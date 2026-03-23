@@ -13,3 +13,4 @@ native/desktop/src-tauri/tauri.conf.json
 !*.env.example
 !**/.env.example
 .mcp.json
+.claude/
