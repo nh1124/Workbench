@@ -1,0 +1,16 @@
+{
+  "name": "workbench-native-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "npm run tauri:prepare",
+    "tauri:prepare": "node ./scripts/prepare-tauri-config.mjs",
+    "tauri:dev": "npm run tauri:prepare && tauri dev --config src-tauri/tauri.conf.json",
+    "tauri:build": "npm run tauri:prepare && tauri build --config src-tauri/tauri.conf.json"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.0",
+    "dotenv": "^16.5.0"
+  }
+}

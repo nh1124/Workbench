@@ -1,0 +1,25 @@
+[
+  {
+    "id": "task-1",
+    "title": "Define microservice contracts",
+    "description": "Finalize CRUD and project filter contract for all services.",
+    "projectId": "project-alpha",
+    "projectName": "Project Alpha",
+    "status": "in_progress",
+    "priority": "high",
+    "dueDate": "2026-03-24T09:00:00.000Z",
+    "createdAt": "2026-03-14T08:00:00.000Z",
+    "updatedAt": "2026-03-18T09:30:00.000Z"
+  },
+  {
+    "id": "task-2",
+    "title": "Prepare rollout note",
+    "description": "Share migration plan with stakeholders.",
+    "projectId": "project-beta",
+    "projectName": "Project Beta",
+    "status": "todo",
+    "priority": "medium",
+    "createdAt": "2026-03-13T03:00:00.000Z",
+    "updatedAt": "2026-03-17T12:15:00.000Z"
+  }
+]

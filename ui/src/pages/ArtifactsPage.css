@@ -1,0 +1,694 @@
+.va-artifacts-page {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  color: #cde0fa;
+}
+
+.va-shell {
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  padding: 0;
+  border-radius: 20px;
+  border: 1px solid rgba(42, 62, 93, 0.75);
+  background: radial-gradient(120% 180% at 0% 0%, rgba(6, 15, 33, 0.95) 0%, rgba(4, 10, 23, 0.98) 65%, rgba(2, 8, 21, 1) 100%);
+  box-shadow: 0 20px 42px rgba(1, 5, 14, 0.35), inset 0 1px 0 rgba(97, 139, 197, 0.08);
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.va-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+  padding: 0.68rem 0.78rem;
+  border-bottom: 1px solid rgba(47, 65, 93, 0.8);
+  background: linear-gradient(180deg, rgba(8, 17, 35, 0.96), rgba(5, 12, 25, 0.95));
+}
+
+.va-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 0.38rem;
+  color: #bed5f6;
+}
+
+.va-home-icon {
+  width: 0.86rem;
+  height: 0.86rem;
+  display: inline-grid;
+  place-items: center;
+  color: #91b3df;
+}
+
+.va-home-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.va-toolbar-left strong {
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.va-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 0.42rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.va-project-select-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.42rem;
+  color: #7890b0;
+  font-size: 0.62rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.va-project-select-wrap select {
+  min-width: 180px;
+  height: 2rem;
+  border-radius: 9px;
+  border-color: rgba(66, 85, 114, 0.8);
+  background: #141d31;
+  padding: 0.2rem 0.58rem;
+  font-size: 0.74rem;
+  color: #d5e3f7;
+}
+
+.va-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  min-height: 2rem;
+  border-radius: 9px;
+  border: 1px solid rgba(77, 97, 128, 0.9);
+  background: linear-gradient(180deg, rgba(44, 58, 84, 0.9), rgba(35, 47, 72, 0.95));
+  color: #d2e4fa;
+  font-size: 0.71rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 0.32rem 0.75rem;
+}
+
+.va-action-btn svg {
+  width: 0.78rem;
+  height: 0.78rem;
+}
+
+.va-action-btn.primary {
+  border-color: rgba(113, 202, 237, 0.54);
+  background: linear-gradient(180deg, rgba(136, 223, 255, 0.98), rgba(90, 184, 229, 0.96));
+  color: #06273b;
+}
+
+.va-action-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.va-inline-error {
+  margin: 0;
+  padding: 0.42rem 0.82rem;
+  font-size: 0.77rem;
+  color: #f8b4c2;
+  border-bottom: 1px solid rgba(129, 58, 86, 0.6);
+  background: rgba(95, 25, 49, 0.35);
+}
+
+.va-main-grid {
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+}
+
+.va-tree-pane {
+  min-height: 0;
+  border-right: 1px solid rgba(47, 65, 93, 0.8);
+  background: linear-gradient(180deg, rgba(5, 12, 27, 0.95), rgba(3, 9, 22, 1));
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+
+.va-tree-pane.drop-target-root {
+  box-shadow: inset 0 0 0 2px rgba(109, 180, 231, 0.6);
+}
+
+.va-tree-pane > .va-tree-list {
+  min-height: 0;
+  overflow: auto;
+}
+
+.va-tree-list {
+  margin: 0;
+  padding: 0.2rem 0.28rem 0 0.28rem;
+  list-style: none;
+  display: grid;
+  align-content: start;
+  gap: 0.1rem;
+}
+
+.va-tree-list .va-tree-list {
+  padding-left: 1rem;
+  padding-top: 0.08rem;
+}
+
+.va-tree-row {
+  width: 100%;
+  min-height: 1.65rem;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #99b3d6;
+  display: grid;
+  grid-template-columns: 0.8rem 0.88rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.74rem;
+  font-weight: 500;
+  padding: 0.18rem 0.32rem;
+  text-align: left;
+}
+
+.va-tree-row[draggable="true"] {
+  cursor: grab;
+}
+
+.va-tree-row.dragging {
+  opacity: 0.45;
+  cursor: grabbing;
+}
+
+.va-tree-row.drop-target {
+  border-color: rgba(114, 191, 244, 0.9);
+  background: rgba(33, 67, 106, 0.5);
+}
+
+.va-tree-row:hover {
+  border-color: rgba(74, 106, 148, 0.7);
+  background: rgba(24, 41, 68, 0.55);
+}
+
+.va-tree-row.active {
+  border-color: transparent;
+  background: transparent;
+  color: #99b3d6;
+}
+
+.va-tree-row.multi-selected {
+  border-color: rgba(106, 168, 223, 0.78);
+  background: rgba(30, 56, 90, 0.5);
+  color: #d8ebff;
+}
+
+.va-tree-row:focus,
+.va-tree-row:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.va-tree-row small {
+  color: #6989b5;
+  font-size: 0.61rem;
+}
+
+.va-tree-caret {
+  color: #7090bc;
+  text-align: center;
+  font-size: 0.66rem;
+}
+
+.va-tree-icon {
+  width: 0.88rem;
+  height: 0.88rem;
+  display: inline-grid;
+  place-items: center;
+  color: #8ab4e8;
+}
+
+.va-tree-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.va-tree-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.va-tree-foot {
+  border-top: 1px solid rgba(48, 65, 89, 0.8);
+  padding: 0.36rem 0.45rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: #6f87aa;
+  font-size: 0.69rem;
+}
+
+.va-tree-foot .ghost-button {
+  padding: 0.14rem 0.42rem;
+  border-radius: 7px;
+  font-size: 0.66rem;
+}
+
+.va-detail-pane {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0.75rem 0.9rem;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0.7rem;
+}
+
+.va-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.va-detail-title-block {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+.va-detail-path {
+  color: #cde4ff;
+  font-size: 0.8rem;
+  font-family: "JetBrains Mono", "Consolas", monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.va-detail-title-block small {
+  color: #6e8bb1;
+  font-size: 0.64rem;
+}
+
+.va-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.va-icon-btn {
+  width: 2rem;
+  min-width: 2rem;
+  height: 2rem;
+  border-radius: 9px;
+  border: 1px solid rgba(77, 97, 128, 0.9);
+  background: rgba(14, 24, 42, 0.92);
+  color: #c4d8f3;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+}
+
+.va-icon-btn svg {
+  width: 0.86rem;
+  height: 0.86rem;
+}
+
+.va-icon-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.va-form-grid {
+  min-height: 0;
+  overflow: visible;
+  align-content: start;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.66rem;
+  padding-right: 0.25rem;
+  padding-bottom: 1rem;
+}
+
+.va-tree-pane > .va-tree-list,
+.va-detail-pane,
+.va-content-section textarea,
+.va-markdown-preview {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(124, 145, 174, 0.7) rgba(8, 16, 35, 0.78);
+}
+
+.va-tree-pane > .va-tree-list::-webkit-scrollbar,
+.va-detail-pane::-webkit-scrollbar,
+.va-content-section textarea::-webkit-scrollbar,
+.va-markdown-preview::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.va-tree-pane > .va-tree-list::-webkit-scrollbar-track,
+.va-detail-pane::-webkit-scrollbar-track,
+.va-content-section textarea::-webkit-scrollbar-track,
+.va-markdown-preview::-webkit-scrollbar-track {
+  background: rgba(8, 16, 35, 0.78);
+  border-radius: 999px;
+}
+
+.va-tree-pane > .va-tree-list::-webkit-scrollbar-thumb,
+.va-detail-pane::-webkit-scrollbar-thumb,
+.va-content-section textarea::-webkit-scrollbar-thumb,
+.va-markdown-preview::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  border: 2px solid rgba(8, 16, 35, 0.78);
+  background: linear-gradient(180deg, rgba(146, 167, 196, 0.9), rgba(108, 129, 158, 0.85));
+}
+
+.va-tree-pane > .va-tree-list::-webkit-scrollbar-button,
+.va-detail-pane::-webkit-scrollbar-button,
+.va-content-section textarea::-webkit-scrollbar-button,
+.va-markdown-preview::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.va-form-grid .span-2 {
+  grid-column: 1 / -1;
+}
+
+.va-field-label {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: #6f8caf;
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.va-meta-strip {
+  border: 1px solid rgba(56, 75, 103, 0.88);
+  border-radius: 12px;
+  background: rgba(13, 25, 46, 0.7);
+  padding: 0.56rem 0.7rem;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+
+.va-meta-strip small {
+  display: block;
+  color: #6986ab;
+  font-size: 0.58rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 0.15rem;
+}
+
+.va-meta-strip p {
+  margin: 0;
+  color: #d0def1;
+  font-size: 0.74rem;
+}
+
+.va-content-section,
+.va-preview-section {
+  display: grid;
+  gap: 0.34rem;
+}
+
+.va-content-section textarea {
+  min-height: 320px;
+}
+
+.va-content-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.va-content-mode {
+  display: inline-flex;
+  border: 1px solid rgba(65, 85, 115, 0.88);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.va-content-mode button {
+  min-width: 62px;
+  border: 0;
+  border-right: 1px solid rgba(65, 85, 115, 0.88);
+  border-radius: 0;
+  background: rgba(12, 21, 39, 0.9);
+  color: #7894b8;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 0.28rem 0.4rem;
+}
+
+.va-content-mode button:last-child {
+  border-right: 0;
+}
+
+.va-content-mode button.active {
+  background: linear-gradient(180deg, rgba(109, 208, 245, 0.7), rgba(73, 163, 210, 0.72));
+  color: #08263b;
+}
+
+.va-markdown-preview {
+  min-height: 220px;
+  border: 1px solid rgba(56, 75, 103, 0.88);
+  border-radius: 12px;
+  background: rgba(8, 14, 27, 0.93);
+  padding: 0.76rem;
+  color: #c7d8ec;
+  font-size: 0.82rem;
+  line-height: 1.62;
+}
+
+.va-markdown-preview h1,
+.va-markdown-preview h2,
+.va-markdown-preview h3,
+.va-markdown-preview h4 {
+  color: #f3f8ff;
+  margin-top: 0;
+}
+
+.va-markdown-preview p {
+  margin: 0 0 0.65rem;
+}
+
+.va-markdown-preview pre {
+  margin: 0 0 0.72rem;
+  border: 1px solid rgba(76, 95, 123, 0.84);
+  border-radius: 9px;
+  background: rgba(6, 11, 21, 0.95);
+  padding: 0.64rem;
+  overflow: auto;
+}
+
+.va-markdown-preview code {
+  border: 1px solid rgba(78, 95, 122, 0.8);
+  border-radius: 5px;
+  background: rgba(15, 24, 39, 0.88);
+  padding: 0.06rem 0.25rem;
+  font-size: 0.75rem;
+}
+
+.va-markdown-preview pre code {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.va-pdf-frame {
+  width: 100%;
+  min-height: 520px;
+  border: 1px solid rgba(58, 77, 106, 0.85);
+  border-radius: 12px;
+  background: #0b1323;
+}
+
+.va-tags-wrap {
+  min-height: 2.35rem;
+  border: 1px solid rgba(58, 77, 106, 0.85);
+  border-radius: 11px;
+  background: rgba(14, 25, 44, 0.86);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.35rem 0.44rem;
+}
+
+.va-tags-wrap input {
+  flex: 1;
+  min-width: 150px;
+  border: 0;
+  background: transparent;
+  padding: 0.18rem;
+}
+
+.va-tags-wrap input:focus {
+  outline: none;
+}
+
+.va-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border: 1px solid rgba(94, 182, 222, 0.55);
+  border-radius: 7px;
+  background: rgba(37, 113, 147, 0.32);
+  color: #caeeff;
+  padding: 0.1rem 0.35rem;
+  font-size: 0.67rem;
+}
+
+.va-tag-chip button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 0.76rem;
+  line-height: 1;
+  padding: 0;
+}
+
+.va-detail-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  color: #6f88ad;
+  border-top: 1px solid rgba(47, 65, 93, 0.8);
+  padding-top: 0.62rem;
+}
+
+.va-detail-meta small {
+  color: #6f88ad;
+  font-size: 0.69rem;
+}
+
+.va-empty {
+  min-height: 120px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed rgba(70, 88, 116, 0.85);
+  border-radius: 11px;
+  color: #8299b8;
+  font-size: 0.8rem;
+  background: rgba(11, 19, 33, 0.66);
+  margin: 0.4rem;
+}
+
+.va-hidden-upload {
+  display: none;
+}
+
+.va-context-menu {
+  position: fixed;
+  z-index: 80;
+  min-width: 170px;
+  border: 1px solid rgba(80, 112, 154, 0.9);
+  border-radius: 10px;
+  background: rgba(8, 16, 33, 0.98);
+  box-shadow: 0 14px 24px rgba(2, 6, 15, 0.5);
+  display: grid;
+  gap: 0;
+  overflow: hidden;
+}
+
+.va-context-menu button {
+  border: 0;
+  border-bottom: 1px solid rgba(46, 71, 105, 0.8);
+  border-radius: 0;
+  background: transparent;
+  color: #cfe5ff;
+  font-size: 0.76rem;
+  font-weight: 600;
+  text-align: left;
+  padding: 0.52rem 0.68rem;
+}
+
+.va-context-menu button:last-child {
+  border-bottom: 0;
+}
+
+.va-context-menu button:hover:not(:disabled) {
+  background: rgba(36, 66, 104, 0.62);
+}
+
+.va-context-menu button:disabled {
+  color: rgba(124, 150, 183, 0.65);
+}
+
+@media (max-width: 1220px) {
+  .va-main-grid {
+  min-height: 0;
+  height: auto;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+}
+
+  .va-pdf-frame {
+    min-height: 440px;
+  }
+}
+
+@media (max-width: 980px) {
+  .va-main-grid {
+  min-height: 0;
+  height: auto;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+}
+
+  .va-tree-pane {
+    border-right: 0;
+    border-bottom: 1px solid rgba(47, 65, 93, 0.8);
+  }
+
+  .va-toolbar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .va-toolbar-right {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .va-project-select-wrap {
+    width: 100%;
+  }
+
+  .va-project-select-wrap select {
+    flex: 1;
+    min-width: 0;
+  }
+}
+
+
+
+

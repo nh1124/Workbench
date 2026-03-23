@@ -1,0 +1,15 @@
+node_modules/
+/dist/
+/.idea/
+/.vscode/
+*.log
+ui/dist/
+services/*/dist/
+native/desktop/src-tauri/target/
+native/desktop/node_modules/
+native/desktop/src-tauri/tauri.conf.json
+.env
+*.env
+!*.env.example
+!**/.env.example
+.mcp.json

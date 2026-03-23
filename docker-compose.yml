@@ -1,0 +1,72 @@
+services:
+  workbench-core-db:
+    image: postgres:16-alpine
+    container_name: workbench-core-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: workbench_core_db
+      POSTGRES_USER: workbench_user
+      POSTGRES_PASSWORD: workbench_pass
+    ports:
+      - "5542:5432"
+    volumes:
+      - workbench_core_pgdata:/var/lib/postgresql/data
+
+  notes-db:
+    image: postgres:16-alpine
+    container_name: workbench-notes-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: notes_db
+      POSTGRES_USER: notes_user
+      POSTGRES_PASSWORD: notes_pass
+    ports:
+      - "5543:5432"
+    volumes:
+      - notes_pgdata:/var/lib/postgresql/data
+
+  artifacts-db:
+    image: postgres:16-alpine
+    container_name: workbench-artifacts-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: artifacts_db
+      POSTGRES_USER: artifacts_user
+      POSTGRES_PASSWORD: artifacts_pass
+    ports:
+      - "5544:5432"
+    volumes:
+      - artifacts_pgdata:/var/lib/postgresql/data
+
+  tasks-db:
+    image: postgres:16-alpine
+    container_name: workbench-tasks-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: tasks_db
+      POSTGRES_USER: tasks_user
+      POSTGRES_PASSWORD: tasks_pass
+    ports:
+      - "5545:5432"
+    volumes:
+      - tasks_pgdata:/var/lib/postgresql/data
+
+  projects-db:
+    image: postgres:16-alpine
+    container_name: workbench-projects-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: projects_db
+      POSTGRES_USER: projects_user
+      POSTGRES_PASSWORD: projects_pass
+    ports:
+      - "5546:5432"
+    volumes:
+      - projects_pgdata:/var/lib/postgresql/data
+
+volumes:
+  workbench_core_pgdata:
+  notes_pgdata:
+  artifacts_pgdata:
+  tasks_pgdata:
+  projects_pgdata:

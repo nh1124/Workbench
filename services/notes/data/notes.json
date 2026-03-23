@@ -1,0 +1,22 @@
+[
+  {
+    "id": "note-1",
+    "title": "Kickoff Notes",
+    "content": "Define MVP workspace pages and MCP service boundaries.",
+    "projectId": "project-alpha",
+    "projectName": "Project Alpha",
+    "tags": ["planning", "mvp"],
+    "createdAt": "2026-03-15T09:00:00.000Z",
+    "updatedAt": "2026-03-18T06:20:00.000Z"
+  },
+  {
+    "id": "note-2",
+    "title": "Migration Memo",
+    "content": "Keep VisionArk frozen and move daily workflow to Workbench.",
+    "projectId": "project-beta",
+    "projectName": "Project Beta",
+    "tags": ["migration"],
+    "createdAt": "2026-03-14T07:30:00.000Z",
+    "updatedAt": "2026-03-17T03:40:00.000Z"
+  }
+]

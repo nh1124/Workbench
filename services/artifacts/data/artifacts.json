@@ -1,0 +1,23 @@
+[
+  {
+    "id": "artifact-1",
+    "name": "Workspace Wireframe",
+    "type": "design",
+    "description": "Initial layout for dashboard and project pages.",
+    "projectId": "project-alpha",
+    "projectName": "Project Alpha",
+    "url": "https://example.com/wireframe",
+    "createdAt": "2026-03-12T10:00:00.000Z",
+    "updatedAt": "2026-03-18T08:10:00.000Z"
+  },
+  {
+    "id": "artifact-2",
+    "name": "Migration Checklist",
+    "type": "document",
+    "description": "Cut-over checklist for Workbench launch.",
+    "projectId": "project-beta",
+    "projectName": "Project Beta",
+    "createdAt": "2026-03-13T04:10:00.000Z",
+    "updatedAt": "2026-03-16T11:55:00.000Z"
+  }
+]
