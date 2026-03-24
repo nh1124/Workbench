@@ -8,7 +8,11 @@ import {
 } from "../deepResearch/service.js";
 import { asMcpText, runWithAuthContext, tokenInput } from "./helpers.js";
 
-export function registerDeepResearchTools(server: McpServer): void {
+type ToolContext = {
+  accessToken: string;
+};
+
+export function registerDeepResearchTools(server: McpServer, ctx?: ToolContext): void {
   server.registerTool(
     "deep_research_capabilities",
     {
@@ -20,7 +24,7 @@ export function registerDeepResearchTools(server: McpServer): void {
       }
     },
     async ({ accessToken }) => {
-      const defaults = await runWithAuthContext(accessToken, ({ userId }) => getDeepResearchDefaults(userId));
+      const defaults = await runWithAuthContext(accessToken, ({ userId }) => getDeepResearchDefaults(userId), ctx?.accessToken);
       const configuredProviders = (["gemini", "openai", "anthropic"] as const).filter(
         (provider) => defaults.availableProviders[provider]
       );
@@ -57,19 +61,23 @@ export function registerDeepResearchTools(server: McpServer): void {
       }
     },
     async ({ accessToken, ...payload }) => {
-      const result = await runWithAuthContext(accessToken, ({ userId }) =>
-        runDeepResearch(userId, accessToken, {
-          query: payload.query,
-          provider: payload.provider,
-          speed: payload.speed,
-          timeoutSec: payload.timeout_sec,
-          asyncOnTimeout: payload.async_on_timeout,
-          saveToArtifacts: payload.save_to_artifacts,
-          artifactTitle: payload.artifact_title,
-          artifactPath: payload.artifact_path,
-          projectId: payload.project_id,
-          projectName: payload.project_name
-        })
+      const token = accessToken ?? ctx?.accessToken;
+      const result = await runWithAuthContext(
+        accessToken,
+        ({ userId }) =>
+          runDeepResearch(userId, token!, {
+            query: payload.query,
+            provider: payload.provider,
+            speed: payload.speed,
+            timeoutSec: payload.timeout_sec,
+            asyncOnTimeout: payload.async_on_timeout,
+            saveToArtifacts: payload.save_to_artifacts,
+            artifactTitle: payload.artifact_title,
+            artifactPath: payload.artifact_path,
+            projectId: payload.project_id,
+            projectName: payload.project_name
+          }),
+        ctx?.accessToken
       );
       return asMcpText(result);
     }
@@ -86,7 +94,11 @@ export function registerDeepResearchTools(server: McpServer): void {
       }
     },
     async ({ accessToken, job_id }) => {
-      const result = await runWithAuthContext(accessToken, ({ userId }) => getDeepResearchStatus(userId, job_id));
+      const result = await runWithAuthContext(
+        accessToken,
+        ({ userId }) => getDeepResearchStatus(userId, job_id),
+        ctx?.accessToken
+      );
       return asMcpText(result);
     }
   );
@@ -102,7 +114,11 @@ export function registerDeepResearchTools(server: McpServer): void {
       }
     },
     async ({ accessToken, job_id }) => {
-      const result = await runWithAuthContext(accessToken, ({ userId }) => cancelDeepResearch(userId, job_id));
+      const result = await runWithAuthContext(
+        accessToken,
+        ({ userId }) => cancelDeepResearch(userId, job_id),
+        ctx?.accessToken
+      );
       return asMcpText(result);
     }
   );

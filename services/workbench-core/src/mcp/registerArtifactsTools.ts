@@ -3,7 +3,11 @@ import { z } from "zod";
 import { artifactsClient } from "../internalClients.js";
 import { asMcpText, runWithAuth, tokenInput } from "./helpers.js";
 
-export function registerArtifactsTools(server: McpServer): void {
+type ToolContext = {
+  accessToken: string;
+};
+
+export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): void {
   server.registerTool(
     "artifacts.list",
     {
@@ -16,7 +20,8 @@ export function registerArtifactsTools(server: McpServer): void {
       }
     },
     async ({ accessToken, projectId, limit }) => {
-      const result = await runWithAuth(accessToken, () => artifactsClient.list(accessToken, projectId, limit));
+      const token = accessToken ?? ctx?.accessToken;
+      const result = await runWithAuth(accessToken, () => artifactsClient.list(token!, projectId, limit), ctx?.accessToken);
       return asMcpText(result);
     }
   );
@@ -32,7 +37,8 @@ export function registerArtifactsTools(server: McpServer): void {
       }
     },
     async ({ accessToken, id }) => {
-      const result = await runWithAuth(accessToken, () => artifactsClient.get(accessToken, id));
+      const token = accessToken ?? ctx?.accessToken;
+      const result = await runWithAuth(accessToken, () => artifactsClient.get(token!, id), ctx?.accessToken);
       return asMcpText(result);
     }
   );
@@ -53,7 +59,8 @@ export function registerArtifactsTools(server: McpServer): void {
       }
     },
     async ({ accessToken, ...payload }) => {
-      const result = await runWithAuth(accessToken, () => artifactsClient.create(accessToken, payload));
+      const token = accessToken ?? ctx?.accessToken;
+      const result = await runWithAuth(accessToken, () => artifactsClient.create(token!, payload), ctx?.accessToken);
       return asMcpText(result);
     }
   );
@@ -75,7 +82,8 @@ export function registerArtifactsTools(server: McpServer): void {
       }
     },
     async ({ accessToken, id, ...payload }) => {
-      const result = await runWithAuth(accessToken, () => artifactsClient.update(accessToken, id, payload));
+      const token = accessToken ?? ctx?.accessToken;
+      const result = await runWithAuth(accessToken, () => artifactsClient.update(token!, id, payload), ctx?.accessToken);
       return asMcpText(result);
     }
   );
@@ -91,9 +99,9 @@ export function registerArtifactsTools(server: McpServer): void {
       }
     },
     async ({ accessToken, id }) => {
-      await runWithAuth(accessToken, () => artifactsClient.remove(accessToken, id));
+      const token = accessToken ?? ctx?.accessToken;
+      await runWithAuth(accessToken, () => artifactsClient.remove(token!, id), ctx?.accessToken);
       return asMcpText({ status: "ok" });
     }
   );
 }
-

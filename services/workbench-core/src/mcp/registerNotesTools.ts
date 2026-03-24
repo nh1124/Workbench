@@ -3,7 +3,11 @@ import { z } from "zod";
 import { notesClient } from "../internalClients.js";
 import { asMcpText, runWithAuth, tokenInput } from "./helpers.js";
 
-export function registerNotesTools(server: McpServer): void {
+type ToolContext = {
+  accessToken: string;
+};
+
+export function registerNotesTools(server: McpServer, ctx?: ToolContext): void {
   server.registerTool(
     "notes.list",
     {
@@ -16,7 +20,8 @@ export function registerNotesTools(server: McpServer): void {
       }
     },
     async ({ accessToken, projectId, limit }) => {
-      const result = await runWithAuth(accessToken, () => notesClient.list(accessToken, projectId, limit));
+      const token = accessToken ?? ctx?.accessToken;
+      const result = await runWithAuth(accessToken, () => notesClient.list(token!, projectId, limit), ctx?.accessToken);
       return asMcpText(result);
     }
   );
@@ -32,7 +37,8 @@ export function registerNotesTools(server: McpServer): void {
       }
     },
     async ({ accessToken, id }) => {
-      const result = await runWithAuth(accessToken, () => notesClient.get(accessToken, id));
+      const token = accessToken ?? ctx?.accessToken;
+      const result = await runWithAuth(accessToken, () => notesClient.get(token!, id), ctx?.accessToken);
       return asMcpText(result);
     }
   );
@@ -52,7 +58,8 @@ export function registerNotesTools(server: McpServer): void {
       }
     },
     async ({ accessToken, ...payload }) => {
-      const result = await runWithAuth(accessToken, () => notesClient.create(accessToken, payload));
+      const token = accessToken ?? ctx?.accessToken;
+      const result = await runWithAuth(accessToken, () => notesClient.create(token!, payload), ctx?.accessToken);
       return asMcpText(result);
     }
   );
@@ -73,7 +80,8 @@ export function registerNotesTools(server: McpServer): void {
       }
     },
     async ({ accessToken, id, ...payload }) => {
-      const result = await runWithAuth(accessToken, () => notesClient.update(accessToken, id, payload));
+      const token = accessToken ?? ctx?.accessToken;
+      const result = await runWithAuth(accessToken, () => notesClient.update(token!, id, payload), ctx?.accessToken);
       return asMcpText(result);
     }
   );
@@ -89,7 +97,8 @@ export function registerNotesTools(server: McpServer): void {
       }
     },
     async ({ accessToken, id }) => {
-      await runWithAuth(accessToken, () => notesClient.remove(accessToken, id));
+      const token = accessToken ?? ctx?.accessToken;
+      await runWithAuth(accessToken, () => notesClient.remove(token!, id), ctx?.accessToken);
       return asMcpText({ status: "ok" });
     }
   );

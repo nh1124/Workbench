@@ -3,6 +3,10 @@ import { verifyAccessToken } from "../auth.js";
 import { findUserById } from "../store.js";
 
 export const tokenInput = {
+  accessToken: z.string().optional()
+};
+
+export const tokenInputRequired = {
   accessToken: z.string().min(1)
 };
 
@@ -30,15 +34,28 @@ async function readAuthContext(accessToken: string): Promise<{ userId: string; u
   };
 }
 
-export async function runWithAuth<T>(accessToken: string, operation: () => Promise<T>): Promise<T> {
-  await ensureAuthenticatedToken(accessToken);
+export async function runWithAuth<T>(
+  accessToken: string | undefined,
+  operation: () => Promise<T>,
+  injectedToken?: string
+): Promise<T> {
+  const token = accessToken ?? injectedToken;
+  if (!token) {
+    throw new Error("accessToken is required");
+  }
+  await ensureAuthenticatedToken(token);
   return operation();
 }
 
 export async function runWithAuthContext<T>(
-  accessToken: string,
-  operation: (context: { userId: string; username: string }) => Promise<T>
+  accessToken: string | undefined,
+  operation: (context: { userId: string; username: string }) => Promise<T>,
+  injectedToken?: string
 ): Promise<T> {
-  const context = await readAuthContext(accessToken);
+  const token = accessToken ?? injectedToken;
+  if (!token) {
+    throw new Error("accessToken is required");
+  }
+  const context = await readAuthContext(token);
   return operation(context);
 }

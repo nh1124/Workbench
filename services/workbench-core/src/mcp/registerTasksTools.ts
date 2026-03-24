@@ -3,7 +3,11 @@ import { z } from "zod";
 import { tasksClient } from "../internalClients.js";
 import { asMcpText, runWithAuth, tokenInput } from "./helpers.js";
 
-export function registerTasksTools(server: McpServer): void {
+type ToolContext = {
+  accessToken: string;
+};
+
+export function registerTasksTools(server: McpServer, ctx?: ToolContext): void {
   server.registerTool(
     "tasks.list",
     {
@@ -17,7 +21,8 @@ export function registerTasksTools(server: McpServer): void {
       }
     },
     async ({ accessToken, context, status, limit }) => {
-      const result = await runWithAuth(accessToken, () => tasksClient.list(accessToken, context, status, limit));
+      const token = accessToken ?? ctx?.accessToken;
+      const result = await runWithAuth(accessToken, () => tasksClient.list(token!, context, status, limit), ctx?.accessToken);
       return asMcpText(result);
     }
   );
@@ -35,7 +40,8 @@ export function registerTasksTools(server: McpServer): void {
       }
     },
     async ({ accessToken, context, status, limit }) => {
-      const result = await runWithAuth(accessToken, () => tasksClient.list(accessToken, context, status, limit));
+      const token = accessToken ?? ctx?.accessToken;
+      const result = await runWithAuth(accessToken, () => tasksClient.list(token!, context, status, limit), ctx?.accessToken);
       return asMcpText(result);
     }
   );
@@ -51,7 +57,8 @@ export function registerTasksTools(server: McpServer): void {
       }
     },
     async ({ accessToken, id }) => {
-      const result = await runWithAuth(accessToken, () => tasksClient.get(accessToken, id));
+      const token = accessToken ?? ctx?.accessToken;
+      const result = await runWithAuth(accessToken, () => tasksClient.get(token!, id), ctx?.accessToken);
       return asMcpText(result);
     }
   );
@@ -77,7 +84,8 @@ export function registerTasksTools(server: McpServer): void {
       }
     },
     async ({ accessToken, ...payload }) => {
-      const result = await runWithAuth(accessToken, () => tasksClient.create(accessToken, payload));
+      const token = accessToken ?? ctx?.accessToken;
+      const result = await runWithAuth(accessToken, () => tasksClient.create(token!, payload), ctx?.accessToken);
       return asMcpText(result);
     }
   );
@@ -104,7 +112,8 @@ export function registerTasksTools(server: McpServer): void {
       }
     },
     async ({ accessToken, id, ...payload }) => {
-      const result = await runWithAuth(accessToken, () => tasksClient.update(accessToken, id, payload));
+      const token = accessToken ?? ctx?.accessToken;
+      const result = await runWithAuth(accessToken, () => tasksClient.update(token!, id, payload), ctx?.accessToken);
       return asMcpText(result);
     }
   );
@@ -120,9 +129,9 @@ export function registerTasksTools(server: McpServer): void {
       }
     },
     async ({ accessToken, id }) => {
-      await runWithAuth(accessToken, () => tasksClient.remove(accessToken, id));
+      const token = accessToken ?? ctx?.accessToken;
+      await runWithAuth(accessToken, () => tasksClient.remove(token!, id), ctx?.accessToken);
       return asMcpText({ status: "ok" });
     }
   );
 }
-

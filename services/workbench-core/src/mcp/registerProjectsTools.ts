@@ -5,7 +5,11 @@ import { asMcpText, runWithAuth, tokenInput } from "./helpers.js";
 
 const projectStatusSchema = z.enum(["draft", "active", "archived"]);
 
-export function registerProjectsTools(server: McpServer): void {
+type ToolContext = {
+  accessToken: string;
+};
+
+export function registerProjectsTools(server: McpServer, ctx?: ToolContext): void {
   server.registerTool(
     "projects.list",
     {
@@ -20,7 +24,12 @@ export function registerProjectsTools(server: McpServer): void {
       }
     },
     async ({ accessToken, query, status, limit, cursor }) => {
-      const result = await runWithAuth(accessToken, () => projectsClient.list(accessToken, query, status, limit, cursor));
+      const token = accessToken ?? ctx?.accessToken;
+      const result = await runWithAuth(
+        accessToken,
+        () => projectsClient.list(token!, query, status, limit, cursor),
+        ctx?.accessToken
+      );
       return asMcpText(result);
     }
   );
@@ -36,7 +45,8 @@ export function registerProjectsTools(server: McpServer): void {
       }
     },
     async ({ accessToken, id }) => {
-      const result = await runWithAuth(accessToken, () => projectsClient.get(accessToken, id));
+      const token = accessToken ?? ctx?.accessToken;
+      const result = await runWithAuth(accessToken, () => projectsClient.get(token!, id), ctx?.accessToken);
       return asMcpText(result);
     }
   );
@@ -55,7 +65,8 @@ export function registerProjectsTools(server: McpServer): void {
       }
     },
     async ({ accessToken, ...payload }) => {
-      const result = await runWithAuth(accessToken, () => projectsClient.create(accessToken, payload));
+      const token = accessToken ?? ctx?.accessToken;
+      const result = await runWithAuth(accessToken, () => projectsClient.create(token!, payload), ctx?.accessToken);
       return asMcpText(result);
     }
   );
@@ -74,7 +85,8 @@ export function registerProjectsTools(server: McpServer): void {
       }
     },
     async ({ accessToken, id, ...payload }) => {
-      const result = await runWithAuth(accessToken, () => projectsClient.update(accessToken, id, payload));
+      const token = accessToken ?? ctx?.accessToken;
+      const result = await runWithAuth(accessToken, () => projectsClient.update(token!, id, payload), ctx?.accessToken);
       return asMcpText(result);
     }
   );
@@ -90,7 +102,8 @@ export function registerProjectsTools(server: McpServer): void {
       }
     },
     async ({ accessToken, id }) => {
-      await runWithAuth(accessToken, () => projectsClient.remove(accessToken, id));
+      const token = accessToken ?? ctx?.accessToken;
+      await runWithAuth(accessToken, () => projectsClient.remove(token!, id), ctx?.accessToken);
       return asMcpText({ status: "ok" });
     }
   );

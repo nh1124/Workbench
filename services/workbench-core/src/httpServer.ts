@@ -1782,14 +1782,18 @@ app.post("/api/tasks/import", express.text({ type: "text/csv", limit: "10mb" }),
 // Requires Bearer token authentication. Tools are accessible at POST /mcp.
 // ---------------------------------------------------------------------------
 
-function createMcpServerInstance(): McpServer {
+type McpInjectedContext = {
+  accessToken: string;
+};
+
+function createMcpServerInstance(injectedContext?: McpInjectedContext): McpServer {
   const server = new McpServer({ name: "workbench-core-mcp", version: "0.2.0" });
   registerAuthTools(server);
-  registerNotesTools(server);
-  registerArtifactsTools(server);
-  registerTasksTools(server);
-  registerProjectsTools(server);
-  registerDeepResearchTools(server);
+  registerNotesTools(server, injectedContext);
+  registerArtifactsTools(server, injectedContext);
+  registerTasksTools(server, injectedContext);
+  registerProjectsTools(server, injectedContext);
+  registerDeepResearchTools(server, injectedContext);
   return server;
 }
 
@@ -1839,34 +1843,22 @@ app.post("/mcp", async (req, res) => {
   // Accept either a static MCP_API_KEY (for connector configuration) or a valid JWT
   const mcpApiKey = optionalEnv("MCP_API_KEY");
   const isApiKey = mcpApiKey && token === mcpApiKey;
-  console.info("[mcp] auth check", { is_api_key: isApiKey });
+  let injectedContext: McpInjectedContext | undefined;
   if (!isApiKey) {
     try {
       verifyAccessToken(token);
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      console.warn("[mcp] token verify failed", { reason });
+    } catch {
       setMcpBearerChallengeHeader(req, res);
       return res.status(401).json({ error: "Unauthorized", message: "Invalid or expired token" });
     }
 
     const decoded = jwt.decode(token);
     if (!decoded || typeof decoded !== "object") {
-      console.warn("[mcp] token decode failed");
       setMcpBearerChallengeHeader(req, res);
       return res.status(401).json({ error: "Unauthorized", message: "Invalid token payload" });
     }
 
     const expectedAudience = buildCanonicalMcpResource(req);
-    const tokenAud = (decoded as { aud?: unknown }).aud;
-    const tokenScope = (decoded as { scope?: unknown }).scope;
-    console.info("[mcp] token claims", {
-      aud: tokenAud,
-      scope: tokenScope,
-      expected_audience: expectedAudience,
-      aud_ok: isExpectedMcpAudience(decoded as { aud?: unknown }, expectedAudience),
-      scope_ok: tokenHasRequiredScope(decoded as { scope?: unknown }, "mcp:tools")
-    });
     if (!isExpectedMcpAudience(decoded as { aud?: unknown }, expectedAudience)) {
       setMcpBearerChallengeHeader(req, res);
       return res.status(401).json({ error: "Unauthorized", message: "Invalid token audience" });
@@ -1875,10 +1867,19 @@ app.post("/mcp", async (req, res) => {
       setMcpBearerChallengeHeader(req, res);
       return res.status(401).json({ error: "Unauthorized", message: "Insufficient token scope" });
     }
-    console.info("[mcp] token valid, proceeding");
+
+    const decodedIdentity = decoded as { sub?: unknown; username?: unknown };
+    if (typeof decodedIdentity.sub === "string" && decodedIdentity.sub.trim().length > 0) {
+      const user = await findUserById(decodedIdentity.sub);
+      if (user) {
+        const bundle = issueTokenBundle({ userId: user.id, username: user.username });
+        injectedContext = { accessToken: bundle.accessToken };
+        console.info("[mcp] user context injected", { username: user.username });
+      }
+    }
   }
 
-  const server = createMcpServerInstance();
+  const server = createMcpServerInstance(injectedContext);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   await server.connect(transport);
 
