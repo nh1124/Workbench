@@ -1,28 +1,31 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { tasksClient } from "../internalClients.js";
-import { asMcpText, runWithAuth, tokenInput } from "./helpers.js";
+import { asMcpText, runWithAuth } from "./helpers.js";
 
 type ToolContext = {
   accessToken: string;
 };
 
+export function registerTasksTools(server: McpServer, ctx: ToolContext): void;
+export function registerTasksTools(server: McpServer): void;
 export function registerTasksTools(server: McpServer, ctx?: ToolContext): void {
+  if (!ctx) {
+    throw new Error("Tool context is required");
+  }
   server.registerTool(
     "tasks.list",
     {
       title: "List Tasks",
       description: "List tasks for the authenticated user.",
       inputSchema: {
-        ...tokenInput,
         context: z.string().optional(),
         status: z.string().optional(),
         limit: z.number().int().positive().optional()
       }
     },
-    async ({ accessToken, context, status, limit }) => {
-      const token = accessToken ?? ctx?.accessToken;
-      const result = await runWithAuth(accessToken, () => tasksClient.list(token!, context, status, limit), ctx?.accessToken);
+    async ({ context, status, limit }) => {
+      const result = await runWithAuth(ctx.accessToken, () => tasksClient.list(ctx.accessToken, context, status, limit));
       return asMcpText(result);
     }
   );
@@ -33,15 +36,13 @@ export function registerTasksTools(server: McpServer, ctx?: ToolContext): void {
       title: "List Calendar Tasks",
       description: "List tasks for calendar use.",
       inputSchema: {
-        ...tokenInput,
         context: z.string().optional(),
         status: z.string().optional(),
         limit: z.number().int().positive().optional()
       }
     },
-    async ({ accessToken, context, status, limit }) => {
-      const token = accessToken ?? ctx?.accessToken;
-      const result = await runWithAuth(accessToken, () => tasksClient.list(token!, context, status, limit), ctx?.accessToken);
+    async ({ context, status, limit }) => {
+      const result = await runWithAuth(ctx.accessToken, () => tasksClient.list(ctx.accessToken, context, status, limit));
       return asMcpText(result);
     }
   );
@@ -52,13 +53,11 @@ export function registerTasksTools(server: McpServer, ctx?: ToolContext): void {
       title: "Get Task",
       description: "Get a task by id.",
       inputSchema: {
-        ...tokenInput,
         id: z.string().min(1)
       }
     },
-    async ({ accessToken, id }) => {
-      const token = accessToken ?? ctx?.accessToken;
-      const result = await runWithAuth(accessToken, () => tasksClient.get(token!, id), ctx?.accessToken);
+    async ({ id }) => {
+      const result = await runWithAuth(ctx.accessToken, () => tasksClient.get(ctx.accessToken, id));
       return asMcpText(result);
     }
   );
@@ -69,7 +68,6 @@ export function registerTasksTools(server: McpServer, ctx?: ToolContext): void {
       title: "Create Task",
       description: "Create a task.",
       inputSchema: {
-        ...tokenInput,
         title: z.string().min(1),
         context: z.string().min(1),
         notes: z.string().optional(),
@@ -83,9 +81,8 @@ export function registerTasksTools(server: McpServer, ctx?: ToolContext): void {
         timezone: z.string().optional()
       }
     },
-    async ({ accessToken, ...payload }) => {
-      const token = accessToken ?? ctx?.accessToken;
-      const result = await runWithAuth(accessToken, () => tasksClient.create(token!, payload), ctx?.accessToken);
+    async (payload) => {
+      const result = await runWithAuth(ctx.accessToken, () => tasksClient.create(ctx.accessToken, payload));
       return asMcpText(result);
     }
   );
@@ -96,7 +93,6 @@ export function registerTasksTools(server: McpServer, ctx?: ToolContext): void {
       title: "Update Task",
       description: "Update a task.",
       inputSchema: {
-        ...tokenInput,
         id: z.string().min(1),
         title: z.string().optional(),
         context: z.string().optional(),
@@ -111,9 +107,8 @@ export function registerTasksTools(server: McpServer, ctx?: ToolContext): void {
         timezone: z.string().optional()
       }
     },
-    async ({ accessToken, id, ...payload }) => {
-      const token = accessToken ?? ctx?.accessToken;
-      const result = await runWithAuth(accessToken, () => tasksClient.update(token!, id, payload), ctx?.accessToken);
+    async ({ id, ...payload }) => {
+      const result = await runWithAuth(ctx.accessToken, () => tasksClient.update(ctx.accessToken, id, payload));
       return asMcpText(result);
     }
   );
@@ -124,13 +119,11 @@ export function registerTasksTools(server: McpServer, ctx?: ToolContext): void {
       title: "Delete Task",
       description: "Delete a task.",
       inputSchema: {
-        ...tokenInput,
         id: z.string().min(1)
       }
     },
-    async ({ accessToken, id }) => {
-      const token = accessToken ?? ctx?.accessToken;
-      await runWithAuth(accessToken, () => tasksClient.remove(token!, id), ctx?.accessToken);
+    async ({ id }) => {
+      await runWithAuth(ctx.accessToken, () => tasksClient.remove(ctx.accessToken, id));
       return asMcpText({ status: "ok" });
     }
   );

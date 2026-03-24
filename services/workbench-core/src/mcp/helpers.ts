@@ -1,14 +1,5 @@
-import { z } from "zod";
 import { verifyAccessToken } from "../auth.js";
 import { findUserById } from "../store.js";
-
-export const tokenInput = {
-  accessToken: z.string().optional()
-};
-
-export const tokenInputRequired = {
-  accessToken: z.string().min(1)
-};
 
 export function asMcpText(value: unknown): { content: Array<{ type: "text"; text: string }> } {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
@@ -35,27 +26,17 @@ async function readAuthContext(accessToken: string): Promise<{ userId: string; u
 }
 
 export async function runWithAuth<T>(
-  accessToken: string | undefined,
-  operation: () => Promise<T>,
-  injectedToken?: string
+  accessToken: string,
+  operation: () => Promise<T>
 ): Promise<T> {
-  const token = accessToken ?? injectedToken;
-  if (!token) {
-    throw new Error("accessToken is required");
-  }
-  await ensureAuthenticatedToken(token);
+  await ensureAuthenticatedToken(accessToken);
   return operation();
 }
 
 export async function runWithAuthContext<T>(
-  accessToken: string | undefined,
-  operation: (context: { userId: string; username: string }) => Promise<T>,
-  injectedToken?: string
+  accessToken: string,
+  operation: (context: { userId: string; username: string }) => Promise<T>
 ): Promise<T> {
-  const token = accessToken ?? injectedToken;
-  if (!token) {
-    throw new Error("accessToken is required");
-  }
-  const context = await readAuthContext(token);
+  const context = await readAuthContext(accessToken);
   return operation(context);
 }

@@ -6,25 +6,28 @@ import {
   getDeepResearchStatus,
   runDeepResearch
 } from "../deepResearch/service.js";
-import { asMcpText, runWithAuthContext, tokenInput } from "./helpers.js";
+import { asMcpText, runWithAuthContext } from "./helpers.js";
 
 type ToolContext = {
   accessToken: string;
 };
 
+export function registerDeepResearchTools(server: McpServer, ctx: ToolContext): void;
+export function registerDeepResearchTools(server: McpServer): void;
 export function registerDeepResearchTools(server: McpServer, ctx?: ToolContext): void {
+  if (!ctx) {
+    throw new Error("Tool context is required");
+  }
   server.registerTool(
     "deep_research_capabilities",
     {
       title: "Deep Research Capabilities",
       description:
         "Return Deep Research capabilities for the authenticated user, including configured providers and default options.",
-      inputSchema: {
-        ...tokenInput
-      }
+      inputSchema: {}
     },
-    async ({ accessToken }) => {
-      const defaults = await runWithAuthContext(accessToken, ({ userId }) => getDeepResearchDefaults(userId), ctx?.accessToken);
+    async () => {
+      const defaults = await runWithAuthContext(ctx.accessToken, ({ userId }) => getDeepResearchDefaults(userId));
       const configuredProviders = (["gemini", "openai", "anthropic"] as const).filter(
         (provider) => defaults.availableProviders[provider]
       );
@@ -47,7 +50,6 @@ export function registerDeepResearchTools(server: McpServer, ctx?: ToolContext):
       title: "Deep Research",
       description: "Run deep research with provider routing, timeout fallback, background jobs, and artifact save.",
       inputSchema: {
-        ...tokenInput,
         query: z.string().min(1),
         provider: z.enum(["auto", "gemini", "openai", "anthropic"]).optional(),
         speed: z.enum(["deep", "fast"]).optional(),
@@ -60,24 +62,20 @@ export function registerDeepResearchTools(server: McpServer, ctx?: ToolContext):
         project_name: z.string().optional()
       }
     },
-    async ({ accessToken, ...payload }) => {
-      const token = accessToken ?? ctx?.accessToken;
-      const result = await runWithAuthContext(
-        accessToken,
-        ({ userId }) =>
-          runDeepResearch(userId, token!, {
-            query: payload.query,
-            provider: payload.provider,
-            speed: payload.speed,
-            timeoutSec: payload.timeout_sec,
-            asyncOnTimeout: payload.async_on_timeout,
-            saveToArtifacts: payload.save_to_artifacts,
-            artifactTitle: payload.artifact_title,
-            artifactPath: payload.artifact_path,
-            projectId: payload.project_id,
-            projectName: payload.project_name
-          }),
-        ctx?.accessToken
+    async (payload) => {
+      const result = await runWithAuthContext(ctx.accessToken, ({ userId }) =>
+        runDeepResearch(userId, ctx.accessToken, {
+          query: payload.query,
+          provider: payload.provider,
+          speed: payload.speed,
+          timeoutSec: payload.timeout_sec,
+          asyncOnTimeout: payload.async_on_timeout,
+          saveToArtifacts: payload.save_to_artifacts,
+          artifactTitle: payload.artifact_title,
+          artifactPath: payload.artifact_path,
+          projectId: payload.project_id,
+          projectName: payload.project_name
+        })
       );
       return asMcpText(result);
     }
@@ -89,16 +87,11 @@ export function registerDeepResearchTools(server: McpServer, ctx?: ToolContext):
       title: "Deep Research Status",
       description: "Check a long-running Deep Research job status by job id.",
       inputSchema: {
-        ...tokenInput,
         job_id: z.string().min(1)
       }
     },
-    async ({ accessToken, job_id }) => {
-      const result = await runWithAuthContext(
-        accessToken,
-        ({ userId }) => getDeepResearchStatus(userId, job_id),
-        ctx?.accessToken
-      );
+    async ({ job_id }) => {
+      const result = await runWithAuthContext(ctx.accessToken, ({ userId }) => getDeepResearchStatus(userId, job_id));
       return asMcpText(result);
     }
   );
@@ -109,16 +102,11 @@ export function registerDeepResearchTools(server: McpServer, ctx?: ToolContext):
       title: "Deep Research Cancel",
       description: "Cancel a running Deep Research job.",
       inputSchema: {
-        ...tokenInput,
         job_id: z.string().min(1)
       }
     },
-    async ({ accessToken, job_id }) => {
-      const result = await runWithAuthContext(
-        accessToken,
-        ({ userId }) => cancelDeepResearch(userId, job_id),
-        ctx?.accessToken
-      );
+    async ({ job_id }) => {
+      const result = await runWithAuthContext(ctx.accessToken, ({ userId }) => cancelDeepResearch(userId, job_id));
       return asMcpText(result);
     }
   );

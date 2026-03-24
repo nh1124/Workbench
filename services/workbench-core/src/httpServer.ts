@@ -14,7 +14,6 @@ import { issueTokenBundle, verifyAccessToken, verifyRefreshToken } from "./auth.
 import { ensureCoreSchema } from "./db.js";
 import { getIntegrationManifests, type IntegrationManifestId } from "./integrations/index.js";
 import { registerArtifactsTools } from "./mcp/registerArtifactsTools.js";
-import { registerAuthTools } from "./mcp/registerAuthTools.js";
 import { registerDeepResearchTools } from "./mcp/registerDeepResearchTools.js";
 import { registerNotesTools } from "./mcp/registerNotesTools.js";
 import { registerProjectsTools } from "./mcp/registerProjectsTools.js";
@@ -1671,9 +1670,8 @@ type McpInjectedContext = {
   accessToken: string;
 };
 
-function createMcpServerInstance(injectedContext?: McpInjectedContext): McpServer {
+function createMcpServerInstance(injectedContext: McpInjectedContext): McpServer {
   const server = new McpServer({ name: "workbench-core-mcp", version: "0.2.0" });
-  registerAuthTools(server);
   registerNotesTools(server, injectedContext);
   registerArtifactsTools(server, injectedContext);
   registerTasksTools(server, injectedContext);
@@ -1750,14 +1748,20 @@ app.post("/mcp", async (req, res) => {
   }
 
   const decodedIdentity = decoded as { sub?: unknown; username?: unknown };
-  if (typeof decodedIdentity.sub === "string" && decodedIdentity.sub.trim().length > 0) {
-    const user = await findUserById(decodedIdentity.sub);
-    if (user) {
-      const bundle = issueTokenBundle({ userId: user.id, username: user.username });
-      injectedContext = { accessToken: bundle.accessToken };
-      console.info("[mcp] user context injected", { username: user.username });
-    }
+  if (typeof decodedIdentity.sub !== "string" || decodedIdentity.sub.trim().length === 0) {
+    setMcpBearerChallengeHeader(req, res);
+    return res.status(401).json({ error: "Unauthorized", message: "Invalid token subject" });
   }
+
+  const user = await findUserById(decodedIdentity.sub);
+  if (!user) {
+    setMcpBearerChallengeHeader(req, res);
+    return res.status(401).json({ error: "Unauthorized", message: "Invalid token user" });
+  }
+
+  const bundle = issueTokenBundle({ userId: user.id, username: user.username });
+  injectedContext = { accessToken: bundle.accessToken };
+  console.info("[mcp] user context injected", { username: user.username });
 
   const server = createMcpServerInstance(injectedContext);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });

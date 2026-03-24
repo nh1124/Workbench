@@ -1,27 +1,30 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { artifactsClient } from "../internalClients.js";
-import { asMcpText, runWithAuth, tokenInput } from "./helpers.js";
+import { asMcpText, runWithAuth } from "./helpers.js";
 
 type ToolContext = {
   accessToken: string;
 };
 
+export function registerArtifactsTools(server: McpServer, ctx: ToolContext): void;
+export function registerArtifactsTools(server: McpServer): void;
 export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): void {
+  if (!ctx) {
+    throw new Error("Tool context is required");
+  }
   server.registerTool(
     "artifacts.list",
     {
       title: "List Artifacts",
       description: "List artifacts for the authenticated user.",
       inputSchema: {
-        ...tokenInput,
         projectId: z.string().optional(),
         limit: z.number().int().positive().optional()
       }
     },
-    async ({ accessToken, projectId, limit }) => {
-      const token = accessToken ?? ctx?.accessToken;
-      const result = await runWithAuth(accessToken, () => artifactsClient.list(token!, projectId, limit), ctx?.accessToken);
+    async ({ projectId, limit }) => {
+      const result = await runWithAuth(ctx.accessToken, () => artifactsClient.list(ctx.accessToken, projectId, limit));
       return asMcpText(result);
     }
   );
@@ -32,13 +35,11 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
       title: "Get Artifact",
       description: "Get an artifact by id.",
       inputSchema: {
-        ...tokenInput,
         id: z.string().min(1)
       }
     },
-    async ({ accessToken, id }) => {
-      const token = accessToken ?? ctx?.accessToken;
-      const result = await runWithAuth(accessToken, () => artifactsClient.get(token!, id), ctx?.accessToken);
+    async ({ id }) => {
+      const result = await runWithAuth(ctx.accessToken, () => artifactsClient.get(ctx.accessToken, id));
       return asMcpText(result);
     }
   );
@@ -49,7 +50,6 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
       title: "Create Artifact",
       description: "Create an artifact.",
       inputSchema: {
-        ...tokenInput,
         name: z.string().min(1),
         type: z.string().min(1),
         description: z.string().optional(),
@@ -58,9 +58,8 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
         url: z.string().optional()
       }
     },
-    async ({ accessToken, ...payload }) => {
-      const token = accessToken ?? ctx?.accessToken;
-      const result = await runWithAuth(accessToken, () => artifactsClient.create(token!, payload), ctx?.accessToken);
+    async (payload) => {
+      const result = await runWithAuth(ctx.accessToken, () => artifactsClient.create(ctx.accessToken, payload));
       return asMcpText(result);
     }
   );
@@ -71,7 +70,6 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
       title: "Update Artifact",
       description: "Update an artifact.",
       inputSchema: {
-        ...tokenInput,
         id: z.string().min(1),
         name: z.string().optional(),
         type: z.string().optional(),
@@ -81,9 +79,8 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
         url: z.string().optional()
       }
     },
-    async ({ accessToken, id, ...payload }) => {
-      const token = accessToken ?? ctx?.accessToken;
-      const result = await runWithAuth(accessToken, () => artifactsClient.update(token!, id, payload), ctx?.accessToken);
+    async ({ id, ...payload }) => {
+      const result = await runWithAuth(ctx.accessToken, () => artifactsClient.update(ctx.accessToken, id, payload));
       return asMcpText(result);
     }
   );
@@ -94,13 +91,11 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
       title: "Delete Artifact",
       description: "Delete an artifact.",
       inputSchema: {
-        ...tokenInput,
         id: z.string().min(1)
       }
     },
-    async ({ accessToken, id }) => {
-      const token = accessToken ?? ctx?.accessToken;
-      await runWithAuth(accessToken, () => artifactsClient.remove(token!, id), ctx?.accessToken);
+    async ({ id }) => {
+      await runWithAuth(ctx.accessToken, () => artifactsClient.remove(ctx.accessToken, id));
       return asMcpText({ status: "ok" });
     }
   );

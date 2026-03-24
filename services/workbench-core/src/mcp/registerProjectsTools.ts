@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { projectsClient } from "../internalClients.js";
-import { asMcpText, runWithAuth, tokenInput } from "./helpers.js";
+import { asMcpText, runWithAuth } from "./helpers.js";
 
 const projectStatusSchema = z.enum(["draft", "active", "archived"]);
 
@@ -9,27 +9,26 @@ type ToolContext = {
   accessToken: string;
 };
 
+export function registerProjectsTools(server: McpServer, ctx: ToolContext): void;
+export function registerProjectsTools(server: McpServer): void;
 export function registerProjectsTools(server: McpServer, ctx?: ToolContext): void {
+  if (!ctx) {
+    throw new Error("Tool context is required");
+  }
   server.registerTool(
     "projects.list",
     {
       title: "List Projects",
       description: "List projects for the authenticated user.",
       inputSchema: {
-        ...tokenInput,
         query: z.string().optional(),
         status: projectStatusSchema.optional(),
         limit: z.number().int().positive().optional(),
         cursor: z.string().optional()
       }
     },
-    async ({ accessToken, query, status, limit, cursor }) => {
-      const token = accessToken ?? ctx?.accessToken;
-      const result = await runWithAuth(
-        accessToken,
-        () => projectsClient.list(token!, query, status, limit, cursor),
-        ctx?.accessToken
-      );
+    async ({ query, status, limit, cursor }) => {
+      const result = await runWithAuth(ctx.accessToken, () => projectsClient.list(ctx.accessToken, query, status, limit, cursor));
       return asMcpText(result);
     }
   );
@@ -40,13 +39,11 @@ export function registerProjectsTools(server: McpServer, ctx?: ToolContext): voi
       title: "Get Project",
       description: "Get a project by id.",
       inputSchema: {
-        ...tokenInput,
         id: z.string().min(1)
       }
     },
-    async ({ accessToken, id }) => {
-      const token = accessToken ?? ctx?.accessToken;
-      const result = await runWithAuth(accessToken, () => projectsClient.get(token!, id), ctx?.accessToken);
+    async ({ id }) => {
+      const result = await runWithAuth(ctx.accessToken, () => projectsClient.get(ctx.accessToken, id));
       return asMcpText(result);
     }
   );
@@ -57,16 +54,14 @@ export function registerProjectsTools(server: McpServer, ctx?: ToolContext): voi
       title: "Create Project",
       description: "Create a project.",
       inputSchema: {
-        ...tokenInput,
         name: z.string().min(1),
         description: z.string().optional(),
         status: projectStatusSchema.optional(),
         ownerAccountId: z.string().optional()
       }
     },
-    async ({ accessToken, ...payload }) => {
-      const token = accessToken ?? ctx?.accessToken;
-      const result = await runWithAuth(accessToken, () => projectsClient.create(token!, payload), ctx?.accessToken);
+    async (payload) => {
+      const result = await runWithAuth(ctx.accessToken, () => projectsClient.create(ctx.accessToken, payload));
       return asMcpText(result);
     }
   );
@@ -77,16 +72,14 @@ export function registerProjectsTools(server: McpServer, ctx?: ToolContext): voi
       title: "Update Project",
       description: "Update a project.",
       inputSchema: {
-        ...tokenInput,
         id: z.string().min(1),
         name: z.string().optional(),
         description: z.string().optional(),
         status: projectStatusSchema.optional()
       }
     },
-    async ({ accessToken, id, ...payload }) => {
-      const token = accessToken ?? ctx?.accessToken;
-      const result = await runWithAuth(accessToken, () => projectsClient.update(token!, id, payload), ctx?.accessToken);
+    async ({ id, ...payload }) => {
+      const result = await runWithAuth(ctx.accessToken, () => projectsClient.update(ctx.accessToken, id, payload));
       return asMcpText(result);
     }
   );
@@ -97,13 +90,11 @@ export function registerProjectsTools(server: McpServer, ctx?: ToolContext): voi
       title: "Delete Project",
       description: "Delete a project.",
       inputSchema: {
-        ...tokenInput,
         id: z.string().min(1)
       }
     },
-    async ({ accessToken, id }) => {
-      const token = accessToken ?? ctx?.accessToken;
-      await runWithAuth(accessToken, () => projectsClient.remove(token!, id), ctx?.accessToken);
+    async ({ id }) => {
+      await runWithAuth(ctx.accessToken, () => projectsClient.remove(ctx.accessToken, id));
       return asMcpText({ status: "ok" });
     }
   );
