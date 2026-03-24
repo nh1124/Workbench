@@ -65,6 +65,7 @@ export function Layout() {
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [isQuickNoteOpen, setIsQuickNoteOpen] = useState(false);
   const [isNotificationOpen, setIsNotificationOpen] = useState(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const {
     items: notifications,
     unreadCount,
@@ -77,6 +78,7 @@ export function Layout() {
   useEffect(() => {
     setIsUserMenuOpen(false);
     setIsNotificationOpen(false);
+    setIsMobileMenuOpen(false);
   }, [location.pathname]);
 
   useEffect(() => {
@@ -138,8 +140,19 @@ export function Layout() {
   };
 
   return (
-    <div className={isSidebarCollapsed ? "app-shell sidebar-collapsed" : "app-shell"}>
-      <aside className="sidebar">
+    <div className={[
+      "app-shell",
+      isSidebarCollapsed ? "sidebar-collapsed" : "",
+      isMobileMenuOpen ? "mobile-menu-open" : ""
+    ].filter(Boolean).join(" ")}>
+      {isMobileMenuOpen && (
+        <div
+          className="mobile-sidebar-backdrop"
+          aria-hidden="true"
+          onClick={() => setIsMobileMenuOpen(false)}
+        />
+      )}
+      <aside className={isMobileMenuOpen ? "sidebar mobile-sidebar-open" : "sidebar"}>
         <div className="sidebar-top">
           <button
             type="button"
@@ -239,10 +252,22 @@ export function Layout() {
 
       <main className="workspace-main">
         <header className="workspace-topbar">
-          <p className="topbar-brand">
-            <span className="topbar-dot" aria-hidden="true" />
-            WORKBENCH
-          </p>
+          <div className="topbar-left">
+            <button
+              type="button"
+              className="mobile-hamburger"
+              aria-label="Open navigation menu"
+              onClick={() => setIsMobileMenuOpen((prev) => !prev)}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                <path d="M4 7h16M4 12h16M4 17h16" />
+              </svg>
+            </button>
+            <p className="topbar-brand">
+              <span className="topbar-dot" aria-hidden="true" />
+              WORKBENCH
+            </p>
+          </div>
           <div className="topbar-actions">
             <div className="notification-menu-wrap" ref={notificationMenuRef}>
               <button

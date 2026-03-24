@@ -269,6 +269,41 @@ export const artifactsClient = {
 export const tasksClient = {
   list: (token: string, context?: string, status?: string, limit?: number) =>
     serviceRequest<unknown[]>(tasksService, `/tasks${buildQuery({ context, status, limit })}`, token),
+  pins: (token: string) => serviceRequest<{ taskIds: string[] }>(tasksService, "/tasks/pins", token),
+  setPin: (token: string, id: string, pinned: boolean) =>
+    serviceRequest<{ taskId: string; pinned: boolean }>(tasksService, `/tasks/${encodeURIComponent(id)}/pin`, token, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pinned })
+    }),
+  schedule: (token: string, startDate: string, endDate: string, context?: string, status?: string) =>
+    serviceRequest<unknown[]>(
+      tasksService,
+      `/tasks/schedule${buildQuery({ startDate, endDate, context, status })}`,
+      token
+    ),
+  completeOccurrence: (token: string, id: string, targetDate: string, status: string) =>
+    serviceRequest<{ taskId: string; targetDate: string; status: string }>(
+      tasksService,
+      `/tasks/${encodeURIComponent(id)}/occurrences/complete`,
+      token,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetDate, status })
+      }
+    ),
+  moveOccurrence: (token: string, id: string, sourceDate: string, targetDate: string) =>
+    serviceRequest<{ taskId: string; sourceDate: string; targetDate: string }>(
+      tasksService,
+      `/tasks/${encodeURIComponent(id)}/occurrences/move`,
+      token,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sourceDate, targetDate })
+      }
+    ),
   get: (token: string, id: string) => serviceRequest<unknown>(tasksService, `/tasks/${encodeURIComponent(id)}`, token),
   create: (token: string, payload: unknown) =>
     serviceRequest<unknown>(tasksService, "/tasks", token, {

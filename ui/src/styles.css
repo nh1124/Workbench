@@ -211,6 +211,11 @@ button, input, select, textarea { font: inherit; }
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 1rem; background: #030712;
 }
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
 .topbar-brand { margin: 0; font-size: 0.7rem; letter-spacing: 0.24em; color: #64748b; text-transform: uppercase; font-weight: 800; display: flex; align-items: center; gap: 0.45rem; }
 .topbar-dot { width: 0.5rem; height: 0.5rem; border-radius: 999px; background: #3b82f6; display: inline-block; }
 .topbar-actions {
@@ -629,9 +634,93 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
 }
 .has-unread { position: relative; }
 
-@media (max-width: 980px) {
-  .app-shell { grid-template-columns: 1fr; }
-  .sidebar { position: static; }
+/* Mobile hamburger — hidden on desktop */
+.mobile-hamburger {
+  display: none;
+  width: 2.1rem;
+  height: 2.1rem;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #94a3b8;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.mobile-hamburger svg { width: 1.2rem; height: 1.2rem; display: block; }
+.mobile-hamburger:hover { background: rgba(255,255,255,0.06); color: #e2e8f0; }
+
+/* Mobile sidebar backdrop */
+.mobile-sidebar-backdrop {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  /* Show desktop sidebar grid as normal column on mobile */
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  /* Hide sidebar by default on mobile — slide in from left */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 200;
+    width: 220px;
+    transform: translateX(-100%);
+    transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: none;
+  }
+
+  /* When mobile menu is open, slide sidebar in */
+  .sidebar.mobile-sidebar-open {
+    transform: translateX(0);
+    box-shadow: 8px 0 32px rgba(0,0,0,0.55);
+  }
+
+  /* Backdrop */
+  .mobile-sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 199;
+    background: rgba(2, 6, 23, 0.65);
+    backdrop-filter: blur(2px);
+    pointer-events: all;
+    cursor: default;
+  }
+
+  /* Ensure main content sits below the backdrop */
+  .workspace-main {
+    position: relative;
+    z-index: 1;
+  }
+
+  /* Show hamburger button */
+  .mobile-hamburger {
+    display: inline-flex;
+  }
+
+  /* Force sidebar to full height; not collapsed on mobile */
+  .app-shell.sidebar-collapsed .sidebar {
+    width: 220px;
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
+  .app-shell.sidebar-collapsed .nav-label { display: block; }
+  .app-shell.sidebar-collapsed .nav-link { justify-content: flex-start; padding: 0.6rem 0.7rem; }
+  .app-shell.sidebar-collapsed .sidebar-footer-wrap { display: block; }
+  .app-shell.sidebar-collapsed .sidebar-footer {
+    width: 100%; border: 1px solid var(--line); background: rgba(15,23,42,0.9);
+    padding: 0.45rem 0.55rem; gap: 0.55rem; justify-content: flex-start; box-shadow: none;
+  }
+  .app-shell.sidebar-collapsed .sidebar-footer strong,
+  .app-shell.sidebar-collapsed .sidebar-footer .user-chevron { display: block; }
+
+  /* Misc layout fixes */
   .split-grid { grid-template-columns: 1fr; }
   .form-grid { grid-template-columns: 1fr; }
 }

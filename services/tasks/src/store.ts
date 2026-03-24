@@ -2,8 +2,17 @@ import { config as loadEnv } from "dotenv";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { cacheTasks, upsertServiceAccount } from "./db.js";
-import type { RecurrenceType, Task, TaskHistoryEntry, TaskInput, TaskProjectSummary, TaskStatus } from "./types.js";
+import { cacheTasks, listPinnedTaskIds, setTaskPinned, upsertServiceAccount } from "./db.js";
+import { LbsClient, type LbsClientConfig, type LbsScheduleDay } from "./lbsClient.js";
+import type {
+  RecurrenceType,
+  Task,
+  TaskHistoryEntry,
+  TaskInput,
+  TaskProjectSummary,
+  TaskScheduleDay as TaskScheduleDayModel,
+  TaskStatus
+} from "./types.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -51,6 +60,10 @@ interface LbsHistoryEntry {
   created_at?: string;
 }
 
+interface LbsResolvedTask {
+  status?: string | null;
+}
+
 interface LbsConfig {
   baseUrl: string;
   authBaseUrl: string;
@@ -62,6 +75,22 @@ interface LbsConfig {
   timezone: string;
   forceOverride: boolean;
   defaultActive: boolean;
+}
+
+function toClientConfig(config: LbsConfig): LbsClientConfig {
+  return {
+    baseUrl: config.baseUrl,
+    authBaseUrl: config.authBaseUrl,
+    authLoginPath: config.authLoginPath,
+    authUserCreatePath: config.authUserCreatePath,
+    timezone: config.timezone,
+    apiKey: config.apiKey,
+    sharedToken: config.token
+  };
+}
+
+function createLbsClient(config: LbsConfig, authToken?: string): LbsClient {
+  return new LbsClient(toClientConfig(config), authToken);
 }
 
 function requireEnv(name: string): string {
@@ -115,9 +144,32 @@ function toUiStatus(lbsStatus?: string | null): TaskStatus {
 
 function toDueDateOnly(value?: string | null): string | undefined {
   if (!value) return undefined;
+  const trimmed = value.trim();
+  const leadingDate = /^(\d{4})-(\d{2})-(\d{2})(?:$|[T\s])/.exec(trimmed);
+  if (leadingDate) {
+    return `${leadingDate[1]}-${leadingDate[2]}-${leadingDate[3]}`;
+  }
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return undefined;
   return date.toISOString().slice(0, 10);
+}
+
+function todayInTimezone(timezone: string, baseDate: Date = new Date()): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).formatToParts(baseDate);
+    const year = parts.find((part) => part.type === "year")?.value;
+    const month = parts.find((part) => part.type === "month")?.value;
+    const day = parts.find((part) => part.type === "day")?.value;
+    if (year && month && day) return `${year}-${month}-${day}`;
+  } catch {
+    // fall through to UTC fallback
+  }
+  return new Date().toISOString().slice(0, 10);
 }
 
 function normalizeResponseTask(task: LbsTask): Task {
@@ -154,55 +206,6 @@ function normalizeResponseTask(task: LbsTask): Task {
     createdAt: task.created_at || task.updated_at || now,
     updatedAt: task.updated_at || task.created_at || now
   };
-}
-
-type LbsRequestOptions = {
-  body?: unknown;
-  authToken?: string;
-  allowSharedAuth?: boolean;
-};
-
-async function lbsRequest<T>(method: string, endpoint: string, options?: LbsRequestOptions): Promise<T> {
-  const config = getLbsConfig();
-  const url = `${config.baseUrl}/${endpoint.replace(/^\/+/, "")}`;
-  const headers: Record<string, string> = {
-    Accept: "application/json",
-    "Content-Type": "application/json",
-    "X-Timezone": config.timezone
-  };
-
-  if (options?.authToken) {
-    headers.Authorization = `Bearer ${options.authToken}`;
-  } else if (options?.allowSharedAuth && config.apiKey) {
-    headers["X-API-KEY"] = config.apiKey;
-  } else if (options?.allowSharedAuth && config.token) {
-    headers.Authorization = `Bearer ${config.token}`;
-  } else {
-    throw new Error("LBS user token is missing for this request");
-  }
-
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      method,
-      headers,
-      body: options?.body ? JSON.stringify(options.body) : undefined
-    });
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : "unknown network error";
-    throw new Error(`LBS_UNREACHABLE: unable to reach ${config.baseUrl} (${detail})`);
-  }
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `LBS request failed: ${method} ${endpoint} (${response.status})`);
-  }
-
-  if (response.status === 204) {
-    return undefined as T;
-  }
-
-  return (await response.json()) as T;
 }
 
 interface LbsAuthTokenResponse {
@@ -343,20 +346,54 @@ export async function provisionLbsAccount(coreUserId: string, usernameSnapshot: 
   await upsertServiceAccount(coreUserId, usernameSnapshot, tokens);
 }
 
+function resolveStatusTargetDate(
+  recurrence: RecurrenceType | undefined,
+  dueDate: string | undefined,
+  timezone: string,
+  fallbackTimezone: string
+): string {
+  if ((recurrence ?? "ONCE") === "ONCE") {
+    return toDueDateOnly(dueDate) || todayInTimezone(timezone || fallbackTimezone);
+  }
+  return todayInTimezone(timezone || fallbackTimezone);
+}
+
 async function setTaskCompletion(
   taskId: string,
   lbsAccessToken: string,
-  dueDate?: string,
+  targetDate: string,
   status: TaskStatus = "todo"
 ): Promise<void> {
-  const targetDate = toDueDateOnly(dueDate) || new Date().toISOString().slice(0, 10);
-  await lbsRequest("POST", `tasks/${taskId}/complete`, {
-    authToken: lbsAccessToken,
-    body: {
-      target_date: targetDate,
-      status: toLbsStatus(status)
+  const config = getLbsConfig();
+  const client = createLbsClient(config, lbsAccessToken);
+  await client.completeTask(taskId, toDueDateOnly(targetDate) || targetDate, toLbsStatus(status));
+}
+
+function resolveTargetDate(task: Task, fallbackTimezone: string): string {
+  return resolveStatusTargetDate(task.recurrence, task.dueDate, task.timezone || fallbackTimezone, fallbackTimezone);
+}
+
+async function applyResolvedStatus(task: Task, lbsAccessToken: string, fallbackTimezone: string): Promise<Task> {
+  const targetDate = resolveTargetDate(task, fallbackTimezone);
+  const config = getLbsConfig();
+  const client = createLbsClient(config, lbsAccessToken);
+  try {
+    const resolved = (await client.resolveTask(task.id, targetDate)) as unknown as LbsResolvedTask;
+    return { ...task, status: toUiStatus(resolved.status) };
+  } catch {
+    try {
+      const history = (await client.getTaskHistory(task.id, targetDate, targetDate)) as unknown as LbsHistoryEntry[];
+      if (history.length === 0) {
+        return task;
+      }
+      const latest = history
+        .slice()
+        .sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""))[0];
+      return { ...task, status: toUiStatus(latest.status) };
+    } catch {
+      return task;
     }
-  });
+  }
 }
 
 export async function listTasks(
@@ -365,14 +402,17 @@ export async function listTasks(
   lbsAccessToken: string
 ): Promise<Task[]> {
   const config = getLbsConfig();
-  const params = new URLSearchParams();
-  if (filters?.projectId) params.set("context", filters.projectId);
-  if (config.defaultActive) params.set("active", "true");
-
-  const query = params.toString();
-  const tasks = await lbsRequest<LbsTask[]>("GET", `tasks${query ? `?${query}` : ""}`, { authToken: lbsAccessToken });
+  const client = createLbsClient(config, lbsAccessToken);
+  const tasks = (await client.listTasks(filters?.projectId, config.defaultActive)) as unknown as LbsTask[];
   const mapped = tasks.map(normalizeResponseTask);
-  const statusFiltered = filters?.status ? mapped.filter((task) => task.status === filters.status) : mapped;
+  const withResolvedStatuses = await Promise.all(
+    mapped.map((task) => applyResolvedStatus(task, lbsAccessToken, config.timezone))
+  );
+  const pinnedIds = new Set(await listPinnedTaskIds(ownerUsername));
+  const withPins = withResolvedStatuses.map((task) => ({ ...task, isPinned: pinnedIds.has(task.id) }));
+  const statusFiltered = filters?.status
+    ? withPins.filter((task) => task.status === filters.status)
+    : withPins;
   const sorted = statusFiltered.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 
   const result = filters?.limit && filters.limit > 0 ? sorted.slice(0, filters.limit) : sorted;
@@ -382,10 +422,15 @@ export async function listTasks(
 
 export async function getTask(id: string, ownerUsername: string, lbsAccessToken: string): Promise<Task | undefined> {
   try {
-    const task = await lbsRequest<LbsTask>("GET", `tasks/${id}`, { authToken: lbsAccessToken });
+    const config = getLbsConfig();
+    const client = createLbsClient(config, lbsAccessToken);
+    const task = (await client.getTask(id)) as unknown as LbsTask;
     const normalized = normalizeResponseTask(task);
-    await cacheTasks([normalized], ownerUsername);
-    return normalized;
+    const resolved = await applyResolvedStatus(normalized, lbsAccessToken, config.timezone);
+    const pinnedIds = new Set(await listPinnedTaskIds(ownerUsername));
+    const taskWithPin = { ...resolved, isPinned: pinnedIds.has(resolved.id) };
+    await cacheTasks([taskWithPin], ownerUsername);
+    return taskWithPin;
   } catch (error) {
     if (error instanceof Error && error.message.includes("(404)")) {
       return undefined;
@@ -396,7 +441,13 @@ export async function getTask(id: string, ownerUsername: string, lbsAccessToken:
 
 export async function getTaskHistory(id: string, lbsAccessToken: string): Promise<TaskHistoryEntry[]> {
   try {
-    const history = await lbsRequest<LbsHistoryEntry[]>("GET", `tasks/${id}/history`, { authToken: lbsAccessToken });
+    const config = getLbsConfig();
+    const client = createLbsClient(config, lbsAccessToken);
+    const endDate = todayInTimezone(config.timezone);
+    const startBase = new Date();
+    startBase.setFullYear(startBase.getFullYear() - 2);
+    const startDate = todayInTimezone(config.timezone, startBase);
+    const history = (await client.getTaskHistory(id, startDate, endDate)) as unknown as LbsHistoryEntry[];
     return history.map((entry) => ({
       id: entry.id ?? "",
       taskId: entry.task_id ?? id,
@@ -443,18 +494,28 @@ function buildLbsPayload(input: TaskInput, config: LbsConfig): Record<string, un
 
 export async function createTask(input: TaskInput, ownerUsername: string, lbsAccessToken: string): Promise<Task> {
   const config = getLbsConfig();
+  const client = createLbsClient(config, lbsAccessToken);
   const payload = buildLbsPayload(input, config);
 
-  const created = await lbsRequest<LbsTask>("POST", "tasks", { authToken: lbsAccessToken, body: payload });
+  const created = (await client.createTask(payload)) as unknown as LbsTask;
 
   // Set initial status via completion endpoint
   const uiStatus = input.status ?? "todo";
-  await setTaskCompletion(created.task_id, lbsAccessToken, input.dueDate, uiStatus);
+  const createStatusTargetDate = resolveStatusTargetDate(
+    input.recurrence,
+    input.dueDate,
+    input.timezone || config.timezone,
+    config.timezone
+  );
+  await setTaskCompletion(created.task_id, lbsAccessToken, createStatusTargetDate, uiStatus);
 
-  const fresh = await lbsRequest<LbsTask>("GET", `tasks/${created.task_id}`, { authToken: lbsAccessToken });
+  const fresh = (await client.getTask(created.task_id)) as unknown as LbsTask;
   const normalized = normalizeResponseTask(fresh);
-  await cacheTasks([normalized], ownerUsername);
-  return normalized;
+  const resolved = await applyResolvedStatus(normalized, lbsAccessToken, config.timezone);
+  const pinnedIds = new Set(await listPinnedTaskIds(ownerUsername));
+  const taskWithPin = { ...resolved, isPinned: pinnedIds.has(resolved.id) };
+  await cacheTasks([taskWithPin], ownerUsername);
+  return taskWithPin;
 }
 
 export async function updateTask(
@@ -464,11 +525,12 @@ export async function updateTask(
   lbsAccessToken: string
 ): Promise<Task | undefined> {
   const config = getLbsConfig();
+  const client = createLbsClient(config, lbsAccessToken);
 
   // Fetch current task first to merge fields
   let current: LbsTask | undefined;
   try {
-    current = await lbsRequest<LbsTask>("GET", `tasks/${id}`, { authToken: lbsAccessToken });
+    current = (await client.getTask(id)) as unknown as LbsTask;
   } catch {
     return undefined;
   }
@@ -504,17 +566,25 @@ export async function updateTask(
   const payload = buildLbsPayload(merged, config);
 
   try {
-    const query = `force_override=${String(config.forceOverride)}`;
-    await lbsRequest<LbsTask>("PUT", `tasks/${id}?${query}`, { authToken: lbsAccessToken, body: payload });
+    await client.updateTask(id, payload, config.forceOverride);
 
     if (updates.status !== undefined) {
-      await setTaskCompletion(id, lbsAccessToken, merged.dueDate, updates.status);
+      const updateStatusTargetDate = resolveStatusTargetDate(
+        merged.recurrence,
+        merged.dueDate,
+        merged.timezone || config.timezone,
+        config.timezone
+      );
+      await setTaskCompletion(id, lbsAccessToken, updateStatusTargetDate, updates.status);
     }
 
-    const fresh = await lbsRequest<LbsTask>("GET", `tasks/${id}`, { authToken: lbsAccessToken });
+    const fresh = (await client.getTask(id)) as unknown as LbsTask;
     const normalized = normalizeResponseTask(fresh);
-    await cacheTasks([normalized], ownerUsername);
-    return normalized;
+    const resolved = await applyResolvedStatus(normalized, lbsAccessToken, config.timezone);
+    const pinnedIds = new Set(await listPinnedTaskIds(ownerUsername));
+    const taskWithPin = { ...resolved, isPinned: pinnedIds.has(resolved.id) };
+    await cacheTasks([taskWithPin], ownerUsername);
+    return taskWithPin;
   } catch (error) {
     if (error instanceof Error && error.message.includes("(404)")) {
       return undefined;
@@ -525,9 +595,9 @@ export async function updateTask(
 
 export async function deleteTask(id: string, _ownerUsername: string, lbsAccessToken: string): Promise<boolean> {
   const config = getLbsConfig();
+  const client = createLbsClient(config, lbsAccessToken);
   try {
-    const query = `force_override=${String(config.forceOverride)}`;
-    await lbsRequest<void>("DELETE", `tasks/${id}?${query}`, { authToken: lbsAccessToken });
+    await client.deleteTask(id, config.forceOverride);
     return true;
   } catch (error) {
     if (error instanceof Error && error.message.includes("(404)")) {
@@ -539,41 +609,22 @@ export async function deleteTask(id: string, _ownerUsername: string, lbsAccessTo
 
 export async function exportTasksCsv(lbsAccessToken: string): Promise<string> {
   const config = getLbsConfig();
-  const url = `${config.baseUrl}/tasks/export-csv`;
-  const headers: Record<string, string> = {
-    Accept: "text/csv",
-    "X-Timezone": config.timezone
-  };
-  headers.Authorization = `Bearer ${lbsAccessToken}`;
-
-  const response = await fetch(url, { method: "GET", headers });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `LBS export failed (${response.status})`);
-  }
-  return response.text();
+  const client = createLbsClient(config, lbsAccessToken);
+  return client.exportTasksCsv();
 }
 
 export async function importTasksCsv(csvContent: string, lbsAccessToken: string): Promise<{ imported: number }> {
   const config = getLbsConfig();
-  const url = `${config.baseUrl}/tasks/upload-csv`;
-  const headers: Record<string, string> = {
-    "Content-Type": "text/csv",
-    "X-Timezone": config.timezone
-  };
-  headers.Authorization = `Bearer ${lbsAccessToken}`;
-
-  const response = await fetch(url, { method: "POST", headers, body: csvContent });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `LBS import failed (${response.status})`);
-  }
-  const result = (await response.json()) as Record<string, unknown>;
+  const client = createLbsClient(config, lbsAccessToken);
+  const result = await client.uploadTasksCsv(csvContent);
   return { imported: typeof result.imported === "number" ? result.imported : 0 };
 }
 
-export async function listTaskProjects(ownerUsername: string, lbsAccessToken: string): Promise<TaskProjectSummary[]> {
-  const tasks = await listTasks(undefined, ownerUsername, lbsAccessToken);
+export async function listTaskProjects(_ownerUsername: string, lbsAccessToken: string): Promise<TaskProjectSummary[]> {
+  const config = getLbsConfig();
+  const client = createLbsClient(config, lbsAccessToken);
+  const tasks = ((await client.listTasks(undefined, config.defaultActive)) as unknown as LbsTask[])
+    .map(normalizeResponseTask);
   const grouped = new Map<string, TaskProjectSummary>();
 
   for (const task of tasks) {
@@ -595,4 +646,151 @@ export async function listTaskProjects(ownerUsername: string, lbsAccessToken: st
   }
 
   return Array.from(grouped.values()).sort((a, b) => b.latestUpdatedAt.localeCompare(a.latestUpdatedAt));
+}
+
+export async function listTaskPins(ownerUsername: string): Promise<string[]> {
+  return listPinnedTaskIds(ownerUsername);
+}
+
+export async function updateTaskPin(ownerUsername: string, taskId: string, pinned: boolean): Promise<{ taskId: string; pinned: boolean }> {
+  await setTaskPinned(ownerUsername, taskId, pinned);
+  return { taskId, pinned };
+}
+
+function mapScheduleStatus(status?: string | null): TaskStatus {
+  return toUiStatus(status);
+}
+
+function mapScheduleDay(
+  day: LbsScheduleDay,
+  projectId?: string,
+  status?: TaskStatus
+): TaskScheduleDayModel {
+  const mappedTasks = (day.tasks || [])
+    .filter((task) => (projectId ? task.context === projectId : true))
+    .map((task) => ({
+      taskId: task.task_id,
+      title: task.task_name,
+      context: task.context,
+      status: mapScheduleStatus(task.status),
+      load: task.load,
+      startTime: task.start_time || undefined,
+      endTime: task.end_time || undefined,
+      isLocked: task.is_locked === true
+    }))
+    .filter((task) => (status ? task.status === status : true));
+
+  return {
+    date: day.date,
+    totalLoad: day.total_load,
+    baseLoad: day.base_load,
+    cap: day.cap,
+    level: day.level,
+    tasks: mappedTasks
+  };
+}
+
+export async function getTaskSchedule(
+  startDate: string,
+  endDate: string,
+  projectId: string | undefined,
+  status: TaskStatus | undefined,
+  lbsAccessToken: string
+): Promise<TaskScheduleDayModel[]> {
+  const config = getLbsConfig();
+  const client = createLbsClient(config, lbsAccessToken);
+  const days = await client.getSchedule(startDate, endDate);
+  return days
+    .map((day) => mapScheduleDay(day, projectId, status))
+    .filter((day) => day.tasks.length > 0);
+}
+
+export async function completeTaskOccurrence(
+  taskId: string,
+  targetDate: string,
+  status: TaskStatus,
+  lbsAccessToken: string
+): Promise<{ taskId: string; targetDate: string; status: TaskStatus }> {
+  const config = getLbsConfig();
+  const client = createLbsClient(config, lbsAccessToken);
+  const normalizedDate = toDueDateOnly(targetDate);
+  if (!normalizedDate) {
+    throw new Error("targetDate must be in YYYY-MM-DD format");
+  }
+  await client.completeTask(taskId, normalizedDate, toLbsStatus(status));
+  return { taskId, targetDate: normalizedDate, status };
+}
+
+function extractExceptionId(record: Record<string, unknown>): number | undefined {
+  const id = record.id;
+  if (typeof id === "number") return id;
+  if (typeof id === "string" && id.trim()) {
+    const parsed = Number(id);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function extractExceptionDate(record: Record<string, unknown>): string | undefined {
+  const value = record.target_date;
+  if (typeof value === "string") return toDueDateOnly(value);
+  return undefined;
+}
+
+async function upsertTaskException(
+  client: LbsClient,
+  taskId: string,
+  targetDate: string,
+  exceptionType: "SKIP" | "FORCE_DO",
+  notes: string
+): Promise<void> {
+  const payload = {
+    task_id: taskId,
+    target_date: targetDate,
+    exception_type: exceptionType,
+    notes,
+    is_locked: false
+  };
+  try {
+    await client.createException(payload, true);
+    return;
+  } catch {
+    const listed = await client.listExceptions(taskId, targetDate, targetDate);
+    const exact = listed.find((row) => extractExceptionDate(row) === targetDate);
+    const exceptionId = exact ? extractExceptionId(exact) : undefined;
+    if (!exceptionId) {
+      throw new Error(`Failed to upsert exception for ${taskId} on ${targetDate}`);
+    }
+    await client.updateException(
+      exceptionId,
+      {
+        exception_type: exceptionType,
+        notes,
+        is_locked: false
+      },
+      true
+    );
+  }
+}
+
+export async function moveTaskOccurrence(
+  taskId: string,
+  sourceDate: string,
+  targetDate: string,
+  lbsAccessToken: string
+): Promise<{ taskId: string; sourceDate: string; targetDate: string }> {
+  const config = getLbsConfig();
+  const client = createLbsClient(config, lbsAccessToken);
+  const normalizedSource = toDueDateOnly(sourceDate);
+  const normalizedTarget = toDueDateOnly(targetDate);
+  if (!normalizedSource || !normalizedTarget) {
+    throw new Error("sourceDate and targetDate must be in YYYY-MM-DD format");
+  }
+  if (normalizedSource === normalizedTarget) {
+    return { taskId, sourceDate: normalizedSource, targetDate: normalizedTarget };
+  }
+
+  await upsertTaskException(client, taskId, normalizedSource, "SKIP", `Moved to ${normalizedTarget}`);
+  await upsertTaskException(client, taskId, normalizedTarget, "FORCE_DO", `Moved from ${normalizedSource}`);
+  return { taskId, sourceDate: normalizedSource, targetDate: normalizedTarget };
 }

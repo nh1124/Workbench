@@ -7,15 +7,20 @@ import { z } from "zod";
 import { requireInternalApiKey, requireUserAuth } from "./auth.js";
 import { ensureTasksSchema, findServiceAccountByCoreUserId } from "./db.js";
 import {
+  completeTaskOccurrence,
   createTask,
   deleteTask,
   exportTasksCsv,
+  getTaskSchedule,
   getTask,
   getTaskHistory,
   importTasksCsv,
   listTaskProjects,
+  listTaskPins,
   listTasks,
+  moveTaskOccurrence,
   provisionLbsAccount,
+  updateTaskPin,
   updateTask
 } from "./store.js";
 import { RECURRENCE_TYPES, TASK_STATUSES } from "./types.js";
@@ -83,6 +88,20 @@ const taskInputSchema = z.object({
 const internalAccountSchema = z.object({
   coreUserId: z.string().min(1),
   username: z.string().min(1),
+});
+
+const taskPinSchema = z.object({
+  pinned: z.boolean()
+});
+
+const occurrenceStatusSchema = z.object({
+  targetDate: z.string().min(1),
+  status: z.enum(TASK_STATUSES)
+});
+
+const occurrenceMoveSchema = z.object({
+  sourceDate: z.string().min(1),
+  targetDate: z.string().min(1)
 });
 
 function normalizeEmptyStrings(data: Record<string, unknown>): Record<string, unknown> {
@@ -193,6 +212,105 @@ app.get("/tasks", requireUserAuth, async (req, res) => {
     }, owner, lbsAccessToken);
 
     return res.json(tasks);
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+app.get("/tasks/pins", requireUserAuth, async (req, res) => {
+  try {
+    const owner = req.authUser?.coreUserId;
+    if (!owner) {
+      return res.status(401).json({ message: "Missing auth context" });
+    }
+    const taskIds = await listTaskPins(owner);
+    return res.json({ taskIds });
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+app.put("/tasks/:id/pin", requireUserAuth, async (req, res) => {
+  try {
+    const parsed = taskPinSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: parsed.error.flatten() });
+    }
+    const owner = req.authUser?.coreUserId;
+    if (!owner) {
+      return res.status(401).json({ message: "Missing auth context" });
+    }
+    const result = await updateTaskPin(owner, String(req.params.id), parsed.data.pinned);
+    return res.json(result);
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+app.get("/tasks/schedule", requireUserAuth, async (req, res) => {
+  try {
+    const startDate = typeof req.query.startDate === "string" ? req.query.startDate : undefined;
+    const endDate = typeof req.query.endDate === "string" ? req.query.endDate : undefined;
+    const context = typeof req.query.context === "string" ? req.query.context : undefined;
+    const status = typeof req.query.status === "string" ? req.query.status : undefined;
+    if (!startDate || !endDate) {
+      return res.status(400).json({ message: "startDate and endDate are required" });
+    }
+
+    const lbsAccessToken = await ensureLbsAccessToken(req);
+    if (!lbsAccessToken) {
+      return res.status(403).json({ message: "LBS account token not provisioned" });
+    }
+
+    const parsedStatus = TASK_STATUSES.includes(status as (typeof TASK_STATUSES)[number])
+      ? (status as (typeof TASK_STATUSES)[number])
+      : undefined;
+    const schedule = await getTaskSchedule(startDate, endDate, context, parsedStatus, lbsAccessToken);
+    return res.json(schedule);
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+app.post("/tasks/:id/occurrences/complete", requireUserAuth, async (req, res) => {
+  try {
+    const parsed = occurrenceStatusSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: parsed.error.flatten() });
+    }
+    const lbsAccessToken = await ensureLbsAccessToken(req);
+    if (!lbsAccessToken) {
+      return res.status(403).json({ message: "LBS account token not provisioned" });
+    }
+    const result = await completeTaskOccurrence(
+      String(req.params.id),
+      parsed.data.targetDate,
+      parsed.data.status,
+      lbsAccessToken
+    );
+    return res.json(result);
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+app.post("/tasks/:id/occurrences/move", requireUserAuth, async (req, res) => {
+  try {
+    const parsed = occurrenceMoveSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: parsed.error.flatten() });
+    }
+    const lbsAccessToken = await ensureLbsAccessToken(req);
+    if (!lbsAccessToken) {
+      return res.status(403).json({ message: "LBS account token not provisioned" });
+    }
+    const result = await moveTaskOccurrence(
+      String(req.params.id),
+      parsed.data.sourceDate,
+      parsed.data.targetDate,
+      lbsAccessToken
+    );
+    return res.json(result);
   } catch (error) {
     return handleError(res, error);
   }

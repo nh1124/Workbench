@@ -2076,6 +2076,92 @@ app.get("/api/tasks", async (req, res) => {
   }
 });
 
+app.get("/api/tasks/pins", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  try {
+    const result = await tasksClient.pins(authContext.accessToken);
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.put("/api/tasks/:id/pin", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const pinned = typeof req.body?.pinned === "boolean" ? req.body.pinned : undefined;
+  if (pinned === undefined) {
+    return res.status(400).json({ message: "pinned(boolean) is required" });
+  }
+
+  try {
+    const result = await tasksClient.setPin(authContext.accessToken, String(req.params.id), pinned);
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.get("/api/tasks/schedule", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const startDate = typeof req.query.startDate === "string" ? req.query.startDate : undefined;
+  const endDate = typeof req.query.endDate === "string" ? req.query.endDate : undefined;
+  const context = typeof req.query.context === "string" ? req.query.context : undefined;
+  const status = typeof req.query.status === "string" ? req.query.status : undefined;
+
+  if (!startDate || !endDate) {
+    return res.status(400).json({ message: "startDate and endDate are required" });
+  }
+
+  try {
+    const result = await tasksClient.schedule(authContext.accessToken, startDate, endDate, context, status);
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/tasks/:id/occurrences/complete", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const targetDate = typeof req.body?.targetDate === "string" ? req.body.targetDate : undefined;
+  const status = typeof req.body?.status === "string" ? req.body.status : undefined;
+  if (!targetDate || !status) {
+    return res.status(400).json({ message: "targetDate and status are required" });
+  }
+
+  try {
+    const result = await tasksClient.completeOccurrence(authContext.accessToken, String(req.params.id), targetDate, status);
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/tasks/:id/occurrences/move", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const sourceDate = typeof req.body?.sourceDate === "string" ? req.body.sourceDate : undefined;
+  const targetDate = typeof req.body?.targetDate === "string" ? req.body.targetDate : undefined;
+  if (!sourceDate || !targetDate) {
+    return res.status(400).json({ message: "sourceDate and targetDate are required" });
+  }
+
+  try {
+    const result = await tasksClient.moveOccurrence(authContext.accessToken, String(req.params.id), sourceDate, targetDate);
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
 app.get("/api/tasks/projects", async (req, res) => {
   const authContext = await requireAuthenticatedContext(req, res);
   if (!authContext) return;

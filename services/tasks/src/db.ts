@@ -38,6 +38,10 @@ export interface ServiceAccount {
   lbsRefreshToken?: string;
 }
 
+function normalizeOwner(ownerCoreUserId: string): string {
+  return ownerCoreUserId.trim().toLowerCase();
+}
+
 function isTransientStartupError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
@@ -107,6 +111,15 @@ export async function ensureTasksSchema(): Promise<void> {
             task_id TEXT NOT NULL,
             payload JSONB NOT NULL,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (owner_username, task_id)
+          );
+        `);
+
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS task_pins (
+            owner_username TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             PRIMARY KEY (owner_username, task_id)
           );
         `);
@@ -194,7 +207,7 @@ export async function findServiceAccountByCoreUserId(coreUserId: string): Promis
 
 export async function cacheTasks(tasks: Task[], ownerCoreUserId: string): Promise<void> {
   await ensureTasksSchema();
-  const owner = ownerCoreUserId.trim().toLowerCase();
+  const owner = normalizeOwner(ownerCoreUserId);
   if (!owner) {
     throw new Error("Owner core user id is required");
   }
@@ -214,4 +227,52 @@ export async function cacheTasks(tasks: Task[], ownerCoreUserId: string): Promis
 
 export function getTasksPool(): Pool {
   return pool;
+}
+
+export async function listPinnedTaskIds(ownerCoreUserId: string): Promise<string[]> {
+  await ensureTasksSchema();
+  const owner = normalizeOwner(ownerCoreUserId);
+  if (!owner) return [];
+
+  const result = await pool.query<{ task_id: string }>(
+    `
+      SELECT task_id
+      FROM task_pins
+      WHERE owner_username = $1
+      ORDER BY created_at DESC
+    `,
+    [owner]
+  );
+  return result.rows.map((row) => row.task_id);
+}
+
+export async function setTaskPinned(ownerCoreUserId: string, taskId: string, pinned: boolean): Promise<void> {
+  await ensureTasksSchema();
+  const owner = normalizeOwner(ownerCoreUserId);
+  const normalizedTaskId = taskId.trim();
+  if (!owner || !normalizedTaskId) {
+    throw new Error("owner and taskId are required");
+  }
+
+  if (pinned) {
+    await pool.query(
+      `
+        INSERT INTO task_pins (owner_username, task_id, created_at)
+        VALUES ($1, $2, NOW())
+        ON CONFLICT (owner_username, task_id)
+        DO NOTHING
+      `,
+      [owner, normalizedTaskId]
+    );
+    return;
+  }
+
+  await pool.query(
+    `
+      DELETE FROM task_pins
+      WHERE owner_username = $1
+        AND task_id = $2
+    `,
+    [owner, normalizedTaskId]
+  );
 }

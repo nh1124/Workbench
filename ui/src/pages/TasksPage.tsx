@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type UIEvent } from "react";
 import { projectsApi, tasksApi } from "../lib/api";
 import { formatDateTime } from "../lib/format";
-import type { RecurrenceType, Task, TaskHistoryEntry, TaskStatus } from "../types/models";
+import type { RecurrenceType, Task, TaskHistoryEntry, TaskScheduleDay, TaskStatus } from "../types/models";
 import "./TasksPage.css";
 
 type SidebarMode = "list" | "calendar";
 type CalendarMode = "month" | "week";
-type QuickFilter = "all" | "today" | "planned" | "overdue" | "inbox";
+type QuickFilter = "today" | "myday" | "planned" | "overdue" | "inbox";
 type CalendarStatusFilter = "all" | "open" | "done";
 
 const TASK_STATUSES: TaskStatus[] = ["todo", "done", "skipped"];
@@ -48,6 +48,20 @@ interface TaskDraft {
 
 interface MonthCell { key: string; date: Date; inCurrentMonth: boolean; }
 interface ProjectOption { projectId: string; projectName?: string; }
+interface TaskOccurrenceRow {
+  key: string;
+  taskId: string;
+  date: string;
+  title: string;
+  context: string;
+  status: TaskStatus;
+  load?: number;
+  startTime?: string;
+  endTime?: string;
+  isLocked?: boolean;
+}
+
+const OCCURRENCE_PAGE_DAYS = 1;
 
 const emptyDraft: TaskDraft = {
   title: "", notes: "", context: "",
@@ -97,6 +111,27 @@ function addDays(date: Date, days: number): Date { const v = new Date(date); v.s
 function addMonths(date: Date, months: number): Date { return new Date(date.getFullYear(), date.getMonth() + months, 1); }
 function isSameDay(a: Date, b: Date): boolean { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); }
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+function toDateKey(date: Date): string {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function toTaskStatus(value: string | undefined): TaskStatus {
+  if (value === "done" || value === "skipped") return value;
+  return "todo";
+}
+
+function formatDateHeading(dateKey: string): string {
+  const parsed = parseDateOnly(dateKey);
+  if (!parsed) return dateKey;
+  const mm = `${parsed.getMonth() + 1}`.padStart(2, "0");
+  const dd = `${parsed.getDate()}`.padStart(2, "0");
+  const yyyy = `${parsed.getFullYear()}`;
+  return `${mm}.${dd}.${yyyy}`;
+}
 
 function parseDateOnly(value?: string): Date | null {
   if (!value) return null;
@@ -340,6 +375,11 @@ const IcoRepeat = () => (
     <polyline points="7 23 3 19 7 15" /><path d="M21 13v2a4 4 0 0 1-4 4H3" />
   </svg>
 );
+const IcoPin = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" style={{ width: "0.8rem", height: "0.8rem" }}>
+    <path d="M14 3l7 7-3 1-3 6-2-2-2 6-2-2 6-2-2-2 1-3-3-3z" />
+  </svg>
+);
 const IcoZap = () => (
   <svg viewBox="0 0 24 24" fill="currentColor" style={{ width: "0.6rem", height: "0.6rem" }}>
     <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
@@ -372,8 +412,20 @@ export function TasksPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [projectOptions, setProjectOptions] = useState<ProjectOption[]>([]);
   const [contextFilter, setContextFilter] = useState("");
-  const [quickFilter, setQuickFilter] = useState<QuickFilter>("all");
+  const [quickFilter, setQuickFilter] = useState<QuickFilter>("today");
   const [calendarStatusFilter, setCalendarStatusFilter] = useState<CalendarStatusFilter>("all");
+  const [todayTaskIds, setTodayTaskIds] = useState<Set<string>>(new Set());
+  const [occurrenceRows, setOccurrenceRows] = useState<TaskOccurrenceRow[]>([]);
+  const [occurrenceCursorDate, setOccurrenceCursorDate] = useState<Date | null>(null);
+  const [occurrenceLoading, setOccurrenceLoading] = useState(false);
+  const [occurrenceHasMore, setOccurrenceHasMore] = useState(true);
+  const [selectedOccurrenceKeys, setSelectedOccurrenceKeys] = useState<Set<string>>(new Set());
+  const [lastOccurrenceKey, setLastOccurrenceKey] = useState<string | null>(null);
+  const [occurrenceMenu, setOccurrenceMenu] = useState<{ x: number; y: number; visible: boolean }>({
+    x: 0,
+    y: 0,
+    visible: false
+  });
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>("list");
   const [calendarMode, setCalendarMode] = useState<CalendarMode>("month");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -410,27 +462,46 @@ export function TasksPage() {
     setIsLoading(true);
     setError(null);
     try {
-      const [taskList, taskProjects, projectsResult] = await Promise.all([
+      const todayKey = toDateKey(new Date());
+      const [taskList, taskProjects, projectsResult, todaySchedule] = await Promise.all([
         tasksApi.list(contextFilter || undefined),
         tasksApi.projects(),
-        projectsApi.list(undefined, "active", 200).catch(() => ({ items: [] }))
+        projectsApi.list(undefined, "active", 200).catch(() => ({ items: [] })),
+        tasksApi.schedule(todayKey, todayKey, contextFilter || undefined).catch(() => [] as TaskScheduleDay[])
       ]);
+      const todayIds = new Set<string>();
+      const todayStatusMap = new Map<string, TaskStatus>();
+      for (const day of todaySchedule) {
+        for (const item of day.tasks) {
+          todayIds.add(item.taskId);
+          todayStatusMap.set(item.taskId, toTaskStatus(item.status));
+        }
+      }
+
+      const mergedTasks = taskList.map((task) => {
+        const status = todayStatusMap.get(task.id);
+        if (!status) return task;
+        return { ...task, status };
+      });
+
       const serviceProjects = projectsResult.items.map((project) => ({
         projectId: project.id,
         projectName: project.name
       }));
-      setTasks(taskList);
+      setTasks(mergedTasks);
+      setTodayTaskIds(todayIds);
       setProjectOptions(
         mergeProjectOptions(
           taskProjects.map((p) => ({ projectId: p.projectId, projectName: p.projectName })),
           serviceProjects
         )
       );
-      if (selectedTaskId && !taskList.find((t) => t.id === selectedTaskId)) {
+      if (selectedTaskId && !mergedTasks.find((t) => t.id === selectedTaskId)) {
         setSelectedTaskId(null);
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : "Failed to load tasks.";
+      setTodayTaskIds(new Set());
       setError(isAuthErrorMessage(message) ? message : null);
     } finally {
       setIsLoading(false);
@@ -439,6 +510,121 @@ export function TasksPage() {
 
   useEffect(() => { void load(); }, [contextFilter]);
 
+  const buildOccurrenceRowsFromSchedule = (
+    scheduleDays: TaskScheduleDay[],
+    mode: "planned" | "overdue",
+    todayKey: string
+  ): TaskOccurrenceRow[] => {
+    const rows: TaskOccurrenceRow[] = [];
+    for (const day of scheduleDays) {
+      const dateKey = day.date;
+      if (mode === "planned" && dateKey <= todayKey) continue;
+      if (mode === "overdue" && dateKey >= todayKey) continue;
+      for (const item of day.tasks) {
+        const status = toTaskStatus(item.status);
+        if (mode === "overdue" && status === "done") continue;
+        rows.push({
+          key: `${dateKey}::${item.taskId}`,
+          taskId: item.taskId,
+          date: dateKey,
+          title: item.title,
+          context: item.context,
+          status,
+          load: item.load,
+          startTime: item.startTime,
+          endTime: item.endTime,
+          isLocked: item.isLocked
+        });
+      }
+    }
+    rows.sort((a, b) => {
+      if (a.date !== b.date) return a.date.localeCompare(b.date);
+      return a.title.localeCompare(b.title);
+    });
+    return rows;
+  };
+
+  const loadOccurrencePage = async (mode: "planned" | "overdue", reset = false) => {
+    if (occurrenceLoading) return;
+    if (!reset && !occurrenceHasMore) return;
+    setOccurrenceLoading(true);
+    try {
+      const todayDate = startOfDay(new Date());
+      const todayKey = toDateKey(todayDate);
+      const baseDate = reset || !occurrenceCursorDate
+        ? (mode === "planned" ? addDays(todayDate, 1) : addDays(todayDate, -1))
+        : occurrenceCursorDate;
+      const startDate = mode === "planned" ? baseDate : addDays(baseDate, -(OCCURRENCE_PAGE_DAYS - 1));
+      const endDate = mode === "planned" ? addDays(baseDate, OCCURRENCE_PAGE_DAYS - 1) : baseDate;
+      const schedule = await tasksApi.schedule(
+        toDateKey(startDate),
+        toDateKey(endDate),
+        contextFilter || undefined
+      );
+      const rows = buildOccurrenceRowsFromSchedule(schedule, mode, todayKey);
+      const nextCursor = mode === "planned" ? addDays(endDate, 1) : addDays(startDate, -1);
+
+      if (reset) {
+        setOccurrenceRows(rows);
+      } else {
+        setOccurrenceRows((prev) => {
+          const map = new Map<string, TaskOccurrenceRow>();
+          for (const row of prev) map.set(row.key, row);
+          for (const row of rows) map.set(row.key, row);
+          const merged = Array.from(map.values());
+          merged.sort((a, b) => {
+            if (a.date !== b.date) return a.date.localeCompare(b.date);
+            return a.title.localeCompare(b.title);
+          });
+          return merged;
+        });
+      }
+      setOccurrenceCursorDate(nextCursor);
+      setOccurrenceHasMore(rows.length > 0);
+    } catch {
+      setOccurrenceHasMore(false);
+    } finally {
+      setOccurrenceLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (quickFilter !== "planned" && quickFilter !== "overdue") {
+      setOccurrenceRows([]);
+      setOccurrenceCursorDate(null);
+      setOccurrenceHasMore(true);
+      setSelectedOccurrenceKeys(new Set());
+      setLastOccurrenceKey(null);
+      setOccurrenceMenu((prev) => ({ ...prev, visible: false }));
+      return;
+    }
+    setOccurrenceCursorDate(null);
+    setOccurrenceHasMore(true);
+    setSelectedOccurrenceKeys(new Set());
+    setLastOccurrenceKey(null);
+    void loadOccurrencePage(quickFilter, true);
+  }, [quickFilter, contextFilter]);
+
+  useEffect(() => {
+    if (!occurrenceMenu.visible) return;
+    const close = () => {
+      setOccurrenceMenu((prev) => ({ ...prev, visible: false }));
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        close();
+      }
+    };
+    window.addEventListener("click", close);
+    window.addEventListener("contextmenu", close);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("contextmenu", close);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [occurrenceMenu.visible]);
+
   const filteredTasks = useMemo(() => {
     let base = tasks;
     // Apply calendar status filter in calendar mode
@@ -446,23 +632,46 @@ export function TasksPage() {
       if (calendarStatusFilter === "open") base = base.filter((t) => t.status === "todo");
       if (calendarStatusFilter === "done") base = base.filter((t) => t.status === "done");
     } else {
-      if (quickFilter === "inbox") base = base.filter((t) => !t.dueDate);
-      else if (quickFilter === "today") base = base.filter((t) => t.dueDate && isSameDay(startOfDay(new Date(t.dueDate)), today));
-      else if (quickFilter === "planned") base = base.filter((t) => t.dueDate && startOfDay(new Date(t.dueDate)) > today);
-      else if (quickFilter === "overdue") base = base.filter((t) => t.dueDate && startOfDay(new Date(t.dueDate)) < today && t.status !== "done");
+      if (quickFilter === "today") {
+        base = todayTaskIds.size > 0
+          ? base.filter((t) => todayTaskIds.has(t.id))
+          : base.filter((task) => taskOccursOnDate(task, today));
+      } else if (quickFilter === "myday") {
+        base = base.filter((t) => t.isPinned === true);
+      } else if (quickFilter === "planned") {
+        base = base;
+      } else if (quickFilter === "overdue") {
+        base = base;
+      } else if (quickFilter === "inbox") {
+        // Inbox is the previous "All Tasks" view in VisionArk flow.
+        base = base;
+      }
     }
     return base.sort((a, b) => {
       const dA = a.dueDate || "9999-12-31", dB = b.dueDate || "9999-12-31";
       return dA !== dB ? dA.localeCompare(dB) : b.updatedAt.localeCompare(a.updatedAt);
     });
-  }, [quickFilter, calendarStatusFilter, sidebarMode, tasks, today]);
+  }, [quickFilter, calendarStatusFilter, sidebarMode, tasks, today, todayTaskIds]);
 
   const counters = useMemo(() => ({
-    today: tasks.filter((t) => t.dueDate && isSameDay(startOfDay(new Date(t.dueDate)), today)).length,
-    planned: tasks.filter((t) => t.dueDate && startOfDay(new Date(t.dueDate)) > today).length,
-    overdue: tasks.filter((t) => t.dueDate && startOfDay(new Date(t.dueDate)) < today && t.status !== "done").length,
-    inbox: tasks.filter((t) => !t.dueDate).length
-  }), [tasks, today]);
+    today: todayTaskIds.size > 0
+      ? todayTaskIds.size
+      : tasks.filter((task) => taskOccursOnDate(task, today)).length,
+    myday: tasks.filter((t) => t.isPinned === true).length,
+    planned: occurrenceRows.filter((row) => row.date > toDateKey(today)).length,
+    overdue: occurrenceRows.filter((row) => row.date < toDateKey(today)).length,
+    inbox: tasks.length
+  }), [tasks, today, todayTaskIds, occurrenceRows]);
+
+  const handleCenterScroll = (event: UIEvent<HTMLDivElement>) => {
+    if (sidebarMode !== "list") return;
+    if (quickFilter !== "planned" && quickFilter !== "overdue") return;
+    const currentTarget = event.currentTarget;
+    const remaining = currentTarget.scrollHeight - currentTarget.scrollTop - currentTarget.clientHeight;
+    if (remaining < 140) {
+      void loadOccurrencePage(quickFilter, false);
+    }
+  };
 
   const projectNameMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -486,6 +695,34 @@ export function TasksPage() {
       context, contextName: projectNameMap.get(context) || pts[0]?.contextName || context, tasks: pts
     }));
   }, [filteredTasks, projectNameMap]);
+
+  const occurrenceRowsOrdered = useMemo(() => {
+    const copied = occurrenceRows.slice();
+    copied.sort((a, b) => {
+      if (a.date !== b.date) {
+        return quickFilter === "overdue"
+          ? b.date.localeCompare(a.date)
+          : a.date.localeCompare(b.date);
+      }
+      return a.title.localeCompare(b.title);
+    });
+    return copied;
+  }, [occurrenceRows, quickFilter]);
+
+  const occurrenceDateGroups = useMemo(() => {
+    const map = new Map<string, TaskOccurrenceRow[]>();
+    for (const row of occurrenceRowsOrdered) {
+      const list = map.get(row.date) || [];
+      list.push(row);
+      map.set(row.date, list);
+    }
+    return Array.from(map.entries()).map(([date, rows]) => ({ date, rows }));
+  }, [occurrenceRowsOrdered]);
+
+  const occurrenceOrderedKeys = useMemo(
+    () => occurrenceRowsOrdered.map((row) => row.key),
+    [occurrenceRowsOrdered]
+  );
 
   const monthCells = useMemo(() => buildMonthCells(monthCursor), [monthCursor]);
   const weekDays = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekCursor, i)), [weekCursor]);
@@ -614,10 +851,155 @@ export function TasksPage() {
 
   const handleToggleDone = async (task: Task) => {
     const newStatus: TaskStatus = task.status === "done" ? "todo" : "done";
+    const previousStatus = task.status;
+    setTasks((prev) => prev.map((item) => (
+      item.id === task.id ? { ...item, status: newStatus } : item
+    )));
+    if (selectedTaskId === task.id) {
+      setDraft((prev) => ({ ...prev, status: newStatus }));
+    }
     try {
       await tasksApi.update(task.id, { status: newStatus });
       await load();
-    } catch { /* ignore */ }
+    } catch {
+      setTasks((prev) => prev.map((item) => (
+        item.id === task.id ? { ...item, status: previousStatus } : item
+      )));
+      if (selectedTaskId === task.id) {
+        setDraft((prev) => ({ ...prev, status: previousStatus }));
+      }
+      setError("Failed to update task status.");
+    }
+  };
+
+  const handleTogglePin = async (task: Task) => {
+    const nextPinned = !(task.isPinned === true);
+    setTasks((prev) => prev.map((item) => (
+      item.id === task.id ? { ...item, isPinned: nextPinned } : item
+    )));
+    try {
+      await tasksApi.setPin(task.id, nextPinned);
+    } catch {
+      setTasks((prev) => prev.map((item) => (
+        item.id === task.id ? { ...item, isPinned: task.isPinned === true } : item
+      )));
+      setError("Failed to update pin state.");
+    }
+  };
+
+  const handleToggleOccurrenceDone = async (row: TaskOccurrenceRow) => {
+    const nextStatus: TaskStatus = row.status === "done" ? "todo" : "done";
+    try {
+      await tasksApi.completeOccurrence(row.taskId, row.date, nextStatus);
+      await refreshAfterOccurrenceMutation();
+    } catch {
+      setError("Failed to update occurrence status.");
+    }
+  };
+
+  const refreshAfterOccurrenceMutation = async () => {
+    await load();
+    if (quickFilter === "planned" || quickFilter === "overdue") {
+      setOccurrenceCursorDate(null);
+      setOccurrenceHasMore(true);
+      await loadOccurrencePage(quickFilter, true);
+    }
+  };
+
+  const handleOccurrenceClick = (event: ReactMouseEvent<HTMLButtonElement>, row: TaskOccurrenceRow) => {
+    const isShift = "shiftKey" in event && event.shiftKey;
+    const isToggle = "metaKey" in event && (event.metaKey || event.ctrlKey);
+    const next = new Set(selectedOccurrenceKeys);
+
+    if (isShift && lastOccurrenceKey) {
+      const start = occurrenceOrderedKeys.indexOf(lastOccurrenceKey);
+      const end = occurrenceOrderedKeys.indexOf(row.key);
+      if (start >= 0 && end >= 0) {
+        const [from, to] = start < end ? [start, end] : [end, start];
+        for (let index = from; index <= to; index += 1) {
+          next.add(occurrenceOrderedKeys[index]);
+        }
+      } else {
+        next.add(row.key);
+      }
+    } else if (isToggle) {
+      if (next.has(row.key)) next.delete(row.key);
+      else next.add(row.key);
+    } else {
+      next.clear();
+      next.add(row.key);
+      const masterTask = tasks.find((task) => task.id === row.taskId);
+      if (masterTask) {
+        selectTask(masterTask);
+      }
+    }
+
+    setSelectedOccurrenceKeys(next);
+    setLastOccurrenceKey(row.key);
+  };
+
+  const ensureContextSelection = (row: TaskOccurrenceRow, x: number, y: number) => {
+    setSelectedOccurrenceKeys((prev) => {
+      if (prev.has(row.key)) return prev;
+      return new Set([row.key]);
+    });
+    setLastOccurrenceKey(row.key);
+    setOccurrenceMenu({ x, y, visible: true });
+  };
+
+  const getSelectedOccurrenceRows = (): TaskOccurrenceRow[] => {
+    if (selectedOccurrenceKeys.size === 0) return [];
+    return occurrenceRowsOrdered.filter((row) => selectedOccurrenceKeys.has(row.key));
+  };
+
+  const handleMarkSelectedOccurrences = async (status: TaskStatus) => {
+    const selectedRows = getSelectedOccurrenceRows();
+    if (selectedRows.length === 0) return;
+    try {
+      await Promise.all(
+        selectedRows.map((row) => tasksApi.completeOccurrence(row.taskId, row.date, status))
+      );
+      setOccurrenceMenu((prev) => ({ ...prev, visible: false }));
+      await refreshAfterOccurrenceMutation();
+    } catch {
+      setError("Failed to update selected occurrences.");
+    }
+  };
+
+  const handleMoveSelectedOccurrences = async () => {
+    const selectedRows = getSelectedOccurrenceRows();
+    if (selectedRows.length === 0) return;
+    const targetDateInput = window.prompt("Move selected occurrences to date (YYYY-MM-DD)");
+    if (!targetDateInput) return;
+    const targetDate = targetDateInput.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) {
+      setError("Invalid date format. Use YYYY-MM-DD.");
+      return;
+    }
+    try {
+      await Promise.all(
+        selectedRows.map((row) => tasksApi.moveOccurrence(row.taskId, row.date, targetDate))
+      );
+      setOccurrenceMenu((prev) => ({ ...prev, visible: false }));
+      await refreshAfterOccurrenceMutation();
+    } catch {
+      setError("Failed to move selected occurrences.");
+    }
+  };
+
+  const handleDeleteSelectedFromMenu = async () => {
+    const selectedRows = getSelectedOccurrenceRows();
+    if (selectedRows.length === 0) return;
+    const confirmed = window.confirm(`Delete ${selectedRows.length} selected task(s)?`);
+    if (!confirmed) return;
+    const taskIds = Array.from(new Set(selectedRows.map((row) => row.taskId)));
+    try {
+      await Promise.all(taskIds.map((taskId) => tasksApi.remove(taskId)));
+      setOccurrenceMenu((prev) => ({ ...prev, visible: false }));
+      await refreshAfterOccurrenceMutation();
+    } catch {
+      setError("Failed to delete selected tasks.");
+    }
   };
 
   const handleAddTask = async () => {
@@ -802,15 +1184,15 @@ export function TasksPage() {
           <>
             <div className="tasks-secondary-group">
               <p>Task Filters</p>
-              <button type="button" className={quickFilter === "all" ? "filter-item active" : "filter-item"}
-                onClick={() => setQuickFilter("all")}>
-                <span className="filter-item-left"><IcoFolder /><span>All Tasks</span></span>
-                <small>{tasks.length}</small>
-              </button>
               <button type="button" className={quickFilter === "today" ? "filter-item active" : "filter-item"}
                 onClick={() => setQuickFilter("today")}>
                 <span className="filter-item-left"><IcoSun /><span>Today</span></span>
                 <small>{counters.today}</small>
+              </button>
+              <button type="button" className={quickFilter === "myday" ? "filter-item active" : "filter-item"}
+                onClick={() => setQuickFilter("myday")}>
+                <span className="filter-item-left"><IcoCheckCircle /><span>My Day</span></span>
+                <small>{counters.myday}</small>
               </button>
               <button type="button" className={quickFilter === "planned" ? "filter-item active" : "filter-item"}
                 onClick={() => setQuickFilter("planned")}>
@@ -889,7 +1271,7 @@ export function TasksPage() {
       </aside>
 
       {/* ── Center content ─────────────────────────────── */}
-      <div className="tasks-center">
+      <div className="tasks-center" onScroll={handleCenterScroll}>
         {/* Header */}
         {sidebarMode === "calendar" ? (
           <header className="tasks-center-head tasks-center-head-calendar">
@@ -1095,69 +1477,169 @@ export function TasksPage() {
         {sidebarMode === "list" ? (
           /* ── Task List ── */
           <section className="task-list-section">
-            {filteredTasks.length === 0 && !isLoading && (
+            {((quickFilter === "planned" || quickFilter === "overdue")
+              ? occurrenceRowsOrdered.length === 0
+              : filteredTasks.length === 0) && !isLoading && (
               <div style={{ textAlign: "center", opacity: 0.35, padding: "3rem 0" }}>
                 <IcoPlus />
                 <p style={{ margin: "0.5rem 0 0", fontSize: "0.7rem", fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.15em" }}>No Tasks</p>
               </div>
             )}
-            {groupedTasks.map((group) => (
-              <article key={group.context} className="task-project-block">
-                <header>
-                  <h4 style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
-                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: contextColor(group.context), display: "inline-block", flexShrink: 0 }} />
-                    {group.contextName}
-                  </h4>
-                  <small>{group.tasks.length}</small>
-                </header>
-                <ul>
-                  {group.tasks.map((task) => (
-                    <li key={task.id}>
-                      <div className={selectedTaskId === task.id ? "task-list-item active" : "task-list-item"}>
-                        {/* Status circle */}
-                        <button type="button" className="task-circle"
-                          onClick={() => void handleToggleDone(task)}
-                          aria-label="Toggle done">
-                          <StatusCircle status={task.status} />
-                        </button>
+            {(quickFilter === "planned" || quickFilter === "overdue") ? (
+              <>
+                {occurrenceDateGroups.map((group) => (
+                  <article key={group.date} className="task-date-group">
+                    <header>
+                      <h4>{formatDateHeading(group.date)}</h4>
+                      <small>{group.rows.length}</small>
+                    </header>
+                    <ul>
+                      {group.rows.map((row) => {
+                        const masterTask = tasks.find((task) => task.id === row.taskId);
+                        const contextName = resolveContextDisplayName(row.context, masterTask?.contextName);
+                        const selected = selectedOccurrenceKeys.has(row.key);
+                        const itemClass = [
+                          selectedTaskId === row.taskId ? "task-list-item active" : "task-list-item",
+                          selected ? "occurrence-selected" : ""
+                        ].filter(Boolean).join(" ");
+                        return (
+                          <li key={row.key}>
+                            <div className={itemClass}>
+                              <button
+                                type="button"
+                                className="task-circle"
+                                onClick={() => void handleToggleOccurrenceDone(row)}
+                                aria-label="Toggle done"
+                              >
+                                <StatusCircle status={row.status} />
+                              </button>
+                              <button
+                                type="button"
+                                className="task-list-main"
+                                onClick={(event) => handleOccurrenceClick(event, row)}
+                                onContextMenu={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  ensureContextSelection(row, event.clientX, event.clientY);
+                                }}
+                              >
+                                <span className={`task-title${row.status === "done" ? " done" : ""}`}>{row.title}</span>
+                                <span className="task-meta-row">
+                                  {typeof row.load === "number" && (
+                                    <span className="load-badge" style={{ color: loadScoreColor(row.load), borderColor: loadScoreColor(row.load) }}>
+                                      <IcoZap />{row.load}
+                                    </span>
+                                  )}
+                                  <span className="context-badge" style={{ color: contextColor(row.context) }}>
+                                    {contextName}
+                                  </span>
+                                  {(row.startTime || row.endTime) && (
+                                    <span className="time-badge">
+                                      <IcoClock />
+                                      {row.startTime || "--:--"}{row.endTime ? ` - ${row.endTime}` : ""}
+                                    </span>
+                                  )}
+                                  {row.isLocked && (
+                                    <span style={{ color: "#fbbf24" }}><IcoLock /></span>
+                                  )}
+                                </span>
+                              </button>
+                              <span style={{ color: "#374151", flexShrink: 0 }}><IcoChevron /></span>
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </article>
+                ))}
+                {occurrenceLoading && (
+                  <p style={{ color: "#64748b", fontSize: "0.74rem", margin: "0.5rem 0 0.25rem" }}>Loading more...</p>
+                )}
+              </>
+            ) : (
+              groupedTasks.map((group) => (
+                <article key={group.context} className="task-project-block">
+                  <header>
+                    <h4 style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
+                      <span style={{ width: 6, height: 6, borderRadius: "50%", background: contextColor(group.context), display: "inline-block", flexShrink: 0 }} />
+                      {group.contextName}
+                    </h4>
+                    <small>{group.tasks.length}</small>
+                  </header>
+                  <ul>
+                    {group.tasks.map((task) => (
+                      <li key={task.id}>
+                        <div className={selectedTaskId === task.id ? "task-list-item active" : "task-list-item"}>
+                          {/* Status circle */}
+                          <button type="button" className="task-circle"
+                            onClick={() => void handleToggleDone(task)}
+                            aria-label="Toggle done">
+                            <StatusCircle status={task.status} />
+                          </button>
 
-                        {/* Main content */}
-                        <button type="button" className="task-list-main" onClick={() => selectTask(task)}>
-                          <span className={`task-title${task.status === "done" ? " done" : ""}`}>{task.title}</span>
-                          <span className="task-meta-row">
-                            {/* Load score badge */}
-                            <span className="load-badge" style={{ color: loadScoreColor(task.baseLoadScore), borderColor: loadScoreColor(task.baseLoadScore) }}>
-                              <IcoZap />{task.baseLoadScore}
+                          {/* Main content */}
+                          <button type="button" className="task-list-main" onClick={() => selectTask(task)}>
+                            <span className={`task-title${task.status === "done" ? " done" : ""}`}>{task.title}</span>
+                            <span className="task-meta-row">
+                              {/* Load score badge */}
+                              <span className="load-badge" style={{ color: loadScoreColor(task.baseLoadScore), borderColor: loadScoreColor(task.baseLoadScore) }}>
+                                <IcoZap />{task.baseLoadScore}
+                              </span>
+                              {/* Context tag */}
+                              <span className="context-badge" style={{ color: contextColor(task.context) }}>
+                                {resolveContextDisplayName(task.context, task.contextName)}
+                              </span>
+                              {/* Recurrence */}
+                              {task.recurrence !== "ONCE" && (
+                                <span className="recurrence-badge"><IcoRepeat />{task.recurrence.replace(/_/g, " ")}</span>
+                              )}
+                              {/* Time */}
+                              {task.startTime && (
+                                <span className="time-badge"><IcoClock />{task.startTime}{task.endTime ? ` - ${task.endTime}` : ""}</span>
+                              )}
+                              {/* Due date */}
+                              {task.dueDate && (
+                                <span className="due-badge">{task.dueDate}</span>
+                              )}
+                              {/* Lock */}
+                              {task.isLocked && (
+                                <span style={{ color: "#fbbf24" }}><IcoLock /></span>
+                              )}
                             </span>
-                            {/* Context tag */}
-                            <span className="context-badge" style={{ color: contextColor(task.context) }}>
-                              {resolveContextDisplayName(task.context, task.contextName)}
-                            </span>
-                            {/* Recurrence */}
-                            {task.recurrence !== "ONCE" && (
-                              <span className="recurrence-badge"><IcoRepeat />{task.recurrence.replace(/_/g, " ")}</span>
-                            )}
-                            {/* Time */}
-                            {task.startTime && (
-                              <span className="time-badge"><IcoClock />{task.startTime}{task.endTime ? ` E{task.endTime}` : ""}</span>
-                            )}
-                            {/* Due date */}
-                            {task.dueDate && (
-                              <span className="due-badge">{task.dueDate}</span>
-                            )}
-                            {/* Lock */}
-                            {task.isLocked && (
-                              <span style={{ color: "#fbbf24" }}><IcoLock /></span>
-                            )}
-                          </span>
-                        </button>
-                        <span style={{ color: "#374151", flexShrink: 0 }}><IcoChevron /></span>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </article>
-            ))}
+                          </button>
+                          <button
+                            type="button"
+                            className={task.isPinned ? "task-pin-button active" : "task-pin-button"}
+                            onClick={() => void handleTogglePin(task)}
+                            title={task.isPinned ? "Unpin from My Day" : "Pin to My Day"}
+                            aria-label={task.isPinned ? "Unpin from My Day" : "Pin to My Day"}
+                          >
+                            <IcoPin />
+                          </button>
+                          <span style={{ color: "#374151", flexShrink: 0 }}><IcoChevron /></span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </article>
+              ))
+            )}
+            {(quickFilter === "planned" || quickFilter === "overdue") && occurrenceMenu.visible && (
+              <div
+                className="task-occurrence-menu"
+                style={{ top: occurrenceMenu.y, left: occurrenceMenu.x }}
+                onClick={(event) => event.stopPropagation()}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                }}
+              >
+                <button type="button" onClick={() => void handleMarkSelectedOccurrences("done")}>Mark as Done</button>
+                <button type="button" onClick={() => void handleMarkSelectedOccurrences("skipped")}>Skip this occurrence</button>
+                <button type="button" onClick={() => void handleMoveSelectedOccurrences()}>Move to date</button>
+                <button type="button" className="danger" onClick={() => void handleDeleteSelectedFromMenu()}>Delete</button>
+              </div>
+            )}
           </section>
         ) : (
           /* ── Calendar view ── */

@@ -21,6 +21,7 @@ import type {
   Task,
   TaskHistoryEntry,
   TaskProjectSummary,
+  TaskScheduleDay,
   TaskStatus,
   WorkbenchAuthResponse,
   WorkbenchRefreshResponse,
@@ -578,6 +579,36 @@ export const tasksApi = {
       method: "DELETE"
     }),
   projects: (): Promise<TaskProjectSummary[]> => fetchJson<TaskProjectSummary[]>(`${coreBaseUrl()}/api/tasks/projects`),
+  pins: (): Promise<{ taskIds: string[] }> => fetchJson<{ taskIds: string[] }>(`${coreBaseUrl()}/api/tasks/pins`),
+  setPin: (id: string, pinned: boolean): Promise<{ taskId: string; pinned: boolean }> =>
+    fetchJson<{ taskId: string; pinned: boolean }>(`${coreBaseUrl()}/api/tasks/${encodeURIComponent(id)}/pin`, {
+      method: "PUT",
+      body: JSON.stringify({ pinned })
+    }),
+  completeOccurrence: (id: string, targetDate: string, status: TaskStatus): Promise<{ taskId: string; targetDate: string; status: TaskStatus }> =>
+    fetchJson<{ taskId: string; targetDate: string; status: TaskStatus }>(
+      `${coreBaseUrl()}/api/tasks/${encodeURIComponent(id)}/occurrences/complete`,
+      {
+        method: "POST",
+        body: JSON.stringify({ targetDate, status })
+      }
+    ),
+  moveOccurrence: (id: string, sourceDate: string, targetDate: string): Promise<{ taskId: string; sourceDate: string; targetDate: string }> =>
+    fetchJson<{ taskId: string; sourceDate: string; targetDate: string }>(
+      `${coreBaseUrl()}/api/tasks/${encodeURIComponent(id)}/occurrences/move`,
+      {
+        method: "POST",
+        body: JSON.stringify({ sourceDate, targetDate })
+      }
+    ),
+  schedule: (startDate: string, endDate: string, context?: string, status?: TaskStatus): Promise<TaskScheduleDay[]> => {
+    const params = new URLSearchParams();
+    params.set("startDate", startDate);
+    params.set("endDate", endDate);
+    if (context) params.set("context", context);
+    if (status) params.set("status", status);
+    return fetchJson<TaskScheduleDay[]>(`${coreBaseUrl()}/api/tasks/schedule?${params.toString()}`);
+  },
   history: (id: string): Promise<TaskHistoryEntry[]> =>
     fetchJson<TaskHistoryEntry[]>(`${coreBaseUrl()}/api/tasks/${encodeURIComponent(id)}/history`),
   exportCsv: async (): Promise<Blob> => {

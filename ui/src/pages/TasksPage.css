@@ -110,6 +110,15 @@
 .tasks-center-head p { margin: 0; color: #94a3b8; font-size: 0.72rem; }
 .tasks-center-head-calendar { border-bottom: 1px solid var(--line); padding-bottom: 0.55rem; margin-bottom: 0.55rem; }
 .tasks-head-actions { display: flex; align-items: center; gap: 0.35rem; }
+.tasks-head-actions .icon-button {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.tasks-head-actions .icon-button:hover {
+  border: 0;
+  background: rgba(255, 255, 255, 0.06);
+}
 .tasks-add-btn { background: rgba(8,145,178,0.18); border: 1px solid rgba(34,211,238,0.35); color: #67e8f9; }
 
 .task-add-panel {
@@ -281,17 +290,72 @@
 .task-project-block > header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem; }
 .task-project-block h4 { margin: 0; font-size: 1rem; }
 .task-project-block ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.25rem; }
+.task-date-group { border-top: 1px solid var(--line); padding-top: 0.7rem; margin-top: 0.7rem; }
+.task-date-group:first-of-type { border-top: 0; margin-top: 0; padding-top: 0; }
+.task-date-group > header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem; }
+.task-date-group h4 {
+  margin: 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.11em;
+  color: #94a3b8;
+  font-weight: 700;
+}
+.task-date-group ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.2rem; }
 .task-list-item { border-bottom: 1px solid rgba(51,65,85,0.45); padding: 0.52rem; display: flex; align-items: center; gap: 0.6rem; }
 .task-list-item:hover { background: rgba(255,255,255,0.03); }
 .task-list-item.active { background: rgba(30,41,59,0.6); }
+.task-list-item.occurrence-selected {
+  background: rgba(14, 116, 144, 0.28);
+  box-shadow: inset 0 0 0 1px rgba(34, 211, 238, 0.32);
+}
 .task-circle { border: 0; background: transparent; color: #64748b; padding: 0; display: grid; place-items: center; }
 .task-list-main { flex: 1; min-width: 0; border: 0; background: transparent; color: inherit; display: flex; align-items: center; gap: 0.5rem; padding: 0; }
+.task-pin-button {
+  border: 0;
+  background: transparent;
+  color: #475569;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.12rem;
+  flex-shrink: 0;
+}
+.task-pin-button:hover {
+  color: #94a3b8;
+}
+.task-pin-button.active {
+  color: #7dd3fc;
+}
 .task-title { font-size: 0.88rem; color: #f3f4f6; font-weight: 600; }
 .task-title.done { color: #6b7280; text-decoration: line-through; }
 .task-meta-row { display: flex; align-items: center; gap: 0.35rem; margin-left: auto; }
 .load-badge, .context-badge, .recurrence-badge, .due-badge, .time-badge { font-size: 0.62rem; color: #94a3b8; }
 .load-badge { border: 1px solid currentColor; border-radius: 4px; padding: 0.08rem 0.3rem; display: inline-flex; align-items: center; gap: 0.15rem; }
 .context-badge, .recurrence-badge { padding: 0.08rem 0.3rem; background: rgba(255,255,255,0.05); border-radius: 4px; }
+.task-occurrence-menu {
+  position: fixed;
+  z-index: 80;
+  min-width: 190px;
+  border: 1px solid rgba(71, 85, 105, 0.7);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.98);
+  box-shadow: 0 10px 28px rgba(2, 6, 23, 0.6);
+  padding: 0.3rem;
+  display: grid;
+  gap: 0.1rem;
+}
+.task-occurrence-menu > button {
+  border: 0;
+  background: transparent;
+  color: #cbd5e1;
+  text-align: left;
+  font-size: 0.78rem;
+  border-radius: 8px;
+  padding: 0.42rem 0.5rem;
+}
+.task-occurrence-menu > button:hover { background: rgba(30, 41, 59, 0.9); }
+.task-occurrence-menu > button.danger { color: #fda4af; }
+.task-occurrence-menu > button.danger:hover { background: rgba(127, 29, 29, 0.25); }
 
 .task-calendar-shell { border: 1px solid var(--line); border-radius: 12px; background: #0b1220; min-height: 520px; overflow: hidden; position: relative; }
 .calendar-head-row { display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; border-bottom: 1px solid var(--line); }
@@ -495,7 +559,12 @@
   border-color: rgba(100, 116, 139, 0.42);
   color: #94a3b8;
 }
-.calendar-week-event-block.done strong { text-decoration: line-through; color: #94a3b8; }
+.calendar-week-event-block.done strong,
+.calendar-week-event-block.done span,
+.calendar-week-event-block.done .calendar-week-event-time {
+  text-decoration: line-through;
+  color: #94a3b8;
+}
 .calendar-state-card { position: absolute; inset: 0; background: rgba(2,6,23,0.86); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.5rem; }
 .calendar-state-card h4 { margin: 0; }
 .calendar-state-card p { margin: 0; color: #94a3b8; font-size: 0.78rem; }
