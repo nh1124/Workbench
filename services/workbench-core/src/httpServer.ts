@@ -205,20 +205,16 @@ type AuthorizeRequestParams = {
   codeChallengeMethod: "S256";
 };
 
-function normalizeScope(rawScope: string | undefined): string | undefined {
+function normalizeScope(rawScope: string | undefined): string {
   const normalized = rawScope?.trim();
   const tokens = (normalized && normalized.length > 0 ? normalized : supportedMcpScopes.join(" "))
     .split(/\s+/)
     .map((token) => token.trim())
     .filter((token) => token.length > 0);
-  const uniqueTokens = [...new Set(tokens)];
-  if (uniqueTokens.length === 0) {
-    return undefined;
-  }
-  if (uniqueTokens.some((token) => !supportedMcpScopeSet.has(token))) {
-    return undefined;
-  }
-  return uniqueTokens.join(" ");
+  // Filter to only supported scopes; unknown scopes from clients (e.g. "claudeai") are silently dropped.
+  // If nothing remains after filtering, fall back to the full supported scope set.
+  const knownTokens = [...new Set(tokens)].filter((token) => supportedMcpScopeSet.has(token));
+  return knownTokens.length > 0 ? knownTokens.join(" ") : supportedMcpScopes.join(" ");
 }
 
 function isLocalHostname(hostname: string): boolean {
@@ -456,15 +452,12 @@ function readAuthorizeParams(source: Record<string, unknown>): AuthorizeRequestP
     return { error: "invalid_redirect_uri" };
   }
 
+  // resource is optional: MCP clients (including Claude.ai) may omit it.
+  // If provided, it is stored and later validated in the token exchange.
   const resource = typeof source.resource === "string" ? source.resource.trim() : "";
-  if (!resource) {
-    return { error: "invalid_request" };
-  }
 
+  // Scope: unknown tokens (e.g. "claudeai") are silently dropped; never reject outright.
   const normalizedScope = normalizeScope(typeof source.scope === "string" ? source.scope : undefined);
-  if (!normalizedScope) {
-    return { error: "invalid_scope" };
-  }
 
   const codeChallenge = typeof source.code_challenge === "string" ? source.code_challenge.trim() : "";
   if (!codeChallenge) {
@@ -792,9 +785,14 @@ app.get("/authorize", async (req, res) => {
   }
   logAuthorizeRequest(parsed);
 
+  // If client omitted resource (e.g. Claude.ai), default to the canonical MCP resource.
+  // If resource is present, validate it matches this server.
   const canonicalResource = buildCanonicalMcpResource(req);
-  if (parsed.resource !== canonicalResource) {
+  if (parsed.resource && parsed.resource !== canonicalResource) {
     return res.status(400).json({ error: "invalid_target" });
+  }
+  if (!parsed.resource) {
+    parsed.resource = canonicalResource;
   }
 
   const resolvedClient = await resolveOAuthClient(parsed.clientId, parsed.redirectUri);
@@ -813,9 +811,13 @@ app.post("/authorize", express.urlencoded({ extended: false }), async (req, res)
   }
   logAuthorizeRequest(parsed);
 
+  // Same leniency as GET /authorize: default resource to canonical if omitted.
   const canonicalResource = buildCanonicalMcpResource(req);
-  if (parsed.resource !== canonicalResource) {
+  if (parsed.resource && parsed.resource !== canonicalResource) {
     return res.status(400).json({ error: "invalid_target" });
+  }
+  if (!parsed.resource) {
+    parsed.resource = canonicalResource;
   }
 
   const resolvedClient = await resolveOAuthClient(parsed.clientId, parsed.redirectUri);
@@ -898,11 +900,6 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
     }
 
     const normalizedScope = normalizeScope(typeof req.body?.scope === "string" ? req.body.scope : undefined);
-    if (!normalizedScope) {
-      return res.status(400).json({
-        error: "invalid_scope"
-      });
-    }
 
     const accessToken = issueMcpOAuthAccessToken(clientId, normalizedScope, resource);
     return res.json({
@@ -925,8 +922,9 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
     const code = typeof req.body?.code === "string" ? req.body.code.trim() : "";
     const codeVerifier = typeof req.body?.code_verifier === "string" ? req.body.code_verifier : "";
     const redirectUri = typeof req.body?.redirect_uri === "string" ? req.body.redirect_uri.trim() : "";
+    // resource is optional in token request; if omitted, fall back to the stored record value.
     const resource = typeof req.body?.resource === "string" ? req.body.resource.trim() : "";
-    if (!code || !codeVerifier || !redirectUri || !resource) {
+    if (!code || !codeVerifier || !redirectUri) {
       return res.status(400).json({
         error: "invalid_request"
       });
@@ -957,7 +955,10 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
       });
     }
 
-    if (resource !== record.resource) {
+    // If resource was omitted in the token request, fall back to the value stored at authorization time.
+    // If provided, it must exactly match what was stored.
+    const effectiveResource = resource || record.resource;
+    if (resource && resource !== record.resource) {
       authorizationCodeStore.delete(code);
       logTokenFailure("invalid_resource", { grant_type: "authorization_code", client_id: clientId });
       return res.status(400).json({
@@ -995,7 +996,7 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
     }
 
     authorizationCodeStore.delete(code);
-    const accessToken = issueUserOAuthAccessToken(record.userId, record.username, record.scope, record.resource);
+    const accessToken = issueUserOAuthAccessToken(record.userId, record.username, record.scope, effectiveResource);
     return res.json({
       access_token: accessToken,
       token_type: "bearer",
