@@ -78,11 +78,15 @@ const clientMetadataHostAllowlist = new Set(
 );
 
 type OAuthClientSource = "client_id_metadata_document" | "dynamic_client_registration";
+type OAuthGrantType = "authorization_code" | "refresh_token";
 
 type ResolvedOAuthClient = {
   clientId: string;
   clientName: string;
   redirectUris: string[];
+  tokenEndpointAuthMethod: "none";
+  grantTypes: OAuthGrantType[];
+  responseTypes: "code"[];
   source: OAuthClientSource;
 };
 
@@ -98,6 +102,9 @@ type RegisteredOAuthClient = {
   clientId: string;
   clientName: string;
   redirectUris: string[];
+  tokenEndpointAuthMethod: "none";
+  grantTypes: OAuthGrantType[];
+  responseTypes: "code"[];
   source: "dynamic_client_registration";
   createdAtMs: number;
 };
@@ -168,6 +175,7 @@ type AuthorizationCodeRecord = {
   clientId: string;
   redirectUri: string;
   scope: string;
+  allowRefreshTokenGrant: boolean;
   codeChallenge: string;
   codeChallengeMethod: "S256";
   resource: string;
@@ -178,6 +186,26 @@ type AuthorizationCodeRecord = {
 
 const authorizationCodeStore = new Map<string, AuthorizationCodeRecord>();
 const AUTHORIZATION_CODE_TTL_MS = 5 * 60 * 1000;
+const oauthRefreshTokenExpirySecondsRaw = optionalEnv("OAUTH_REFRESH_TOKEN_EXPIRY_SECONDS") ?? "2592000";
+const oauthRefreshTokenExpirySeconds = Number(oauthRefreshTokenExpirySecondsRaw);
+if (!Number.isFinite(oauthRefreshTokenExpirySeconds) || oauthRefreshTokenExpirySeconds <= 0) {
+  throw new Error(`Invalid OAUTH_REFRESH_TOKEN_EXPIRY_SECONDS value: ${oauthRefreshTokenExpirySecondsRaw}`);
+}
+
+type OAuthRefreshTokenRecord = {
+  tokenHash: string;
+  clientId: string;
+  userId: string;
+  username: string;
+  scope: string;
+  resource: string;
+  issuedAtMs: number;
+  expiresAtMs: number;
+  revokedAtMs?: number;
+  replacedByTokenHash?: string;
+};
+
+const oauthRefreshTokenStore = new Map<string, OAuthRefreshTokenRecord>();
 
 function cleanupExpiredAuthorizationCodes(nowMs = Date.now()): void {
   for (const [code, record] of authorizationCodeStore.entries()) {
@@ -187,8 +215,58 @@ function cleanupExpiredAuthorizationCodes(nowMs = Date.now()): void {
   }
 }
 
+function cleanupExpiredRefreshTokens(nowMs = Date.now()): void {
+  for (const [tokenHash, record] of oauthRefreshTokenStore.entries()) {
+    if (record.expiresAtMs <= nowMs) {
+      oauthRefreshTokenStore.delete(tokenHash);
+    }
+  }
+}
+
 function base64UrlSha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("base64url");
+}
+
+function hashOpaqueToken(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("base64url");
+}
+
+function issueOAuthRefreshToken(input: {
+  clientId: string;
+  userId: string;
+  username: string;
+  scope: string;
+  resource: string;
+}): { refreshToken: string; record: OAuthRefreshTokenRecord } {
+  cleanupExpiredRefreshTokens();
+  const refreshToken = randomBytes(48).toString("base64url");
+  const tokenHash = hashOpaqueToken(refreshToken);
+  const nowMs = Date.now();
+  const record: OAuthRefreshTokenRecord = {
+    tokenHash,
+    clientId: input.clientId,
+    userId: input.userId,
+    username: input.username.trim().toLowerCase(),
+    scope: input.scope,
+    resource: input.resource,
+    issuedAtMs: nowMs,
+    expiresAtMs: nowMs + oauthRefreshTokenExpirySeconds * 1000
+  };
+  oauthRefreshTokenStore.set(tokenHash, record);
+  return { refreshToken, record };
+}
+
+function parseScopeTokens(scope: string): string[] {
+  return scope
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+}
+
+function isScopeSubset(requestedScope: string, grantedScope: string): boolean {
+  const requestedTokens = parseScopeTokens(requestedScope);
+  const grantedTokenSet = new Set(parseScopeTokens(grantedScope));
+  return requestedTokens.every((token) => grantedTokenSet.has(token));
 }
 
 function issueUserOAuthAccessToken(userId: string, username: string, scope: string, resource: string): string {
@@ -363,6 +441,9 @@ function parseClientMetadataDocument(raw: unknown, expectedClientId: string): Re
     clientId,
     clientName,
     redirectUris: [...new Set(redirectUris)],
+    tokenEndpointAuthMethod: "none",
+    grantTypes: ["authorization_code"],
+    responseTypes: ["code"],
     source: "client_id_metadata_document"
   };
 }
@@ -432,7 +513,7 @@ type ParseDynamicClientRegistrationResult =
       clientName: string;
       redirectUris: string[];
       tokenEndpointAuthMethod: "none";
-      grantTypes: "authorization_code"[];
+      grantTypes: OAuthGrantType[];
       responseTypes: "code"[];
     }
   | {
@@ -515,12 +596,14 @@ function parseDynamicClientRegistrationPayload(raw: unknown): ParseDynamicClient
   const grantTypes = Array.isArray(payload.grant_types)
     ? payload.grant_types.filter((value): value is string => typeof value === "string").map((value) => value.trim())
     : ["authorization_code"];
-  if (grantTypes.length === 0 || grantTypes.some((value) => value !== "authorization_code")) {
+  const uniqueGrantTypes = [...new Set(grantTypes)];
+  const unsupportedGrantTypes = uniqueGrantTypes.filter((value) => value !== "authorization_code" && value !== "refresh_token");
+  if (unsupportedGrantTypes.length > 0 || !uniqueGrantTypes.includes("authorization_code")) {
     return {
       ok: false,
       error: "invalid_client_metadata",
       reason: "unsupported_grant_types",
-      details: { grant_types: grantTypes.join(" ") || "(empty)" }
+      details: { grant_types: uniqueGrantTypes.join(" ") || "(empty)" }
     };
   }
 
@@ -543,7 +626,7 @@ function parseDynamicClientRegistrationPayload(raw: unknown): ParseDynamicClient
     clientName,
     redirectUris: [...new Set(redirectUris)],
     tokenEndpointAuthMethod: "none",
-    grantTypes: ["authorization_code"],
+    grantTypes: uniqueGrantTypes as OAuthGrantType[],
     responseTypes: ["code"]
   };
 }
@@ -557,6 +640,9 @@ function resolveClientFromDynamicRegistration(clientId: string): ResolvedOAuthCl
     clientId: registered.clientId,
     clientName: registered.clientName,
     redirectUris: registered.redirectUris,
+    tokenEndpointAuthMethod: registered.tokenEndpointAuthMethod,
+    grantTypes: registered.grantTypes,
+    responseTypes: registered.responseTypes,
     source: registered.source
   };
 }
@@ -916,7 +1002,14 @@ function logAuthorizeRequest(params: AuthorizeRequestParams): void {
 }
 
 function logTokenFailure(
-  reason: "invalid_client" | "invalid_redirect_uri" | "invalid_resource" | "invalid_code" | "invalid_code_verifier",
+  reason:
+    | "invalid_client"
+    | "invalid_redirect_uri"
+    | "invalid_resource"
+    | "invalid_code"
+    | "invalid_code_verifier"
+    | "invalid_refresh_token"
+    | "unsupported_grant_type",
   details: Record<string, string | number | boolean | undefined> = {}
 ): void {
   console.warn("[oauth] token exchange failure", { reason, ...details });
@@ -943,7 +1036,7 @@ app.get("/.well-known/oauth-authorization-server", (req, res) => {
     authorization_endpoint: joinIssuerPath(issuer, "/authorize"),
     token_endpoint: joinIssuerPath(issuer, "/oauth/token"),
     registration_endpoint: joinIssuerPath(issuer, DYNAMIC_CLIENT_REGISTRATION_PATH),
-    grant_types_supported: ["authorization_code"],
+    grant_types_supported: ["authorization_code", "refresh_token"],
     code_challenge_methods_supported: ["S256"],
     token_endpoint_auth_methods_supported: ["none"],
     scopes_supported: [...supportedMcpScopes],
@@ -984,6 +1077,9 @@ app.post(DYNAMIC_CLIENT_REGISTRATION_PATH, (req, res) => {
     clientId,
     clientName: parsed.clientName,
     redirectUris: parsed.redirectUris,
+    tokenEndpointAuthMethod: parsed.tokenEndpointAuthMethod,
+    grantTypes: parsed.grantTypes,
+    responseTypes: parsed.responseTypes,
     source: "dynamic_client_registration",
     createdAtMs: Date.now()
   };
@@ -1062,6 +1158,7 @@ app.post("/authorize", express.urlencoded({ extended: false }), async (req, res)
     clientId: parsed.clientId,
     redirectUri: parsed.redirectUri,
     scope: parsed.scope,
+    allowRefreshTokenGrant: resolvedClient.client.grantTypes.includes("refresh_token"),
     codeChallenge: parsed.codeChallenge,
     codeChallengeMethod: parsed.codeChallengeMethod,
     resource: parsed.resource,
@@ -1088,7 +1185,8 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
     resource: typeof req.body?.resource === "string" ? req.body.resource : "(missing)",
     scope: typeof req.body?.scope === "string" ? req.body.scope : "(missing)",
     has_code: typeof req.body?.code === "string" && req.body.code.length > 0,
-    has_code_verifier: typeof req.body?.code_verifier === "string" && req.body.code_verifier.length > 0
+    has_code_verifier: typeof req.body?.code_verifier === "string" && req.body.code_verifier.length > 0,
+    has_refresh_token: typeof req.body?.refresh_token === "string" && req.body.refresh_token.length > 0
   });
 
   if (grantType === "authorization_code") {
@@ -1199,14 +1297,147 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
     authorizationCodeStore.delete(code);
     console.info("[oauth] token issued successfully", { client_id: clientId, scope: record.scope, resource });
     const accessToken = issueUserOAuthAccessToken(record.userId, record.username, record.scope, resource);
+    const maybeRefreshToken =
+      record.allowRefreshTokenGrant
+        ? issueOAuthRefreshToken({
+            clientId,
+            userId: record.userId,
+            username: record.username,
+            scope: record.scope,
+            resource
+          }).refreshToken
+        : undefined;
+
+    if (record.allowRefreshTokenGrant) {
+      console.info("[oauth] refresh token issued", {
+        client_id: clientId,
+        grant_type: "authorization_code",
+        scope: record.scope
+      });
+    }
+
     return res.json({
       access_token: accessToken,
       token_type: "bearer",
       expires_in: oauthJwtExpirySeconds,
-      scope: record.scope
+      scope: record.scope,
+      ...(maybeRefreshToken ? { refresh_token: maybeRefreshToken } : {})
     });
   }
 
+  if (grantType === "refresh_token") {
+    const clientId = typeof req.body?.client_id === "string" ? req.body.client_id.trim() : "";
+    if (!clientId) {
+      logTokenFailure("invalid_client", { grant_type: "refresh_token" });
+      return res.status(401).json({
+        error: "invalid_client"
+      });
+    }
+
+    const refreshToken = typeof req.body?.refresh_token === "string" ? req.body.refresh_token.trim() : "";
+    if (!refreshToken) {
+      return res.status(400).json({
+        error: "invalid_request"
+      });
+    }
+
+    cleanupExpiredRefreshTokens();
+    const refreshTokenHash = hashOpaqueToken(refreshToken);
+    const refreshRecord = oauthRefreshTokenStore.get(refreshTokenHash);
+    if (!refreshRecord) {
+      logTokenFailure("invalid_refresh_token", { grant_type: "refresh_token", client_id: clientId, reason: "not_found" });
+      return res.status(400).json({
+        error: "invalid_grant"
+      });
+    }
+
+    if (refreshRecord.revokedAtMs) {
+      logTokenFailure("invalid_refresh_token", { grant_type: "refresh_token", client_id: clientId, reason: "revoked" });
+      return res.status(400).json({
+        error: "invalid_grant"
+      });
+    }
+
+    if (refreshRecord.expiresAtMs <= Date.now()) {
+      oauthRefreshTokenStore.delete(refreshTokenHash);
+      logTokenFailure("invalid_refresh_token", { grant_type: "refresh_token", client_id: clientId, reason: "expired" });
+      return res.status(400).json({
+        error: "invalid_grant"
+      });
+    }
+
+    if (refreshRecord.clientId !== clientId) {
+      logTokenFailure("invalid_client", {
+        grant_type: "refresh_token",
+        client_id: clientId,
+        refresh_token_client_id: refreshRecord.clientId
+      });
+      return res.status(401).json({
+        error: "invalid_client"
+      });
+    }
+
+    const canonicalResource = buildCanonicalMcpResource(req);
+    if (refreshRecord.resource !== canonicalResource) {
+      logTokenFailure("invalid_resource", {
+        grant_type: "refresh_token",
+        client_id: clientId,
+        token_resource: refreshRecord.resource,
+        canonical_resource: canonicalResource
+      });
+      return res.status(400).json({
+        error: "invalid_target"
+      });
+    }
+
+    const requestedScopeRaw = typeof req.body?.scope === "string" ? req.body.scope : undefined;
+    const normalizedRequestedScope = requestedScopeRaw ? normalizeScope(requestedScopeRaw) : undefined;
+    if (requestedScopeRaw && !normalizedRequestedScope) {
+      return res.status(400).json({
+        error: "invalid_scope"
+      });
+    }
+
+    const effectiveScope = normalizedRequestedScope ?? refreshRecord.scope;
+    if (!isScopeSubset(effectiveScope, refreshRecord.scope)) {
+      return res.status(400).json({
+        error: "invalid_scope"
+      });
+    }
+
+    const accessToken = issueUserOAuthAccessToken(
+      refreshRecord.userId,
+      refreshRecord.username,
+      effectiveScope,
+      refreshRecord.resource
+    );
+
+    const rotated = issueOAuthRefreshToken({
+      clientId: refreshRecord.clientId,
+      userId: refreshRecord.userId,
+      username: refreshRecord.username,
+      scope: effectiveScope,
+      resource: refreshRecord.resource
+    });
+    refreshRecord.revokedAtMs = Date.now();
+    refreshRecord.replacedByTokenHash = rotated.record.tokenHash;
+    oauthRefreshTokenStore.set(refreshTokenHash, refreshRecord);
+
+    console.info("[oauth] refresh token grant succeeded", {
+      client_id: clientId,
+      scope: effectiveScope
+    });
+
+    return res.json({
+      access_token: accessToken,
+      token_type: "bearer",
+      expires_in: oauthJwtExpirySeconds,
+      scope: effectiveScope,
+      refresh_token: rotated.refreshToken
+    });
+  }
+
+  logTokenFailure("unsupported_grant_type", { grant_type: grantType || "(missing)" });
   return res.status(400).json({
     error: "unsupported_grant_type"
   });

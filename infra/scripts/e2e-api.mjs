@@ -399,6 +399,13 @@ async function run() {
       state
     );
     ensure(
+      Array.isArray(oauthMetadata.json?.grant_types_supported) &&
+      oauthMetadata.json?.grant_types_supported.includes("refresh_token"),
+      "oauth metadata grant_types includes refresh_token",
+      undefined,
+      state
+    );
+    ensure(
       !Array.isArray(oauthMetadata.json?.grant_types_supported) ||
       !oauthMetadata.json?.grant_types_supported.includes("client_credentials"),
       "oauth metadata does not advertise client_credentials",
@@ -605,6 +612,8 @@ async function run() {
         }).toString()
       });
       expectStatus(badPkceToken, 400, `${label} authorization_code rejects bad PKCE verifier`, state);
+
+      return oauthAuthCodeToken;
     };
 
     const registrationEndpoint = typeof oauthMetadata.json?.registration_endpoint === "string"
@@ -631,7 +640,7 @@ async function run() {
           client_name: "e2e-dcr-client",
           redirect_uris: [dcrRedirectUri],
           token_endpoint_auth_method: "none",
-          grant_types: ["authorization_code"],
+          grant_types: ["authorization_code", "refresh_token"],
           response_types: ["code"]
         }
       });
@@ -646,7 +655,43 @@ async function run() {
       );
 
       if (typeof dcrClientId === "string" && dcrClientId.length > 0) {
-        await runAuthorizationCodePkceFlow(dcrClientId, dcrRedirectUri, "dcr");
+        const dcrTokenResult = await runAuthorizationCodePkceFlow(dcrClientId, dcrRedirectUri, "dcr");
+        const dcrRefreshToken = dcrTokenResult.json?.refresh_token;
+        ensure(typeof dcrRefreshToken === "string" && dcrRefreshToken.length > 0, "dcr authorization_code returns refresh token", undefined, state);
+
+        if (typeof dcrRefreshToken === "string" && dcrRefreshToken.length > 0) {
+          const refreshGrant = await request("POST", `${coreBaseUrl}/oauth/token`, {
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({
+              grant_type: "refresh_token",
+              client_id: dcrClientId,
+              refresh_token: dcrRefreshToken
+            }).toString()
+          });
+          expectStatus(refreshGrant, 200, "refresh_token grant success for dcr client", state);
+          ensure(typeof refreshGrant.json?.access_token === "string", "refresh_token grant returns access token", undefined, state);
+          ensure(typeof refreshGrant.json?.refresh_token === "string", "refresh_token grant rotates refresh token", undefined, state);
+
+          const wrongClientRefresh = await request("POST", `${coreBaseUrl}/oauth/token`, {
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({
+              grant_type: "refresh_token",
+              client_id: "wrong-client-id",
+              refresh_token: refreshGrant.json?.refresh_token ?? ""
+            }).toString()
+          });
+          expectStatus(wrongClientRefresh, 401, "refresh_token rejects wrong client_id", state);
+
+          const reusedOldRefresh = await request("POST", `${coreBaseUrl}/oauth/token`, {
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({
+              grant_type: "refresh_token",
+              client_id: dcrClientId,
+              refresh_token: dcrRefreshToken
+            }).toString()
+          });
+          expectStatus(reusedOldRefresh, 400, "refresh_token rejects revoked/rotated token", state);
+        }
       }
     } else {
       warn("dynamic client registration test skipped", "authorization metadata has no registration_endpoint.", state);

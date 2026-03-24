@@ -53,6 +53,7 @@ Flow:
 - `GET /.well-known/oauth-protected-resource`
 - `GET /.well-known/oauth-authorization-server`
 - `POST /oauth/register` (OAuth Dynamic Client Registration for public clients)
+- `POST /oauth/token` (OAuth token endpoint: `authorization_code` and `refresh_token` grants)
 - `GET /integrations/manifests`
 - `GET /integrations/configs`
 - `PUT /integrations/configs/:integrationId`
@@ -88,6 +89,7 @@ Common internal contract:
 - `JWT_SECRET`
 - `JWT_ISSUER`
 - `JWT_EXPIRY_SECONDS`
+- `OAUTH_REFRESH_TOKEN_EXPIRY_SECONDS` (optional, default: `2592000`)
 - `JWT_REFRESH_EXPIRY_SECONDS` (optional, default: `2592000`)
 - `OAUTH_CLIENT_METADATA_HOST_ALLOWLIST` (optional, comma-separated host allowlist for client metadata URL fetches)
 - `NOTES_SERVICE_URL`
