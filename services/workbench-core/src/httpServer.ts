@@ -6,6 +6,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
+import { lookup as dnsLookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { issueTokenBundle, verifyAccessToken, verifyRefreshToken } from "./auth.js";
@@ -55,9 +57,20 @@ function optionalEnv(name: string): string | undefined {
   return value && value.length > 0 ? value : undefined;
 }
 
-const oauthClientId = requireEnv("OAUTH_CLIENT_ID");
-const oauthClientSecret = requireEnv("OAUTH_CLIENT_SECRET");
-const oauthRedirectUri = "https://claude.ai/api/mcp/auth_callback";
+const defaultOauthRedirectUri = "https://claude.ai/api/mcp/auth_callback";
+const preRegisteredOauthClientId = optionalEnv("OAUTH_CLIENT_ID");
+const preRegisteredOauthClientSecret = optionalEnv("OAUTH_CLIENT_SECRET");
+const preRegisteredOauthClientName = optionalEnv("OAUTH_CLIENT_NAME") ?? "Pre-registered MCP Client";
+const preRegisteredOauthRedirectUris = (() => {
+  const configured = optionalEnv("OAUTH_REDIRECT_URIS")
+    ?.split(",")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  if (configured && configured.length > 0) {
+    return configured;
+  }
+  return [defaultOauthRedirectUri];
+})();
 const oauthJwtSecret = requireEnv("JWT_SECRET");
 const oauthJwtIssuer = requireEnv("JWT_ISSUER");
 const oauthJwtExpirySecondsRaw = requireEnv("JWT_EXPIRY_SECONDS");
@@ -66,22 +79,70 @@ if (!Number.isFinite(oauthJwtExpirySeconds) || oauthJwtExpirySeconds <= 0) {
   throw new Error(`Invalid JWT_EXPIRY_SECONDS value: ${oauthJwtExpirySecondsRaw}`);
 }
 
+const supportedMcpScopes = ["mcp:tools"] as const;
+const supportedMcpScopeSet = new Set<string>(supportedMcpScopes);
+const clientMetadataCacheTtlMs = 5 * 60 * 1000;
+const clientMetadataFetchTimeoutMs = 5000;
+const clientMetadataMaxResponseBytes = 64 * 1024;
+const clientMetadataHostAllowlist = new Set(
+  (optionalEnv("OAUTH_CLIENT_METADATA_HOST_ALLOWLIST") ?? "")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => value.length > 0)
+);
+
+type OAuthClientSource = "pre_registered" | "client_id_metadata_document";
+type OAuthClientAuthType = "public" | "confidential";
+
+type ResolvedOAuthClient = {
+  clientId: string;
+  clientName: string;
+  redirectUris: string[];
+  authType: OAuthClientAuthType;
+  clientSecret?: string;
+  source: OAuthClientSource;
+};
+
+type ClientMetadataCacheRecord = {
+  client: ResolvedOAuthClient;
+  expiresAtMs: number;
+};
+
+const clientMetadataCache = new Map<string, ClientMetadataCacheRecord>();
+
+const preRegisteredOauthClient: ResolvedOAuthClient | undefined = preRegisteredOauthClientId
+  ? {
+      clientId: preRegisteredOauthClientId,
+      clientName: preRegisteredOauthClientName,
+      redirectUris: preRegisteredOauthRedirectUris,
+      authType: preRegisteredOauthClientSecret ? "confidential" : "public",
+      clientSecret: preRegisteredOauthClientSecret,
+      source: "pre_registered"
+    }
+  : undefined;
+
 function buildOAuthIssuer(req: express.Request): string {
   return `https://${req.hostname}`;
 }
 
-function issueMcpOAuthAccessToken(clientId: string): string {
+function buildCanonicalMcpResource(req: express.Request): string {
+  return `${buildOAuthIssuer(req)}/mcp`;
+}
+
+function issueMcpOAuthAccessToken(clientId: string, scope: string, resource: string): string {
   return jwt.sign(
     {
       sub: clientId,
       username: clientId.trim().toLowerCase(),
-      tokenUse: "access"
+      tokenUse: "access",
+      scope
     },
     oauthJwtSecret,
     {
       algorithm: "HS256",
       issuer: oauthJwtIssuer,
-      expiresIn: oauthJwtExpirySeconds
+      expiresIn: oauthJwtExpirySeconds,
+      audience: [resource]
     }
   );
 }
@@ -89,6 +150,8 @@ function issueMcpOAuthAccessToken(clientId: string): string {
 type AuthorizationCodeRecord = {
   clientId: string;
   redirectUri: string;
+  scope: string;
+  authType: OAuthClientAuthType;
   codeChallenge: string;
   codeChallengeMethod: "S256";
   resource: string;
@@ -112,14 +175,14 @@ function base64UrlSha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("base64url");
 }
 
-function issueUserOAuthAccessToken(userId: string, username: string, resource: string): string {
+function issueUserOAuthAccessToken(userId: string, username: string, scope: string, resource: string): string {
   const normalizedResource = resource.trim();
   return jwt.sign(
     {
       sub: userId,
       username: username.trim().toLowerCase(),
       tokenUse: "access",
-      scope: "mcp:tools"
+      scope
     },
     oauthJwtSecret,
     {
@@ -137,9 +200,245 @@ type AuthorizeRequestParams = {
   redirectUri: string;
   state?: string;
   resource: string;
+  scope: string;
   codeChallenge: string;
   codeChallengeMethod: "S256";
 };
+
+function normalizeScope(rawScope: string | undefined): string | undefined {
+  const normalized = rawScope?.trim();
+  const tokens = (normalized && normalized.length > 0 ? normalized : supportedMcpScopes.join(" "))
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+  const uniqueTokens = [...new Set(tokens)];
+  if (uniqueTokens.length === 0) {
+    return undefined;
+  }
+  if (uniqueTokens.some((token) => !supportedMcpScopeSet.has(token))) {
+    return undefined;
+  }
+  return uniqueTokens.join(" ");
+}
+
+function isLocalHostname(hostname: string): boolean {
+  const lower = hostname.toLowerCase();
+  return lower === "localhost" || lower.endsWith(".localhost") || lower.endsWith(".local");
+}
+
+function isPrivateOrReservedIp(address: string): boolean {
+  const addressType = isIP(address);
+  if (addressType === 4) {
+    const octets = address.split(".").map((part) => Number(part));
+    if (octets.length !== 4 || octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+      return true;
+    }
+    const [a, b] = octets;
+    if (a === 0 || a === 10 || a === 127) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    if (a === 198 && (b === 18 || b === 19)) return true;
+    return false;
+  }
+
+  if (addressType === 6) {
+    const lower = address.toLowerCase();
+    if (lower === "::" || lower === "::1") return true;
+    if (lower.startsWith("fc") || lower.startsWith("fd")) return true;
+    if (lower.startsWith("fe80:")) return true;
+    if (lower.startsWith("::ffff:")) {
+      return isPrivateOrReservedIp(lower.slice("::ffff:".length));
+    }
+    return false;
+  }
+
+  return true;
+}
+
+async function assertSafeClientMetadataUrl(url: URL): Promise<void> {
+  if (url.protocol !== "https:") {
+    throw new Error("client metadata URL must use https");
+  }
+
+  const hostname = url.hostname.toLowerCase();
+  if (clientMetadataHostAllowlist.has(hostname)) {
+    return;
+  }
+
+  if (isIP(hostname)) {
+    throw new Error("IP-literal metadata hosts are blocked unless allowlisted");
+  }
+
+  if (isLocalHostname(hostname)) {
+    throw new Error("local metadata hosts are blocked unless allowlisted");
+  }
+
+  const resolvedAddresses = await dnsLookup(hostname, { all: true });
+  if (resolvedAddresses.length === 0) {
+    throw new Error("metadata host did not resolve");
+  }
+  for (const entry of resolvedAddresses) {
+    if (isPrivateOrReservedIp(entry.address)) {
+      throw new Error("metadata host resolved to a private or reserved address");
+    }
+  }
+}
+
+async function readLimitedResponseText(response: Response, maxBytes: number): Promise<string> {
+  const contentLengthRaw = response.headers.get("content-length");
+  if (contentLengthRaw) {
+    const contentLength = Number(contentLengthRaw);
+    if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+      throw new Error("metadata response exceeds size limit");
+    }
+  }
+
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    totalBytes += value.byteLength;
+    if (totalBytes > maxBytes) {
+      await reader.cancel();
+      throw new Error("metadata response exceeds size limit");
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
+}
+
+function parseClientMetadataDocument(raw: unknown, expectedClientId: string): ResolvedOAuthClient {
+  if (!raw || typeof raw !== "object") {
+    throw new Error("metadata document must be a JSON object");
+  }
+  const metadata = raw as {
+    client_id?: unknown;
+    client_name?: unknown;
+    redirect_uris?: unknown;
+  };
+  const clientId = typeof metadata.client_id === "string" ? metadata.client_id.trim() : "";
+  if (!clientId || clientId !== expectedClientId) {
+    throw new Error("metadata client_id mismatch");
+  }
+  const clientName = typeof metadata.client_name === "string" ? metadata.client_name.trim() : "";
+  if (!clientName) {
+    throw new Error("metadata client_name is required");
+  }
+  const redirectUris = Array.isArray(metadata.redirect_uris)
+    ? metadata.redirect_uris
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0)
+    : [];
+  if (redirectUris.length === 0) {
+    throw new Error("metadata redirect_uris is required");
+  }
+
+  return {
+    clientId,
+    clientName,
+    redirectUris: [...new Set(redirectUris)],
+    authType: "public",
+    source: "client_id_metadata_document"
+  };
+}
+
+async function resolveClientFromMetadataDocument(clientId: string): Promise<ResolvedOAuthClient> {
+  const cached = clientMetadataCache.get(clientId);
+  if (cached && cached.expiresAtMs > Date.now()) {
+    return cached.client;
+  }
+  if (cached && cached.expiresAtMs <= Date.now()) {
+    clientMetadataCache.delete(clientId);
+  }
+
+  const metadataUrl = new URL(clientId);
+  await assertSafeClientMetadataUrl(metadataUrl);
+
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => abortController.abort(), clientMetadataFetchTimeoutMs);
+  try {
+    const response = await fetch(metadataUrl.toString(), {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      redirect: "error",
+      signal: abortController.signal
+    });
+    if (!response.ok) {
+      throw new Error(`metadata fetch failed with HTTP ${response.status}`);
+    }
+
+    const rawText = await readLimitedResponseText(response, clientMetadataMaxResponseBytes);
+    const parsed = JSON.parse(rawText) as unknown;
+    const resolvedClient = parseClientMetadataDocument(parsed, clientId);
+    clientMetadataCache.set(clientId, {
+      client: resolvedClient,
+      expiresAtMs: Date.now() + clientMetadataCacheTtlMs
+    });
+    return resolvedClient;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function isHttpsClientId(clientId: string): boolean {
+  try {
+    const parsed = new URL(clientId);
+    return parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+type ResolveOAuthClientResult =
+  | { ok: true; client: ResolvedOAuthClient }
+  | { ok: false; error: "invalid_client" | "invalid_redirect_uri"; message: string };
+
+async function resolveOAuthClient(clientId: string, redirectUri: string): Promise<ResolveOAuthClientResult> {
+  let resolvedClient: ResolvedOAuthClient | undefined;
+  if (preRegisteredOauthClient && clientId === preRegisteredOauthClient.clientId) {
+    resolvedClient = preRegisteredOauthClient;
+  } else if (isHttpsClientId(clientId)) {
+    try {
+      resolvedClient = await resolveClientFromMetadataDocument(clientId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "client metadata resolution failed";
+      return {
+        ok: false,
+        error: "invalid_client",
+        message
+      };
+    }
+  }
+
+  if (!resolvedClient) {
+    return {
+      ok: false,
+      error: "invalid_client",
+      message: "client is not recognized"
+    };
+  }
+  if (!resolvedClient.redirectUris.includes(redirectUri)) {
+    return {
+      ok: false,
+      error: "invalid_redirect_uri",
+      message: "redirect_uri is not registered for client"
+    };
+  }
+  return {
+    ok: true,
+    client: resolvedClient
+  };
+}
 
 function readAuthorizeParams(source: Record<string, unknown>): AuthorizeRequestParams | { error: string } {
   const responseType = typeof source.response_type === "string" ? source.response_type.trim() : "";
@@ -148,13 +447,23 @@ function readAuthorizeParams(source: Record<string, unknown>): AuthorizeRequestP
   }
 
   const clientId = typeof source.client_id === "string" ? source.client_id.trim() : "";
-  if (!clientId || clientId !== oauthClientId) {
+  if (!clientId) {
     return { error: "invalid_client" };
   }
 
   const redirectUri = typeof source.redirect_uri === "string" ? source.redirect_uri.trim() : "";
-  if (!redirectUri || redirectUri !== oauthRedirectUri) {
+  if (!redirectUri) {
     return { error: "invalid_redirect_uri" };
+  }
+
+  const resource = typeof source.resource === "string" ? source.resource.trim() : "";
+  if (!resource) {
+    return { error: "invalid_request" };
+  }
+
+  const normalizedScope = normalizeScope(typeof source.scope === "string" ? source.scope : undefined);
+  if (!normalizedScope) {
+    return { error: "invalid_scope" };
   }
 
   const codeChallenge = typeof source.code_challenge === "string" ? source.code_challenge.trim() : "";
@@ -169,13 +478,13 @@ function readAuthorizeParams(source: Record<string, unknown>): AuthorizeRequestP
   }
 
   const state = typeof source.state === "string" && source.state.trim().length > 0 ? source.state : undefined;
-  const resource = typeof source.resource === "string" ? source.resource.trim() : "";
   return {
     responseType: "code",
     clientId,
     redirectUri,
     state,
     resource,
+    scope: normalizedScope,
     codeChallenge,
     codeChallengeMethod: "S256"
   };
@@ -198,6 +507,7 @@ function renderAuthorizeLoginForm(params: AuthorizeRequestParams, errorMessage?:
     ? `<input type="hidden" name="state" value="${escapeHtml(params.state)}" />`
     : "";
   const resourceInput = `<input type="hidden" name="resource" value="${escapeHtml(params.resource)}" />`;
+  const scopeInput = `<input type="hidden" name="scope" value="${escapeHtml(params.scope)}" />`;
 
   return `<!doctype html>
 <html lang="en">
@@ -228,6 +538,7 @@ function renderAuthorizeLoginForm(params: AuthorizeRequestParams, errorMessage?:
         <input type="hidden" name="code_challenge_method" value="${params.codeChallengeMethod}" />
         ${stateInput}
         ${resourceInput}
+        ${scopeInput}
         <label for="username">Username</label>
         <input id="username" name="username" type="text" required autocomplete="username" />
         <label for="password">Password</label>
@@ -428,34 +739,67 @@ app.get("/health", (_req, res) => {
   });
 });
 
+function logAuthorizeRequest(params: AuthorizeRequestParams): void {
+  console.info("[oauth] authorize request", {
+    client_id: params.clientId,
+    redirect_uri: params.redirectUri,
+    resource: params.resource,
+    scope: params.scope
+  });
+}
+
+function logTokenFailure(
+  reason: "invalid_client" | "invalid_redirect_uri" | "invalid_resource" | "invalid_code" | "invalid_code_verifier",
+  details: Record<string, string | number | boolean | undefined> = {}
+): void {
+  console.warn("[oauth] token exchange failure", { reason, ...details });
+}
+
 app.get("/.well-known/oauth-protected-resource", (req, res) => {
   const issuer = buildOAuthIssuer(req);
   return res.json({
-    resource: `${issuer}/mcp`,
+    resource: buildCanonicalMcpResource(req),
     authorization_servers: [issuer],
-    scopes_supported: ["mcp:tools"],
+    scopes_supported: [...supportedMcpScopes],
     bearer_methods_supported: ["header"]
   });
 });
 
 app.get("/.well-known/oauth-authorization-server", (req, res) => {
   const issuer = buildOAuthIssuer(req);
+  const tokenEndpointAuthMethodsSupported =
+    preRegisteredOauthClient?.authType === "confidential" ? ["none", "client_secret_post"] : ["none"];
+  const grantTypesSupported =
+    preRegisteredOauthClient?.authType === "confidential"
+      ? (["authorization_code", "client_credentials"] as const)
+      : (["authorization_code"] as const);
   return res.json({
     issuer,
     authorization_endpoint: `${issuer}/authorize`,
     token_endpoint: `${issuer}/oauth/token`,
-    grant_types_supported: ["authorization_code"],
+    grant_types_supported: [...grantTypesSupported],
     code_challenge_methods_supported: ["S256"],
-    token_endpoint_auth_methods_supported: ["client_secret_post"],
-    scopes_supported: ["mcp:tools"],
-    client_id_metadata_document_supported: false
+    token_endpoint_auth_methods_supported: tokenEndpointAuthMethodsSupported,
+    scopes_supported: [...supportedMcpScopes],
+    client_id_metadata_document_supported: true
   });
 });
 
-app.get("/authorize", (req, res) => {
+app.get("/authorize", async (req, res) => {
   const parsed = readAuthorizeParams(req.query as Record<string, unknown>);
   if ("error" in parsed) {
     return res.status(400).json({ error: parsed.error });
+  }
+  logAuthorizeRequest(parsed);
+
+  const canonicalResource = buildCanonicalMcpResource(req);
+  if (parsed.resource !== canonicalResource) {
+    return res.status(400).json({ error: "invalid_target" });
+  }
+
+  const resolvedClient = await resolveOAuthClient(parsed.clientId, parsed.redirectUri);
+  if (!resolvedClient.ok) {
+    return res.status(400).json({ error: resolvedClient.error });
   }
 
   res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -466,6 +810,17 @@ app.post("/authorize", express.urlencoded({ extended: false }), async (req, res)
   const parsed = readAuthorizeParams(req.body as Record<string, unknown>);
   if ("error" in parsed) {
     return res.status(400).json({ error: parsed.error });
+  }
+  logAuthorizeRequest(parsed);
+
+  const canonicalResource = buildCanonicalMcpResource(req);
+  if (parsed.resource !== canonicalResource) {
+    return res.status(400).json({ error: "invalid_target" });
+  }
+
+  const resolvedClient = await resolveOAuthClient(parsed.clientId, parsed.redirectUri);
+  if (!resolvedClient.ok) {
+    return res.status(400).json({ error: resolvedClient.error });
   }
 
   const username = typeof req.body?.username === "string" ? req.body.username.trim() : "";
@@ -486,6 +841,8 @@ app.post("/authorize", express.urlencoded({ extended: false }), async (req, res)
   authorizationCodeStore.set(code, {
     clientId: parsed.clientId,
     redirectUri: parsed.redirectUri,
+    scope: parsed.scope,
+    authType: resolvedClient.client.authType,
     codeChallenge: parsed.codeChallenge,
     codeChallengeMethod: parsed.codeChallengeMethod,
     resource: parsed.resource,
@@ -508,24 +865,58 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
 
   if (grantType === "client_credentials") {
     const clientId = typeof req.body?.client_id === "string" ? req.body.client_id.trim() : "";
-    const clientSecret = typeof req.body?.client_secret === "string" ? req.body.client_secret : "";
-    if (clientId !== oauthClientId || clientSecret !== oauthClientSecret) {
+    if (!preRegisteredOauthClient || clientId !== preRegisteredOauthClient.clientId) {
+      logTokenFailure("invalid_client", { grant_type: "client_credentials", client_id: clientId || undefined });
       return res.status(401).json({
         error: "invalid_client"
       });
     }
+    if (preRegisteredOauthClient.authType === "confidential") {
+      const clientSecret = typeof req.body?.client_secret === "string" ? req.body.client_secret : "";
+      if (!clientSecret || clientSecret !== preRegisteredOauthClient.clientSecret) {
+        logTokenFailure("invalid_client", {
+          grant_type: "client_credentials",
+          client_id: clientId
+        });
+        return res.status(401).json({
+          error: "invalid_client"
+        });
+      }
+    }
 
-    const accessToken = issueMcpOAuthAccessToken(clientId);
+    const requestedResource = typeof req.body?.resource === "string" ? req.body.resource.trim() : "";
+    const canonicalResource = buildCanonicalMcpResource(req);
+    const resource = requestedResource || canonicalResource;
+    if (resource !== canonicalResource) {
+      logTokenFailure("invalid_resource", {
+        grant_type: "client_credentials",
+        client_id: clientId
+      });
+      return res.status(400).json({
+        error: "invalid_target"
+      });
+    }
+
+    const normalizedScope = normalizeScope(typeof req.body?.scope === "string" ? req.body.scope : undefined);
+    if (!normalizedScope) {
+      return res.status(400).json({
+        error: "invalid_scope"
+      });
+    }
+
+    const accessToken = issueMcpOAuthAccessToken(clientId, normalizedScope, resource);
     return res.json({
       access_token: accessToken,
       token_type: "bearer",
-      expires_in: oauthJwtExpirySeconds
+      expires_in: oauthJwtExpirySeconds,
+      scope: normalizedScope
     });
   }
 
   if (grantType === "authorization_code") {
     const clientId = typeof req.body?.client_id === "string" ? req.body.client_id.trim() : "";
-    if (clientId !== oauthClientId) {
+    if (!clientId) {
+      logTokenFailure("invalid_client", { grant_type: "authorization_code" });
       return res.status(401).json({
         error: "invalid_client"
       });
@@ -533,7 +924,9 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
 
     const code = typeof req.body?.code === "string" ? req.body.code.trim() : "";
     const codeVerifier = typeof req.body?.code_verifier === "string" ? req.body.code_verifier : "";
-    if (!code || !codeVerifier) {
+    const redirectUri = typeof req.body?.redirect_uri === "string" ? req.body.redirect_uri.trim() : "";
+    const resource = typeof req.body?.resource === "string" ? req.body.resource.trim() : "";
+    if (!code || !codeVerifier || !redirectUri || !resource) {
       return res.status(400).json({
         error: "invalid_request"
       });
@@ -542,36 +935,72 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
     cleanupExpiredAuthorizationCodes();
     const record = authorizationCodeStore.get(code);
     if (!record) {
+      logTokenFailure("invalid_code", { grant_type: "authorization_code", client_id: clientId });
       return res.status(400).json({
         error: "invalid_grant"
       });
     }
 
-    const redirectUri = typeof req.body?.redirect_uri === "string" ? req.body.redirect_uri.trim() : "";
-    if (
-      record.clientId !== clientId ||
-      (redirectUri.length > 0 && redirectUri !== record.redirectUri)
-    ) {
+    if (record.clientId !== clientId) {
       authorizationCodeStore.delete(code);
+      logTokenFailure("invalid_client", { grant_type: "authorization_code", client_id: clientId });
+      return res.status(401).json({
+        error: "invalid_client"
+      });
+    }
+
+    if (redirectUri !== record.redirectUri) {
+      authorizationCodeStore.delete(code);
+      logTokenFailure("invalid_redirect_uri", { grant_type: "authorization_code", client_id: clientId });
       return res.status(400).json({
         error: "invalid_grant"
+      });
+    }
+
+    if (resource !== record.resource) {
+      authorizationCodeStore.delete(code);
+      logTokenFailure("invalid_resource", { grant_type: "authorization_code", client_id: clientId });
+      return res.status(400).json({
+        error: "invalid_target"
+      });
+    }
+
+    if (record.authType === "confidential") {
+      const clientSecret = typeof req.body?.client_secret === "string" ? req.body.client_secret : "";
+      if (clientSecret && (!preRegisteredOauthClient?.clientSecret || clientSecret !== preRegisteredOauthClient.clientSecret)) {
+        authorizationCodeStore.delete(code);
+        logTokenFailure("invalid_client", { grant_type: "authorization_code", client_id: clientId });
+        return res.status(401).json({
+          error: "invalid_client"
+        });
+      }
+    }
+
+    const canonicalResource = buildCanonicalMcpResource(req);
+    if (resource !== canonicalResource) {
+      authorizationCodeStore.delete(code);
+      logTokenFailure("invalid_resource", { grant_type: "authorization_code", client_id: clientId });
+      return res.status(400).json({
+        error: "invalid_target"
       });
     }
 
     const computedChallenge = base64UrlSha256(codeVerifier);
     if (record.codeChallengeMethod !== "S256" || computedChallenge !== record.codeChallenge) {
       authorizationCodeStore.delete(code);
+      logTokenFailure("invalid_code_verifier", { grant_type: "authorization_code", client_id: clientId });
       return res.status(400).json({
         error: "invalid_grant"
       });
     }
 
     authorizationCodeStore.delete(code);
-    const accessToken = issueUserOAuthAccessToken(record.userId, record.username, record.resource);
+    const accessToken = issueUserOAuthAccessToken(record.userId, record.username, record.scope, record.resource);
     return res.json({
       access_token: accessToken,
       token_type: "bearer",
-      expires_in: oauthJwtExpirySeconds
+      expires_in: oauthJwtExpirySeconds,
+      scope: record.scope
     });
   }
 
@@ -1328,17 +1757,31 @@ function setMcpBearerChallengeHeader(req: express.Request, res: express.Response
   res.setHeader("WWW-Authenticate", `Bearer resource_metadata="${resourceMetadataUrl}", scope="mcp:tools"`);
 }
 
-function isExpectedMcpAudience(token: string, expectedAudience: string): boolean {
-  const decoded = jwt.decode(token);
-  if (!decoded || typeof decoded !== "object" || !("aud" in decoded)) {
-    return true;
+function isExpectedMcpAudience(decoded: { aud?: unknown }, expectedAudience: string): boolean {
+  const aud = decoded.aud;
+  if (!aud) {
+    return false;
   }
-  const aud = (decoded as { aud?: unknown }).aud;
   if (typeof aud === "string") {
     return aud === expectedAudience;
   }
   if (Array.isArray(aud)) {
     return aud.includes(expectedAudience);
+  }
+  return false;
+}
+
+function tokenHasRequiredScope(decoded: { scope?: unknown }, requiredScope: string): boolean {
+  const scopeClaim = decoded.scope;
+  if (typeof scopeClaim === "string") {
+    return scopeClaim
+      .split(/\s+/)
+      .map((scope) => scope.trim())
+      .filter((scope) => scope.length > 0)
+      .includes(requiredScope);
+  }
+  if (Array.isArray(scopeClaim)) {
+    return scopeClaim.includes(requiredScope);
   }
   return false;
 }
@@ -1354,16 +1797,27 @@ app.post("/mcp", async (req, res) => {
   const mcpApiKey = optionalEnv("MCP_API_KEY");
   const isApiKey = mcpApiKey && token === mcpApiKey;
   if (!isApiKey) {
-    const expectedAudience = `${buildOAuthIssuer(req)}/mcp`;
-    if (!isExpectedMcpAudience(token, expectedAudience)) {
-      setMcpBearerChallengeHeader(req, res);
-      return res.status(401).json({ error: "Unauthorized", message: "Invalid token audience" });
-    }
     try {
       verifyAccessToken(token);
     } catch {
       setMcpBearerChallengeHeader(req, res);
       return res.status(401).json({ error: "Unauthorized", message: "Invalid or expired token" });
+    }
+
+    const decoded = jwt.decode(token);
+    if (!decoded || typeof decoded !== "object") {
+      setMcpBearerChallengeHeader(req, res);
+      return res.status(401).json({ error: "Unauthorized", message: "Invalid token payload" });
+    }
+
+    const expectedAudience = buildCanonicalMcpResource(req);
+    if (!isExpectedMcpAudience(decoded as { aud?: unknown }, expectedAudience)) {
+      setMcpBearerChallengeHeader(req, res);
+      return res.status(401).json({ error: "Unauthorized", message: "Invalid token audience" });
+    }
+    if (!tokenHasRequiredScope(decoded as { scope?: unknown }, "mcp:tools")) {
+      setMcpBearerChallengeHeader(req, res);
+      return res.status(401).json({ error: "Unauthorized", message: "Insufficient token scope" });
     }
   }
 

@@ -344,6 +344,7 @@ async function run() {
     const oauthMetadata = await request("GET", `${coreBaseUrl}/.well-known/oauth-authorization-server`);
     expectStatus(oauthMetadata, 200, "oauth authorization metadata", state);
     const expectedIssuer = `https://${new URL(coreBaseUrl).hostname}`;
+    const oauthResource = `${expectedIssuer}/mcp`;
     ensure(oauthMetadata.json?.issuer === expectedIssuer, "oauth metadata issuer", undefined, state);
     ensure(
       oauthMetadata.json?.authorization_endpoint === `${expectedIssuer}/authorize`,
@@ -375,7 +376,9 @@ async function run() {
     const oauthTokenRequestBody = new URLSearchParams({
       grant_type: "client_credentials",
       client_id: coreEnv.OAUTH_CLIENT_ID,
-      client_secret: coreEnv.OAUTH_CLIENT_SECRET
+      client_secret: coreEnv.OAUTH_CLIENT_SECRET,
+      resource: oauthResource,
+      scope: "mcp:tools"
     }).toString();
     const oauthToken = await request("POST", `${coreBaseUrl}/oauth/token`, {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -402,6 +405,22 @@ async function run() {
       oauthUnsupportedGrant.json?.error === "unsupported_grant_type",
       "oauth unsupported_grant_type error code",
       undefined,
+      state
+    );
+
+    const mcpMissingBearer = await request("POST", `${coreBaseUrl}/mcp`, { body: {} });
+    expectStatus(mcpMissingBearer, 401, "mcp missing bearer rejected", state);
+    const mcpChallengeHeader = mcpMissingBearer.headers.get("www-authenticate") ?? "";
+    ensure(
+      mcpChallengeHeader.includes("resource_metadata="),
+      "mcp 401 includes resource_metadata challenge",
+      mcpChallengeHeader,
+      state
+    );
+    ensure(
+      mcpChallengeHeader.includes('scope="mcp:tools"'),
+      "mcp 401 includes required scope challenge",
+      mcpChallengeHeader,
       state
     );
 
@@ -456,7 +475,7 @@ async function run() {
     const codeChallenge = base64UrlSha256(codeVerifier);
     const authorizeGet = await request(
       "GET",
-      `${coreBaseUrl}/authorize?response_type=code&client_id=${encodeURIComponent(coreEnv.OAUTH_CLIENT_ID)}&redirect_uri=${encodeURIComponent("https://claude.ai/api/mcp/auth_callback")}&code_challenge=${encodeURIComponent(codeChallenge)}&code_challenge_method=S256&state=e2e-state`
+      `${coreBaseUrl}/authorize?response_type=code&client_id=${encodeURIComponent(coreEnv.OAUTH_CLIENT_ID)}&redirect_uri=${encodeURIComponent("https://claude.ai/api/mcp/auth_callback")}&resource=${encodeURIComponent(oauthResource)}&scope=${encodeURIComponent("mcp:tools")}&code_challenge=${encodeURIComponent(codeChallenge)}&code_challenge_method=S256&state=e2e-state`
     );
     expectStatus(authorizeGet, 200, "authorize login form displayed", state);
     ensure(
@@ -470,6 +489,8 @@ async function run() {
       response_type: "code",
       client_id: coreEnv.OAUTH_CLIENT_ID,
       redirect_uri: "https://claude.ai/api/mcp/auth_callback",
+      resource: oauthResource,
+      scope: "mcp:tools",
       code_challenge: codeChallenge,
       code_challenge_method: "S256",
       state: "e2e-state",
@@ -499,7 +520,8 @@ async function run() {
       client_id: coreEnv.OAUTH_CLIENT_ID,
       code: authCode,
       code_verifier: codeVerifier,
-      redirect_uri: "https://claude.ai/api/mcp/auth_callback"
+      redirect_uri: "https://claude.ai/api/mcp/auth_callback",
+      resource: oauthResource
     }).toString();
     const oauthAuthCodeToken = await request("POST", `${coreBaseUrl}/oauth/token`, {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -523,6 +545,86 @@ async function run() {
       `status=${oauthPkceMcpCall.status} body=${trimBody(oauthPkceMcpCall.text)}`,
       state
     );
+
+    const issueAuthorizationCode = async (stateValue, verifier, username, pass) => {
+      const challenge = base64UrlSha256(verifier);
+      const authorizeBody = new URLSearchParams({
+        response_type: "code",
+        client_id: coreEnv.OAUTH_CLIENT_ID,
+        redirect_uri: "https://claude.ai/api/mcp/auth_callback",
+        resource: oauthResource,
+        scope: "mcp:tools",
+        code_challenge: challenge,
+        code_challenge_method: "S256",
+        state: stateValue,
+        username,
+        password: pass
+      }).toString();
+      const authRes = await request("POST", `${coreBaseUrl}/authorize`, {
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: authorizeBody,
+        redirect: "manual"
+      });
+      expectStatus(authRes, 302, `authorize code issue (${stateValue})`, state);
+      const location = authRes.headers.get("location") ?? "";
+      if (!location) return "";
+      const parsedLocation = new URL(location);
+      return parsedLocation.searchParams.get("code") ?? "";
+    };
+
+    const badRedirectVerifier = randomBytes(32).toString("base64url");
+    const badRedirectCode = await issueAuthorizationCode("bad-redirect", badRedirectVerifier, userA, password);
+    const badRedirectToken = await request("POST", `${coreBaseUrl}/oauth/token`, {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        client_id: coreEnv.OAUTH_CLIENT_ID,
+        code: badRedirectCode,
+        code_verifier: badRedirectVerifier,
+        redirect_uri: "https://claude.ai/api/mcp/auth_callback/wrong",
+        resource: oauthResource
+      }).toString()
+    });
+    expectStatus(badRedirectToken, 400, "authorization_code rejects bad redirect_uri", state);
+
+    const badPkceVerifier = randomBytes(32).toString("base64url");
+    const badPkceCode = await issueAuthorizationCode("bad-pkce", badPkceVerifier, userA, password);
+    const badPkceToken = await request("POST", `${coreBaseUrl}/oauth/token`, {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        client_id: coreEnv.OAUTH_CLIENT_ID,
+        code: badPkceCode,
+        code_verifier: randomBytes(32).toString("base64url"),
+        redirect_uri: "https://claude.ai/api/mcp/auth_callback",
+        resource: oauthResource
+      }).toString()
+    });
+    expectStatus(badPkceToken, 400, "authorization_code rejects bad PKCE verifier", state);
+
+    const badAudienceMcpCall = await request("POST", `${coreBaseUrl}/mcp`, {
+      token: tokenALogin,
+      body: {}
+    });
+    expectStatus(badAudienceMcpCall, 401, "mcp rejects token without expected audience", state);
+
+    const cimdClientIdUrl = process.env.E2E_CIMD_CLIENT_ID_URL?.trim();
+    const cimdRedirectUri = process.env.E2E_CIMD_REDIRECT_URI?.trim();
+    if (cimdClientIdUrl && cimdRedirectUri) {
+      const cimdVerifier = randomBytes(32).toString("base64url");
+      const cimdChallenge = base64UrlSha256(cimdVerifier);
+      const cimdAuthorize = await request(
+        "GET",
+        `${coreBaseUrl}/authorize?response_type=code&client_id=${encodeURIComponent(cimdClientIdUrl)}&redirect_uri=${encodeURIComponent(cimdRedirectUri)}&resource=${encodeURIComponent(oauthResource)}&scope=${encodeURIComponent("mcp:tools")}&code_challenge=${encodeURIComponent(cimdChallenge)}&code_challenge_method=S256&state=cimd-state`
+      );
+      expectStatus(cimdAuthorize, 200, "URL-based client_id metadata resolution success", state);
+    } else {
+      warn(
+        "URL-based client_id metadata resolution test skipped",
+        "Set E2E_CIMD_CLIENT_ID_URL and E2E_CIMD_REDIRECT_URI to enable this check.",
+        state
+      );
+    }
 
     logStep("Core-managed integration manifests");
     const manifests = await request("GET", `${coreBaseUrl}/integrations/manifests`);
