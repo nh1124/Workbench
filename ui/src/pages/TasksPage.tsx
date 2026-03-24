@@ -392,9 +392,19 @@ export function TasksPage() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [nowMarker, setNowMarker] = useState(() => new Date());
   const importRef = useRef<HTMLInputElement>(null);
+  const weekTimelineScrollRef = useRef<HTMLDivElement | null>(null);
+  const autoScrolledWeekKeyRef = useRef<string>("");
 
   const today = useMemo(() => startOfDay(new Date()), []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setNowMarker(new Date());
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const load = async () => {
     setIsLoading(true);
@@ -510,6 +520,35 @@ export function TasksPage() {
     () => (TIMELINE_END_HOUR - TIMELINE_START_HOUR) * TIMELINE_HOUR_HEIGHT,
     []
   );
+  const nowDay = useMemo(() => startOfDay(nowMarker), [nowMarker]);
+  const nowMinuteOfDay = useMemo(() => (nowMarker.getHours() * 60) + nowMarker.getMinutes(), [nowMarker]);
+  const visibleWeekKey = useMemo(
+    () => `${weekDays[0].getFullYear()}-${weekDays[0].getMonth()}-${weekDays[0].getDate()}_${weekDays[6].getFullYear()}-${weekDays[6].getMonth()}-${weekDays[6].getDate()}`,
+    [weekDays]
+  );
+
+  useEffect(() => {
+    if (sidebarMode !== "calendar" || calendarMode !== "week") {
+      autoScrolledWeekKeyRef.current = "";
+    }
+  }, [sidebarMode, calendarMode]);
+
+  useEffect(() => {
+    if (sidebarMode !== "calendar" || calendarMode !== "week") return;
+    if (autoScrolledWeekKeyRef.current === visibleWeekKey) return;
+    const scrollElement = weekTimelineScrollRef.current;
+    if (!scrollElement) return;
+
+    const startMinutes = TIMELINE_START_HOUR * 60;
+    const endMinutes = TIMELINE_END_HOUR * 60;
+    if (nowMinuteOfDay < startMinutes || nowMinuteOfDay > endMinutes) return;
+
+    const markerTop = ((nowMinuteOfDay - startMinutes) / 60) * TIMELINE_HOUR_HEIGHT;
+    const target = Math.max(0, markerTop - (scrollElement.clientHeight * 0.35));
+    scrollElement.scrollTop = target;
+    autoScrolledWeekKeyRef.current = visibleWeekKey;
+  }, [calendarMode, nowMinuteOfDay, sidebarMode, visibleWeekKey]);
+
   const isAuthError = useMemo(() => {
     if (!error) return false;
     return isAuthErrorMessage(error);
@@ -1196,7 +1235,7 @@ export function TasksPage() {
                   })}
                 </div>
 
-                <div className="calendar-week-scroll">
+                <div className="calendar-week-scroll" ref={weekTimelineScrollRef}>
                   <div className="calendar-week-grid">
                     <div className="calendar-week-time-axis" style={{ height: timelineBodyHeight }}>
                       {timelineHours.map((hour) => (
@@ -1213,6 +1252,11 @@ export function TasksPage() {
                     {weekDays.map((day) => {
                       const key = `${day.getFullYear()}-${day.getMonth()}-${day.getDate()}`;
                       const dayTasks = tasksByDate.get(key) || [];
+                      const isCurrentDay = isSameDay(day, nowDay);
+                      const showNowLine = isCurrentDay
+                        && nowMinuteOfDay >= (TIMELINE_START_HOUR * 60)
+                        && nowMinuteOfDay <= (TIMELINE_END_HOUR * 60);
+                      const nowLineTop = ((nowMinuteOfDay - (TIMELINE_START_HOUR * 60)) / 60) * TIMELINE_HOUR_HEIGHT;
                       const timedTasks = dayTasks
                         .filter((task) => task.startTime || task.endTime)
                         .sort((a, b) => {
@@ -1220,6 +1264,94 @@ export function TasksPage() {
                           const bStart = parseTimeToMinutes(b.startTime) ?? 0;
                           return aStart - bStart;
                         });
+
+                      const laidOutTimedTasks = timedTasks
+                        .map((task) => {
+                          const startMinuteRaw = parseTimeToMinutes(task.startTime);
+                          const endMinuteRaw = parseTimeToMinutes(task.endTime);
+                          const fallbackStart = endMinuteRaw !== null
+                            ? Math.max((TIMELINE_START_HOUR * 60), endMinuteRaw - 60)
+                            : (TIMELINE_START_HOUR * 60);
+                          const startMinute = startMinuteRaw ?? fallbackStart;
+                          const fallbackEnd = Math.min((TIMELINE_END_HOUR * 60), startMinute + 60);
+                          const rawEnd = endMinuteRaw ?? fallbackEnd;
+
+                          const clippedStart = Math.max(TIMELINE_START_HOUR * 60, Math.min(startMinute, TIMELINE_END_HOUR * 60));
+                          const boundedEnd = Math.max(clippedStart + 30, rawEnd);
+                          const clippedEnd = Math.min(TIMELINE_END_HOUR * 60, boundedEnd);
+
+                          if (clippedStart >= TIMELINE_END_HOUR * 60 || clippedEnd <= TIMELINE_START_HOUR * 60) {
+                            return null;
+                          }
+
+                          const top = ((clippedStart - (TIMELINE_START_HOUR * 60)) / 60) * TIMELINE_HOUR_HEIGHT;
+                          const height = Math.max(22, ((clippedEnd - clippedStart) / 60) * TIMELINE_HOUR_HEIGHT);
+                          const timeLabel = task.startTime
+                            ? `${task.startTime}${task.endTime ? ` - ${task.endTime}` : ""}`
+                            : `${hourLabel(Math.floor(clippedStart / 60))}`;
+
+                          return {
+                            task,
+                            clippedStart,
+                            clippedEnd,
+                            top,
+                            height,
+                            timeLabel,
+                            lane: 0,
+                            laneCount: 1
+                          };
+                        })
+                        .filter((item): item is {
+                          task: Task;
+                          clippedStart: number;
+                          clippedEnd: number;
+                          top: number;
+                          height: number;
+                          timeLabel: string;
+                          lane: number;
+                          laneCount: number;
+                        } => item !== null)
+                        .sort((a, b) => {
+                          if (a.clippedStart !== b.clippedStart) return a.clippedStart - b.clippedStart;
+                          return a.clippedEnd - b.clippedEnd;
+                        });
+
+                      const activeEvents: Array<{ lane: number; end: number }> = [];
+                      let clusterIndexes: number[] = [];
+                      let clusterMaxLanes = 1;
+
+                      for (let index = 0; index < laidOutTimedTasks.length; index++) {
+                        const event = laidOutTimedTasks[index];
+
+                        for (let activeIndex = activeEvents.length - 1; activeIndex >= 0; activeIndex--) {
+                          if (activeEvents[activeIndex].end <= event.clippedStart) {
+                            activeEvents.splice(activeIndex, 1);
+                          }
+                        }
+
+                        if (activeEvents.length === 0 && clusterIndexes.length > 0) {
+                          for (const clusterIndex of clusterIndexes) {
+                            laidOutTimedTasks[clusterIndex].laneCount = clusterMaxLanes;
+                          }
+                          clusterIndexes = [];
+                          clusterMaxLanes = 1;
+                        }
+
+                        const usedLanes = new Set(activeEvents.map((active) => active.lane));
+                        let lane = 0;
+                        while (usedLanes.has(lane)) lane++;
+
+                        event.lane = lane;
+                        activeEvents.push({ lane, end: event.clippedEnd });
+                        clusterIndexes.push(index);
+                        clusterMaxLanes = Math.max(clusterMaxLanes, lane + 1);
+                      }
+
+                      if (clusterIndexes.length > 0) {
+                        for (const clusterIndex of clusterIndexes) {
+                          laidOutTimedTasks[clusterIndex].laneCount = clusterMaxLanes;
+                        }
+                      }
 
                       return (
                         <div
@@ -1235,43 +1367,38 @@ export function TasksPage() {
                             />
                           ))}
 
-                          {timedTasks.map((task) => {
-                            const startMinuteRaw = parseTimeToMinutes(task.startTime);
-                            const endMinuteRaw = parseTimeToMinutes(task.endTime);
-                            const fallbackStart = endMinuteRaw !== null
-                              ? Math.max((TIMELINE_START_HOUR * 60), endMinuteRaw - 60)
-                              : (TIMELINE_START_HOUR * 60);
-                            const startMinute = startMinuteRaw ?? fallbackStart;
-                            const fallbackEnd = Math.min((TIMELINE_END_HOUR * 60), startMinute + 60);
-                            const rawEnd = endMinuteRaw ?? fallbackEnd;
+                          {showNowLine ? (
+                            <span className="calendar-week-now-line" style={{ top: nowLineTop }} />
+                          ) : null}
 
-                            const clippedStart = Math.max(TIMELINE_START_HOUR * 60, Math.min(startMinute, TIMELINE_END_HOUR * 60));
-                            const boundedEnd = Math.max(clippedStart + 30, rawEnd);
-                            const clippedEnd = Math.min(TIMELINE_END_HOUR * 60, boundedEnd);
-
-                            if (clippedStart >= TIMELINE_END_HOUR * 60 || clippedEnd <= TIMELINE_START_HOUR * 60) {
-                              return null;
-                            }
-
-                            const top = ((clippedStart - (TIMELINE_START_HOUR * 60)) / 60) * TIMELINE_HOUR_HEIGHT;
-                            const height = Math.max(22, ((clippedEnd - clippedStart) / 60) * TIMELINE_HOUR_HEIGHT);
-                            const contextDisplay = resolveContextDisplayName(task.context, task.contextName);
-                            const timeLabel = task.startTime
-                              ? `${task.startTime}${task.endTime ? ` - ${task.endTime}` : ""}`
-                              : `${hourLabel(Math.floor(clippedStart / 60))}`;
+                          {laidOutTimedTasks.map((event, eventIndex) => {
+                            const contextDisplay = resolveContextDisplayName(event.task.context, event.task.contextName);
+                            const laneWidthPercent = 100 / event.laneCount;
+                            const laneLeftPercent = laneWidthPercent * event.lane;
+                            const compactClass = event.height < 44
+                              ? " title-only"
+                              : event.height < 64
+                                ? " title-priority"
+                                : "";
 
                             return (
                               <button
-                                key={task.id}
+                                key={`${event.task.id}-${eventIndex}`}
                                 type="button"
-                                className={`calendar-week-event-block${task.status === "done" ? " done" : ""}`}
-                                style={{ top, height }}
-                                onClick={() => selectTask(task)}
-                                title={`${task.title} (${timeLabel})`}
+                                className={`calendar-week-event-block${event.task.status === "done" ? " done" : ""}${compactClass}`}
+                                style={{
+                                  top: event.top,
+                                  height: event.height,
+                                  left: `calc(${laneLeftPercent}% + 2px)`,
+                                  width: `calc(${laneWidthPercent}% - 4px)`,
+                                  zIndex: event.lane + 1
+                                }}
+                                onClick={() => selectTask(event.task)}
+                                title={`${event.task.title} (${event.timeLabel})`}
                               >
-                                <strong>{task.title}</strong>
+                                <strong>{event.task.title}</strong>
                                 <span>{contextDisplay}</span>
-                                <small className="calendar-week-event-time">{timeLabel}</small>
+                                <small className="calendar-week-event-time">{event.timeLabel}</small>
                               </button>
                             );
                           })}
