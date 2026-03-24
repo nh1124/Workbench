@@ -87,6 +87,33 @@ async function serviceRequest<T>(
   return JSON.parse(text) as T;
 }
 
+function decodeContentDispositionFilename(contentDisposition: string | null): string | undefined {
+  if (!contentDisposition) {
+    return undefined;
+  }
+
+  const utf8Match = contentDisposition.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch {
+      return utf8Match[1];
+    }
+  }
+
+  const quotedMatch = contentDisposition.match(/filename\s*=\s*"([^"]+)"/i);
+  if (quotedMatch?.[1]) {
+    return quotedMatch[1];
+  }
+
+  const plainMatch = contentDisposition.match(/filename\s*=\s*([^;]+)/i);
+  if (plainMatch?.[1]) {
+    return plainMatch[1].trim();
+  }
+
+  return undefined;
+}
+
 function buildQuery(params: Record<string, string | number | undefined>): string {
   const sp = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -161,7 +188,82 @@ export const artifactsClient = {
       body: JSON.stringify(payload)
     }),
   removeItem: (token: string, id: string) =>
-    serviceRequest<void>(artifactsService, `/artifacts/items/${encodeURIComponent(id)}`, token, { method: "DELETE" })
+    serviceRequest<void>(artifactsService, `/artifacts/items/${encodeURIComponent(id)}`, token, { method: "DELETE" }),
+  uploadFile: async (
+    token: string,
+    payload: {
+      projectId?: string;
+      projectName?: string;
+      directoryPath?: string;
+      scope?: "private" | "org" | "project";
+      tags?: string[];
+      filename: string;
+      mimeType?: string;
+      contentBase64: string;
+    }
+  ) => {
+    const fileBuffer = Buffer.from(payload.contentBase64, "base64");
+    const formData = new FormData();
+    if (payload.projectId) formData.append("projectId", payload.projectId);
+    if (payload.projectName) formData.append("projectName", payload.projectName);
+    if (payload.directoryPath) formData.append("directoryPath", payload.directoryPath);
+    if (payload.scope) formData.append("scope", payload.scope);
+    if (payload.tags?.length) formData.append("tags", JSON.stringify(payload.tags));
+    formData.append(
+      "file",
+      new Blob([fileBuffer], { type: payload.mimeType || "application/octet-stream" }),
+      payload.filename
+    );
+
+    const response = await fetch(`${artifactsService.baseUrl}/artifacts/upload`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`
+      },
+      body: formData
+    });
+
+    const text = await response.text();
+    if (!response.ok) {
+      throw new InternalServiceError(artifactsService.id, response.status, text || `HTTP ${response.status}`);
+    }
+    if (!text.trim()) {
+      return undefined as unknown;
+    }
+    return JSON.parse(text) as unknown;
+  },
+  downloadFile: async (token: string, id: string, asAttachment = true) => {
+    const suffix = asAttachment ? "?download=1" : "";
+    const response = await fetch(
+      `${artifactsService.baseUrl}/artifacts/items/${encodeURIComponent(id)}/download${suffix}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      }
+    );
+
+    const arrayBuffer = await response.arrayBuffer();
+    if (!response.ok) {
+      const text = Buffer.from(arrayBuffer).toString("utf8");
+      throw new InternalServiceError(artifactsService.id, response.status, text || `HTTP ${response.status}`);
+    }
+
+    const contentDisposition = response.headers.get("content-disposition");
+    const fileName = decodeContentDispositionFilename(contentDisposition) ?? id;
+    const mimeType = response.headers.get("content-type") ?? "application/octet-stream";
+    const sizeBytesHeader = response.headers.get("content-length");
+    const sizeBytes = sizeBytesHeader ? Number(sizeBytesHeader) : arrayBuffer.byteLength;
+    const contentBase64 = Buffer.from(arrayBuffer).toString("base64");
+
+    return {
+      id,
+      fileName,
+      mimeType,
+      sizeBytes: Number.isFinite(sizeBytes) ? sizeBytes : arrayBuffer.byteLength,
+      contentBase64
+    };
+  }
 };
 
 export const tasksClient = {
