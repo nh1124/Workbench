@@ -864,6 +864,16 @@ app.post("/authorize", express.urlencoded({ extended: false }), async (req, res)
 
 app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => {
   const grantType = typeof req.body?.grant_type === "string" ? req.body.grant_type.trim() : "";
+  console.info("[oauth] token request received", {
+    grant_type: grantType || "(missing)",
+    client_id: typeof req.body?.client_id === "string" ? req.body.client_id : "(missing)",
+    redirect_uri: typeof req.body?.redirect_uri === "string" ? req.body.redirect_uri : "(missing)",
+    resource: typeof req.body?.resource === "string" ? req.body.resource : "(missing)",
+    scope: typeof req.body?.scope === "string" ? req.body.scope : "(missing)",
+    has_code: typeof req.body?.code === "string" && req.body.code.length > 0,
+    has_code_verifier: typeof req.body?.code_verifier === "string" && req.body.code_verifier.length > 0,
+    has_client_secret: typeof req.body?.client_secret === "string" && req.body.client_secret.length > 0
+  });
 
   if (grantType === "client_credentials") {
     const clientId = typeof req.body?.client_id === "string" ? req.body.client_id.trim() : "";
@@ -934,14 +944,26 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
     const record = authorizationCodeStore.get(code);
     if (!record) {
       logTokenFailure("invalid_code", { grant_type: "authorization_code", client_id: clientId });
+      console.warn("[oauth] auth code not found or expired", { client_id: clientId, store_size: authorizationCodeStore.size });
       return res.status(400).json({
         error: "invalid_grant"
       });
     }
 
+    console.info("[oauth] auth code record found", {
+      record_client_id: record.clientId,
+      request_client_id: clientId,
+      record_redirect_uri: record.redirectUri,
+      request_redirect_uri: redirectUri,
+      record_resource: record.resource,
+      request_resource: resource || "(omitted)",
+      record_scope: record.scope,
+      record_auth_type: record.authType
+    });
+
     if (record.clientId !== clientId) {
       authorizationCodeStore.delete(code);
-      logTokenFailure("invalid_client", { grant_type: "authorization_code", client_id: clientId });
+      logTokenFailure("invalid_client", { grant_type: "authorization_code", client_id: clientId, record_client_id: record.clientId });
       return res.status(401).json({
         error: "invalid_client"
       });
@@ -949,7 +971,12 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
 
     if (redirectUri !== record.redirectUri) {
       authorizationCodeStore.delete(code);
-      logTokenFailure("invalid_redirect_uri", { grant_type: "authorization_code", client_id: clientId });
+      logTokenFailure("invalid_redirect_uri", {
+        grant_type: "authorization_code",
+        client_id: clientId,
+        request_redirect_uri: redirectUri,
+        record_redirect_uri: record.redirectUri
+      });
       return res.status(400).json({
         error: "invalid_grant"
       });
@@ -960,7 +987,12 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
     const effectiveResource = resource || record.resource;
     if (resource && resource !== record.resource) {
       authorizationCodeStore.delete(code);
-      logTokenFailure("invalid_resource", { grant_type: "authorization_code", client_id: clientId });
+      logTokenFailure("invalid_resource", {
+        grant_type: "authorization_code",
+        client_id: clientId,
+        request_resource: resource,
+        record_resource: record.resource
+      });
       return res.status(400).json({
         error: "invalid_target"
       });
@@ -972,15 +1004,30 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
 
     // Validate that the effective resource matches this server's canonical MCP resource.
     const canonicalResource = buildCanonicalMcpResource(req);
+    console.info("[oauth] resource check", {
+      effective_resource: effectiveResource,
+      canonical_resource: canonicalResource,
+      match: effectiveResource === canonicalResource
+    });
     if (effectiveResource !== canonicalResource) {
       authorizationCodeStore.delete(code);
-      logTokenFailure("invalid_resource", { grant_type: "authorization_code", client_id: clientId });
+      logTokenFailure("invalid_resource", {
+        grant_type: "authorization_code",
+        client_id: clientId,
+        effective_resource: effectiveResource,
+        canonical_resource: canonicalResource
+      });
       return res.status(400).json({
         error: "invalid_target"
       });
     }
 
     const computedChallenge = base64UrlSha256(codeVerifier);
+    console.info("[oauth] PKCE check", {
+      computed_challenge: computedChallenge,
+      stored_challenge: record.codeChallenge,
+      match: computedChallenge === record.codeChallenge
+    });
     if (record.codeChallengeMethod !== "S256" || computedChallenge !== record.codeChallenge) {
       authorizationCodeStore.delete(code);
       logTokenFailure("invalid_code_verifier", { grant_type: "authorization_code", client_id: clientId });
@@ -990,6 +1037,7 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
     }
 
     authorizationCodeStore.delete(code);
+    console.info("[oauth] token issued successfully", { client_id: clientId, scope: record.scope, resource: effectiveResource });
     const accessToken = issueUserOAuthAccessToken(record.userId, record.username, record.scope, effectiveResource);
     return res.json({
       access_token: accessToken,
@@ -1791,21 +1839,34 @@ app.post("/mcp", async (req, res) => {
   // Accept either a static MCP_API_KEY (for connector configuration) or a valid JWT
   const mcpApiKey = optionalEnv("MCP_API_KEY");
   const isApiKey = mcpApiKey && token === mcpApiKey;
+  console.info("[mcp] auth check", { is_api_key: isApiKey });
   if (!isApiKey) {
     try {
       verifyAccessToken(token);
-    } catch {
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.warn("[mcp] token verify failed", { reason });
       setMcpBearerChallengeHeader(req, res);
       return res.status(401).json({ error: "Unauthorized", message: "Invalid or expired token" });
     }
 
     const decoded = jwt.decode(token);
     if (!decoded || typeof decoded !== "object") {
+      console.warn("[mcp] token decode failed");
       setMcpBearerChallengeHeader(req, res);
       return res.status(401).json({ error: "Unauthorized", message: "Invalid token payload" });
     }
 
     const expectedAudience = buildCanonicalMcpResource(req);
+    const tokenAud = (decoded as { aud?: unknown }).aud;
+    const tokenScope = (decoded as { scope?: unknown }).scope;
+    console.info("[mcp] token claims", {
+      aud: tokenAud,
+      scope: tokenScope,
+      expected_audience: expectedAudience,
+      aud_ok: isExpectedMcpAudience(decoded as { aud?: unknown }, expectedAudience),
+      scope_ok: tokenHasRequiredScope(decoded as { scope?: unknown }, "mcp:tools")
+    });
     if (!isExpectedMcpAudience(decoded as { aud?: unknown }, expectedAudience)) {
       setMcpBearerChallengeHeader(req, res);
       return res.status(401).json({ error: "Unauthorized", message: "Invalid token audience" });
@@ -1814,6 +1875,7 @@ app.post("/mcp", async (req, res) => {
       setMcpBearerChallengeHeader(req, res);
       return res.status(401).json({ error: "Unauthorized", message: "Insufficient token scope" });
     }
+    console.info("[mcp] token valid, proceeding");
   }
 
   const server = createMcpServerInstance();
