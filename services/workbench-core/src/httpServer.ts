@@ -503,8 +503,7 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
 
   if (grantType === "authorization_code") {
     const clientId = typeof req.body?.client_id === "string" ? req.body.client_id.trim() : "";
-    const clientSecret = typeof req.body?.client_secret === "string" ? req.body.client_secret : "";
-    if (clientId !== oauthClientId || clientSecret !== oauthClientSecret) {
+    if (clientId !== oauthClientId) {
       return res.status(401).json({
         error: "invalid_client"
       });

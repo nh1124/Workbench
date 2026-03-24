@@ -497,7 +497,6 @@ async function run() {
     const oauthAuthCodeTokenBody = new URLSearchParams({
       grant_type: "authorization_code",
       client_id: coreEnv.OAUTH_CLIENT_ID,
-      client_secret: coreEnv.OAUTH_CLIENT_SECRET,
       code: authCode,
       code_verifier: codeVerifier,
       redirect_uri: "https://claude.ai/api/mcp/auth_callback"
