@@ -966,19 +966,13 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
       });
     }
 
-    if (record.authType === "confidential") {
-      const clientSecret = typeof req.body?.client_secret === "string" ? req.body.client_secret : "";
-      if (clientSecret && (!preRegisteredOauthClient?.clientSecret || clientSecret !== preRegisteredOauthClient.clientSecret)) {
-        authorizationCodeStore.delete(code);
-        logTokenFailure("invalid_client", { grant_type: "authorization_code", client_id: clientId });
-        return res.status(401).json({
-          error: "invalid_client"
-        });
-      }
-    }
+    // authorization_code + PKCE: client_secret is NOT validated.
+    // The code_verifier proves client identity; requiring client_secret here
+    // breaks public clients (including Claude.ai) that use PKCE without a secret.
 
+    // Validate that the effective resource matches this server's canonical MCP resource.
     const canonicalResource = buildCanonicalMcpResource(req);
-    if (resource !== canonicalResource) {
+    if (effectiveResource !== canonicalResource) {
       authorizationCodeStore.delete(code);
       logTokenFailure("invalid_resource", { grant_type: "authorization_code", client_id: clientId });
       return res.status(400).json({
