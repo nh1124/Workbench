@@ -1201,8 +1201,9 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
     const code = typeof req.body?.code === "string" ? req.body.code.trim() : "";
     const codeVerifier = typeof req.body?.code_verifier === "string" ? req.body.code_verifier : "";
     const redirectUri = typeof req.body?.redirect_uri === "string" ? req.body.redirect_uri.trim() : "";
-    const resource = typeof req.body?.resource === "string" ? req.body.resource.trim() : "";
-    if (!code || !codeVerifier || !redirectUri || !resource) {
+    const tokenRequestResource = typeof req.body?.resource === "string" ? req.body.resource.trim() : "";
+    const tokenRequestResourcePresent = tokenRequestResource.length > 0;
+    if (!code || !codeVerifier || !redirectUri) {
       return res.status(400).json({
         error: "invalid_request"
       });
@@ -1224,7 +1225,8 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
       record_redirect_uri: record.redirectUri,
       request_redirect_uri: redirectUri,
       record_resource: record.resource,
-      request_resource: resource,
+      request_resource: tokenRequestResourcePresent ? tokenRequestResource : "(missing)",
+      token_request_resource_present: tokenRequestResourcePresent,
       record_scope: record.scope
     });
 
@@ -1249,12 +1251,12 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
       });
     }
 
-    if (resource !== record.resource) {
+    if (tokenRequestResourcePresent && tokenRequestResource !== record.resource) {
       authorizationCodeStore.delete(code);
       logTokenFailure("invalid_resource", {
         grant_type: "authorization_code",
         client_id: clientId,
-        request_resource: resource,
+        request_resource: tokenRequestResource,
         record_resource: record.resource
       });
       return res.status(400).json({
@@ -1262,19 +1264,27 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
       });
     }
 
+    const usedStoredResourceFallback = !tokenRequestResourcePresent;
+    const effectiveResource = usedStoredResourceFallback ? record.resource : tokenRequestResource;
+    console.info("[oauth] authorization_code resource resolution", {
+      client_id: clientId,
+      token_request_resource_present: tokenRequestResourcePresent,
+      used_stored_resource_fallback: usedStoredResourceFallback
+    });
+
     // Validate that the effective resource matches this server's canonical MCP resource.
     const canonicalResource = buildCanonicalMcpResource(req);
     console.info("[oauth] resource check", {
-      effective_resource: resource,
+      effective_resource: effectiveResource,
       canonical_resource: canonicalResource,
-      match: resource === canonicalResource
+      match: effectiveResource === canonicalResource
     });
-    if (resource !== canonicalResource) {
+    if (effectiveResource !== canonicalResource) {
       authorizationCodeStore.delete(code);
       logTokenFailure("invalid_resource", {
         grant_type: "authorization_code",
         client_id: clientId,
-        effective_resource: resource,
+        effective_resource: effectiveResource,
         canonical_resource: canonicalResource
       });
       return res.status(400).json({
@@ -1295,8 +1305,14 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
     }
 
     authorizationCodeStore.delete(code);
-    console.info("[oauth] token issued successfully", { client_id: clientId, scope: record.scope, resource });
-    const accessToken = issueUserOAuthAccessToken(record.userId, record.username, record.scope, resource);
+    const issuedResource = record.resource;
+    console.info("[oauth] token issuance result", {
+      client_id: clientId,
+      token_request_resource_present: tokenRequestResourcePresent,
+      used_stored_resource_fallback: usedStoredResourceFallback,
+      token_issued: true
+    });
+    const accessToken = issueUserOAuthAccessToken(record.userId, record.username, record.scope, issuedResource);
     const maybeRefreshToken =
       record.allowRefreshTokenGrant
         ? issueOAuthRefreshToken({
@@ -1304,7 +1320,7 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
             userId: record.userId,
             username: record.username,
             scope: record.scope,
-            resource
+            resource: issuedResource
           }).refreshToken
         : undefined;
 
