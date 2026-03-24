@@ -91,6 +91,7 @@ type AuthorizationCodeRecord = {
   redirectUri: string;
   codeChallenge: string;
   codeChallengeMethod: "S256";
+  resource: string;
   userId: string;
   username: string;
   expiresAtMs: number;
@@ -111,18 +112,21 @@ function base64UrlSha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("base64url");
 }
 
-function issueUserOAuthAccessToken(userId: string, username: string): string {
+function issueUserOAuthAccessToken(userId: string, username: string, resource: string): string {
+  const normalizedResource = resource.trim();
   return jwt.sign(
     {
       sub: userId,
       username: username.trim().toLowerCase(),
-      tokenUse: "access"
+      tokenUse: "access",
+      scope: "mcp:tools"
     },
     oauthJwtSecret,
     {
       algorithm: "HS256",
       issuer: oauthJwtIssuer,
-      expiresIn: oauthJwtExpirySeconds
+      expiresIn: oauthJwtExpirySeconds,
+      ...(normalizedResource.length > 0 ? { audience: [normalizedResource] } : {})
     }
   );
 }
@@ -132,6 +136,7 @@ type AuthorizeRequestParams = {
   clientId: string;
   redirectUri: string;
   state?: string;
+  resource: string;
   codeChallenge: string;
   codeChallengeMethod: "S256";
 };
@@ -164,11 +169,13 @@ function readAuthorizeParams(source: Record<string, unknown>): AuthorizeRequestP
   }
 
   const state = typeof source.state === "string" && source.state.trim().length > 0 ? source.state : undefined;
+  const resource = typeof source.resource === "string" ? source.resource.trim() : "";
   return {
     responseType: "code",
     clientId,
     redirectUri,
     state,
+    resource,
     codeChallenge,
     codeChallengeMethod: "S256"
   };
@@ -190,6 +197,7 @@ function renderAuthorizeLoginForm(params: AuthorizeRequestParams, errorMessage?:
   const stateInput = params.state
     ? `<input type="hidden" name="state" value="${escapeHtml(params.state)}" />`
     : "";
+  const resourceInput = `<input type="hidden" name="resource" value="${escapeHtml(params.resource)}" />`;
 
   return `<!doctype html>
 <html lang="en">
@@ -219,6 +227,7 @@ function renderAuthorizeLoginForm(params: AuthorizeRequestParams, errorMessage?:
         <input type="hidden" name="code_challenge" value="${escapeHtml(params.codeChallenge)}" />
         <input type="hidden" name="code_challenge_method" value="${params.codeChallengeMethod}" />
         ${stateInput}
+        ${resourceInput}
         <label for="username">Username</label>
         <input id="username" name="username" type="text" required autocomplete="username" />
         <label for="password">Password</label>
@@ -419,6 +428,16 @@ app.get("/health", (_req, res) => {
   });
 });
 
+app.get("/.well-known/oauth-protected-resource", (req, res) => {
+  const issuer = buildOAuthIssuer(req);
+  return res.json({
+    resource: `${issuer}/mcp`,
+    authorization_servers: [issuer],
+    scopes_supported: ["mcp:tools"],
+    bearer_methods_supported: ["header"]
+  });
+});
+
 app.get("/.well-known/oauth-authorization-server", (req, res) => {
   const issuer = buildOAuthIssuer(req);
   return res.json({
@@ -427,7 +446,9 @@ app.get("/.well-known/oauth-authorization-server", (req, res) => {
     token_endpoint: `${issuer}/oauth/token`,
     grant_types_supported: ["authorization_code"],
     code_challenge_methods_supported: ["S256"],
-    token_endpoint_auth_methods_supported: ["client_secret_post"]
+    token_endpoint_auth_methods_supported: ["client_secret_post"],
+    scopes_supported: ["mcp:tools"],
+    client_id_metadata_document_supported: false
   });
 });
 
@@ -467,6 +488,7 @@ app.post("/authorize", express.urlencoded({ extended: false }), async (req, res)
     redirectUri: parsed.redirectUri,
     codeChallenge: parsed.codeChallenge,
     codeChallengeMethod: parsed.codeChallengeMethod,
+    resource: parsed.resource,
     userId: user.id,
     username: user.username,
     expiresAtMs: Date.now() + AUTHORIZATION_CODE_TTL_MS
@@ -545,7 +567,7 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
     }
 
     authorizationCodeStore.delete(code);
-    const accessToken = issueUserOAuthAccessToken(record.userId, record.username);
+    const accessToken = issueUserOAuthAccessToken(record.userId, record.username, record.resource);
     return res.json({
       access_token: accessToken,
       token_type: "bearer",
@@ -1299,10 +1321,32 @@ function createMcpServerInstance(): McpServer {
   return server;
 }
 
-// Handle POST /mcp  – used for tool calls (and initialize)
+// Handle POST /mcp - used for tool calls (and initialize)
+function setMcpBearerChallengeHeader(req: express.Request, res: express.Response): void {
+  const issuer = buildOAuthIssuer(req);
+  const resourceMetadataUrl = `${issuer}/.well-known/oauth-protected-resource`;
+  res.setHeader("WWW-Authenticate", `Bearer resource_metadata="${resourceMetadataUrl}", scope="mcp:tools"`);
+}
+
+function isExpectedMcpAudience(token: string, expectedAudience: string): boolean {
+  const decoded = jwt.decode(token);
+  if (!decoded || typeof decoded !== "object" || !("aud" in decoded)) {
+    return true;
+  }
+  const aud = (decoded as { aud?: unknown }).aud;
+  if (typeof aud === "string") {
+    return aud === expectedAudience;
+  }
+  if (Array.isArray(aud)) {
+    return aud.includes(expectedAudience);
+  }
+  return false;
+}
+
 app.post("/mcp", async (req, res) => {
   const token = readBearerToken(req);
   if (!token) {
+    setMcpBearerChallengeHeader(req, res);
     return res.status(401).json({ error: "Unauthorized", message: "Bearer token required for MCP access" });
   }
 
@@ -1310,9 +1354,15 @@ app.post("/mcp", async (req, res) => {
   const mcpApiKey = optionalEnv("MCP_API_KEY");
   const isApiKey = mcpApiKey && token === mcpApiKey;
   if (!isApiKey) {
+    const expectedAudience = `${buildOAuthIssuer(req)}/mcp`;
+    if (!isExpectedMcpAudience(token, expectedAudience)) {
+      setMcpBearerChallengeHeader(req, res);
+      return res.status(401).json({ error: "Unauthorized", message: "Invalid token audience" });
+    }
     try {
       verifyAccessToken(token);
     } catch {
+      setMcpBearerChallengeHeader(req, res);
       return res.status(401).json({ error: "Unauthorized", message: "Invalid or expired token" });
     }
   }
@@ -1331,7 +1381,7 @@ app.post("/mcp", async (req, res) => {
   }
 });
 
-// Handle GET /mcp – SSE stream for server-initiated messages (stateless: returns 405)
+// Handle GET /mcp - SSE stream for server-initiated messages (stateless: returns 405)
 app.get("/mcp", (_req, res) => {
   res.status(405).json({
     error: "MethodNotAllowed",
