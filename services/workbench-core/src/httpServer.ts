@@ -435,17 +435,31 @@ type ParseDynamicClientRegistrationResult =
       grantTypes: "authorization_code"[];
       responseTypes: "code"[];
     }
-  | { ok: false; error: string };
+  | {
+      ok: false;
+      error: string;
+      reason:
+        | "payload_not_object"
+        | "missing_client_name"
+        | "missing_redirect_uris"
+        | "invalid_redirect_uri_format"
+        | "invalid_redirect_uri_scheme"
+        | "invalid_redirect_uri_fragment"
+        | "unsupported_token_endpoint_auth_method"
+        | "unsupported_grant_types"
+        | "unsupported_response_types";
+      details?: Record<string, string | number | boolean | undefined>;
+    };
 
 function parseDynamicClientRegistrationPayload(raw: unknown): ParseDynamicClientRegistrationResult {
   if (!raw || typeof raw !== "object") {
-    return { ok: false, error: "invalid_client_metadata" };
+    return { ok: false, error: "invalid_client_metadata", reason: "payload_not_object" };
   }
 
   const payload = raw as DynamicClientRegistrationPayload;
   const clientName = typeof payload.client_name === "string" ? payload.client_name.trim() : "";
   if (!clientName) {
-    return { ok: false, error: "invalid_client_metadata" };
+    return { ok: false, error: "invalid_client_metadata", reason: "missing_client_name" };
   }
 
   const redirectUris = Array.isArray(payload.redirect_uris)
@@ -455,34 +469,59 @@ function parseDynamicClientRegistrationPayload(raw: unknown): ParseDynamicClient
         .filter((value) => value.length > 0)
     : [];
   if (redirectUris.length === 0) {
-    return { ok: false, error: "invalid_redirect_uri" };
+    return { ok: false, error: "invalid_redirect_uri", reason: "missing_redirect_uris" };
   }
 
   for (const redirectUri of redirectUris) {
     try {
       const parsed = new URL(redirectUri);
       if (parsed.protocol !== "https:") {
-        return { ok: false, error: "invalid_redirect_uri" };
+        return {
+          ok: false,
+          error: "invalid_redirect_uri",
+          reason: "invalid_redirect_uri_scheme",
+          details: { redirect_uri: redirectUri, scheme: parsed.protocol }
+        };
       }
       if (parsed.hash && parsed.hash.length > 0) {
-        return { ok: false, error: "invalid_redirect_uri" };
+        return {
+          ok: false,
+          error: "invalid_redirect_uri",
+          reason: "invalid_redirect_uri_fragment",
+          details: { redirect_uri: redirectUri }
+        };
       }
     } catch {
-      return { ok: false, error: "invalid_redirect_uri" };
+      return {
+        ok: false,
+        error: "invalid_redirect_uri",
+        reason: "invalid_redirect_uri_format",
+        details: { redirect_uri: redirectUri }
+      };
     }
   }
 
   const tokenEndpointAuthMethodRaw =
     typeof payload.token_endpoint_auth_method === "string" ? payload.token_endpoint_auth_method.trim() : "none";
   if (tokenEndpointAuthMethodRaw !== "none") {
-    return { ok: false, error: "invalid_client_metadata" };
+    return {
+      ok: false,
+      error: "invalid_client_metadata",
+      reason: "unsupported_token_endpoint_auth_method",
+      details: { token_endpoint_auth_method: tokenEndpointAuthMethodRaw || "(empty)" }
+    };
   }
 
   const grantTypes = Array.isArray(payload.grant_types)
     ? payload.grant_types.filter((value): value is string => typeof value === "string").map((value) => value.trim())
     : ["authorization_code"];
   if (grantTypes.length === 0 || grantTypes.some((value) => value !== "authorization_code")) {
-    return { ok: false, error: "invalid_client_metadata" };
+    return {
+      ok: false,
+      error: "invalid_client_metadata",
+      reason: "unsupported_grant_types",
+      details: { grant_types: grantTypes.join(" ") || "(empty)" }
+    };
   }
 
   const responseTypes = Array.isArray(payload.response_types)
@@ -491,7 +530,12 @@ function parseDynamicClientRegistrationPayload(raw: unknown): ParseDynamicClient
         .map((value) => value.trim())
     : ["code"];
   if (responseTypes.length === 0 || responseTypes.some((value) => value !== "code")) {
-    return { ok: false, error: "invalid_client_metadata" };
+    return {
+      ok: false,
+      error: "invalid_client_metadata",
+      reason: "unsupported_response_types",
+      details: { response_types: responseTypes.join(" ") || "(empty)" }
+    };
   }
 
   return {
@@ -533,12 +577,20 @@ async function resolveOAuthClient(clientId: string, redirectUri: string): Promis
   } else {
     const dynamicallyRegisteredClient = resolveClientFromDynamicRegistration(clientId);
     if (!dynamicallyRegisteredClient) {
+      console.warn("[oauth] client resolution failed for non-URL client_id", {
+        client_id: clientId,
+        redirect_uri: redirectUri
+      });
       return {
         ok: false,
         error: "invalid_client",
         message: "client is not recognized"
       };
     }
+    console.info("[oauth] resolved dynamically registered client", {
+      client_id: dynamicallyRegisteredClient.clientId,
+      redirect_uri: redirectUri
+    });
     resolvedClient = dynamicallyRegisteredClient;
   }
 
@@ -882,6 +934,10 @@ app.get("/.well-known/oauth-protected-resource", (req, res) => {
 
 app.get("/.well-known/oauth-authorization-server", (req, res) => {
   const issuer = buildOAuthIssuer(req);
+  console.info("[oauth] authorization server metadata requested", {
+    user_agent: req.header("user-agent") || "(missing)",
+    issuer
+  });
   return res.json({
     issuer,
     authorization_endpoint: joinIssuerPath(issuer, "/authorize"),
@@ -896,8 +952,28 @@ app.get("/.well-known/oauth-authorization-server", (req, res) => {
 });
 
 app.post(DYNAMIC_CLIENT_REGISTRATION_PATH, (req, res) => {
+  const payload = req.body as DynamicClientRegistrationPayload | undefined;
+  const redirectUrisCount = Array.isArray(payload?.redirect_uris)
+    ? payload.redirect_uris.filter((value): value is string => typeof value === "string").length
+    : 0;
+  console.info("[oauth] dynamic client registration request received", {
+    user_agent: req.header("user-agent") || "(missing)",
+    content_type: req.header("content-type") || "(missing)",
+    has_client_name: typeof payload?.client_name === "string" && payload.client_name.trim().length > 0,
+    redirect_uris_count: redirectUrisCount,
+    token_endpoint_auth_method:
+      typeof payload?.token_endpoint_auth_method === "string" ? payload.token_endpoint_auth_method : "(default:none)",
+    has_grant_types: Array.isArray(payload?.grant_types),
+    has_response_types: Array.isArray(payload?.response_types)
+  });
+
   const parsed = parseDynamicClientRegistrationPayload(req.body);
   if (!parsed.ok) {
+    console.warn("[oauth] dynamic client registration rejected", {
+      reason: parsed.reason,
+      error: parsed.error,
+      ...parsed.details
+    });
     return res.status(400).json({
       error: parsed.error
     });
@@ -912,6 +988,11 @@ app.post(DYNAMIC_CLIENT_REGISTRATION_PATH, (req, res) => {
     createdAtMs: Date.now()
   };
   dynamicallyRegisteredClients.set(clientId, registeredClient);
+  console.info("[oauth] dynamic client registration succeeded", {
+    client_id: registeredClient.clientId,
+    client_name: registeredClient.clientName,
+    redirect_uris_count: registeredClient.redirectUris.length
+  });
 
   return res.status(201).json({
     client_id: clientId,
