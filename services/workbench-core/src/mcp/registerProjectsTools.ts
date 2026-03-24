@@ -1,0 +1,97 @@
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+import { projectsClient } from "../internalClients.js";
+import { asMcpText, runWithAuth, tokenInput } from "./helpers.js";
+
+const projectStatusSchema = z.enum(["draft", "active", "archived"]);
+
+export function registerProjectsTools(server: McpServer): void {
+  server.registerTool(
+    "projects.list",
+    {
+      title: "List Projects",
+      description: "List projects for the authenticated user.",
+      inputSchema: {
+        ...tokenInput,
+        query: z.string().optional(),
+        status: projectStatusSchema.optional(),
+        limit: z.number().int().positive().optional(),
+        cursor: z.string().optional()
+      }
+    },
+    async ({ accessToken, query, status, limit, cursor }) => {
+      const result = await runWithAuth(accessToken, () => projectsClient.list(accessToken, query, status, limit, cursor));
+      return asMcpText(result);
+    }
+  );
+
+  server.registerTool(
+    "projects.get",
+    {
+      title: "Get Project",
+      description: "Get a project by id.",
+      inputSchema: {
+        ...tokenInput,
+        id: z.string().min(1)
+      }
+    },
+    async ({ accessToken, id }) => {
+      const result = await runWithAuth(accessToken, () => projectsClient.get(accessToken, id));
+      return asMcpText(result);
+    }
+  );
+
+  server.registerTool(
+    "projects.create",
+    {
+      title: "Create Project",
+      description: "Create a project.",
+      inputSchema: {
+        ...tokenInput,
+        name: z.string().min(1),
+        description: z.string().optional(),
+        status: projectStatusSchema.optional(),
+        ownerAccountId: z.string().optional()
+      }
+    },
+    async ({ accessToken, ...payload }) => {
+      const result = await runWithAuth(accessToken, () => projectsClient.create(accessToken, payload));
+      return asMcpText(result);
+    }
+  );
+
+  server.registerTool(
+    "projects.update",
+    {
+      title: "Update Project",
+      description: "Update a project.",
+      inputSchema: {
+        ...tokenInput,
+        id: z.string().min(1),
+        name: z.string().optional(),
+        description: z.string().optional(),
+        status: projectStatusSchema.optional()
+      }
+    },
+    async ({ accessToken, id, ...payload }) => {
+      const result = await runWithAuth(accessToken, () => projectsClient.update(accessToken, id, payload));
+      return asMcpText(result);
+    }
+  );
+
+  server.registerTool(
+    "projects.delete",
+    {
+      title: "Delete Project",
+      description: "Delete a project.",
+      inputSchema: {
+        ...tokenInput,
+        id: z.string().min(1)
+      }
+    },
+    async ({ accessToken, id }) => {
+      await runWithAuth(accessToken, () => projectsClient.remove(accessToken, id));
+      return asMcpText({ status: "ok" });
+    }
+  );
+}

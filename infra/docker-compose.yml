@@ -1,0 +1,13 @@
+services:
+  # Cloudflare Tunnel
+  tunnel:
+    profiles:
+      - edge
+    image: cloudflare/cloudflared:latest
+    container_name: workbench-tunnel
+    command: tunnel --no-autoupdate run
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file:
+      - ${EDGE_ENV_FILE:-../.env.edge}

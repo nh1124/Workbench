@@ -14,6 +14,7 @@ import { registerArtifactsTools } from "./mcp/registerArtifactsTools.js";
 import { registerAuthTools } from "./mcp/registerAuthTools.js";
 import { registerDeepResearchTools } from "./mcp/registerDeepResearchTools.js";
 import { registerNotesTools } from "./mcp/registerNotesTools.js";
+import { registerProjectsTools } from "./mcp/registerProjectsTools.js";
 import { registerTasksTools } from "./mcp/registerTasksTools.js";
 import { ensureIntegrationLinked } from "./integrationLinking.js";
 import { artifactsClient, InternalServiceError, notesClient, projectsClient, serviceBaseUrls, tasksClient } from "./internalClients.js";
@@ -978,6 +979,7 @@ function createMcpServerInstance(): McpServer {
   registerNotesTools(server);
   registerArtifactsTools(server);
   registerTasksTools(server);
+  registerProjectsTools(server);
   registerDeepResearchTools(server);
   return server;
 }
@@ -987,6 +989,17 @@ app.post("/mcp", async (req, res) => {
   const token = readBearerToken(req);
   if (!token) {
     return res.status(401).json({ error: "Unauthorized", message: "Bearer token required for MCP access" });
+  }
+
+  // Accept either a static MCP_API_KEY (for connector configuration) or a valid JWT
+  const mcpApiKey = optionalEnv("MCP_API_KEY");
+  const isApiKey = mcpApiKey && token === mcpApiKey;
+  if (!isApiKey) {
+    try {
+      verifyAccessToken(token);
+    } catch {
+      return res.status(401).json({ error: "Unauthorized", message: "Invalid or expired token" });
+    }
   }
 
   const server = createMcpServerInstance();
