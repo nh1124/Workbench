@@ -69,6 +69,7 @@ const supportedMcpScopeSet = new Set<string>(supportedMcpScopes);
 const clientMetadataCacheTtlMs = 5 * 60 * 1000;
 const clientMetadataFetchTimeoutMs = 5000;
 const clientMetadataMaxResponseBytes = 64 * 1024;
+const externalBaseUrlRaw = optionalEnv("CORE_EXTERNAL_BASE_URL");
 const clientMetadataHostAllowlist = new Set(
   (optionalEnv("OAUTH_CLIENT_METADATA_HOST_ALLOWLIST") ?? "")
     .split(",")
@@ -76,7 +77,7 @@ const clientMetadataHostAllowlist = new Set(
     .filter((value) => value.length > 0)
 );
 
-type OAuthClientSource = "client_id_metadata_document";
+type OAuthClientSource = "client_id_metadata_document" | "dynamic_client_registration";
 
 type ResolvedOAuthClient = {
   clientId: string;
@@ -91,13 +92,76 @@ type ClientMetadataCacheRecord = {
 };
 
 const clientMetadataCache = new Map<string, ClientMetadataCacheRecord>();
+const DYNAMIC_CLIENT_REGISTRATION_PATH = "/oauth/register";
 
-function buildOAuthIssuer(req: express.Request): string {
+type RegisteredOAuthClient = {
+  clientId: string;
+  clientName: string;
+  redirectUris: string[];
+  source: "dynamic_client_registration";
+  createdAtMs: number;
+};
+
+const dynamicallyRegisteredClients = new Map<string, RegisteredOAuthClient>();
+
+type CanonicalBaseConfig = {
+  issuer: string;
+};
+
+function normalizeCanonicalBase(raw: string): CanonicalBaseConfig {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw.trim());
+  } catch {
+    throw new Error("CORE_EXTERNAL_BASE_URL must be a valid absolute URL");
+  }
+
+  if (parsed.protocol !== "https:") {
+    throw new Error("CORE_EXTERNAL_BASE_URL must use https");
+  }
+
+  if (!parsed.host) {
+    throw new Error("CORE_EXTERNAL_BASE_URL must include a host");
+  }
+
+  const normalizedPath = parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/+$/, "");
+  const issuer = `${parsed.origin}${normalizedPath}`;
+  return { issuer };
+}
+
+const canonicalBaseConfig = externalBaseUrlRaw ? normalizeCanonicalBase(externalBaseUrlRaw) : undefined;
+
+function joinIssuerPath(issuer: string, pathSuffix: string): string {
+  const normalizedSuffix = pathSuffix.startsWith("/") ? pathSuffix : `/${pathSuffix}`;
+  return `${issuer}${normalizedSuffix}`;
+}
+
+function buildFallbackIssuerFromRequest(req: express.Request): string {
+  const forwardedProto = req
+    .header("x-forwarded-proto")
+    ?.split(",")[0]
+    ?.trim()
+    ?.toLowerCase();
+  const forwardedHost = req
+    .header("x-forwarded-host")
+    ?.split(",")[0]
+    ?.trim();
+  const hostHeader = forwardedHost || req.header("host")?.trim();
+  if (forwardedProto === "https" && hostHeader && hostHeader.length > 0) {
+    return `https://${hostHeader}`;
+  }
+  if (hostHeader && hostHeader.length > 0) {
+    return `https://${hostHeader}`;
+  }
   return `https://${req.hostname}`;
 }
 
+function buildOAuthIssuer(req: express.Request): string {
+  return canonicalBaseConfig?.issuer ?? buildFallbackIssuerFromRequest(req);
+}
+
 function buildCanonicalMcpResource(req: express.Request): string {
-  return `${buildOAuthIssuer(req)}/mcp`;
+  return joinIssuerPath(buildOAuthIssuer(req), "/mcp");
 }
 
 type AuthorizationCodeRecord = {
@@ -354,25 +418,128 @@ type ResolveOAuthClientResult =
   | { ok: true; client: ResolvedOAuthClient }
   | { ok: false; error: "invalid_client" | "invalid_redirect_uri"; message: string };
 
-async function resolveOAuthClient(clientId: string, redirectUri: string): Promise<ResolveOAuthClientResult> {
-  if (!isHttpsClientId(clientId)) {
-    return {
-      ok: false,
-      error: "invalid_client",
-      message: "client_id must be an https URL"
-    };
+type DynamicClientRegistrationPayload = {
+  client_name?: unknown;
+  redirect_uris?: unknown;
+  token_endpoint_auth_method?: unknown;
+  grant_types?: unknown;
+  response_types?: unknown;
+};
+
+type ParseDynamicClientRegistrationResult =
+  | {
+      ok: true;
+      clientName: string;
+      redirectUris: string[];
+      tokenEndpointAuthMethod: "none";
+      grantTypes: "authorization_code"[];
+      responseTypes: "code"[];
+    }
+  | { ok: false; error: string };
+
+function parseDynamicClientRegistrationPayload(raw: unknown): ParseDynamicClientRegistrationResult {
+  if (!raw || typeof raw !== "object") {
+    return { ok: false, error: "invalid_client_metadata" };
   }
 
+  const payload = raw as DynamicClientRegistrationPayload;
+  const clientName = typeof payload.client_name === "string" ? payload.client_name.trim() : "";
+  if (!clientName) {
+    return { ok: false, error: "invalid_client_metadata" };
+  }
+
+  const redirectUris = Array.isArray(payload.redirect_uris)
+    ? payload.redirect_uris
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0)
+    : [];
+  if (redirectUris.length === 0) {
+    return { ok: false, error: "invalid_redirect_uri" };
+  }
+
+  for (const redirectUri of redirectUris) {
+    try {
+      const parsed = new URL(redirectUri);
+      if (parsed.protocol !== "https:") {
+        return { ok: false, error: "invalid_redirect_uri" };
+      }
+      if (parsed.hash && parsed.hash.length > 0) {
+        return { ok: false, error: "invalid_redirect_uri" };
+      }
+    } catch {
+      return { ok: false, error: "invalid_redirect_uri" };
+    }
+  }
+
+  const tokenEndpointAuthMethodRaw =
+    typeof payload.token_endpoint_auth_method === "string" ? payload.token_endpoint_auth_method.trim() : "none";
+  if (tokenEndpointAuthMethodRaw !== "none") {
+    return { ok: false, error: "invalid_client_metadata" };
+  }
+
+  const grantTypes = Array.isArray(payload.grant_types)
+    ? payload.grant_types.filter((value): value is string => typeof value === "string").map((value) => value.trim())
+    : ["authorization_code"];
+  if (grantTypes.length === 0 || grantTypes.some((value) => value !== "authorization_code")) {
+    return { ok: false, error: "invalid_client_metadata" };
+  }
+
+  const responseTypes = Array.isArray(payload.response_types)
+    ? payload.response_types
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => value.trim())
+    : ["code"];
+  if (responseTypes.length === 0 || responseTypes.some((value) => value !== "code")) {
+    return { ok: false, error: "invalid_client_metadata" };
+  }
+
+  return {
+    ok: true,
+    clientName,
+    redirectUris: [...new Set(redirectUris)],
+    tokenEndpointAuthMethod: "none",
+    grantTypes: ["authorization_code"],
+    responseTypes: ["code"]
+  };
+}
+
+function resolveClientFromDynamicRegistration(clientId: string): ResolvedOAuthClient | undefined {
+  const registered = dynamicallyRegisteredClients.get(clientId);
+  if (!registered) {
+    return undefined;
+  }
+  return {
+    clientId: registered.clientId,
+    clientName: registered.clientName,
+    redirectUris: registered.redirectUris,
+    source: registered.source
+  };
+}
+
+async function resolveOAuthClient(clientId: string, redirectUri: string): Promise<ResolveOAuthClientResult> {
   let resolvedClient: ResolvedOAuthClient;
-  try {
-    resolvedClient = await resolveClientFromMetadataDocument(clientId);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "client metadata resolution failed";
-    return {
-      ok: false,
-      error: "invalid_client",
-      message
-    };
+  if (isHttpsClientId(clientId)) {
+    try {
+      resolvedClient = await resolveClientFromMetadataDocument(clientId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "client metadata resolution failed";
+      return {
+        ok: false,
+        error: "invalid_client",
+        message
+      };
+    }
+  } else {
+    const dynamicallyRegisteredClient = resolveClientFromDynamicRegistration(clientId);
+    if (!dynamicallyRegisteredClient) {
+      return {
+        ok: false,
+        error: "invalid_client",
+        message: "client is not recognized"
+      };
+    }
+    resolvedClient = dynamicallyRegisteredClient;
   }
 
   if (!resolvedClient.redirectUris.includes(redirectUri)) {
@@ -717,13 +884,43 @@ app.get("/.well-known/oauth-authorization-server", (req, res) => {
   const issuer = buildOAuthIssuer(req);
   return res.json({
     issuer,
-    authorization_endpoint: `${issuer}/authorize`,
-    token_endpoint: `${issuer}/oauth/token`,
+    authorization_endpoint: joinIssuerPath(issuer, "/authorize"),
+    token_endpoint: joinIssuerPath(issuer, "/oauth/token"),
+    registration_endpoint: joinIssuerPath(issuer, DYNAMIC_CLIENT_REGISTRATION_PATH),
     grant_types_supported: ["authorization_code"],
     code_challenge_methods_supported: ["S256"],
     token_endpoint_auth_methods_supported: ["none"],
     scopes_supported: [...supportedMcpScopes],
     client_id_metadata_document_supported: true
+  });
+});
+
+app.post(DYNAMIC_CLIENT_REGISTRATION_PATH, (req, res) => {
+  const parsed = parseDynamicClientRegistrationPayload(req.body);
+  if (!parsed.ok) {
+    return res.status(400).json({
+      error: parsed.error
+    });
+  }
+
+  const clientId = `workbench_dcr_${randomBytes(16).toString("hex")}`;
+  const registeredClient: RegisteredOAuthClient = {
+    clientId,
+    clientName: parsed.clientName,
+    redirectUris: parsed.redirectUris,
+    source: "dynamic_client_registration",
+    createdAtMs: Date.now()
+  };
+  dynamicallyRegisteredClients.set(clientId, registeredClient);
+
+  return res.status(201).json({
+    client_id: clientId,
+    client_id_issued_at: Math.floor(registeredClient.createdAtMs / 1000),
+    client_name: registeredClient.clientName,
+    redirect_uris: registeredClient.redirectUris,
+    token_endpoint_auth_method: parsed.tokenEndpointAuthMethod,
+    grant_types: parsed.grantTypes,
+    response_types: parsed.responseTypes
   });
 });
 
@@ -908,8 +1105,6 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
 
     const computedChallenge = base64UrlSha256(codeVerifier);
     console.info("[oauth] PKCE check", {
-      computed_challenge: computedChallenge,
-      stored_challenge: record.codeChallenge,
       match: computedChallenge === record.codeChallenge
     });
     if (record.codeChallengeMethod !== "S256" || computedChallenge !== record.codeChallenge) {
@@ -1683,7 +1878,7 @@ function createMcpServerInstance(injectedContext: McpInjectedContext): McpServer
 // Handle POST /mcp - used for tool calls (and initialize)
 function setMcpBearerChallengeHeader(req: express.Request, res: express.Response): void {
   const issuer = buildOAuthIssuer(req);
-  const resourceMetadataUrl = `${issuer}/.well-known/oauth-protected-resource`;
+  const resourceMetadataUrl = joinIssuerPath(issuer, "/.well-known/oauth-protected-resource");
   res.setHeader("WWW-Authenticate", `Bearer resource_metadata="${resourceMetadataUrl}", scope="mcp:tools"`);
 }
 
@@ -1797,5 +1992,8 @@ void ensureCoreSchema().then(() => {
   app.listen(port, host, () => {
     console.log(`Workbench Core HTTP listening on ${host}:${port}`);
     console.log(`MCP HTTP endpoint available at POST http://${host}:${port}/mcp`);
+    if (canonicalBaseConfig) {
+      console.log(`Canonical external OAuth base configured as ${canonicalBaseConfig.issuer}`);
+    }
   });
 });

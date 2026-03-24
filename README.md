@@ -50,6 +50,9 @@ Flow:
 - `POST /accounts/login`
 - `POST /auth/refresh`
 - `GET /auth/me`
+- `GET /.well-known/oauth-protected-resource`
+- `GET /.well-known/oauth-authorization-server`
+- `POST /oauth/register` (OAuth Dynamic Client Registration for public clients)
 - `GET /integrations/manifests`
 - `GET /integrations/configs`
 - `PUT /integrations/configs/:integrationId`
@@ -79,6 +82,9 @@ Common internal contract:
 
 ### Core
 
+- `CORE_SERVICE_HOST` (for remote deployment, use `0.0.0.0`)
+- `CORE_SERVICE_PORT`
+- `CORE_EXTERNAL_BASE_URL` (recommended for remote MCP/OAuth behind proxies/tunnels; must be public HTTPS base URL)
 - `JWT_SECRET`
 - `JWT_ISSUER`
 - `JWT_EXPIRY_SECONDS`
@@ -112,6 +118,8 @@ Common internal contract:
 - `VITE_WORKBENCH_CORE_URL`
 
 UI calls Core endpoints only.
+
+For remote MCP connector setups, configure `CORE_EXTERNAL_BASE_URL` to the exact externally reachable HTTPS origin (or base path) used by clients so OAuth issuer/resource metadata and MCP token audience validation remain consistent.
 
 ## Scripts
 

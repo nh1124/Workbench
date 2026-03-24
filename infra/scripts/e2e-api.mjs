@@ -342,8 +342,28 @@ async function run() {
     logStep("Core OAuth metadata for MCP");
     const oauthMetadata = await request("GET", `${coreBaseUrl}/.well-known/oauth-authorization-server`);
     expectStatus(oauthMetadata, 200, "oauth authorization metadata", state);
-    const expectedIssuer = `https://${new URL(coreBaseUrl).hostname}`;
-    const oauthResource = `${expectedIssuer}/mcp`;
+    const expectedIssuer = typeof oauthMetadata.json?.issuer === "string" ? oauthMetadata.json.issuer : "";
+    ensure(Boolean(expectedIssuer), "oauth metadata issuer present", undefined, state);
+    const oauthResourceMetadata = await request("GET", `${coreBaseUrl}/.well-known/oauth-protected-resource`);
+    expectStatus(oauthResourceMetadata, 200, "oauth protected resource metadata", state);
+    const oauthResource = typeof oauthResourceMetadata.json?.resource === "string" ? oauthResourceMetadata.json.resource : "";
+    ensure(Boolean(oauthResource), "oauth protected resource URI present", undefined, state);
+    const expectedExternalBaseUrl = process.env.E2E_EXPECT_EXTERNAL_BASE_URL?.trim();
+    if (expectedExternalBaseUrl) {
+      const normalizedExpectedExternalBase = expectedExternalBaseUrl.replace(/\/+$/, "");
+      ensure(
+        expectedIssuer === normalizedExpectedExternalBase,
+        "oauth metadata issuer matches configured external base URL",
+        `issuer=${expectedIssuer} expected=${normalizedExpectedExternalBase}`,
+        state
+      );
+      ensure(
+        oauthResource === `${normalizedExpectedExternalBase}/mcp`,
+        "oauth protected resource URI matches configured external base URL",
+        `resource=${oauthResource} expected=${normalizedExpectedExternalBase}/mcp`,
+        state
+      );
+    }
     ensure(oauthMetadata.json?.issuer === expectedIssuer, "oauth metadata issuer", undefined, state);
     ensure(
       oauthMetadata.json?.authorization_endpoint === `${expectedIssuer}/authorize`,
@@ -354,6 +374,20 @@ async function run() {
     ensure(
       oauthMetadata.json?.token_endpoint === `${expectedIssuer}/oauth/token`,
       "oauth metadata token endpoint",
+      undefined,
+      state
+    );
+    ensure(
+      Array.isArray(oauthResourceMetadata.json?.authorization_servers) &&
+      oauthResourceMetadata.json?.authorization_servers.includes(expectedIssuer),
+      "oauth protected resource metadata authorization_servers includes issuer",
+      undefined,
+      state
+    );
+    ensure(
+      Array.isArray(oauthResourceMetadata.json?.scopes_supported) &&
+      oauthResourceMetadata.json?.scopes_supported.includes("mcp:tools"),
+      "oauth protected resource metadata scopes_supported includes mcp:tools",
       undefined,
       state
     );
@@ -382,6 +416,12 @@ async function run() {
       Array.isArray(oauthMetadata.json?.token_endpoint_auth_methods_supported) &&
       oauthMetadata.json?.token_endpoint_auth_methods_supported.includes("none"),
       "oauth metadata supports public clients (auth method none)",
+      undefined,
+      state
+    );
+    ensure(
+      typeof oauthMetadata.json?.registration_endpoint === "string" && oauthMetadata.json?.registration_endpoint.length > 0,
+      "oauth metadata advertises dynamic client registration endpoint",
       undefined,
       state
     );
@@ -449,33 +489,25 @@ async function run() {
     expectStatus(meA, 200, "auth/me userA", state);
     ensure(meA.json?.user?.username === userA, "auth/me returns correct username", undefined, state);
 
-    const cimdClientIdUrl = process.env.E2E_CIMD_CLIENT_ID_URL?.trim();
-    const cimdRedirectUri = process.env.E2E_CIMD_REDIRECT_URI?.trim();
-    if (cimdClientIdUrl && cimdRedirectUri) {
-      logStep("OAuth authorization_code + PKCE for MCP");
+    const runAuthorizationCodePkceFlow = async (clientId, redirectUri, label) => {
       const codeVerifier = randomBytes(32).toString("base64url");
       const codeChallenge = base64UrlSha256(codeVerifier);
       const authorizeGet = await request(
         "GET",
-        `${coreBaseUrl}/authorize?response_type=code&client_id=${encodeURIComponent(cimdClientIdUrl)}&redirect_uri=${encodeURIComponent(cimdRedirectUri)}&resource=${encodeURIComponent(oauthResource)}&scope=${encodeURIComponent("mcp:tools")}&code_challenge=${encodeURIComponent(codeChallenge)}&code_challenge_method=S256&state=e2e-state`
+        `${coreBaseUrl}/authorize?response_type=code&client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&resource=${encodeURIComponent(oauthResource)}&scope=${encodeURIComponent("mcp:tools")}&code_challenge=${encodeURIComponent(codeChallenge)}&code_challenge_method=S256&state=${encodeURIComponent(`${label}-state`)}`
       );
-      expectStatus(authorizeGet, 200, "authorize login form displayed", state);
-      ensure(
-        authorizeGet.text.includes("<form"),
-        "authorize endpoint returns html form",
-        undefined,
-        state
-      );
+      expectStatus(authorizeGet, 200, `${label} authorize login form displayed`, state);
+      ensure(authorizeGet.text.includes("<form"), `${label} authorize endpoint returns html form`, undefined, state);
 
       const authorizePostBody = new URLSearchParams({
         response_type: "code",
-        client_id: cimdClientIdUrl,
-        redirect_uri: cimdRedirectUri,
+        client_id: clientId,
+        redirect_uri: redirectUri,
         resource: oauthResource,
         scope: "mcp:tools",
         code_challenge: codeChallenge,
         code_challenge_method: "S256",
-        state: "e2e-state",
+        state: `${label}-state`,
         username: userA,
         password
       }).toString();
@@ -484,38 +516,28 @@ async function run() {
         body: authorizePostBody,
         redirect: "manual"
       });
-      expectStatus(authorizePost, 302, "authorize returns redirect with code", state);
+      expectStatus(authorizePost, 302, `${label} authorize returns redirect with code`, state);
       const authorizeLocation = authorizePost.headers.get("location") ?? "";
-      ensure(
-        authorizeLocation.startsWith(cimdRedirectUri),
-        "authorize redirect_uri target",
-        authorizeLocation,
-        state
-      );
+      ensure(authorizeLocation.startsWith(redirectUri), `${label} authorize redirect_uri target`, authorizeLocation, state);
       const redirectedUrl = new URL(authorizeLocation);
       const authCode = redirectedUrl.searchParams.get("code") ?? "";
-      ensure(Boolean(authCode), "authorize redirect contains code", undefined, state);
-      ensure(redirectedUrl.searchParams.get("state") === "e2e-state", "authorize redirect preserves state", undefined, state);
+      ensure(Boolean(authCode), `${label} authorize redirect contains code`, undefined, state);
+      ensure(redirectedUrl.searchParams.get("state") === `${label}-state`, `${label} authorize redirect preserves state`, undefined, state);
 
       const oauthAuthCodeTokenBody = new URLSearchParams({
         grant_type: "authorization_code",
-        client_id: cimdClientIdUrl,
+        client_id: clientId,
         code: authCode,
         code_verifier: codeVerifier,
-        redirect_uri: cimdRedirectUri,
+        redirect_uri: redirectUri,
         resource: oauthResource
       }).toString();
       const oauthAuthCodeToken = await request("POST", `${coreBaseUrl}/oauth/token`, {
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: oauthAuthCodeTokenBody
       });
-      expectStatus(oauthAuthCodeToken, 200, "authorization_code token success", state);
-      ensure(
-        typeof oauthAuthCodeToken.json?.access_token === "string",
-        "authorization_code returns access token",
-        undefined,
-        state
-      );
+      expectStatus(oauthAuthCodeToken, 200, `${label} authorization_code token success`, state);
+      ensure(typeof oauthAuthCodeToken.json?.access_token === "string", `${label} authorization_code returns access token`, undefined, state);
 
       const oauthPkceMcpCall = await request("POST", `${coreBaseUrl}/mcp`, {
         token: oauthAuthCodeToken.json?.access_token,
@@ -523,7 +545,7 @@ async function run() {
       });
       ensure(
         oauthPkceMcpCall.status !== 401,
-        "authorization_code JWT accepted by /mcp auth layer",
+        `${label} authorization_code JWT accepted by /mcp auth layer`,
         `status=${oauthPkceMcpCall.status} body=${trimBody(oauthPkceMcpCall.text)}`,
         state
       );
@@ -532,8 +554,8 @@ async function run() {
         const challenge = base64UrlSha256(verifier);
         const authorizeBody = new URLSearchParams({
           response_type: "code",
-          client_id: cimdClientIdUrl,
-          redirect_uri: cimdRedirectUri,
+          client_id: clientId,
+          redirect_uri: redirectUri,
           resource: oauthResource,
           scope: "mcp:tools",
           code_challenge: challenge,
@@ -547,7 +569,7 @@ async function run() {
           body: authorizeBody,
           redirect: "manual"
         });
-        expectStatus(authRes, 302, `authorize code issue (${stateValue})`, state);
+        expectStatus(authRes, 302, `${label} authorize code issue (${stateValue})`, state);
         const location = authRes.headers.get("location") ?? "";
         if (!location) return "";
         const parsedLocation = new URL(location);
@@ -555,34 +577,86 @@ async function run() {
       };
 
       const badRedirectVerifier = randomBytes(32).toString("base64url");
-      const badRedirectCode = await issueAuthorizationCode("bad-redirect", badRedirectVerifier, userA, password);
+      const badRedirectCode = await issueAuthorizationCode(`${label}-bad-redirect`, badRedirectVerifier, userA, password);
       const badRedirectToken = await request("POST", `${coreBaseUrl}/oauth/token`, {
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({
           grant_type: "authorization_code",
-          client_id: cimdClientIdUrl,
+          client_id: clientId,
           code: badRedirectCode,
           code_verifier: badRedirectVerifier,
-          redirect_uri: `${cimdRedirectUri}/wrong`,
+          redirect_uri: `${redirectUri}/wrong`,
           resource: oauthResource
         }).toString()
       });
-      expectStatus(badRedirectToken, 400, "authorization_code rejects bad redirect_uri", state);
+      expectStatus(badRedirectToken, 400, `${label} authorization_code rejects bad redirect_uri`, state);
 
       const badPkceVerifier = randomBytes(32).toString("base64url");
-      const badPkceCode = await issueAuthorizationCode("bad-pkce", badPkceVerifier, userA, password);
+      const badPkceCode = await issueAuthorizationCode(`${label}-bad-pkce`, badPkceVerifier, userA, password);
       const badPkceToken = await request("POST", `${coreBaseUrl}/oauth/token`, {
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({
           grant_type: "authorization_code",
-          client_id: cimdClientIdUrl,
+          client_id: clientId,
           code: badPkceCode,
           code_verifier: randomBytes(32).toString("base64url"),
-          redirect_uri: cimdRedirectUri,
+          redirect_uri: redirectUri,
           resource: oauthResource
         }).toString()
       });
-      expectStatus(badPkceToken, 400, "authorization_code rejects bad PKCE verifier", state);
+      expectStatus(badPkceToken, 400, `${label} authorization_code rejects bad PKCE verifier`, state);
+    };
+
+    const registrationEndpoint = typeof oauthMetadata.json?.registration_endpoint === "string"
+      ? oauthMetadata.json.registration_endpoint
+      : "";
+    const registrationEndpointRequestUrl = (() => {
+      if (!registrationEndpoint) return "";
+      try {
+        const discovered = new URL(registrationEndpoint);
+        const local = new URL(coreBaseUrl);
+        if (discovered.hostname === local.hostname && (discovered.port || "443") === (local.port || "80")) {
+          discovered.protocol = local.protocol;
+        }
+        return discovered.toString();
+      } catch {
+        return registrationEndpoint;
+      }
+    })();
+    const dcrRedirectUri = process.env.E2E_DCR_REDIRECT_URI?.trim() ?? "https://claude.ai/api/mcp/auth_callback";
+    if (registrationEndpointRequestUrl) {
+      logStep("OAuth dynamic client registration + PKCE for MCP");
+      const dcrResponse = await request("POST", registrationEndpointRequestUrl, {
+        body: {
+          client_name: "e2e-dcr-client",
+          redirect_uris: [dcrRedirectUri],
+          token_endpoint_auth_method: "none",
+          grant_types: ["authorization_code"],
+          response_types: ["code"]
+        }
+      });
+      expectStatus(dcrResponse, 201, "dynamic client registration success", state);
+      const dcrClientId = dcrResponse.json?.client_id;
+      ensure(typeof dcrClientId === "string" && dcrClientId.length > 0, "dynamic client registration returns client_id", undefined, state);
+      ensure(
+        typeof dcrClientId === "string" && !dcrClientId.startsWith("https://"),
+        "dynamic client registration returns non-URL client_id fallback",
+        `client_id=${dcrClientId ?? "(missing)"}`,
+        state
+      );
+
+      if (typeof dcrClientId === "string" && dcrClientId.length > 0) {
+        await runAuthorizationCodePkceFlow(dcrClientId, dcrRedirectUri, "dcr");
+      }
+    } else {
+      warn("dynamic client registration test skipped", "authorization metadata has no registration_endpoint.", state);
+    }
+
+    const cimdClientIdUrl = process.env.E2E_CIMD_CLIENT_ID_URL?.trim();
+    const cimdRedirectUri = process.env.E2E_CIMD_REDIRECT_URI?.trim();
+    if (cimdClientIdUrl && cimdRedirectUri) {
+      logStep("OAuth authorization_code + PKCE for MCP (CIMD)");
+      await runAuthorizationCodePkceFlow(cimdClientIdUrl, cimdRedirectUri, "cimd");
 
       const cimdVerifier = randomBytes(32).toString("base64url");
       const cimdChallenge = base64UrlSha256(cimdVerifier);
