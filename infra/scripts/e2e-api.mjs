@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import fs from "node:fs/promises";
+import { createHash, randomBytes } from "node:crypto";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -142,7 +143,8 @@ async function request(method, url, options = {}) {
   const response = await fetch(url, {
     method,
     headers,
-    body
+    body,
+    redirect: options.redirect ?? "follow"
   });
 
   const text = await response.text();
@@ -162,6 +164,10 @@ async function request(method, url, options = {}) {
     json,
     headers: response.headers
   };
+}
+
+function base64UrlSha256(value) {
+  return createHash("sha256").update(value, "utf8").digest("base64url");
 }
 
 function ensure(condition, message, detail, state) {
@@ -340,8 +346,28 @@ async function run() {
     const expectedIssuer = `https://${new URL(coreBaseUrl).hostname}`;
     ensure(oauthMetadata.json?.issuer === expectedIssuer, "oauth metadata issuer", undefined, state);
     ensure(
+      oauthMetadata.json?.authorization_endpoint === `${expectedIssuer}/authorize`,
+      "oauth metadata authorization endpoint",
+      undefined,
+      state
+    );
+    ensure(
       oauthMetadata.json?.token_endpoint === `${expectedIssuer}/oauth/token`,
       "oauth metadata token endpoint",
+      undefined,
+      state
+    );
+    ensure(
+      Array.isArray(oauthMetadata.json?.grant_types_supported) &&
+      oauthMetadata.json?.grant_types_supported.includes("authorization_code"),
+      "oauth metadata grant_types includes authorization_code",
+      undefined,
+      state
+    );
+    ensure(
+      Array.isArray(oauthMetadata.json?.code_challenge_methods_supported) &&
+      oauthMetadata.json?.code_challenge_methods_supported.includes("S256"),
+      "oauth metadata code_challenge_methods includes S256",
       undefined,
       state
     );
@@ -424,6 +450,80 @@ async function run() {
     const meA = await request("GET", `${coreBaseUrl}/auth/me`, { token: tokenALogin });
     expectStatus(meA, 200, "auth/me userA", state);
     ensure(meA.json?.user?.username === userA, "auth/me returns correct username", undefined, state);
+
+    logStep("OAuth authorization_code + PKCE for MCP");
+    const codeVerifier = randomBytes(32).toString("base64url");
+    const codeChallenge = base64UrlSha256(codeVerifier);
+    const authorizeGet = await request(
+      "GET",
+      `${coreBaseUrl}/authorize?response_type=code&client_id=${encodeURIComponent(coreEnv.OAUTH_CLIENT_ID)}&redirect_uri=${encodeURIComponent("https://claude.ai/api/mcp/auth_callback")}&code_challenge=${encodeURIComponent(codeChallenge)}&code_challenge_method=S256&state=e2e-state`
+    );
+    expectStatus(authorizeGet, 200, "authorize login form displayed", state);
+    ensure(
+      authorizeGet.text.includes("<form"),
+      "authorize endpoint returns html form",
+      undefined,
+      state
+    );
+
+    const authorizePostBody = new URLSearchParams({
+      response_type: "code",
+      client_id: coreEnv.OAUTH_CLIENT_ID,
+      redirect_uri: "https://claude.ai/api/mcp/auth_callback",
+      code_challenge: codeChallenge,
+      code_challenge_method: "S256",
+      state: "e2e-state",
+      username: userA,
+      password
+    }).toString();
+    const authorizePost = await request("POST", `${coreBaseUrl}/authorize`, {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: authorizePostBody,
+      redirect: "manual"
+    });
+    expectStatus(authorizePost, 302, "authorize returns redirect with code", state);
+    const authorizeLocation = authorizePost.headers.get("location") ?? "";
+    ensure(
+      authorizeLocation.startsWith("https://claude.ai/api/mcp/auth_callback"),
+      "authorize redirect_uri target",
+      authorizeLocation,
+      state
+    );
+    const redirectedUrl = new URL(authorizeLocation);
+    const authCode = redirectedUrl.searchParams.get("code") ?? "";
+    ensure(Boolean(authCode), "authorize redirect contains code", undefined, state);
+    ensure(redirectedUrl.searchParams.get("state") === "e2e-state", "authorize redirect preserves state", undefined, state);
+
+    const oauthAuthCodeTokenBody = new URLSearchParams({
+      grant_type: "authorization_code",
+      client_id: coreEnv.OAUTH_CLIENT_ID,
+      client_secret: coreEnv.OAUTH_CLIENT_SECRET,
+      code: authCode,
+      code_verifier: codeVerifier,
+      redirect_uri: "https://claude.ai/api/mcp/auth_callback"
+    }).toString();
+    const oauthAuthCodeToken = await request("POST", `${coreBaseUrl}/oauth/token`, {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: oauthAuthCodeTokenBody
+    });
+    expectStatus(oauthAuthCodeToken, 200, "authorization_code token success", state);
+    ensure(
+      typeof oauthAuthCodeToken.json?.access_token === "string",
+      "authorization_code returns access token",
+      undefined,
+      state
+    );
+
+    const oauthPkceMcpCall = await request("POST", `${coreBaseUrl}/mcp`, {
+      token: oauthAuthCodeToken.json?.access_token,
+      body: {}
+    });
+    ensure(
+      oauthPkceMcpCall.status !== 401,
+      "authorization_code JWT accepted by /mcp auth layer",
+      `status=${oauthPkceMcpCall.status} body=${trimBody(oauthPkceMcpCall.text)}`,
+      state
+    );
 
     logStep("Core-managed integration manifests");
     const manifests = await request("GET", `${coreBaseUrl}/integrations/manifests`);

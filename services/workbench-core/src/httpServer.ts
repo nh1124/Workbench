@@ -5,6 +5,7 @@ import jwt from "jsonwebtoken";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import path from "node:path";
+import { createHash, randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { issueTokenBundle, verifyAccessToken, verifyRefreshToken } from "./auth.js";
@@ -56,6 +57,7 @@ function optionalEnv(name: string): string | undefined {
 
 const oauthClientId = requireEnv("OAUTH_CLIENT_ID");
 const oauthClientSecret = requireEnv("OAUTH_CLIENT_SECRET");
+const oauthRedirectUri = "https://claude.ai/api/mcp/auth_callback";
 const oauthJwtSecret = requireEnv("JWT_SECRET");
 const oauthJwtIssuer = requireEnv("JWT_ISSUER");
 const oauthJwtExpirySecondsRaw = requireEnv("JWT_EXPIRY_SECONDS");
@@ -82,6 +84,150 @@ function issueMcpOAuthAccessToken(clientId: string): string {
       expiresIn: oauthJwtExpirySeconds
     }
   );
+}
+
+type AuthorizationCodeRecord = {
+  clientId: string;
+  redirectUri: string;
+  codeChallenge: string;
+  codeChallengeMethod: "S256";
+  userId: string;
+  username: string;
+  expiresAtMs: number;
+};
+
+const authorizationCodeStore = new Map<string, AuthorizationCodeRecord>();
+const AUTHORIZATION_CODE_TTL_MS = 5 * 60 * 1000;
+
+function cleanupExpiredAuthorizationCodes(nowMs = Date.now()): void {
+  for (const [code, record] of authorizationCodeStore.entries()) {
+    if (record.expiresAtMs <= nowMs) {
+      authorizationCodeStore.delete(code);
+    }
+  }
+}
+
+function base64UrlSha256(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("base64url");
+}
+
+function issueUserOAuthAccessToken(userId: string, username: string): string {
+  return jwt.sign(
+    {
+      sub: userId,
+      username: username.trim().toLowerCase(),
+      tokenUse: "access"
+    },
+    oauthJwtSecret,
+    {
+      algorithm: "HS256",
+      issuer: oauthJwtIssuer,
+      expiresIn: oauthJwtExpirySeconds
+    }
+  );
+}
+
+type AuthorizeRequestParams = {
+  responseType: "code";
+  clientId: string;
+  redirectUri: string;
+  state?: string;
+  codeChallenge: string;
+  codeChallengeMethod: "S256";
+};
+
+function readAuthorizeParams(source: Record<string, unknown>): AuthorizeRequestParams | { error: string } {
+  const responseType = typeof source.response_type === "string" ? source.response_type.trim() : "";
+  if (responseType !== "code") {
+    return { error: "unsupported_response_type" };
+  }
+
+  const clientId = typeof source.client_id === "string" ? source.client_id.trim() : "";
+  if (!clientId || clientId !== oauthClientId) {
+    return { error: "invalid_client" };
+  }
+
+  const redirectUri = typeof source.redirect_uri === "string" ? source.redirect_uri.trim() : "";
+  if (!redirectUri || redirectUri !== oauthRedirectUri) {
+    return { error: "invalid_redirect_uri" };
+  }
+
+  const codeChallenge = typeof source.code_challenge === "string" ? source.code_challenge.trim() : "";
+  if (!codeChallenge) {
+    return { error: "invalid_request" };
+  }
+
+  const codeChallengeMethodRaw =
+    typeof source.code_challenge_method === "string" ? source.code_challenge_method.trim() : "";
+  if (codeChallengeMethodRaw !== "S256") {
+    return { error: "invalid_request" };
+  }
+
+  const state = typeof source.state === "string" && source.state.trim().length > 0 ? source.state : undefined;
+  return {
+    responseType: "code",
+    clientId,
+    redirectUri,
+    state,
+    codeChallenge,
+    codeChallengeMethod: "S256"
+  };
+}
+
+function escapeHtml(raw: string): string {
+  return raw
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function renderAuthorizeLoginForm(params: AuthorizeRequestParams, errorMessage?: string): string {
+  const errorHtml = errorMessage
+    ? `<p style="color:#b91c1c;background:#fee2e2;padding:8px 10px;border-radius:6px;">${escapeHtml(errorMessage)}</p>`
+    : "";
+  const stateInput = params.state
+    ? `<input type="hidden" name="state" value="${escapeHtml(params.state)}" />`
+    : "";
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Workbench Authorization</title>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:#f8fafc; margin:0; }
+      main { max-width:420px; margin:56px auto; background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:24px; }
+      h1 { margin:0 0 10px; font-size:20px; }
+      p { margin:0 0 16px; color:#334155; font-size:14px; }
+      label { display:block; margin:12px 0 6px; font-size:13px; color:#0f172a; }
+      input { width:100%; box-sizing:border-box; padding:10px 12px; border:1px solid #cbd5e1; border-radius:8px; }
+      button { margin-top:16px; width:100%; border:0; border-radius:8px; padding:11px 12px; background:#0f172a; color:#fff; font-weight:600; cursor:pointer; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Authorize Workbench Access</h1>
+      <p>Sign in to continue with Claude connector authorization.</p>
+      ${errorHtml}
+      <form method="post" action="/authorize">
+        <input type="hidden" name="response_type" value="${params.responseType}" />
+        <input type="hidden" name="client_id" value="${escapeHtml(params.clientId)}" />
+        <input type="hidden" name="redirect_uri" value="${escapeHtml(params.redirectUri)}" />
+        <input type="hidden" name="code_challenge" value="${escapeHtml(params.codeChallenge)}" />
+        <input type="hidden" name="code_challenge_method" value="${params.codeChallengeMethod}" />
+        ${stateInput}
+        <label for="username">Username</label>
+        <input id="username" name="username" type="text" required autocomplete="username" />
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" required autocomplete="current-password" />
+        <button type="submit">Authorize</button>
+      </form>
+    </main>
+  </body>
+</html>`;
 }
 
 const app = express();
@@ -277,33 +423,139 @@ app.get("/.well-known/oauth-authorization-server", (req, res) => {
   const issuer = buildOAuthIssuer(req);
   return res.json({
     issuer,
+    authorization_endpoint: `${issuer}/authorize`,
     token_endpoint: `${issuer}/oauth/token`,
-    grant_types_supported: ["client_credentials"],
+    grant_types_supported: ["authorization_code"],
+    code_challenge_methods_supported: ["S256"],
     token_endpoint_auth_methods_supported: ["client_secret_post"]
   });
 });
 
+app.get("/authorize", (req, res) => {
+  const parsed = readAuthorizeParams(req.query as Record<string, unknown>);
+  if ("error" in parsed) {
+    return res.status(400).json({ error: parsed.error });
+  }
+
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  return res.status(200).send(renderAuthorizeLoginForm(parsed));
+});
+
+app.post("/authorize", express.urlencoded({ extended: false }), async (req, res) => {
+  const parsed = readAuthorizeParams(req.body as Record<string, unknown>);
+  if ("error" in parsed) {
+    return res.status(400).json({ error: parsed.error });
+  }
+
+  const username = typeof req.body?.username === "string" ? req.body.username.trim() : "";
+  const password = typeof req.body?.password === "string" ? req.body.password : "";
+  if (!username || !password) {
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    return res.status(400).send(renderAuthorizeLoginForm(parsed, "Username and password are required."));
+  }
+
+  const user = await loginUser(username, password);
+  if (!user) {
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    return res.status(401).send(renderAuthorizeLoginForm(parsed, "Invalid username or password."));
+  }
+
+  cleanupExpiredAuthorizationCodes();
+  const code = randomBytes(32).toString("hex");
+  authorizationCodeStore.set(code, {
+    clientId: parsed.clientId,
+    redirectUri: parsed.redirectUri,
+    codeChallenge: parsed.codeChallenge,
+    codeChallengeMethod: parsed.codeChallengeMethod,
+    userId: user.id,
+    username: user.username,
+    expiresAtMs: Date.now() + AUTHORIZATION_CODE_TTL_MS
+  });
+
+  const redirectUrl = new URL(parsed.redirectUri);
+  redirectUrl.searchParams.set("code", code);
+  if (parsed.state) {
+    redirectUrl.searchParams.set("state", parsed.state);
+  }
+
+  return res.redirect(302, redirectUrl.toString());
+});
+
 app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => {
   const grantType = typeof req.body?.grant_type === "string" ? req.body.grant_type.trim() : "";
-  if (grantType !== "client_credentials") {
-    return res.status(400).json({
-      error: "unsupported_grant_type"
+
+  if (grantType === "client_credentials") {
+    const clientId = typeof req.body?.client_id === "string" ? req.body.client_id.trim() : "";
+    const clientSecret = typeof req.body?.client_secret === "string" ? req.body.client_secret : "";
+    if (clientId !== oauthClientId || clientSecret !== oauthClientSecret) {
+      return res.status(401).json({
+        error: "invalid_client"
+      });
+    }
+
+    const accessToken = issueMcpOAuthAccessToken(clientId);
+    return res.json({
+      access_token: accessToken,
+      token_type: "bearer",
+      expires_in: oauthJwtExpirySeconds
     });
   }
 
-  const clientId = typeof req.body?.client_id === "string" ? req.body.client_id.trim() : "";
-  const clientSecret = typeof req.body?.client_secret === "string" ? req.body.client_secret : "";
-  if (clientId !== oauthClientId || clientSecret !== oauthClientSecret) {
-    return res.status(401).json({
-      error: "invalid_client"
+  if (grantType === "authorization_code") {
+    const clientId = typeof req.body?.client_id === "string" ? req.body.client_id.trim() : "";
+    const clientSecret = typeof req.body?.client_secret === "string" ? req.body.client_secret : "";
+    if (clientId !== oauthClientId || clientSecret !== oauthClientSecret) {
+      return res.status(401).json({
+        error: "invalid_client"
+      });
+    }
+
+    const code = typeof req.body?.code === "string" ? req.body.code.trim() : "";
+    const codeVerifier = typeof req.body?.code_verifier === "string" ? req.body.code_verifier : "";
+    if (!code || !codeVerifier) {
+      return res.status(400).json({
+        error: "invalid_request"
+      });
+    }
+
+    cleanupExpiredAuthorizationCodes();
+    const record = authorizationCodeStore.get(code);
+    if (!record) {
+      return res.status(400).json({
+        error: "invalid_grant"
+      });
+    }
+
+    const redirectUri = typeof req.body?.redirect_uri === "string" ? req.body.redirect_uri.trim() : "";
+    if (
+      record.clientId !== clientId ||
+      (redirectUri.length > 0 && redirectUri !== record.redirectUri)
+    ) {
+      authorizationCodeStore.delete(code);
+      return res.status(400).json({
+        error: "invalid_grant"
+      });
+    }
+
+    const computedChallenge = base64UrlSha256(codeVerifier);
+    if (record.codeChallengeMethod !== "S256" || computedChallenge !== record.codeChallenge) {
+      authorizationCodeStore.delete(code);
+      return res.status(400).json({
+        error: "invalid_grant"
+      });
+    }
+
+    authorizationCodeStore.delete(code);
+    const accessToken = issueUserOAuthAccessToken(record.userId, record.username);
+    return res.json({
+      access_token: accessToken,
+      token_type: "bearer",
+      expires_in: oauthJwtExpirySeconds
     });
   }
 
-  const accessToken = issueMcpOAuthAccessToken(clientId);
-  return res.json({
-    access_token: accessToken,
-    token_type: "bearer",
-    expires_in: oauthJwtExpirySeconds
+  return res.status(400).json({
+    error: "unsupported_grant_type"
   });
 });
 
