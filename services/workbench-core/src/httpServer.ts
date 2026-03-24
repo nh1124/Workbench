@@ -54,6 +54,36 @@ function optionalEnv(name: string): string | undefined {
   return value && value.length > 0 ? value : undefined;
 }
 
+const oauthClientId = requireEnv("OAUTH_CLIENT_ID");
+const oauthClientSecret = requireEnv("OAUTH_CLIENT_SECRET");
+const oauthJwtSecret = requireEnv("JWT_SECRET");
+const oauthJwtIssuer = requireEnv("JWT_ISSUER");
+const oauthJwtExpirySecondsRaw = requireEnv("JWT_EXPIRY_SECONDS");
+const oauthJwtExpirySeconds = Number(oauthJwtExpirySecondsRaw);
+if (!Number.isFinite(oauthJwtExpirySeconds) || oauthJwtExpirySeconds <= 0) {
+  throw new Error(`Invalid JWT_EXPIRY_SECONDS value: ${oauthJwtExpirySecondsRaw}`);
+}
+
+function buildOAuthIssuer(req: express.Request): string {
+  return `https://${req.hostname}`;
+}
+
+function issueMcpOAuthAccessToken(clientId: string): string {
+  return jwt.sign(
+    {
+      sub: clientId,
+      username: clientId.trim().toLowerCase(),
+      tokenUse: "access"
+    },
+    oauthJwtSecret,
+    {
+      algorithm: "HS256",
+      issuer: oauthJwtIssuer,
+      expiresIn: oauthJwtExpirySeconds
+    }
+  );
+}
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
@@ -240,6 +270,40 @@ app.get("/health", (_req, res) => {
     service: "workbench-core",
     status: "ok",
     timestamp: new Date().toISOString()
+  });
+});
+
+app.get("/.well-known/oauth-authorization-server", (req, res) => {
+  const issuer = buildOAuthIssuer(req);
+  return res.json({
+    issuer,
+    token_endpoint: `${issuer}/oauth/token`,
+    grant_types_supported: ["client_credentials"],
+    token_endpoint_auth_methods_supported: ["client_secret_post"]
+  });
+});
+
+app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => {
+  const grantType = typeof req.body?.grant_type === "string" ? req.body.grant_type.trim() : "";
+  if (grantType !== "client_credentials") {
+    return res.status(400).json({
+      error: "unsupported_grant_type"
+    });
+  }
+
+  const clientId = typeof req.body?.client_id === "string" ? req.body.client_id.trim() : "";
+  const clientSecret = typeof req.body?.client_secret === "string" ? req.body.client_secret : "";
+  if (clientId !== oauthClientId || clientSecret !== oauthClientSecret) {
+    return res.status(401).json({
+      error: "invalid_client"
+    });
+  }
+
+  const accessToken = issueMcpOAuthAccessToken(clientId);
+  return res.json({
+    access_token: accessToken,
+    token_type: "bearer",
+    expires_in: oauthJwtExpirySeconds
   });
 });
 

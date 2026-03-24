@@ -308,6 +308,7 @@ async function deleteNotesServiceAccount(coreUserId) {
 async function run() {
   const state = { passes: 0, failures: 0, warnings: 0 };
 
+  const coreEnv = await readEnvFile("services/workbench-core/.env");
   const notesEnv = await readEnvFile("services/notes/.env");
   const artifactsEnv = await readEnvFile("services/artifacts/.env");
   const tasksEnv = await readEnvFile("services/tasks/.env");
@@ -332,6 +333,62 @@ async function run() {
     await waitForHealth(`${artifactsBaseUrl}/health`);
     await waitForHealth(`${tasksBaseUrl}/health`);
     await waitForHealth(`${projectsBaseUrl}/health`);
+
+    logStep("Core OAuth client_credentials for MCP");
+    const oauthMetadata = await request("GET", `${coreBaseUrl}/.well-known/oauth-authorization-server`);
+    expectStatus(oauthMetadata, 200, "oauth authorization metadata", state);
+    const expectedIssuer = `https://${new URL(coreBaseUrl).hostname}`;
+    ensure(oauthMetadata.json?.issuer === expectedIssuer, "oauth metadata issuer", undefined, state);
+    ensure(
+      oauthMetadata.json?.token_endpoint === `${expectedIssuer}/oauth/token`,
+      "oauth metadata token endpoint",
+      undefined,
+      state
+    );
+
+    const oauthTokenRequestBody = new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: coreEnv.OAUTH_CLIENT_ID,
+      client_secret: coreEnv.OAUTH_CLIENT_SECRET
+    }).toString();
+    const oauthToken = await request("POST", `${coreBaseUrl}/oauth/token`, {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: oauthTokenRequestBody
+    });
+    expectStatus(oauthToken, 200, "oauth token endpoint success", state);
+    ensure(oauthToken.json?.token_type === "bearer", "oauth token_type is bearer", undefined, state);
+    ensure(typeof oauthToken.json?.access_token === "string", "oauth access_token returned", undefined, state);
+    ensure(oauthToken.json?.expires_in === Number(coreEnv.JWT_EXPIRY_SECONDS), "oauth expires_in matches env", undefined, state);
+
+    const oauthInvalidClient = await request("POST", `${coreBaseUrl}/oauth/token`, {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: "grant_type=client_credentials&client_id=wrong&client_secret=wrong"
+    });
+    expectStatus(oauthInvalidClient, 401, "oauth invalid client rejected", state);
+    ensure(oauthInvalidClient.json?.error === "invalid_client", "oauth invalid_client error code", undefined, state);
+
+    const oauthUnsupportedGrant = await request("POST", `${coreBaseUrl}/oauth/token`, {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `grant_type=password&client_id=${encodeURIComponent(coreEnv.OAUTH_CLIENT_ID)}&client_secret=${encodeURIComponent(coreEnv.OAUTH_CLIENT_SECRET)}`
+    });
+    expectStatus(oauthUnsupportedGrant, 400, "oauth unsupported grant rejected", state);
+    ensure(
+      oauthUnsupportedGrant.json?.error === "unsupported_grant_type",
+      "oauth unsupported_grant_type error code",
+      undefined,
+      state
+    );
+
+    const oauthMcpCall = await request("POST", `${coreBaseUrl}/mcp`, {
+      token: oauthToken.json?.access_token,
+      body: {}
+    });
+    ensure(
+      oauthMcpCall.status !== 401,
+      "oauth JWT accepted by /mcp auth layer",
+      `status=${oauthMcpCall.status} body=${trimBody(oauthMcpCall.text)}`,
+      state
+    );
 
     const stamp = Date.now();
     const userA = `e2e_user_a_${stamp}`;
