@@ -83,8 +83,7 @@ Common internal contract:
 - `JWT_ISSUER`
 - `JWT_EXPIRY_SECONDS`
 - `JWT_REFRESH_EXPIRY_SECONDS` (optional, default: `2592000`)
-- `OAUTH_CLIENT_ID`
-- `OAUTH_CLIENT_SECRET`
+- `OAUTH_CLIENT_METADATA_HOST_ALLOWLIST` (optional, comma-separated host allowlist for client metadata URL fetches)
 - `NOTES_SERVICE_URL`
 - `ARTIFACTS_SERVICE_URL`
 - `TASKS_SERVICE_URL`

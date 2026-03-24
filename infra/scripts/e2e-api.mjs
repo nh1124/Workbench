@@ -314,7 +314,6 @@ async function deleteNotesServiceAccount(coreUserId) {
 async function run() {
   const state = { passes: 0, failures: 0, warnings: 0 };
 
-  const coreEnv = await readEnvFile("services/workbench-core/.env");
   const notesEnv = await readEnvFile("services/notes/.env");
   const artifactsEnv = await readEnvFile("services/artifacts/.env");
   const tasksEnv = await readEnvFile("services/tasks/.env");
@@ -340,7 +339,7 @@ async function run() {
     await waitForHealth(`${tasksBaseUrl}/health`);
     await waitForHealth(`${projectsBaseUrl}/health`);
 
-    logStep("Core OAuth client_credentials for MCP");
+    logStep("Core OAuth metadata for MCP");
     const oauthMetadata = await request("GET", `${coreBaseUrl}/.well-known/oauth-authorization-server`);
     expectStatus(oauthMetadata, 200, "oauth authorization metadata", state);
     const expectedIssuer = `https://${new URL(coreBaseUrl).hostname}`;
@@ -366,39 +365,30 @@ async function run() {
       state
     );
     ensure(
+      !Array.isArray(oauthMetadata.json?.grant_types_supported) ||
+      !oauthMetadata.json?.grant_types_supported.includes("client_credentials"),
+      "oauth metadata does not advertise client_credentials",
+      undefined,
+      state
+    );
+    ensure(
       Array.isArray(oauthMetadata.json?.code_challenge_methods_supported) &&
       oauthMetadata.json?.code_challenge_methods_supported.includes("S256"),
       "oauth metadata code_challenge_methods includes S256",
       undefined,
       state
     );
-
-    const oauthTokenRequestBody = new URLSearchParams({
-      grant_type: "client_credentials",
-      client_id: coreEnv.OAUTH_CLIENT_ID,
-      client_secret: coreEnv.OAUTH_CLIENT_SECRET,
-      resource: oauthResource,
-      scope: "mcp:tools"
-    }).toString();
-    const oauthToken = await request("POST", `${coreBaseUrl}/oauth/token`, {
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: oauthTokenRequestBody
-    });
-    expectStatus(oauthToken, 200, "oauth token endpoint success", state);
-    ensure(oauthToken.json?.token_type === "bearer", "oauth token_type is bearer", undefined, state);
-    ensure(typeof oauthToken.json?.access_token === "string", "oauth access_token returned", undefined, state);
-    ensure(oauthToken.json?.expires_in === Number(coreEnv.JWT_EXPIRY_SECONDS), "oauth expires_in matches env", undefined, state);
-
-    const oauthInvalidClient = await request("POST", `${coreBaseUrl}/oauth/token`, {
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: "grant_type=client_credentials&client_id=wrong&client_secret=wrong"
-    });
-    expectStatus(oauthInvalidClient, 401, "oauth invalid client rejected", state);
-    ensure(oauthInvalidClient.json?.error === "invalid_client", "oauth invalid_client error code", undefined, state);
+    ensure(
+      Array.isArray(oauthMetadata.json?.token_endpoint_auth_methods_supported) &&
+      oauthMetadata.json?.token_endpoint_auth_methods_supported.includes("none"),
+      "oauth metadata supports public clients (auth method none)",
+      undefined,
+      state
+    );
 
     const oauthUnsupportedGrant = await request("POST", `${coreBaseUrl}/oauth/token`, {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: `grant_type=password&client_id=${encodeURIComponent(coreEnv.OAUTH_CLIENT_ID)}&client_secret=${encodeURIComponent(coreEnv.OAUTH_CLIENT_SECRET)}`
+      body: "grant_type=password"
     });
     expectStatus(oauthUnsupportedGrant, 400, "oauth unsupported grant rejected", state);
     ensure(
@@ -421,17 +411,6 @@ async function run() {
       mcpChallengeHeader.includes('scope="mcp:tools"'),
       "mcp 401 includes required scope challenge",
       mcpChallengeHeader,
-      state
-    );
-
-    const oauthMcpCall = await request("POST", `${coreBaseUrl}/mcp`, {
-      token: oauthToken.json?.access_token,
-      body: {}
-    });
-    ensure(
-      oauthMcpCall.status !== 401,
-      "oauth JWT accepted by /mcp auth layer",
-      `status=${oauthMcpCall.status} body=${trimBody(oauthMcpCall.text)}`,
       state
     );
 
@@ -470,147 +449,141 @@ async function run() {
     expectStatus(meA, 200, "auth/me userA", state);
     ensure(meA.json?.user?.username === userA, "auth/me returns correct username", undefined, state);
 
-    logStep("OAuth authorization_code + PKCE for MCP");
-    const codeVerifier = randomBytes(32).toString("base64url");
-    const codeChallenge = base64UrlSha256(codeVerifier);
-    const authorizeGet = await request(
-      "GET",
-      `${coreBaseUrl}/authorize?response_type=code&client_id=${encodeURIComponent(coreEnv.OAUTH_CLIENT_ID)}&redirect_uri=${encodeURIComponent("https://claude.ai/api/mcp/auth_callback")}&resource=${encodeURIComponent(oauthResource)}&scope=${encodeURIComponent("mcp:tools")}&code_challenge=${encodeURIComponent(codeChallenge)}&code_challenge_method=S256&state=e2e-state`
-    );
-    expectStatus(authorizeGet, 200, "authorize login form displayed", state);
-    ensure(
-      authorizeGet.text.includes("<form"),
-      "authorize endpoint returns html form",
-      undefined,
-      state
-    );
-
-    const authorizePostBody = new URLSearchParams({
-      response_type: "code",
-      client_id: coreEnv.OAUTH_CLIENT_ID,
-      redirect_uri: "https://claude.ai/api/mcp/auth_callback",
-      resource: oauthResource,
-      scope: "mcp:tools",
-      code_challenge: codeChallenge,
-      code_challenge_method: "S256",
-      state: "e2e-state",
-      username: userA,
-      password
-    }).toString();
-    const authorizePost = await request("POST", `${coreBaseUrl}/authorize`, {
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: authorizePostBody,
-      redirect: "manual"
-    });
-    expectStatus(authorizePost, 302, "authorize returns redirect with code", state);
-    const authorizeLocation = authorizePost.headers.get("location") ?? "";
-    ensure(
-      authorizeLocation.startsWith("https://claude.ai/api/mcp/auth_callback"),
-      "authorize redirect_uri target",
-      authorizeLocation,
-      state
-    );
-    const redirectedUrl = new URL(authorizeLocation);
-    const authCode = redirectedUrl.searchParams.get("code") ?? "";
-    ensure(Boolean(authCode), "authorize redirect contains code", undefined, state);
-    ensure(redirectedUrl.searchParams.get("state") === "e2e-state", "authorize redirect preserves state", undefined, state);
-
-    const oauthAuthCodeTokenBody = new URLSearchParams({
-      grant_type: "authorization_code",
-      client_id: coreEnv.OAUTH_CLIENT_ID,
-      code: authCode,
-      code_verifier: codeVerifier,
-      redirect_uri: "https://claude.ai/api/mcp/auth_callback",
-      resource: oauthResource
-    }).toString();
-    const oauthAuthCodeToken = await request("POST", `${coreBaseUrl}/oauth/token`, {
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: oauthAuthCodeTokenBody
-    });
-    expectStatus(oauthAuthCodeToken, 200, "authorization_code token success", state);
-    ensure(
-      typeof oauthAuthCodeToken.json?.access_token === "string",
-      "authorization_code returns access token",
-      undefined,
-      state
-    );
-
-    const oauthPkceMcpCall = await request("POST", `${coreBaseUrl}/mcp`, {
-      token: oauthAuthCodeToken.json?.access_token,
-      body: {}
-    });
-    ensure(
-      oauthPkceMcpCall.status !== 401,
-      "authorization_code JWT accepted by /mcp auth layer",
-      `status=${oauthPkceMcpCall.status} body=${trimBody(oauthPkceMcpCall.text)}`,
-      state
-    );
-
-    const issueAuthorizationCode = async (stateValue, verifier, username, pass) => {
-      const challenge = base64UrlSha256(verifier);
-      const authorizeBody = new URLSearchParams({
-        response_type: "code",
-        client_id: coreEnv.OAUTH_CLIENT_ID,
-        redirect_uri: "https://claude.ai/api/mcp/auth_callback",
-        resource: oauthResource,
-        scope: "mcp:tools",
-        code_challenge: challenge,
-        code_challenge_method: "S256",
-        state: stateValue,
-        username,
-        password: pass
-      }).toString();
-      const authRes = await request("POST", `${coreBaseUrl}/authorize`, {
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: authorizeBody,
-        redirect: "manual"
-      });
-      expectStatus(authRes, 302, `authorize code issue (${stateValue})`, state);
-      const location = authRes.headers.get("location") ?? "";
-      if (!location) return "";
-      const parsedLocation = new URL(location);
-      return parsedLocation.searchParams.get("code") ?? "";
-    };
-
-    const badRedirectVerifier = randomBytes(32).toString("base64url");
-    const badRedirectCode = await issueAuthorizationCode("bad-redirect", badRedirectVerifier, userA, password);
-    const badRedirectToken = await request("POST", `${coreBaseUrl}/oauth/token`, {
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "authorization_code",
-        client_id: coreEnv.OAUTH_CLIENT_ID,
-        code: badRedirectCode,
-        code_verifier: badRedirectVerifier,
-        redirect_uri: "https://claude.ai/api/mcp/auth_callback/wrong",
-        resource: oauthResource
-      }).toString()
-    });
-    expectStatus(badRedirectToken, 400, "authorization_code rejects bad redirect_uri", state);
-
-    const badPkceVerifier = randomBytes(32).toString("base64url");
-    const badPkceCode = await issueAuthorizationCode("bad-pkce", badPkceVerifier, userA, password);
-    const badPkceToken = await request("POST", `${coreBaseUrl}/oauth/token`, {
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "authorization_code",
-        client_id: coreEnv.OAUTH_CLIENT_ID,
-        code: badPkceCode,
-        code_verifier: randomBytes(32).toString("base64url"),
-        redirect_uri: "https://claude.ai/api/mcp/auth_callback",
-        resource: oauthResource
-      }).toString()
-    });
-    expectStatus(badPkceToken, 400, "authorization_code rejects bad PKCE verifier", state);
-
-    const badAudienceMcpCall = await request("POST", `${coreBaseUrl}/mcp`, {
-      token: tokenALogin,
-      body: {}
-    });
-    expectStatus(badAudienceMcpCall, 401, "mcp rejects token without expected audience", state);
-
     const cimdClientIdUrl = process.env.E2E_CIMD_CLIENT_ID_URL?.trim();
     const cimdRedirectUri = process.env.E2E_CIMD_REDIRECT_URI?.trim();
     if (cimdClientIdUrl && cimdRedirectUri) {
+      logStep("OAuth authorization_code + PKCE for MCP");
+      const codeVerifier = randomBytes(32).toString("base64url");
+      const codeChallenge = base64UrlSha256(codeVerifier);
+      const authorizeGet = await request(
+        "GET",
+        `${coreBaseUrl}/authorize?response_type=code&client_id=${encodeURIComponent(cimdClientIdUrl)}&redirect_uri=${encodeURIComponent(cimdRedirectUri)}&resource=${encodeURIComponent(oauthResource)}&scope=${encodeURIComponent("mcp:tools")}&code_challenge=${encodeURIComponent(codeChallenge)}&code_challenge_method=S256&state=e2e-state`
+      );
+      expectStatus(authorizeGet, 200, "authorize login form displayed", state);
+      ensure(
+        authorizeGet.text.includes("<form"),
+        "authorize endpoint returns html form",
+        undefined,
+        state
+      );
+
+      const authorizePostBody = new URLSearchParams({
+        response_type: "code",
+        client_id: cimdClientIdUrl,
+        redirect_uri: cimdRedirectUri,
+        resource: oauthResource,
+        scope: "mcp:tools",
+        code_challenge: codeChallenge,
+        code_challenge_method: "S256",
+        state: "e2e-state",
+        username: userA,
+        password
+      }).toString();
+      const authorizePost = await request("POST", `${coreBaseUrl}/authorize`, {
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: authorizePostBody,
+        redirect: "manual"
+      });
+      expectStatus(authorizePost, 302, "authorize returns redirect with code", state);
+      const authorizeLocation = authorizePost.headers.get("location") ?? "";
+      ensure(
+        authorizeLocation.startsWith(cimdRedirectUri),
+        "authorize redirect_uri target",
+        authorizeLocation,
+        state
+      );
+      const redirectedUrl = new URL(authorizeLocation);
+      const authCode = redirectedUrl.searchParams.get("code") ?? "";
+      ensure(Boolean(authCode), "authorize redirect contains code", undefined, state);
+      ensure(redirectedUrl.searchParams.get("state") === "e2e-state", "authorize redirect preserves state", undefined, state);
+
+      const oauthAuthCodeTokenBody = new URLSearchParams({
+        grant_type: "authorization_code",
+        client_id: cimdClientIdUrl,
+        code: authCode,
+        code_verifier: codeVerifier,
+        redirect_uri: cimdRedirectUri,
+        resource: oauthResource
+      }).toString();
+      const oauthAuthCodeToken = await request("POST", `${coreBaseUrl}/oauth/token`, {
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: oauthAuthCodeTokenBody
+      });
+      expectStatus(oauthAuthCodeToken, 200, "authorization_code token success", state);
+      ensure(
+        typeof oauthAuthCodeToken.json?.access_token === "string",
+        "authorization_code returns access token",
+        undefined,
+        state
+      );
+
+      const oauthPkceMcpCall = await request("POST", `${coreBaseUrl}/mcp`, {
+        token: oauthAuthCodeToken.json?.access_token,
+        body: {}
+      });
+      ensure(
+        oauthPkceMcpCall.status !== 401,
+        "authorization_code JWT accepted by /mcp auth layer",
+        `status=${oauthPkceMcpCall.status} body=${trimBody(oauthPkceMcpCall.text)}`,
+        state
+      );
+
+      const issueAuthorizationCode = async (stateValue, verifier, username, pass) => {
+        const challenge = base64UrlSha256(verifier);
+        const authorizeBody = new URLSearchParams({
+          response_type: "code",
+          client_id: cimdClientIdUrl,
+          redirect_uri: cimdRedirectUri,
+          resource: oauthResource,
+          scope: "mcp:tools",
+          code_challenge: challenge,
+          code_challenge_method: "S256",
+          state: stateValue,
+          username,
+          password: pass
+        }).toString();
+        const authRes = await request("POST", `${coreBaseUrl}/authorize`, {
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: authorizeBody,
+          redirect: "manual"
+        });
+        expectStatus(authRes, 302, `authorize code issue (${stateValue})`, state);
+        const location = authRes.headers.get("location") ?? "";
+        if (!location) return "";
+        const parsedLocation = new URL(location);
+        return parsedLocation.searchParams.get("code") ?? "";
+      };
+
+      const badRedirectVerifier = randomBytes(32).toString("base64url");
+      const badRedirectCode = await issueAuthorizationCode("bad-redirect", badRedirectVerifier, userA, password);
+      const badRedirectToken = await request("POST", `${coreBaseUrl}/oauth/token`, {
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          client_id: cimdClientIdUrl,
+          code: badRedirectCode,
+          code_verifier: badRedirectVerifier,
+          redirect_uri: `${cimdRedirectUri}/wrong`,
+          resource: oauthResource
+        }).toString()
+      });
+      expectStatus(badRedirectToken, 400, "authorization_code rejects bad redirect_uri", state);
+
+      const badPkceVerifier = randomBytes(32).toString("base64url");
+      const badPkceCode = await issueAuthorizationCode("bad-pkce", badPkceVerifier, userA, password);
+      const badPkceToken = await request("POST", `${coreBaseUrl}/oauth/token`, {
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          client_id: cimdClientIdUrl,
+          code: badPkceCode,
+          code_verifier: randomBytes(32).toString("base64url"),
+          redirect_uri: cimdRedirectUri,
+          resource: oauthResource
+        }).toString()
+      });
+      expectStatus(badPkceToken, 400, "authorization_code rejects bad PKCE verifier", state);
+
       const cimdVerifier = randomBytes(32).toString("base64url");
       const cimdChallenge = base64UrlSha256(cimdVerifier);
       const cimdAuthorize = await request(
@@ -625,6 +598,12 @@ async function run() {
         state
       );
     }
+
+    const badAudienceMcpCall = await request("POST", `${coreBaseUrl}/mcp`, {
+      token: tokenALogin,
+      body: {}
+    });
+    expectStatus(badAudienceMcpCall, 401, "mcp rejects token without expected audience", state);
 
     logStep("Core-managed integration manifests");
     const manifests = await request("GET", `${coreBaseUrl}/integrations/manifests`);

@@ -57,20 +57,6 @@ function optionalEnv(name: string): string | undefined {
   return value && value.length > 0 ? value : undefined;
 }
 
-const defaultOauthRedirectUri = "https://claude.ai/api/mcp/auth_callback";
-const preRegisteredOauthClientId = optionalEnv("OAUTH_CLIENT_ID");
-const preRegisteredOauthClientSecret = optionalEnv("OAUTH_CLIENT_SECRET");
-const preRegisteredOauthClientName = optionalEnv("OAUTH_CLIENT_NAME") ?? "Pre-registered MCP Client";
-const preRegisteredOauthRedirectUris = (() => {
-  const configured = optionalEnv("OAUTH_REDIRECT_URIS")
-    ?.split(",")
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
-  if (configured && configured.length > 0) {
-    return configured;
-  }
-  return [defaultOauthRedirectUri];
-})();
 const oauthJwtSecret = requireEnv("JWT_SECRET");
 const oauthJwtIssuer = requireEnv("JWT_ISSUER");
 const oauthJwtExpirySecondsRaw = requireEnv("JWT_EXPIRY_SECONDS");
@@ -91,15 +77,12 @@ const clientMetadataHostAllowlist = new Set(
     .filter((value) => value.length > 0)
 );
 
-type OAuthClientSource = "pre_registered" | "client_id_metadata_document";
-type OAuthClientAuthType = "public" | "confidential";
+type OAuthClientSource = "client_id_metadata_document";
 
 type ResolvedOAuthClient = {
   clientId: string;
   clientName: string;
   redirectUris: string[];
-  authType: OAuthClientAuthType;
-  clientSecret?: string;
   source: OAuthClientSource;
 };
 
@@ -110,17 +93,6 @@ type ClientMetadataCacheRecord = {
 
 const clientMetadataCache = new Map<string, ClientMetadataCacheRecord>();
 
-const preRegisteredOauthClient: ResolvedOAuthClient | undefined = preRegisteredOauthClientId
-  ? {
-      clientId: preRegisteredOauthClientId,
-      clientName: preRegisteredOauthClientName,
-      redirectUris: preRegisteredOauthRedirectUris,
-      authType: preRegisteredOauthClientSecret ? "confidential" : "public",
-      clientSecret: preRegisteredOauthClientSecret,
-      source: "pre_registered"
-    }
-  : undefined;
-
 function buildOAuthIssuer(req: express.Request): string {
   return `https://${req.hostname}`;
 }
@@ -129,29 +101,10 @@ function buildCanonicalMcpResource(req: express.Request): string {
   return `${buildOAuthIssuer(req)}/mcp`;
 }
 
-function issueMcpOAuthAccessToken(clientId: string, scope: string, resource: string): string {
-  return jwt.sign(
-    {
-      sub: clientId,
-      username: clientId.trim().toLowerCase(),
-      tokenUse: "access",
-      scope
-    },
-    oauthJwtSecret,
-    {
-      algorithm: "HS256",
-      issuer: oauthJwtIssuer,
-      expiresIn: oauthJwtExpirySeconds,
-      audience: [resource]
-    }
-  );
-}
-
 type AuthorizationCodeRecord = {
   clientId: string;
   redirectUri: string;
   scope: string;
-  authType: OAuthClientAuthType;
   codeChallenge: string;
   codeChallengeMethod: "S256";
   resource: string;
@@ -205,16 +158,20 @@ type AuthorizeRequestParams = {
   codeChallengeMethod: "S256";
 };
 
-function normalizeScope(rawScope: string | undefined): string {
+function normalizeScope(rawScope: string | undefined): string | undefined {
   const normalized = rawScope?.trim();
   const tokens = (normalized && normalized.length > 0 ? normalized : supportedMcpScopes.join(" "))
     .split(/\s+/)
     .map((token) => token.trim())
     .filter((token) => token.length > 0);
-  // Filter to only supported scopes; unknown scopes from clients (e.g. "claudeai") are silently dropped.
-  // If nothing remains after filtering, fall back to the full supported scope set.
-  const knownTokens = [...new Set(tokens)].filter((token) => supportedMcpScopeSet.has(token));
-  return knownTokens.length > 0 ? knownTokens.join(" ") : supportedMcpScopes.join(" ");
+  const uniqueTokens = [...new Set(tokens)];
+  if (uniqueTokens.length === 0) {
+    return undefined;
+  }
+  if (uniqueTokens.some((token) => !supportedMcpScopeSet.has(token))) {
+    return undefined;
+  }
+  return uniqueTokens.join(" ");
 }
 
 function isLocalHostname(hostname: string): boolean {
@@ -343,7 +300,6 @@ function parseClientMetadataDocument(raw: unknown, expectedClientId: string): Re
     clientId,
     clientName,
     redirectUris: [...new Set(redirectUris)],
-    authType: "public",
     source: "client_id_metadata_document"
   };
 }
@@ -400,29 +356,26 @@ type ResolveOAuthClientResult =
   | { ok: false; error: "invalid_client" | "invalid_redirect_uri"; message: string };
 
 async function resolveOAuthClient(clientId: string, redirectUri: string): Promise<ResolveOAuthClientResult> {
-  let resolvedClient: ResolvedOAuthClient | undefined;
-  if (preRegisteredOauthClient && clientId === preRegisteredOauthClient.clientId) {
-    resolvedClient = preRegisteredOauthClient;
-  } else if (isHttpsClientId(clientId)) {
-    try {
-      resolvedClient = await resolveClientFromMetadataDocument(clientId);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "client metadata resolution failed";
-      return {
-        ok: false,
-        error: "invalid_client",
-        message
-      };
-    }
-  }
-
-  if (!resolvedClient) {
+  if (!isHttpsClientId(clientId)) {
     return {
       ok: false,
       error: "invalid_client",
-      message: "client is not recognized"
+      message: "client_id must be an https URL"
     };
   }
+
+  let resolvedClient: ResolvedOAuthClient;
+  try {
+    resolvedClient = await resolveClientFromMetadataDocument(clientId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "client metadata resolution failed";
+    return {
+      ok: false,
+      error: "invalid_client",
+      message
+    };
+  }
+
   if (!resolvedClient.redirectUris.includes(redirectUri)) {
     return {
       ok: false,
@@ -452,12 +405,15 @@ function readAuthorizeParams(source: Record<string, unknown>): AuthorizeRequestP
     return { error: "invalid_redirect_uri" };
   }
 
-  // resource is optional: MCP clients (including Claude.ai) may omit it.
-  // If provided, it is stored and later validated in the token exchange.
   const resource = typeof source.resource === "string" ? source.resource.trim() : "";
+  if (!resource) {
+    return { error: "invalid_request" };
+  }
 
-  // Scope: unknown tokens (e.g. "claudeai") are silently dropped; never reject outright.
   const normalizedScope = normalizeScope(typeof source.scope === "string" ? source.scope : undefined);
+  if (!normalizedScope) {
+    return { error: "invalid_scope" };
+  }
 
   const codeChallenge = typeof source.code_challenge === "string" ? source.code_challenge.trim() : "";
   if (!codeChallenge) {
@@ -760,19 +716,13 @@ app.get("/.well-known/oauth-protected-resource", (req, res) => {
 
 app.get("/.well-known/oauth-authorization-server", (req, res) => {
   const issuer = buildOAuthIssuer(req);
-  const tokenEndpointAuthMethodsSupported =
-    preRegisteredOauthClient?.authType === "confidential" ? ["none", "client_secret_post"] : ["none"];
-  const grantTypesSupported =
-    preRegisteredOauthClient?.authType === "confidential"
-      ? (["authorization_code", "client_credentials"] as const)
-      : (["authorization_code"] as const);
   return res.json({
     issuer,
     authorization_endpoint: `${issuer}/authorize`,
     token_endpoint: `${issuer}/oauth/token`,
-    grant_types_supported: [...grantTypesSupported],
+    grant_types_supported: ["authorization_code"],
     code_challenge_methods_supported: ["S256"],
-    token_endpoint_auth_methods_supported: tokenEndpointAuthMethodsSupported,
+    token_endpoint_auth_methods_supported: ["none"],
     scopes_supported: [...supportedMcpScopes],
     client_id_metadata_document_supported: true
   });
@@ -785,14 +735,9 @@ app.get("/authorize", async (req, res) => {
   }
   logAuthorizeRequest(parsed);
 
-  // If client omitted resource (e.g. Claude.ai), default to the canonical MCP resource.
-  // If resource is present, validate it matches this server.
   const canonicalResource = buildCanonicalMcpResource(req);
-  if (parsed.resource && parsed.resource !== canonicalResource) {
+  if (parsed.resource !== canonicalResource) {
     return res.status(400).json({ error: "invalid_target" });
-  }
-  if (!parsed.resource) {
-    parsed.resource = canonicalResource;
   }
 
   const resolvedClient = await resolveOAuthClient(parsed.clientId, parsed.redirectUri);
@@ -811,13 +756,9 @@ app.post("/authorize", express.urlencoded({ extended: false }), async (req, res)
   }
   logAuthorizeRequest(parsed);
 
-  // Same leniency as GET /authorize: default resource to canonical if omitted.
   const canonicalResource = buildCanonicalMcpResource(req);
-  if (parsed.resource && parsed.resource !== canonicalResource) {
+  if (parsed.resource !== canonicalResource) {
     return res.status(400).json({ error: "invalid_target" });
-  }
-  if (!parsed.resource) {
-    parsed.resource = canonicalResource;
   }
 
   const resolvedClient = await resolveOAuthClient(parsed.clientId, parsed.redirectUri);
@@ -844,7 +785,6 @@ app.post("/authorize", express.urlencoded({ extended: false }), async (req, res)
     clientId: parsed.clientId,
     redirectUri: parsed.redirectUri,
     scope: parsed.scope,
-    authType: resolvedClient.client.authType,
     codeChallenge: parsed.codeChallenge,
     codeChallengeMethod: parsed.codeChallengeMethod,
     resource: parsed.resource,
@@ -871,54 +811,8 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
     resource: typeof req.body?.resource === "string" ? req.body.resource : "(missing)",
     scope: typeof req.body?.scope === "string" ? req.body.scope : "(missing)",
     has_code: typeof req.body?.code === "string" && req.body.code.length > 0,
-    has_code_verifier: typeof req.body?.code_verifier === "string" && req.body.code_verifier.length > 0,
-    has_client_secret: typeof req.body?.client_secret === "string" && req.body.client_secret.length > 0
+    has_code_verifier: typeof req.body?.code_verifier === "string" && req.body.code_verifier.length > 0
   });
-
-  if (grantType === "client_credentials") {
-    const clientId = typeof req.body?.client_id === "string" ? req.body.client_id.trim() : "";
-    if (!preRegisteredOauthClient || clientId !== preRegisteredOauthClient.clientId) {
-      logTokenFailure("invalid_client", { grant_type: "client_credentials", client_id: clientId || undefined });
-      return res.status(401).json({
-        error: "invalid_client"
-      });
-    }
-    if (preRegisteredOauthClient.authType === "confidential") {
-      const clientSecret = typeof req.body?.client_secret === "string" ? req.body.client_secret : "";
-      if (!clientSecret || clientSecret !== preRegisteredOauthClient.clientSecret) {
-        logTokenFailure("invalid_client", {
-          grant_type: "client_credentials",
-          client_id: clientId
-        });
-        return res.status(401).json({
-          error: "invalid_client"
-        });
-      }
-    }
-
-    const requestedResource = typeof req.body?.resource === "string" ? req.body.resource.trim() : "";
-    const canonicalResource = buildCanonicalMcpResource(req);
-    const resource = requestedResource || canonicalResource;
-    if (resource !== canonicalResource) {
-      logTokenFailure("invalid_resource", {
-        grant_type: "client_credentials",
-        client_id: clientId
-      });
-      return res.status(400).json({
-        error: "invalid_target"
-      });
-    }
-
-    const normalizedScope = normalizeScope(typeof req.body?.scope === "string" ? req.body.scope : undefined);
-
-    const accessToken = issueMcpOAuthAccessToken(clientId, normalizedScope, resource);
-    return res.json({
-      access_token: accessToken,
-      token_type: "bearer",
-      expires_in: oauthJwtExpirySeconds,
-      scope: normalizedScope
-    });
-  }
 
   if (grantType === "authorization_code") {
     const clientId = typeof req.body?.client_id === "string" ? req.body.client_id.trim() : "";
@@ -932,9 +826,8 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
     const code = typeof req.body?.code === "string" ? req.body.code.trim() : "";
     const codeVerifier = typeof req.body?.code_verifier === "string" ? req.body.code_verifier : "";
     const redirectUri = typeof req.body?.redirect_uri === "string" ? req.body.redirect_uri.trim() : "";
-    // resource is optional in token request; if omitted, fall back to the stored record value.
     const resource = typeof req.body?.resource === "string" ? req.body.resource.trim() : "";
-    if (!code || !codeVerifier || !redirectUri) {
+    if (!code || !codeVerifier || !redirectUri || !resource) {
       return res.status(400).json({
         error: "invalid_request"
       });
@@ -956,9 +849,8 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
       record_redirect_uri: record.redirectUri,
       request_redirect_uri: redirectUri,
       record_resource: record.resource,
-      request_resource: resource || "(omitted)",
-      record_scope: record.scope,
-      record_auth_type: record.authType
+      request_resource: resource,
+      record_scope: record.scope
     });
 
     if (record.clientId !== clientId) {
@@ -982,10 +874,7 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
       });
     }
 
-    // If resource was omitted in the token request, fall back to the value stored at authorization time.
-    // If provided, it must exactly match what was stored.
-    const effectiveResource = resource || record.resource;
-    if (resource && resource !== record.resource) {
+    if (resource !== record.resource) {
       authorizationCodeStore.delete(code);
       logTokenFailure("invalid_resource", {
         grant_type: "authorization_code",
@@ -998,23 +887,19 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
       });
     }
 
-    // authorization_code + PKCE: client_secret is NOT validated.
-    // The code_verifier proves client identity; requiring client_secret here
-    // breaks public clients (including Claude.ai) that use PKCE without a secret.
-
     // Validate that the effective resource matches this server's canonical MCP resource.
     const canonicalResource = buildCanonicalMcpResource(req);
     console.info("[oauth] resource check", {
-      effective_resource: effectiveResource,
+      effective_resource: resource,
       canonical_resource: canonicalResource,
-      match: effectiveResource === canonicalResource
+      match: resource === canonicalResource
     });
-    if (effectiveResource !== canonicalResource) {
+    if (resource !== canonicalResource) {
       authorizationCodeStore.delete(code);
       logTokenFailure("invalid_resource", {
         grant_type: "authorization_code",
         client_id: clientId,
-        effective_resource: effectiveResource,
+        effective_resource: resource,
         canonical_resource: canonicalResource
       });
       return res.status(400).json({
@@ -1037,8 +922,8 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
     }
 
     authorizationCodeStore.delete(code);
-    console.info("[oauth] token issued successfully", { client_id: clientId, scope: record.scope, resource: effectiveResource });
-    const accessToken = issueUserOAuthAccessToken(record.userId, record.username, record.scope, effectiveResource);
+    console.info("[oauth] token issued successfully", { client_id: clientId, scope: record.scope, resource });
+    const accessToken = issueUserOAuthAccessToken(record.userId, record.username, record.scope, resource);
     return res.json({
       access_token: accessToken,
       token_type: "bearer",
@@ -1840,42 +1725,37 @@ app.post("/mcp", async (req, res) => {
     return res.status(401).json({ error: "Unauthorized", message: "Bearer token required for MCP access" });
   }
 
-  // Accept either a static MCP_API_KEY (for connector configuration) or a valid JWT
-  const mcpApiKey = optionalEnv("MCP_API_KEY");
-  const isApiKey = mcpApiKey && token === mcpApiKey;
   let injectedContext: McpInjectedContext | undefined;
-  if (!isApiKey) {
-    try {
-      verifyAccessToken(token);
-    } catch {
-      setMcpBearerChallengeHeader(req, res);
-      return res.status(401).json({ error: "Unauthorized", message: "Invalid or expired token" });
-    }
+  try {
+    verifyAccessToken(token);
+  } catch {
+    setMcpBearerChallengeHeader(req, res);
+    return res.status(401).json({ error: "Unauthorized", message: "Invalid or expired token" });
+  }
 
-    const decoded = jwt.decode(token);
-    if (!decoded || typeof decoded !== "object") {
-      setMcpBearerChallengeHeader(req, res);
-      return res.status(401).json({ error: "Unauthorized", message: "Invalid token payload" });
-    }
+  const decoded = jwt.decode(token);
+  if (!decoded || typeof decoded !== "object") {
+    setMcpBearerChallengeHeader(req, res);
+    return res.status(401).json({ error: "Unauthorized", message: "Invalid token payload" });
+  }
 
-    const expectedAudience = buildCanonicalMcpResource(req);
-    if (!isExpectedMcpAudience(decoded as { aud?: unknown }, expectedAudience)) {
-      setMcpBearerChallengeHeader(req, res);
-      return res.status(401).json({ error: "Unauthorized", message: "Invalid token audience" });
-    }
-    if (!tokenHasRequiredScope(decoded as { scope?: unknown }, "mcp:tools")) {
-      setMcpBearerChallengeHeader(req, res);
-      return res.status(401).json({ error: "Unauthorized", message: "Insufficient token scope" });
-    }
+  const expectedAudience = buildCanonicalMcpResource(req);
+  if (!isExpectedMcpAudience(decoded as { aud?: unknown }, expectedAudience)) {
+    setMcpBearerChallengeHeader(req, res);
+    return res.status(401).json({ error: "Unauthorized", message: "Invalid token audience" });
+  }
+  if (!tokenHasRequiredScope(decoded as { scope?: unknown }, "mcp:tools")) {
+    setMcpBearerChallengeHeader(req, res);
+    return res.status(401).json({ error: "Unauthorized", message: "Insufficient token scope" });
+  }
 
-    const decodedIdentity = decoded as { sub?: unknown; username?: unknown };
-    if (typeof decodedIdentity.sub === "string" && decodedIdentity.sub.trim().length > 0) {
-      const user = await findUserById(decodedIdentity.sub);
-      if (user) {
-        const bundle = issueTokenBundle({ userId: user.id, username: user.username });
-        injectedContext = { accessToken: bundle.accessToken };
-        console.info("[mcp] user context injected", { username: user.username });
-      }
+  const decodedIdentity = decoded as { sub?: unknown; username?: unknown };
+  if (typeof decodedIdentity.sub === "string" && decodedIdentity.sub.trim().length > 0) {
+    const user = await findUserById(decodedIdentity.sub);
+    if (user) {
+      const bundle = issueTokenBundle({ userId: user.id, username: user.username });
+      injectedContext = { accessToken: bundle.accessToken };
+      console.info("[mcp] user context injected", { username: user.username });
     }
   }
 
