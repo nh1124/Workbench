@@ -1,4 +1,4 @@
-import { workbenchCoreUrl } from "../config/services";
+import { getWorkbenchCoreUrl } from "../config/services";
 import { pushErrorNotification } from "./notificationService";
 import type {
   Artifact,
@@ -117,6 +117,14 @@ export async function initializeSessionStorage(): Promise<void> {
 
 function readStoredSession(): StoredAuthSession | undefined {
   return sessionCache;
+}
+
+function coreBaseUrl(): string {
+  const configuredUrl = getWorkbenchCoreUrl();
+  if (!configuredUrl) {
+    throw new Error("Workbench Core URL is not configured. Set it on the sign-in or sign-up page.");
+  }
+  return configuredUrl;
 }
 
 function authHeaders(extra?: HeadersInit): HeadersInit {
@@ -256,7 +264,7 @@ async function requestJson<T>(url: string, options?: RequestInit, withSessionAut
 
 async function refreshAccessToken(refreshToken: string): Promise<void> {
   const refreshed = await requestJson<WorkbenchRefreshResponse>(
-    `${workbenchCoreUrl}/auth/refresh`,
+    `${coreBaseUrl()}/auth/refresh`,
     {
       method: "POST",
       headers: {
@@ -335,11 +343,11 @@ export const notesApi = {
     const params = new URLSearchParams();
     if (projectId) params.set("projectId", projectId);
     if (limit) params.set("limit", String(limit));
-    return fetchJson<Note[]>(`${workbenchCoreUrl}/api/notes?${params.toString()}`);
+    return fetchJson<Note[]>(`${coreBaseUrl()}/api/notes?${params.toString()}`);
   },
-  get: (id: string): Promise<Note> => fetchJson<Note>(`${workbenchCoreUrl}/api/notes/${encodeURIComponent(id)}`),
+  get: (id: string): Promise<Note> => fetchJson<Note>(`${coreBaseUrl()}/api/notes/${encodeURIComponent(id)}`),
   create: (payload: Omit<Note, "id" | "createdAt" | "updatedAt">): Promise<Note> =>
-    fetchJson<Note>(`${workbenchCoreUrl}/api/notes`, {
+    fetchJson<Note>(`${coreBaseUrl()}/api/notes`, {
       method: "POST",
       body: JSON.stringify(payload)
     }),
@@ -347,15 +355,15 @@ export const notesApi = {
     id: string,
     payload: Partial<Omit<Note, "id" | "createdAt" | "updatedAt">>
   ): Promise<Note> =>
-    fetchJson<Note>(`${workbenchCoreUrl}/api/notes/${encodeURIComponent(id)}`, {
+    fetchJson<Note>(`${coreBaseUrl()}/api/notes/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(payload)
     }),
   remove: (id: string): Promise<void> =>
-    fetchJson<void>(`${workbenchCoreUrl}/api/notes/${encodeURIComponent(id)}`, {
+    fetchJson<void>(`${coreBaseUrl()}/api/notes/${encodeURIComponent(id)}`, {
       method: "DELETE"
     }),
-  projects: (): Promise<NoteProjectSummary[]> => fetchJson<NoteProjectSummary[]>(`${workbenchCoreUrl}/api/notes/projects`)
+  projects: (): Promise<NoteProjectSummary[]> => fetchJson<NoteProjectSummary[]>(`${coreBaseUrl()}/api/notes/projects`)
 };
 
 export const artifactsApi = {
@@ -363,11 +371,11 @@ export const artifactsApi = {
     const params = new URLSearchParams();
     if (projectId) params.set("projectId", projectId);
     if (limit) params.set("limit", String(limit));
-    return fetchJson<Artifact[]>(`${workbenchCoreUrl}/api/artifacts?${params.toString()}`);
+    return fetchJson<Artifact[]>(`${coreBaseUrl()}/api/artifacts?${params.toString()}`);
   },
-  get: (id: string): Promise<Artifact> => fetchJson<Artifact>(`${workbenchCoreUrl}/api/artifacts/${encodeURIComponent(id)}`),
+  get: (id: string): Promise<Artifact> => fetchJson<Artifact>(`${coreBaseUrl()}/api/artifacts/${encodeURIComponent(id)}`),
   create: (payload: Omit<Artifact, "id" | "createdAt" | "updatedAt">): Promise<Artifact> =>
-    fetchJson<Artifact>(`${workbenchCoreUrl}/api/artifacts`, {
+    fetchJson<Artifact>(`${coreBaseUrl()}/api/artifacts`, {
       method: "POST",
       body: JSON.stringify(payload)
     }),
@@ -375,23 +383,23 @@ export const artifactsApi = {
     id: string,
     payload: Partial<Omit<Artifact, "id" | "createdAt" | "updatedAt">>
   ): Promise<Artifact> =>
-    fetchJson<Artifact>(`${workbenchCoreUrl}/api/artifacts/${encodeURIComponent(id)}`, {
+    fetchJson<Artifact>(`${coreBaseUrl()}/api/artifacts/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(payload)
     }),
   remove: (id: string): Promise<void> =>
-    fetchJson<void>(`${workbenchCoreUrl}/api/artifacts/${encodeURIComponent(id)}`, {
+    fetchJson<void>(`${coreBaseUrl()}/api/artifacts/${encodeURIComponent(id)}`, {
       method: "DELETE"
     }),
   projects: (): Promise<ArtifactProjectSummary[]> =>
-    fetchJson<ArtifactProjectSummary[]>(`${workbenchCoreUrl}/api/artifacts/projects`),
+    fetchJson<ArtifactProjectSummary[]>(`${coreBaseUrl()}/api/artifacts/projects`),
   tree: (projectId?: string): Promise<ArtifactItem[]> => {
     const params = new URLSearchParams();
     if (projectId) params.set("projectId", projectId);
-    return fetchJson<ArtifactItem[]>(`${workbenchCoreUrl}/api/artifacts/tree?${params.toString()}`);
+    return fetchJson<ArtifactItem[]>(`${coreBaseUrl()}/api/artifacts/tree?${params.toString()}`);
   },
   getItem: (id: string): Promise<ArtifactItem> =>
-    fetchJson<ArtifactItem>(`${workbenchCoreUrl}/api/artifacts/items/${encodeURIComponent(id)}`),
+    fetchJson<ArtifactItem>(`${coreBaseUrl()}/api/artifacts/items/${encodeURIComponent(id)}`),
   createFolder: (payload: {
     projectId: string;
     projectName?: string;
@@ -399,7 +407,7 @@ export const artifactsApi = {
     title?: string;
     scope?: "private" | "org" | "project";
   }): Promise<ArtifactItem> =>
-    fetchJson<ArtifactItem>(`${workbenchCoreUrl}/api/artifacts/folders`, {
+    fetchJson<ArtifactItem>(`${coreBaseUrl()}/api/artifacts/folders`, {
       method: "POST",
       body: JSON.stringify(payload)
     }),
@@ -412,7 +420,7 @@ export const artifactsApi = {
     tags?: string[];
     contentMarkdown?: string;
   }): Promise<ArtifactItem> =>
-    fetchJson<ArtifactItem>(`${workbenchCoreUrl}/api/artifacts/notes`, {
+    fetchJson<ArtifactItem>(`${coreBaseUrl()}/api/artifacts/notes`, {
       method: "POST",
       body: JSON.stringify(payload)
     }),
@@ -432,7 +440,7 @@ export const artifactsApi = {
     if (payload.tags?.length) formData.append("tags", JSON.stringify(payload.tags));
     formData.append("file", payload.file);
 
-    const response = await fetchWithSessionAuth(`${workbenchCoreUrl}/api/artifacts/upload`, {
+    const response = await fetchWithSessionAuth(`${coreBaseUrl()}/api/artifacts/upload`, {
       method: "POST",
       body: formData
     });
@@ -457,12 +465,12 @@ export const artifactsApi = {
       projectName?: string;
     }
   ): Promise<ArtifactItem> =>
-    fetchJson<ArtifactItem>(`${workbenchCoreUrl}/api/artifacts/items/${encodeURIComponent(id)}`, {
+    fetchJson<ArtifactItem>(`${coreBaseUrl()}/api/artifacts/items/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(payload)
     }),
   removeItem: (id: string): Promise<void> =>
-    fetchJson<void>(`${workbenchCoreUrl}/api/artifacts/items/${encodeURIComponent(id)}`, {
+    fetchJson<void>(`${coreBaseUrl()}/api/artifacts/items/${encodeURIComponent(id)}`, {
       method: "DELETE"
     }),
   downloadFile: async (id: string, asAttachment = false): Promise<Blob> => {
@@ -471,7 +479,7 @@ export const artifactsApi = {
     const suffix = params.toString() ? `?${params.toString()}` : "";
 
     const response = await fetchWithSessionAuth(
-      `${workbenchCoreUrl}/api/artifacts/items/${encodeURIComponent(id)}/download${suffix}`
+      `${coreBaseUrl()}/api/artifacts/items/${encodeURIComponent(id)}/download${suffix}`
     );
 
     if (!response.ok) {
@@ -486,7 +494,7 @@ export const artifactsApi = {
 
 export const deepResearchApi = {
   defaults: (): Promise<DeepResearchDefaultsResponse> =>
-    fetchJson<DeepResearchDefaultsResponse>(`${workbenchCoreUrl}/api/deep-research/defaults`),
+    fetchJson<DeepResearchDefaultsResponse>(`${coreBaseUrl()}/api/deep-research/defaults`),
   run: (payload: {
     query: string;
     provider?: "auto" | "gemini" | "openai" | "anthropic";
@@ -499,16 +507,16 @@ export const deepResearchApi = {
     projectId?: string;
     projectName?: string;
   }): Promise<DeepResearchRunResponse> =>
-    fetchJson<DeepResearchRunResponse>(`${workbenchCoreUrl}/api/deep-research`, {
+    fetchJson<DeepResearchRunResponse>(`${coreBaseUrl()}/api/deep-research`, {
       method: "POST",
       body: JSON.stringify(payload)
     }),
   status: (jobId: string): Promise<DeepResearchStatusResponse> =>
-    fetchJson<DeepResearchStatusResponse>(`${workbenchCoreUrl}/api/deep-research/jobs/${encodeURIComponent(jobId)}`),
+    fetchJson<DeepResearchStatusResponse>(`${coreBaseUrl()}/api/deep-research/jobs/${encodeURIComponent(jobId)}`),
   list: async (limit = 50): Promise<{ items: DeepResearchHistoryEntry[]; unsupported?: boolean }> => {
     try {
       return await fetchJson<{ items: DeepResearchHistoryEntry[]; unsupported?: boolean }>(
-        `${workbenchCoreUrl}/api/deep-research/jobs?limit=${encodeURIComponent(String(limit))}`
+        `${coreBaseUrl()}/api/deep-research/jobs?limit=${encodeURIComponent(String(limit))}`
       );
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) {
@@ -519,7 +527,7 @@ export const deepResearchApi = {
   },
   cancel: (jobId: string): Promise<DeepResearchCancelResponse> =>
     fetchJson<DeepResearchCancelResponse>(
-      `${workbenchCoreUrl}/api/deep-research/jobs/${encodeURIComponent(jobId)}/cancel`,
+      `${coreBaseUrl()}/api/deep-research/jobs/${encodeURIComponent(jobId)}/cancel`,
       {
         method: "POST",
         body: JSON.stringify({})
@@ -535,7 +543,7 @@ export const deepResearchApi = {
     }
   ): Promise<{ status: string; artifact: DeepResearchRunResponse["artifact"] }> =>
     fetchJson<{ status: string; artifact: DeepResearchRunResponse["artifact"] }>(
-      `${workbenchCoreUrl}/api/deep-research/jobs/${encodeURIComponent(jobId)}/save`,
+      `${coreBaseUrl()}/api/deep-research/jobs/${encodeURIComponent(jobId)}/save`,
       {
         method: "POST",
         body: JSON.stringify(payload ?? {})
@@ -549,11 +557,11 @@ export const tasksApi = {
     if (context) params.set("context", context);
     if (status) params.set("status", status);
     if (limit) params.set("limit", String(limit));
-    return fetchJson<Task[]>(`${workbenchCoreUrl}/api/tasks?${params.toString()}`);
+    return fetchJson<Task[]>(`${coreBaseUrl()}/api/tasks?${params.toString()}`);
   },
-  get: (id: string): Promise<Task> => fetchJson<Task>(`${workbenchCoreUrl}/api/tasks/${encodeURIComponent(id)}`),
+  get: (id: string): Promise<Task> => fetchJson<Task>(`${coreBaseUrl()}/api/tasks/${encodeURIComponent(id)}`),
   create: (payload: Omit<Task, "id" | "createdAt" | "updatedAt">): Promise<Task> =>
-    fetchJson<Task>(`${workbenchCoreUrl}/api/tasks`, {
+    fetchJson<Task>(`${coreBaseUrl()}/api/tasks`, {
       method: "POST",
       body: JSON.stringify(payload)
     }),
@@ -561,21 +569,21 @@ export const tasksApi = {
     id: string,
     payload: Partial<Omit<Task, "id" | "createdAt" | "updatedAt">>
   ): Promise<Task> =>
-    fetchJson<Task>(`${workbenchCoreUrl}/api/tasks/${encodeURIComponent(id)}`, {
+    fetchJson<Task>(`${coreBaseUrl()}/api/tasks/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(payload)
     }),
   remove: (id: string): Promise<void> =>
-    fetchJson<void>(`${workbenchCoreUrl}/api/tasks/${encodeURIComponent(id)}`, {
+    fetchJson<void>(`${coreBaseUrl()}/api/tasks/${encodeURIComponent(id)}`, {
       method: "DELETE"
     }),
-  projects: (): Promise<TaskProjectSummary[]> => fetchJson<TaskProjectSummary[]>(`${workbenchCoreUrl}/api/tasks/projects`),
+  projects: (): Promise<TaskProjectSummary[]> => fetchJson<TaskProjectSummary[]>(`${coreBaseUrl()}/api/tasks/projects`),
   history: (id: string): Promise<TaskHistoryEntry[]> =>
-    fetchJson<TaskHistoryEntry[]>(`${workbenchCoreUrl}/api/tasks/${encodeURIComponent(id)}/history`),
+    fetchJson<TaskHistoryEntry[]>(`${coreBaseUrl()}/api/tasks/${encodeURIComponent(id)}/history`),
   exportCsv: async (): Promise<Blob> => {
     await initializeSessionStorage();
     const requestExport = async (): Promise<Response> =>
-      fetch(`${workbenchCoreUrl}/api/tasks/export`, {
+      fetch(`${coreBaseUrl()}/api/tasks/export`, {
         headers: {
           Accept: "text/csv",
           ...authHeaders()
@@ -600,7 +608,7 @@ export const tasksApi = {
     const formData = new FormData();
     formData.append("file", file);
     return file.text().then((text) =>
-      fetchJson<{ imported: number }>(`${workbenchCoreUrl}/api/tasks/import`, {
+      fetchJson<{ imported: number }>(`${coreBaseUrl()}/api/tasks/import`, {
         method: "POST",
         headers: { "Content-Type": "text/csv" },
         body: text
@@ -616,28 +624,28 @@ export const projectsApi = {
     if (status) params.set("status", status);
     if (limit) params.set("limit", String(limit));
     if (cursor) params.set("cursor", cursor);
-    return fetchJson<ProjectListResult>(`${workbenchCoreUrl}/api/projects?${params.toString()}`);
+    return fetchJson<ProjectListResult>(`${coreBaseUrl()}/api/projects?${params.toString()}`);
   },
   get: (id: string): Promise<ProjectRecord> =>
-    fetchJson<ProjectRecord>(`${workbenchCoreUrl}/api/projects/${encodeURIComponent(id)}`),
+    fetchJson<ProjectRecord>(`${coreBaseUrl()}/api/projects/${encodeURIComponent(id)}`),
   create: (payload: { name: string; description?: string; status?: "draft" | "active" | "archived" }): Promise<ProjectRecord> =>
-    fetchJson<ProjectRecord>(`${workbenchCoreUrl}/api/projects`, {
+    fetchJson<ProjectRecord>(`${coreBaseUrl()}/api/projects`, {
       method: "POST",
       body: JSON.stringify(payload)
     }),
   update: (id: string, payload: Partial<Pick<ProjectRecord, "name" | "description" | "status">>): Promise<ProjectRecord> =>
-    fetchJson<ProjectRecord>(`${workbenchCoreUrl}/api/projects/${encodeURIComponent(id)}`, {
+    fetchJson<ProjectRecord>(`${coreBaseUrl()}/api/projects/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(payload)
     }),
   remove: (id: string): Promise<void> =>
-    fetchJson<void>(`${workbenchCoreUrl}/api/projects/${encodeURIComponent(id)}`, {
+    fetchJson<void>(`${coreBaseUrl()}/api/projects/${encodeURIComponent(id)}`, {
       method: "DELETE"
     }),
   getDefault: (): Promise<ProjectDefaultSelection> =>
-    fetchJson<ProjectDefaultSelection>(`${workbenchCoreUrl}/api/projects/default`),
+    fetchJson<ProjectDefaultSelection>(`${coreBaseUrl()}/api/projects/default`),
   setDefault: (projectId: string): Promise<ProjectDefaultSelection> =>
-    fetchJson<ProjectDefaultSelection>(`${workbenchCoreUrl}/api/projects/default`, {
+    fetchJson<ProjectDefaultSelection>(`${coreBaseUrl()}/api/projects/default`, {
       method: "PUT",
       body: JSON.stringify({ projectId })
     })
@@ -645,7 +653,7 @@ export const projectsApi = {
 
 export async function checkServiceHealth(serviceId: "notes" | "artifacts" | "tasks"): Promise<ServiceHealth> {
   try {
-    const health = await fetchJson<ServiceHealth>(`${workbenchCoreUrl}/health`);
+    const health = await fetchJson<ServiceHealth>(`${coreBaseUrl()}/health`);
     return {
       service: serviceId,
       status: health.status,
@@ -670,7 +678,7 @@ export async function fetchServiceManifest(
 
 export async function fetchAllServiceManifests(): Promise<IntegrationManifest[]> {
   try {
-    return await fetchJson<IntegrationManifest[]>(`${workbenchCoreUrl}/integrations/manifests`);
+    return await fetchJson<IntegrationManifest[]>(`${coreBaseUrl()}/integrations/manifests`);
   } catch {
     return [];
   }
@@ -678,18 +686,18 @@ export async function fetchAllServiceManifests(): Promise<IntegrationManifest[]>
 
 export const coreApi = {
   register: (username: string, password: string): Promise<WorkbenchAuthResponse> =>
-    fetchJson(`${workbenchCoreUrl}/accounts/register`, {
+    fetchJson(`${coreBaseUrl()}/accounts/register`, {
       method: "POST",
       body: JSON.stringify({ username, password })
     }),
   login: (username: string, password: string): Promise<WorkbenchAuthResponse> =>
-    fetchJson(`${workbenchCoreUrl}/accounts/login`, {
+    fetchJson(`${coreBaseUrl()}/accounts/login`, {
       method: "POST",
       body: JSON.stringify({ username, password })
     }),
   refresh: (refreshToken: string): Promise<WorkbenchRefreshResponse> =>
     requestJson(
-      `${workbenchCoreUrl}/auth/refresh`,
+      `${coreBaseUrl()}/auth/refresh`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -698,14 +706,14 @@ export const coreApi = {
       false
     ),
   me: (): Promise<{ user: WorkbenchUserSession; provisioning: ServiceProvisioningState[] }> =>
-    fetchJson(`${workbenchCoreUrl}/auth/me`),
+    fetchJson(`${coreBaseUrl()}/auth/me`),
   listIntegrationConfigs: (): Promise<StoredIntegrationConfig[]> =>
-    fetchJson(`${workbenchCoreUrl}/integrations/configs`),
+    fetchJson(`${coreBaseUrl()}/integrations/configs`),
   saveIntegrationConfig: (
     integrationId: string,
     payload: { enabled: boolean; values: Record<string, string | number | boolean> }
   ): Promise<{ status: string }> =>
-    fetchJson(`${workbenchCoreUrl}/integrations/configs/${encodeURIComponent(integrationId)}`, {
+    fetchJson(`${coreBaseUrl()}/integrations/configs/${encodeURIComponent(integrationId)}`, {
       method: "PUT",
       body: JSON.stringify(payload)
     })

@@ -165,7 +165,7 @@ pub fn run() {
         let win_alt_n_handler = win_alt_n.clone();
         let ctrl_alt_n_handler = ctrl_alt_n.clone();
 
-        app.handle().plugin(
+        let plugin_result = app.handle().plugin(
           tauri_plugin_global_shortcut::Builder::new()
             .with_handler(move |app, shortcut, event| {
               if event.state() != ShortcutState::Pressed {
@@ -176,10 +176,18 @@ pub fn run() {
               }
             })
             .build(),
-        )?;
+        );
 
-        app.global_shortcut().register(win_alt_n)?;
-        app.global_shortcut().register(ctrl_alt_n)?;
+        if let Err(error) = plugin_result {
+          eprintln!("[workbench-native] global shortcut plugin setup failed: {error}");
+        } else {
+          if let Err(error) = app.global_shortcut().register(win_alt_n) {
+            eprintln!("[workbench-native] failed to register hotkey ALT+SUPER+N: {error}");
+          }
+          if let Err(error) = app.global_shortcut().register(ctrl_alt_n) {
+            eprintln!("[workbench-native] failed to register hotkey CTRL+ALT+N: {error}");
+          }
+        }
       }
       Ok(())
     })

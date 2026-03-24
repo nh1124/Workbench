@@ -43,3 +43,32 @@
   letter-spacing: 0.01em;
   text-transform: none;
 }
+
+.auth-advanced {
+  border: 1px solid rgba(71, 85, 105, 0.65);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.35);
+  padding: 0.52rem 0.62rem;
+}
+
+.auth-advanced[open] {
+  border-color: rgba(103, 232, 249, 0.45);
+  background: rgba(8, 22, 41, 0.45);
+}
+
+.auth-advanced > summary {
+  cursor: pointer;
+  color: #a3b6d0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  user-select: none;
+}
+
+.auth-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.auth-advanced-content {
+  margin-top: 0.55rem;
+}
