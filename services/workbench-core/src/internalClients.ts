@@ -308,6 +308,17 @@ export const tasksClient = {
         body: JSON.stringify({ sourceDate, targetDate })
       }
     ),
+  skipOccurrenceException: (token: string, id: string, targetDate: string) =>
+    serviceRequest<{ taskId: string; targetDate: string }>(
+      tasksService,
+      `/tasks/${encodeURIComponent(id)}/occurrences/skip-exception`,
+      token,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetDate })
+      }
+    ),
   get: (token: string, id: string) => serviceRequest<unknown>(tasksService, `/tasks/${encodeURIComponent(id)}`, token),
   create: (token: string, payload: unknown) =>
     serviceRequest<unknown>(tasksService, "/tasks", token, {

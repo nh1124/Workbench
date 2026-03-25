@@ -2162,6 +2162,23 @@ app.post("/api/tasks/:id/occurrences/move", async (req, res) => {
   }
 });
 
+app.post("/api/tasks/:id/occurrences/skip-exception", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const targetDate = typeof req.body?.targetDate === "string" ? req.body.targetDate : undefined;
+  if (!targetDate) {
+    return res.status(400).json({ message: "targetDate is required" });
+  }
+
+  try {
+    const result = await tasksClient.skipOccurrenceException(authContext.accessToken, String(req.params.id), targetDate);
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
 app.get("/api/tasks/projects", async (req, res) => {
   const authContext = await requireAuthenticatedContext(req, res);
   if (!authContext) return;
