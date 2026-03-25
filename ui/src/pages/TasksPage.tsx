@@ -61,7 +61,7 @@ interface TaskOccurrenceRow {
   isLocked?: boolean;
 }
 
-const OCCURRENCE_PAGE_DAYS = 1;
+const OCCURRENCE_PAGE_DAYS = 30;
 
 const emptyDraft: TaskDraft = {
   title: "", notes: "", context: "",
@@ -879,11 +879,12 @@ export function TasksPage() {
     )));
     try {
       await tasksApi.setPin(task.id, nextPinned);
+      await load();
     } catch {
       setTasks((prev) => prev.map((item) => (
         item.id === task.id ? { ...item, isPinned: task.isPinned === true } : item
       )));
-      setError("Failed to update pin state.");
+      setError("Failed to update pin status. Please try again.");
     }
   };
 
@@ -928,9 +929,11 @@ export function TasksPage() {
     } else {
       next.clear();
       next.add(row.key);
-      const masterTask = tasks.find((task) => task.id === row.taskId);
-      if (masterTask) {
-        selectTask(masterTask);
+      if (!isShift) {
+        const masterTask = tasks.find((task) => task.id === row.taskId);
+        if (masterTask) {
+          selectTask(masterTask);
+        }
       }
     }
 

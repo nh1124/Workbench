@@ -19,7 +19,7 @@ function optionalEnv(name: string): string | undefined {
   return value && value.length > 0 ? value : undefined;
 }
 
-type ServiceId = "notes" | "artifacts" | "tasks" | "projects";
+type ServiceId = "notes" | "artifacts" | "tasks" | "projects" | "lbs";
 
 type ServiceConfig = {
   id: ServiceId;
@@ -32,11 +32,15 @@ const tasksService: ServiceConfig = { id: "tasks", baseUrl: requireEnv("TASKS_SE
 const projectsBaseUrl = optionalEnv("PROJECTS_SERVICE_URL");
 const projectsService: ServiceConfig | undefined = projectsBaseUrl ? { id: "projects", baseUrl: projectsBaseUrl } : undefined;
 
+const lbsBaseUrl = optionalEnv("LBS_SERVICE_URL");
+const lbsService: ServiceConfig | undefined = lbsBaseUrl ? { id: "lbs", baseUrl: lbsBaseUrl } : undefined;
+
 export const serviceBaseUrls = {
   notes: notesService.baseUrl,
   artifacts: artifactsService.baseUrl,
   tasks: tasksService.baseUrl,
-  projects: projectsService?.baseUrl
+  projects: projectsService?.baseUrl,
+  lbs: lbsService?.baseUrl
 } as const;
 
 export class InternalServiceError extends Error {
@@ -328,6 +332,81 @@ export const tasksClient = {
       method: "POST",
       headers: { "Content-Type": "text/csv" },
       body: csvContent
+    })
+};
+
+function requireLbs(): ServiceConfig {
+  if (!lbsService) throw new Error("LBS service is not configured (LBS_SERVICE_URL missing)");
+  return lbsService;
+}
+
+export const lbsClient = {
+  // ── Analytics / Condition ──────────────────────────────────────────────────
+  dashboard: (token: string) =>
+    serviceRequest<unknown>(requireLbs(), "/dashboard", token),
+
+  calculate: (token: string, date: string, statuses?: string[]) => {
+    const qs = statuses?.length ? `?${statuses.map(s => `status=${encodeURIComponent(s)}`).join("&")}` : "";
+    return serviceRequest<unknown>(requireLbs(), `/calculate/${encodeURIComponent(date)}${qs}`, token);
+  },
+
+  heatmap: (token: string, statuses?: string[]) => {
+    const qs = statuses?.length ? `?${statuses.map(s => `status=${encodeURIComponent(s)}`).join("&")}` : "";
+    return serviceRequest<unknown>(requireLbs(), `/heatmap${qs}`, token);
+  },
+
+  trends: (token: string, statuses?: string[]) => {
+    const qs = statuses?.length ? `?${statuses.map(s => `status=${encodeURIComponent(s)}`).join("&")}` : "";
+    return serviceRequest<unknown>(requireLbs(), `/trends${qs}`, token);
+  },
+
+  contextDistribution: (token: string, statuses?: string[]) => {
+    const qs = statuses?.length ? `?${statuses.map(s => `status=${encodeURIComponent(s)}`).join("&")}` : "";
+    return serviceRequest<unknown>(requireLbs(), `/context-distribution${qs}`, token);
+  },
+
+  // ── Schedule ───────────────────────────────────────────────────────────────
+  schedule: (token: string, startDate: string, endDate: string) =>
+    serviceRequest<unknown>(requireLbs(), `/schedule${buildQuery({ start_date: startDate, end_date: endDate })}`, token),
+
+  // ── Task Execution ─────────────────────────────────────────────────────────
+  recordExecution: (token: string, taskId: string, payload: { target_date: string; status: string; progress?: number; actual_time?: number }) =>
+    serviceRequest<unknown>(requireLbs(), `/tasks/${encodeURIComponent(taskId)}/complete`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+
+  taskHistory: (token: string, taskId: string) =>
+    serviceRequest<unknown[]>(requireLbs(), `/tasks/${encodeURIComponent(taskId)}/history`, token),
+
+  // ── Exceptions ─────────────────────────────────────────────────────────────
+  listExceptions: (token: string, taskId?: string, startDate?: string, endDate?: string) =>
+    serviceRequest<unknown[]>(requireLbs(), `/exceptions${buildQuery({ task_id: taskId, start_date: startDate, end_date: endDate })}`, token),
+
+  createException: (token: string, payload: unknown) =>
+    serviceRequest<unknown>(requireLbs(), "/exceptions", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+
+  updateException: (token: string, id: string | number, payload: unknown) =>
+    serviceRequest<unknown>(requireLbs(), `/exceptions/${encodeURIComponent(String(id))}`, token, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+
+  deleteException: (token: string, id: string | number) =>
+    serviceRequest<void>(requireLbs(), `/exceptions/${encodeURIComponent(String(id))}`, token, { method: "DELETE" }),
+
+  // ── Expansion ──────────────────────────────────────────────────────────────
+  expand: (token: string, payload: { start_date: string; end_date: string }) =>
+    serviceRequest<unknown>(requireLbs(), "/expand", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
     })
 };
 
