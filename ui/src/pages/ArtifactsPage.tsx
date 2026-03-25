@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Link, useSearchParams } from "react-router-dom";
@@ -276,6 +276,21 @@ const IcoTrash = () => (
   </svg>
 );
 
+const IcoClose = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+    <path d="M18 6L6 18M6 6l12 12" />
+  </svg>
+);
+
+const IcoFloppy = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+    <polyline points="17 21 17 13 7 13 7 21" />
+    <polyline points="7 3 7 8 15 8" />
+  </svg>
+);
+
+
 export function ArtifactsPage() {
   const ROOT_DROP_PATH = "";
   const [searchParams] = useSearchParams();
@@ -319,6 +334,19 @@ export function ArtifactsPage() {
     if (draft.id) return parentPath(draft.path);
     return "";
   }, [draft.id, draft.path, mode, selectedFolderPath]);
+
+  const currentFolderNode = useMemo(() => {
+    let cursor = treeRoot;
+    if (currentFolderPath) {
+      const segments = currentFolderPath.split("/").filter(Boolean);
+      for (const segment of segments) {
+        const child = cursor.folders.get(segment);
+        if (!child) return cursor;
+        cursor = child;
+      }
+    }
+    return cursor;
+  }, [treeRoot, currentFolderPath]);
 
   const selectedItemSummary = useMemo(
     () => items.find((item) => item.id === selectedItemId) ?? null,
@@ -686,7 +714,7 @@ export function ArtifactsPage() {
     uploadInputRef.current?.click();
   };
 
-  const handleUploadFiles = async (files: FileList | null) => {
+  const handleUploadFiles = async (files: FileList | null, targetPath?: string) => {
     if (!files || files.length === 0) return;
 
     const activeProject = resolveProjectFromFilter();
@@ -700,7 +728,7 @@ export function ArtifactsPage() {
         const uploaded = await artifactsApi.uploadFile({
           projectId: activeProject.projectId,
           projectName: activeProject.projectName,
-          directoryPath: currentFolderPath || undefined,
+          directoryPath: targetPath ?? (currentFolderPath || undefined),
           file
         });
         lastUploadedId = uploaded.id;
@@ -973,7 +1001,30 @@ export function ArtifactsPage() {
     setDropTargetPath(normalizePath(targetFolderPath));
   };
 
+  const handleRootDrop = (event: DragEvent<HTMLElement>) => {
+    if (event.dataTransfer.files && event.dataTransfer.files.length > 0) {
+      event.preventDefault();
+      event.stopPropagation();
+      setDropTargetPath(null);
+      void handleUploadFiles(event.dataTransfer.files, ROOT_DROP_PATH);
+      return;
+    }
+    event.preventDefault();
+    const dragItem = resolveDraggedItemFromEvent(event);
+    if (!dragItem) return;
+    if (isInvalidFolderMove(dragItem, ROOT_DROP_PATH)) return;
+    setDropTargetPath(null);
+    void moveItemToFolder(dragItem, ROOT_DROP_PATH);
+  };
+
   const handleFolderDrop = (event: DragEvent<HTMLButtonElement>, targetFolderPath: string) => {
+    if (event.dataTransfer.files && event.dataTransfer.files.length > 0) {
+      event.preventDefault();
+      event.stopPropagation();
+      setDropTargetPath(null);
+      void handleUploadFiles(event.dataTransfer.files, targetFolderPath);
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     const dragItem = resolveDraggedItemFromEvent(event);
@@ -984,23 +1035,9 @@ export function ArtifactsPage() {
   };
 
   const handleRootDragOver = (event: DragEvent<HTMLElement>) => {
-    const dragItem = resolveDraggedItemFromEvent(event);
-    if (!dragItem) {
-      setDropTargetPath(null);
-      return;
-    }
     event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
+    event.dataTransfer.dropEffect = "copy";
     setDropTargetPath(ROOT_DROP_PATH);
-  };
-
-  const handleRootDrop = (event: DragEvent<HTMLElement>) => {
-    event.preventDefault();
-    const dragItem = resolveDraggedItemFromEvent(event);
-    if (!dragItem) return;
-    if (isInvalidFolderMove(dragItem, ROOT_DROP_PATH)) return;
-    setDropTargetPath(null);
-    void moveItemToFolder(dragItem, ROOT_DROP_PATH);
   };
 
   const executeContextAction = (action: () => Promise<void> | void) => {
@@ -1008,16 +1045,27 @@ export function ArtifactsPage() {
     void action();
   };
 
-  const renderFolder = (folder: TreeFolderNode): ReactNode => {
-    const sortedFolders = [...folder.folders.values()].sort((a, b) =>
+  const renderDirectoryBrowser = (): ReactNode => {
+    const sortedFolders = [...currentFolderNode.folders.values()].sort((a, b) =>
       a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
     );
-    const sortedItems = sortItems(folder.items);
+    const sortedItems = sortItems(currentFolderNode.items);
 
     return (
       <ul className="va-tree-list">
+        {currentFolderPath !== "" && (
+          <li>
+            <button
+              type="button"
+              className="va-tree-row folder"
+              onClick={() => setSelectedFolderPath(parentPath(currentFolderPath))}
+            >
+              <span className="va-tree-icon" aria-hidden="true"><IcoFolder /></span>
+              <span className="va-tree-label">..</span>
+            </button>
+          </li>
+        )}
         {sortedFolders.map((childFolder) => {
-          const isCollapsed = Boolean(collapsedFolders[childFolder.path]);
           const isSelected = selectedFolderPath === childFolder.path;
           const isDropTarget = dropTargetPath === normalizePath(childFolder.path);
           const draggableFolderItem = childFolder.folderItem;
@@ -1042,10 +1090,8 @@ export function ArtifactsPage() {
                   if (childFolder.folderItem) {
                     updateSelection(childFolder.folderItem.id, event.shiftKey);
                   }
-                  if (!event.shiftKey) {
-                    toggleFolder(childFolder.path);
-                  }
                 }}
+                onDoubleClick={() => setSelectedFolderPath(childFolder.path)}
                 onContextMenu={(event) =>
                   openContextMenu(event, {
                     type: "folder",
@@ -1062,11 +1108,9 @@ export function ArtifactsPage() {
                 onDragOver={(event) => handleFolderDragOver(event, childFolder.path)}
                 onDrop={(event) => handleFolderDrop(event, childFolder.path)}
               >
-                <span className="va-tree-caret" aria-hidden="true">{isCollapsed ? "+" : "-"}</span>
                 <span className="va-tree-icon" aria-hidden="true"><IcoFolder /></span>
                 <span className="va-tree-label">{childFolder.name}</span>
               </button>
-              {!isCollapsed ? renderFolder(childFolder) : null}
             </li>
           );
         })}
@@ -1092,7 +1136,6 @@ export function ArtifactsPage() {
                 onDragStart={(event) => handleDragStart(event, item)}
                 onDragEnd={handleDragEnd}
               >
-                <span className="va-tree-caret" aria-hidden="true" />
                 <span className="va-tree-icon" aria-hidden="true"><IcoFile /></span>
                 <span className="va-tree-label">{item.title}</span>
                 <small>v{item.version}</small>
@@ -1109,7 +1152,15 @@ export function ArtifactsPage() {
       <section className="va-shell panel">
         <header className="va-toolbar">
           <div className="va-toolbar-left">
-            <span className="va-home-icon" aria-hidden="true"><IcoHome /></span>
+            <button
+              type="button"
+              className="va-home-icon-btn"
+              onClick={() => setSelectedFolderPath("")}
+              aria-label="Home"
+              title="Root Directory"
+            >
+              <span className="va-home-icon" aria-hidden="true"><IcoHome /></span>
+            </button>
             <strong>{currentFolderPath || "root"}</strong>
           </div>
 
@@ -1140,7 +1191,7 @@ export function ArtifactsPage() {
 
         {error ? <p className="va-inline-error">{error}</p> : null}
 
-        <div className="va-main-grid">
+        <div className={`va-main-grid ${selectedItemId || mode === "create-note" ? "viewer-active" : "browser-active"}`}>
           <aside
             className={[
               "va-tree-pane",
@@ -1158,7 +1209,7 @@ export function ArtifactsPage() {
             onDragOver={handleRootDragOver}
             onDrop={handleRootDrop}
           >
-            {isLoading ? <div className="va-empty">Loading...</div> : renderFolder(treeRoot)}
+            {isLoading ? <div className="va-empty">Loading...</div> : renderDirectoryBrowser()}
             <footer className="va-tree-foot">
               <span>{selectedItemIds.length} selected</span>
               <button
@@ -1183,6 +1234,21 @@ export function ArtifactsPage() {
               </div>
 
               <div className="va-detail-actions">
+                <button
+                  type="button"
+                  className="va-icon-btn va-close-viewer-btn"
+                  onClick={() => {
+                    setSelectedItemId(null);
+                    setSelectedItemIds([]);
+                    setSelectionAnchorId(null);
+                    setMode("view");
+                  }}
+                  aria-label="Close viewer"
+                  title="Close"
+                >
+                  <IcoClose />
+                </button>
+
                 {draft.kind === "file" && draft.id ? (
                   <button type="button" className="va-action-btn" onClick={() => void handleDownload()}>
                     <IcoDownload /> Download
@@ -1203,7 +1269,7 @@ export function ArtifactsPage() {
                 ) : null}
 
                 <button type="button" className="va-action-btn primary" onClick={() => void handleSave()} disabled={isSaving || !canSave}>
-                  Save
+                  <IcoFloppy />
                 </button>
               </div>
             </header>
