@@ -1,6 +1,6 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { tasksApi } from "../lib/api";
+import { readWorkbenchSession, tasksApi } from "../lib/api";
 import {
   getDefaultLocationPreset,
   getLocationPresetsForTimezone,
@@ -193,6 +193,7 @@ function buildMonthCells(monthDate: Date): CalendarCell[] {
 }
 
 export function HomePage() {
+  const currentUser = readWorkbenchSession();
   const [allTasks, setAllTasks] = useState<Task[]>([]);
   const [taskProjects, setTaskProjects] = useState<TaskProjectSummary[]>([]);
   const [monthCursor, setMonthCursor] = useState(() => startOfMonth(new Date()));
@@ -425,7 +426,7 @@ export function HomePage() {
       <article className="hero-card">
         <div className="hero-main">
           <p className="hero-greeting">{getGreeting(now)},</p>
-          <h2 className="hero-name">hayatonakanishi</h2>
+          <h2 className="hero-name">{currentUser?.username ?? ""}</h2>
           <p className="hero-sub">
             <svg className="hero-sub-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
               <circle cx="12" cy="12" r="8" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
