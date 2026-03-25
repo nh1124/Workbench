@@ -601,6 +601,14 @@ export const tasksApi = {
         body: JSON.stringify({ sourceDate, targetDate })
       }
     ),
+  skipOccurrenceException: (id: string, targetDate: string): Promise<{ taskId: string; targetDate: string }> =>
+    fetchJson<{ taskId: string; targetDate: string }>(
+      `${coreBaseUrl()}/api/tasks/${encodeURIComponent(id)}/occurrences/skip-exception`,
+      {
+        method: "POST",
+        body: JSON.stringify({ targetDate })
+      }
+    ),
   schedule: (startDate: string, endDate: string, context?: string, status?: TaskStatus): Promise<TaskScheduleDay[]> => {
     const params = new URLSearchParams();
     params.set("startDate", startDate);

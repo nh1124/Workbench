@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type UIEvent } from "react";
 import { projectsApi, tasksApi } from "../lib/api";
 import { formatDateTime } from "../lib/format";
+import { pushErrorNotification } from "../lib/notificationService";
 import type { RecurrenceType, Task, TaskHistoryEntry, TaskScheduleDay, TaskStatus } from "../types/models";
 import "./TasksPage.css";
+
+type SortMode = "default" | "load" | "due";
 
 type SidebarMode = "list" | "calendar";
 type CalendarMode = "month" | "week";
@@ -445,6 +448,17 @@ export function TasksPage() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [nowMarker, setNowMarker] = useState(() => new Date());
+  const [sortMode, setSortMode] = useState<SortMode>("default");
+  const [occurrenceGroupMode, setOccurrenceGroupMode] = useState<"date" | "project">("date");
+  const [todayCompletedOpen, setTodayCompletedOpen] = useState(false);
+  const [inboxCompletedOpen, setInboxCompletedOpen] = useState(false);
+  const [showMoveDateInput, setShowMoveDateInput] = useState(false);
+  const [moveDateInput, setMoveDateInput] = useState("");
+  const [todayRows, setTodayRows] = useState<TaskOccurrenceRow[]>([]);
+  const [inboxUpcomingRows, setInboxUpcomingRows] = useState<TaskOccurrenceRow[]>([]);
+  const [inboxDoneRows, setInboxDoneRows] = useState<TaskOccurrenceRow[]>([]);
+  const [plannedCount, setPlannedCount] = useState(0);
+  const [overdueCount, setOverdueCount] = useState(0);
   const importRef = useRef<HTMLInputElement>(null);
   const weekTimelineScrollRef = useRef<HTMLDivElement | null>(null);
   const autoScrolledWeekKeyRef = useRef<string>("");
@@ -462,21 +476,114 @@ export function TasksPage() {
     setIsLoading(true);
     setError(null);
     try {
-      const todayKey = toDateKey(new Date());
-      const [taskList, taskProjects, projectsResult, todaySchedule] = await Promise.all([
+      const todayDate = startOfDay(new Date());
+      const todayKey = toDateKey(todayDate);
+      const countFrom = toDateKey(addDays(todayDate, -(OCCURRENCE_PAGE_DAYS - 1)));
+      const countTo = toDateKey(addDays(todayDate, OCCURRENCE_PAGE_DAYS - 1));
+      const inboxFutureEnd = toDateKey(addDays(todayDate, 90));
+      const inboxPastStart = toDateKey(addDays(todayDate, -90));
+      const inboxPastEnd = toDateKey(addDays(todayDate, -1));
+      const [taskList, taskProjects, projectsResult, todaySchedule, countSchedule, inboxUpcomingSchedule, inboxPastSchedule] = await Promise.all([
         tasksApi.list(contextFilter || undefined),
         tasksApi.projects(),
         projectsApi.list(undefined, "active", 200).catch(() => ({ items: [] })),
-        tasksApi.schedule(todayKey, todayKey, contextFilter || undefined).catch(() => [] as TaskScheduleDay[])
+        tasksApi.schedule(todayKey, todayKey, contextFilter || undefined).catch(() => [] as TaskScheduleDay[]),
+        tasksApi.schedule(countFrom, countTo, contextFilter || undefined).catch(() => [] as TaskScheduleDay[]),
+        tasksApi.schedule(todayKey, inboxFutureEnd, contextFilter || undefined).catch(() => [] as TaskScheduleDay[]),
+        tasksApi.schedule(inboxPastStart, inboxPastEnd, contextFilter || undefined).catch(() => [] as TaskScheduleDay[])
       ]);
       const todayIds = new Set<string>();
       const todayStatusMap = new Map<string, TaskStatus>();
+      const builtTodayRows: TaskOccurrenceRow[] = [];
       for (const day of todaySchedule) {
         for (const item of day.tasks) {
           todayIds.add(item.taskId);
-          todayStatusMap.set(item.taskId, toTaskStatus(item.status));
+          const status = toTaskStatus(item.status);
+          todayStatusMap.set(item.taskId, status);
+          builtTodayRows.push({
+            key: `${day.date}::${item.taskId}`,
+            taskId: item.taskId,
+            date: day.date,
+            title: item.title,
+            context: item.context,
+            status,
+            load: item.load,
+            startTime: item.startTime,
+            endTime: item.endTime,
+            isLocked: item.isLocked
+          });
         }
       }
+      setTodayRows(builtTodayRows);
+
+      let pCnt = 0, oCnt = 0;
+      for (const day of countSchedule) {
+        if (day.date > todayKey) {
+          pCnt += day.tasks.length;
+        } else if (day.date < todayKey) {
+          oCnt += day.tasks.filter((t) => toTaskStatus(t.status) !== "done").length;
+        }
+      }
+      setPlannedCount(pCnt);
+      setOverdueCount(oCnt);
+
+      // Inbox upcoming: first non-done occurrence per task from today onwards
+      const taskNextMap = new Map<string, TaskOccurrenceRow>();
+      for (const day of inboxUpcomingSchedule) {
+        for (const item of day.tasks) {
+          if (toTaskStatus(item.status) === "done") continue;
+          if (!taskNextMap.has(item.taskId)) {
+            taskNextMap.set(item.taskId, {
+              key: `${day.date}::${item.taskId}`,
+              taskId: item.taskId, date: day.date,
+              title: item.title, context: item.context,
+              status: toTaskStatus(item.status),
+              load: item.load, startTime: item.startTime,
+              endTime: item.endTime, isLocked: item.isLocked
+            });
+          }
+        }
+      }
+      // For tasks with no upcoming occurrence, use their most recent past non-done occurrence (overdue)
+      // inboxPastSchedule is sorted ascending, so later entries overwrite earlier ones → last write = most recent
+      const taskLastOverdueMap = new Map<string, TaskOccurrenceRow>();
+      for (const day of inboxPastSchedule) {
+        for (const item of day.tasks) {
+          if (toTaskStatus(item.status) === "done") continue;
+          taskLastOverdueMap.set(item.taskId, {
+            key: `${day.date}::${item.taskId}`,
+            taskId: item.taskId, date: day.date,
+            title: item.title, context: item.context,
+            status: toTaskStatus(item.status),
+            load: item.load, startTime: item.startTime,
+            endTime: item.endTime, isLocked: item.isLocked
+          });
+        }
+      }
+      for (const [taskId, row] of taskLastOverdueMap) {
+        if (!taskNextMap.has(taskId)) {
+          taskNextMap.set(taskId, row);
+        }
+      }
+      const builtInboxUpcoming = Array.from(taskNextMap.values()).sort((a, b) => a.date.localeCompare(b.date));
+
+      // Inbox done: past completed executions (from inboxPastSchedule), newest first
+      const builtInboxDone: TaskOccurrenceRow[] = [];
+      for (const day of [...inboxPastSchedule].reverse()) {
+        for (const item of day.tasks) {
+          if (toTaskStatus(item.status) !== "done") continue;
+          builtInboxDone.push({
+            key: `${day.date}::${item.taskId}`,
+            taskId: item.taskId, date: day.date,
+            title: item.title, context: item.context,
+            status: toTaskStatus(item.status),
+            load: item.load, startTime: item.startTime,
+            endTime: item.endTime, isLocked: item.isLocked
+          });
+        }
+      }
+      setInboxUpcomingRows(builtInboxUpcoming);
+      setInboxDoneRows(builtInboxDone);
 
       const mergedTasks = taskList.map((task) => {
         const status = todayStatusMap.get(task.id);
@@ -502,7 +609,11 @@ export function TasksPage() {
     } catch (e) {
       const message = e instanceof Error ? e.message : "Failed to load tasks.";
       setTodayTaskIds(new Set());
-      setError(isAuthErrorMessage(message) ? message : null);
+      if (isAuthErrorMessage(message)) {
+        setError(message);
+      } else {
+        pushErrorNotification(message, "Failed to load tasks");
+      }
     } finally {
       setIsLoading(false);
     }
@@ -589,24 +700,28 @@ export function TasksPage() {
   };
 
   useEffect(() => {
+    // Always reset selection when switching filters
+    setSelectedOccurrenceKeys(new Set());
+    setLastOccurrenceKey(null);
+    setOccurrenceMenu((prev) => ({ ...prev, visible: false }));
+
     if (quickFilter !== "planned" && quickFilter !== "overdue") {
       setOccurrenceRows([]);
       setOccurrenceCursorDate(null);
       setOccurrenceHasMore(true);
-      setSelectedOccurrenceKeys(new Set());
-      setLastOccurrenceKey(null);
-      setOccurrenceMenu((prev) => ({ ...prev, visible: false }));
       return;
     }
     setOccurrenceCursorDate(null);
     setOccurrenceHasMore(true);
-    setSelectedOccurrenceKeys(new Set());
-    setLastOccurrenceKey(null);
     void loadOccurrencePage(quickFilter, true);
   }, [quickFilter, contextFilter]);
 
   useEffect(() => {
-    if (!occurrenceMenu.visible) return;
+    if (!occurrenceMenu.visible) {
+      setShowMoveDateInput(false);
+      setMoveDateInput("");
+      return;
+    }
     const close = () => {
       setOccurrenceMenu((prev) => ({ ...prev, visible: false }));
     };
@@ -642,26 +757,42 @@ export function TasksPage() {
         base = base;
       } else if (quickFilter === "overdue") {
         base = base;
-      } else if (quickFilter === "inbox") {
-        // Inbox is the previous "All Tasks" view in VisionArk flow.
-        base = base;
       }
     }
+    const doneOrder = (t: Task) => (t.status === "done" ? 1 : 0);
+    if (sortMode === "load") {
+      return base.sort((a, b) => {
+        const d = doneOrder(a) - doneOrder(b);
+        if (d !== 0) return d;
+        return b.baseLoadScore - a.baseLoadScore;
+      });
+    }
+    if (sortMode === "due") {
+      return base.sort((a, b) => {
+        const d = doneOrder(a) - doneOrder(b);
+        if (d !== 0) return d;
+        const dA = a.dueDate || "9999-12-31", dB = b.dueDate || "9999-12-31";
+        if (dA !== dB) return dA.localeCompare(dB);
+        return (a.startTime || "").localeCompare(b.startTime || "");
+      });
+    }
     return base.sort((a, b) => {
+      const d = doneOrder(a) - doneOrder(b);
+      if (d !== 0) return d;
       const dA = a.dueDate || "9999-12-31", dB = b.dueDate || "9999-12-31";
       return dA !== dB ? dA.localeCompare(dB) : b.updatedAt.localeCompare(a.updatedAt);
     });
-  }, [quickFilter, calendarStatusFilter, sidebarMode, tasks, today, todayTaskIds]);
+  }, [quickFilter, calendarStatusFilter, sidebarMode, tasks, today, todayTaskIds, sortMode]);
 
   const counters = useMemo(() => ({
     today: todayTaskIds.size > 0
       ? todayTaskIds.size
       : tasks.filter((task) => taskOccursOnDate(task, today)).length,
     myday: tasks.filter((t) => t.isPinned === true).length,
-    planned: occurrenceRows.filter((row) => row.date > toDateKey(today)).length,
-    overdue: occurrenceRows.filter((row) => row.date < toDateKey(today)).length,
-    inbox: tasks.length
-  }), [tasks, today, todayTaskIds, occurrenceRows]);
+    planned: plannedCount,
+    overdue: overdueCount,
+    inbox: inboxUpcomingRows.length
+  }), [tasks, today, todayTaskIds, plannedCount, overdueCount, inboxUpcomingRows]);
 
   const handleCenterScroll = (event: UIEvent<HTMLDivElement>) => {
     if (sidebarMode !== "list") return;
@@ -684,30 +815,17 @@ export function TasksPage() {
   const resolveContextDisplayName = (context: string, contextName?: string): string =>
     projectNameMap.get(context) || contextName || context;
 
-  const groupedTasks = useMemo(() => {
-    const map = new Map<string, Task[]>();
-    for (const t of filteredTasks) {
-      const list = map.get(t.context) || [];
-      list.push(t);
-      map.set(t.context, list);
-    }
-    return Array.from(map.entries()).map(([context, pts]) => ({
-      context, contextName: projectNameMap.get(context) || pts[0]?.contextName || context, tasks: pts
-    }));
-  }, [filteredTasks, projectNameMap]);
-
   const occurrenceRowsOrdered = useMemo(() => {
     const copied = occurrenceRows.slice();
     copied.sort((a, b) => {
-      if (a.date !== b.date) {
-        return quickFilter === "overdue"
-          ? b.date.localeCompare(a.date)
-          : a.date.localeCompare(b.date);
-      }
+      if (a.date !== b.date) return a.date.localeCompare(b.date);
+      const doneA = a.status === "done" ? 1 : 0;
+      const doneB = b.status === "done" ? 1 : 0;
+      if (doneA !== doneB) return doneA - doneB;
       return a.title.localeCompare(b.title);
     });
     return copied;
-  }, [occurrenceRows, quickFilter]);
+  }, [occurrenceRows]);
 
   const occurrenceDateGroups = useMemo(() => {
     const map = new Map<string, TaskOccurrenceRow[]>();
@@ -722,6 +840,52 @@ export function TasksPage() {
   const occurrenceOrderedKeys = useMemo(
     () => occurrenceRowsOrdered.map((row) => row.key),
     [occurrenceRowsOrdered]
+  );
+
+  const occurrenceProjectGroups = useMemo(() => {
+    const map = new Map<string, TaskOccurrenceRow[]>();
+    for (const row of occurrenceRowsOrdered) {
+      const list = map.get(row.context) || [];
+      list.push(row);
+      map.set(row.context, list);
+    }
+    return Array.from(map.entries()).map(([context, rows]) => {
+      const masterTask = tasks.find((t) => t.context === context);
+      const contextName = projectNameMap.get(context) || masterTask?.contextName || context;
+      return { context, contextName, rows };
+    });
+  }, [occurrenceRowsOrdered, tasks, projectNameMap]);
+
+  const pinnedTaskIds = useMemo(
+    () => new Set(tasks.filter((t) => t.isPinned === true).map((t) => t.id)),
+    [tasks]
+  );
+
+  const todayOccurrenceRowsOrdered = useMemo(() => {
+    const sorted = todayRows.slice().sort((a, b) => {
+      const doneA = a.status === "done" ? 1 : 0;
+      const doneB = b.status === "done" ? 1 : 0;
+      if (doneA !== doneB) return doneA - doneB;
+      return (a.startTime || "").localeCompare(b.startTime || "");
+    });
+    return sorted;
+  }, [todayRows]);
+
+  const mydayOccurrenceRowsOrdered = useMemo(
+    () => todayOccurrenceRowsOrdered.filter((r) => pinnedTaskIds.has(r.taskId)),
+    [todayOccurrenceRowsOrdered, pinnedTaskIds]
+  );
+
+  const activeOccurrenceRows = useMemo(() => {
+    if (quickFilter === "today") return todayOccurrenceRowsOrdered;
+    if (quickFilter === "myday") return mydayOccurrenceRowsOrdered;
+    if (quickFilter === "inbox") return [...inboxUpcomingRows, ...inboxDoneRows];
+    return occurrenceRowsOrdered;
+  }, [quickFilter, todayOccurrenceRowsOrdered, mydayOccurrenceRowsOrdered, occurrenceRowsOrdered, inboxUpcomingRows, inboxDoneRows]);
+
+  const activeOccurrenceOrderedKeys = useMemo(
+    () => activeOccurrenceRows.map((r) => r.key),
+    [activeOccurrenceRows]
   );
 
   const monthCells = useMemo(() => buildMonthCells(monthCursor), [monthCursor]);
@@ -868,7 +1032,7 @@ export function TasksPage() {
       if (selectedTaskId === task.id) {
         setDraft((prev) => ({ ...prev, status: previousStatus }));
       }
-      setError("Failed to update task status.");
+      pushErrorNotification("Failed to update task status.");
     }
   };
 
@@ -884,7 +1048,7 @@ export function TasksPage() {
       setTasks((prev) => prev.map((item) => (
         item.id === task.id ? { ...item, isPinned: task.isPinned === true } : item
       )));
-      setError("Failed to update pin status. Please try again.");
+      pushErrorNotification("Failed to update pin status.");
     }
   };
 
@@ -892,9 +1056,15 @@ export function TasksPage() {
     const nextStatus: TaskStatus = row.status === "done" ? "todo" : "done";
     try {
       await tasksApi.completeOccurrence(row.taskId, row.date, nextStatus);
-      await refreshAfterOccurrenceMutation();
+      const updateRows = (prev: TaskOccurrenceRow[]) =>
+        prev.map((r) => r.key === row.key ? { ...r, status: nextStatus } : r);
+      setTodayRows(updateRows);
+      setOccurrenceRows(updateRows);
+      setInboxUpcomingRows(updateRows);
+      setInboxDoneRows(updateRows);
+      setTimeout(() => { void refreshAfterOccurrenceMutation(); }, 800);
     } catch {
-      setError("Failed to update occurrence status.");
+      pushErrorNotification("Failed to update occurrence status.");
     }
   };
 
@@ -910,35 +1080,44 @@ export function TasksPage() {
   const handleOccurrenceClick = (event: ReactMouseEvent<HTMLButtonElement>, row: TaskOccurrenceRow) => {
     const isShift = "shiftKey" in event && event.shiftKey;
     const isToggle = "metaKey" in event && (event.metaKey || event.ctrlKey);
-    const next = new Set(selectedOccurrenceKeys);
 
-    if (isShift && lastOccurrenceKey) {
-      const start = occurrenceOrderedKeys.indexOf(lastOccurrenceKey);
-      const end = occurrenceOrderedKeys.indexOf(row.key);
-      if (start >= 0 && end >= 0) {
-        const [from, to] = start < end ? [start, end] : [end, start];
-        for (let index = from; index <= to; index += 1) {
-          next.add(occurrenceOrderedKeys[index]);
+    if (isShift || isToggle) event.preventDefault(); // prevent browser text-selection
+
+    if (isShift) {
+      if (lastOccurrenceKey) {
+        // Range select: fresh set from anchor to current; anchor stays fixed
+        const start = activeOccurrenceOrderedKeys.indexOf(lastOccurrenceKey);
+        const end = activeOccurrenceOrderedKeys.indexOf(row.key);
+        const rangeSet = new Set<string>();
+        if (start >= 0 && end >= 0) {
+          const [from, to] = start < end ? [start, end] : [end, start];
+          for (let index = from; index <= to; index += 1) {
+            rangeSet.add(activeOccurrenceOrderedKeys[index]);
+          }
+        } else {
+          rangeSet.add(lastOccurrenceKey);
+          rangeSet.add(row.key);
         }
+        setSelectedOccurrenceKeys(rangeSet);
+        // anchor stays — do NOT update lastOccurrenceKey
       } else {
-        next.add(row.key);
+        // No anchor yet: set this as anchor, don't open detail
+        setSelectedOccurrenceKeys(new Set([row.key]));
+        setLastOccurrenceKey(row.key);
       }
     } else if (isToggle) {
+      const next = new Set(selectedOccurrenceKeys);
       if (next.has(row.key)) next.delete(row.key);
       else next.add(row.key);
+      setSelectedOccurrenceKeys(next);
+      setLastOccurrenceKey(row.key);
     } else {
-      next.clear();
-      next.add(row.key);
-      if (!isShift) {
-        const masterTask = tasks.find((task) => task.id === row.taskId);
-        if (masterTask) {
-          selectTask(masterTask);
-        }
-      }
+      // Plain click: select and open detail
+      setSelectedOccurrenceKeys(new Set([row.key]));
+      setLastOccurrenceKey(row.key);
+      const masterTask = tasks.find((task) => task.id === row.taskId);
+      if (masterTask) selectTask(masterTask);
     }
-
-    setSelectedOccurrenceKeys(next);
-    setLastOccurrenceKey(row.key);
   };
 
   const ensureContextSelection = (row: TaskOccurrenceRow, x: number, y: number) => {
@@ -952,7 +1131,7 @@ export function TasksPage() {
 
   const getSelectedOccurrenceRows = (): TaskOccurrenceRow[] => {
     if (selectedOccurrenceKeys.size === 0) return [];
-    return occurrenceRowsOrdered.filter((row) => selectedOccurrenceKeys.has(row.key));
+    return activeOccurrenceRows.filter((row) => selectedOccurrenceKeys.has(row.key));
   };
 
   const handleMarkSelectedOccurrences = async (status: TaskStatus) => {
@@ -962,46 +1141,79 @@ export function TasksPage() {
       await Promise.all(
         selectedRows.map((row) => tasksApi.completeOccurrence(row.taskId, row.date, status))
       );
+      const updatedKeys = new Set(selectedRows.map((r) => r.key));
+      const updateRows = (prev: TaskOccurrenceRow[]) =>
+        prev.map((r) => updatedKeys.has(r.key) ? { ...r, status } : r);
+      setTodayRows(updateRows);
+      setOccurrenceRows(updateRows);
+      setInboxUpcomingRows(updateRows);
+      setInboxDoneRows(updateRows);
       setOccurrenceMenu((prev) => ({ ...prev, visible: false }));
-      await refreshAfterOccurrenceMutation();
+      setTimeout(() => { void refreshAfterOccurrenceMutation(); }, 800);
     } catch {
-      setError("Failed to update selected occurrences.");
+      pushErrorNotification("Failed to update selected occurrences.");
     }
   };
 
-  const handleMoveSelectedOccurrences = async () => {
+  const handleSkipSelectedTasks = async () => {
     const selectedRows = getSelectedOccurrenceRows();
     if (selectedRows.length === 0) return;
-    const targetDateInput = window.prompt("Move selected occurrences to date (YYYY-MM-DD)");
-    if (!targetDateInput) return;
-    const targetDate = targetDateInput.trim();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) {
-      setError("Invalid date format. Use YYYY-MM-DD.");
+    const uniqueTaskIds = Array.from(new Set(selectedRows.map((row) => row.taskId)));
+    try {
+      await Promise.all(uniqueTaskIds.map((taskId) => tasksApi.update(taskId, { status: "skipped" })));
+      setOccurrenceMenu((prev) => ({ ...prev, visible: false }));
+      await refreshAfterOccurrenceMutation();
+    } catch {
+      pushErrorNotification("Failed to skip selected tasks.");
+    }
+  };
+
+  const handleConfirmMoveDate = async () => {
+    const selectedRows = getSelectedOccurrenceRows();
+    if (selectedRows.length === 0 || !moveDateInput) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(moveDateInput)) {
+      pushErrorNotification("Invalid date format.");
       return;
     }
     try {
       await Promise.all(
-        selectedRows.map((row) => tasksApi.moveOccurrence(row.taskId, row.date, targetDate))
+        selectedRows.map((row) => tasksApi.moveOccurrence(row.taskId, row.date, moveDateInput))
       );
+      const movedKeys = new Set(selectedRows.map((r) => r.key));
+      setOccurrenceRows((prev) => prev.filter((r) => !movedKeys.has(r.key)));
+      setTodayRows((prev) => prev.filter((r) => !movedKeys.has(r.key)));
+      setInboxUpcomingRows((prev) => prev.filter((r) => !movedKeys.has(r.key)));
+      setInboxDoneRows((prev) => prev.filter((r) => !movedKeys.has(r.key)));
+      setSelectedOccurrenceKeys(new Set());
+      setLastOccurrenceKey(null);
+      setShowMoveDateInput(false);
+      setMoveDateInput("");
       setOccurrenceMenu((prev) => ({ ...prev, visible: false }));
-      await refreshAfterOccurrenceMutation();
+      setTimeout(() => { void refreshAfterOccurrenceMutation(); }, 800);
     } catch {
-      setError("Failed to move selected occurrences.");
+      pushErrorNotification("Failed to move selected occurrences.");
     }
   };
 
   const handleDeleteSelectedFromMenu = async () => {
     const selectedRows = getSelectedOccurrenceRows();
     if (selectedRows.length === 0) return;
-    const confirmed = window.confirm(`Delete ${selectedRows.length} selected task(s)?`);
+    const confirmed = window.confirm(`Remove ${selectedRows.length} occurrence(s) from schedule?`);
     if (!confirmed) return;
-    const taskIds = Array.from(new Set(selectedRows.map((row) => row.taskId)));
     try {
-      await Promise.all(taskIds.map((taskId) => tasksApi.remove(taskId)));
+      await Promise.all(selectedRows.map((row) => tasksApi.skipOccurrenceException(row.taskId, row.date)));
+      const removedKeys = new Set(selectedRows.map((r) => r.key));
+      setOccurrenceRows((prev) => prev.filter((r) => !removedKeys.has(r.key)));
+      setTodayRows((prev) => prev.filter((r) => !removedKeys.has(r.key)));
+      setInboxUpcomingRows((prev) => prev.filter((r) => !removedKeys.has(r.key)));
+      setInboxDoneRows((prev) => prev.filter((r) => !removedKeys.has(r.key)));
+      setSelectedOccurrenceKeys(new Set());
+      setLastOccurrenceKey(null);
       setOccurrenceMenu((prev) => ({ ...prev, visible: false }));
-      await refreshAfterOccurrenceMutation();
+      // Delay reload to let backend finish recomputing schedule after exception write
+      setTimeout(() => { void refreshAfterOccurrenceMutation(); }, 800);
     } catch {
-      setError("Failed to delete selected tasks.");
+      pushErrorNotification("Failed to remove selected occurrences.");
     }
   };
 
@@ -1308,6 +1520,27 @@ export function TasksPage() {
               <p>{new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</p>
             </div>
             <div className="tasks-head-actions">
+              <select
+                className="sort-select"
+                value={sortMode}
+                onChange={(e) => setSortMode(e.target.value as SortMode)}
+                title="Sort tasks"
+              >
+                <option value="default">Sort: Default</option>
+                <option value="load">Sort: Load</option>
+                <option value="due">Sort: Due Date</option>
+              </select>
+              {(quickFilter === "planned" || quickFilter === "overdue") && (
+                <select
+                  className="sort-select"
+                  value={occurrenceGroupMode}
+                  onChange={(e) => setOccurrenceGroupMode(e.target.value as "date" | "project")}
+                  title="Group by"
+                >
+                  <option value="date">Group: Date</option>
+                  <option value="project">Group: Project</option>
+                </select>
+              )}
               <button type="button" className="icon-button" onClick={handleExport} title="Export CSV"><IcoDownload /></button>
               <button type="button" className="icon-button" onClick={() => importRef.current?.click()} title="Import CSV"><IcoUpload /></button>
               <input ref={importRef} type="file" accept=".csv" style={{ display: "none" }} onChange={handleImport} />
@@ -1318,7 +1551,6 @@ export function TasksPage() {
         )}
 
         {displayError ? <p className="error" style={{ margin: "0 0 0.5rem", fontSize: "0.8rem" }}>{displayError}</p> : null}
-        {isLoading ? <p className="info" style={{ margin: "0 0 0.5rem", fontSize: "0.8rem" }}>Loading tasks...</p> : null}
 
         {/* ── Quick Add inline panel ── */}
         {showAddPanel && sidebarMode === "list" && (
@@ -1480,20 +1712,180 @@ export function TasksPage() {
         {sidebarMode === "list" ? (
           /* ── Task List ── */
           <section className="task-list-section">
-            {((quickFilter === "planned" || quickFilter === "overdue")
-              ? occurrenceRowsOrdered.length === 0
-              : filteredTasks.length === 0) && !isLoading && (
+            {activeOccurrenceRows.length === 0 && !isLoading && (
               <div style={{ textAlign: "center", opacity: 0.35, padding: "3rem 0" }}>
                 <IcoPlus />
                 <p style={{ margin: "0.5rem 0 0", fontSize: "0.7rem", fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.15em" }}>No Tasks</p>
               </div>
             )}
-            {(quickFilter === "planned" || quickFilter === "overdue") ? (
+            {quickFilter === "inbox" ? (
+              /* ── Inbox: upcoming next-per-task + past done ── */
+              (() => {
+                const renderInboxRow = (row: TaskOccurrenceRow) => {
+                  const masterTask = tasks.find((t) => t.id === row.taskId);
+                  const contextName = resolveContextDisplayName(row.context, masterTask?.contextName);
+                  const selected = selectedOccurrenceKeys.has(row.key);
+                  const itemClass = [
+                    selected ? "task-list-item active" : "task-list-item",
+                    selected ? "occurrence-selected" : ""
+                  ].filter(Boolean).join(" ");
+                  return (
+                    <li key={row.key}>
+                      <div className={itemClass}>
+                        <button type="button" className="task-circle" onClick={() => void handleToggleOccurrenceDone(row)} aria-label="Toggle done">
+                          <StatusCircle status={row.status} />
+                        </button>
+                        <button
+                          type="button"
+                          className="task-list-main"
+                          onClick={(event) => handleOccurrenceClick(event, row)}
+                          onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); ensureContextSelection(row, event.clientX, event.clientY); }}
+                        >
+                          <span className={`task-title${row.status === "done" ? " done" : ""}`}>{row.title}</span>
+                          <span className="task-meta-row">
+                            {typeof row.load === "number" && (
+                              <span className="load-badge" style={{ color: loadScoreColor(row.load), borderColor: loadScoreColor(row.load) }}>
+                                <IcoZap />{row.load}
+                              </span>
+                            )}
+                            <span className="context-badge" style={{ color: contextColor(row.context) }}>{contextName}</span>
+                            <span className="due-badge">{formatDateHeading(row.date)}</span>
+                            {(row.startTime || row.endTime) && (
+                              <span className="time-badge"><IcoClock />{row.startTime || "--:--"}{row.endTime ? ` - ${row.endTime}` : ""}</span>
+                            )}
+                            {row.isLocked && <span style={{ color: "#fbbf24" }}><IcoLock /></span>}
+                          </span>
+                        </button>
+                        <span style={{ color: "#374151", flexShrink: 0 }}><IcoChevron /></span>
+                      </div>
+                    </li>
+                  );
+                };
+                // Group upcoming by date
+                const dateGroupMap = new Map<string, TaskOccurrenceRow[]>();
+                for (const row of inboxUpcomingRows) {
+                  const list = dateGroupMap.get(row.date) || [];
+                  list.push(row);
+                  dateGroupMap.set(row.date, list);
+                }
+                const upcomingGroups = Array.from(dateGroupMap.entries())
+                  .sort(([a], [b]) => a.localeCompare(b))
+                  .map(([date, rows]) => ({ date, rows }));
+                return (
+                  <>
+                    {upcomingGroups.map((group) => (
+                      <article key={group.date} className="task-date-group">
+                        <header>
+                          <h4>{formatDateHeading(group.date)}</h4>
+                          <small>{group.rows.length}</small>
+                        </header>
+                        <ul>{group.rows.map(renderInboxRow)}</ul>
+                      </article>
+                    ))}
+                    {inboxDoneRows.length > 0 && (
+                      <article className="task-project-block task-completed-section">
+                        <header style={{ cursor: "pointer" }} onClick={() => setInboxCompletedOpen((v) => !v)}>
+                          <h4 style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
+                            <span className={inboxCompletedOpen ? "task-add-more-chevron open" : "task-add-more-chevron"}><IcoChevron /></span>
+                            Completed
+                          </h4>
+                          <small>{inboxDoneRows.length}</small>
+                        </header>
+                        {inboxCompletedOpen && (
+                          <ul className="task-flat-occurrence-list">{inboxDoneRows.map(renderInboxRow)}</ul>
+                        )}
+                      </article>
+                    )}
+                  </>
+                );
+              })()
+            ) : (quickFilter === "today" || quickFilter === "myday") ? (
+              /* ── Today / MyDay: flat occurrence list ── */
+              (() => {
+                const renderOccurrenceRow = (row: TaskOccurrenceRow) => {
+                  const masterTask = tasks.find((t) => t.id === row.taskId);
+                  const contextName = resolveContextDisplayName(row.context, masterTask?.contextName);
+                  const selected = selectedOccurrenceKeys.has(row.key);
+                  const itemClass = [
+                    selected ? "task-list-item active" : "task-list-item",
+                    selected ? "occurrence-selected" : ""
+                  ].filter(Boolean).join(" ");
+                  return (
+                    <li key={row.key}>
+                      <div className={itemClass}>
+                        <button type="button" className="task-circle" onClick={() => void handleToggleOccurrenceDone(row)} aria-label="Toggle done">
+                          <StatusCircle status={row.status} />
+                        </button>
+                        <button
+                          type="button"
+                          className="task-list-main"
+                          onClick={(event) => handleOccurrenceClick(event, row)}
+                          onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); ensureContextSelection(row, event.clientX, event.clientY); }}
+                        >
+                          <span className={`task-title${row.status === "done" ? " done" : ""}`}>{row.title}</span>
+                          <span className="task-meta-row">
+                            {typeof row.load === "number" && (
+                              <span className="load-badge" style={{ color: loadScoreColor(row.load), borderColor: loadScoreColor(row.load) }}>
+                                <IcoZap />{row.load}
+                              </span>
+                            )}
+                            <span className="context-badge" style={{ color: contextColor(row.context) }}>{contextName}</span>
+                            {(row.startTime || row.endTime) && (
+                              <span className="time-badge"><IcoClock />{row.startTime || "--:--"}{row.endTime ? ` - ${row.endTime}` : ""}</span>
+                            )}
+                            {row.isLocked && <span style={{ color: "#fbbf24" }}><IcoLock /></span>}
+                          </span>
+                        </button>
+                        <span style={{ color: "#374151", flexShrink: 0 }}><IcoChevron /></span>
+                      </div>
+                    </li>
+                  );
+                };
+                const activeRows = activeOccurrenceRows.filter((r) => r.status !== "done");
+                const doneRows = activeOccurrenceRows.filter((r) => r.status === "done");
+                return (
+                  <>
+                    {activeRows.length > 0 && (
+                      <ul className="task-flat-occurrence-list">
+                        {activeRows.map(renderOccurrenceRow)}
+                      </ul>
+                    )}
+                    {doneRows.length > 0 && (
+                      <article className="task-project-block task-completed-section">
+                        <header style={{ cursor: "pointer" }} onClick={() => setTodayCompletedOpen((v) => !v)}>
+                          <h4 style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
+                            <span className={todayCompletedOpen ? "task-add-more-chevron open" : "task-add-more-chevron"}><IcoChevron /></span>
+                            Completed
+                          </h4>
+                          <small>{doneRows.length}</small>
+                        </header>
+                        {todayCompletedOpen && (
+                          <ul className="task-flat-occurrence-list">{doneRows.map(renderOccurrenceRow)}</ul>
+                        )}
+                      </article>
+                    )}
+                  </>
+                );
+              })()
+            ) : (quickFilter === "planned" || quickFilter === "overdue") ? (
               <>
-                {occurrenceDateGroups.map((group) => (
-                  <article key={group.date} className="task-date-group">
+                {(occurrenceGroupMode === "project" ? occurrenceProjectGroups.map((group) => ({
+                  key: group.context,
+                  label: group.contextName,
+                  dotColor: contextColor(group.context) as string | undefined,
+                  rows: group.rows
+                })) : occurrenceDateGroups.map((group) => ({
+                  key: group.date,
+                  label: formatDateHeading(group.date),
+                  dotColor: undefined as string | undefined,
+                  rows: group.rows
+                }))).map((group) => (
+                  <article key={group.key} className="task-date-group">
                     <header>
-                      <h4>{formatDateHeading(group.date)}</h4>
+                      <h4 style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
+                        {group.dotColor && <span style={{ width: 6, height: 6, borderRadius: "50%", background: group.dotColor, display: "inline-block", flexShrink: 0 }} />}
+                        {group.label}
+                      </h4>
                       <small>{group.rows.length}</small>
                     </header>
                     <ul>
@@ -1502,7 +1894,7 @@ export function TasksPage() {
                         const contextName = resolveContextDisplayName(row.context, masterTask?.contextName);
                         const selected = selectedOccurrenceKeys.has(row.key);
                         const itemClass = [
-                          selectedTaskId === row.taskId ? "task-list-item active" : "task-list-item",
+                          selected ? "task-list-item active" : "task-list-item",
                           selected ? "occurrence-selected" : ""
                         ].filter(Boolean).join(" ");
                         return (
@@ -1559,75 +1951,8 @@ export function TasksPage() {
                   <p style={{ color: "#64748b", fontSize: "0.74rem", margin: "0.5rem 0 0.25rem" }}>Loading more...</p>
                 )}
               </>
-            ) : (
-              groupedTasks.map((group) => (
-                <article key={group.context} className="task-project-block">
-                  <header>
-                    <h4 style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
-                      <span style={{ width: 6, height: 6, borderRadius: "50%", background: contextColor(group.context), display: "inline-block", flexShrink: 0 }} />
-                      {group.contextName}
-                    </h4>
-                    <small>{group.tasks.length}</small>
-                  </header>
-                  <ul>
-                    {group.tasks.map((task) => (
-                      <li key={task.id}>
-                        <div className={selectedTaskId === task.id ? "task-list-item active" : "task-list-item"}>
-                          {/* Status circle */}
-                          <button type="button" className="task-circle"
-                            onClick={() => void handleToggleDone(task)}
-                            aria-label="Toggle done">
-                            <StatusCircle status={task.status} />
-                          </button>
-
-                          {/* Main content */}
-                          <button type="button" className="task-list-main" onClick={() => selectTask(task)}>
-                            <span className={`task-title${task.status === "done" ? " done" : ""}`}>{task.title}</span>
-                            <span className="task-meta-row">
-                              {/* Load score badge */}
-                              <span className="load-badge" style={{ color: loadScoreColor(task.baseLoadScore), borderColor: loadScoreColor(task.baseLoadScore) }}>
-                                <IcoZap />{task.baseLoadScore}
-                              </span>
-                              {/* Context tag */}
-                              <span className="context-badge" style={{ color: contextColor(task.context) }}>
-                                {resolveContextDisplayName(task.context, task.contextName)}
-                              </span>
-                              {/* Recurrence */}
-                              {task.recurrence !== "ONCE" && (
-                                <span className="recurrence-badge"><IcoRepeat />{task.recurrence.replace(/_/g, " ")}</span>
-                              )}
-                              {/* Time */}
-                              {task.startTime && (
-                                <span className="time-badge"><IcoClock />{task.startTime}{task.endTime ? ` - ${task.endTime}` : ""}</span>
-                              )}
-                              {/* Due date */}
-                              {task.dueDate && (
-                                <span className="due-badge">{task.dueDate}</span>
-                              )}
-                              {/* Lock */}
-                              {task.isLocked && (
-                                <span style={{ color: "#fbbf24" }}><IcoLock /></span>
-                              )}
-                            </span>
-                          </button>
-                          <button
-                            type="button"
-                            className={task.isPinned ? "task-pin-button active" : "task-pin-button"}
-                            onClick={() => void handleTogglePin(task)}
-                            title={task.isPinned ? "Unpin from My Day" : "Pin to My Day"}
-                            aria-label={task.isPinned ? "Unpin from My Day" : "Pin to My Day"}
-                          >
-                            <IcoPin />
-                          </button>
-                          <span style={{ color: "#374151", flexShrink: 0 }}><IcoChevron /></span>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                </article>
-              ))
-            )}
-            {(quickFilter === "planned" || quickFilter === "overdue") && occurrenceMenu.visible && (
+            ) : null}
+            {occurrenceMenu.visible && (
               <div
                 className="task-occurrence-menu"
                 style={{ top: occurrenceMenu.y, left: occurrenceMenu.x }}
@@ -1638,9 +1963,23 @@ export function TasksPage() {
                 }}
               >
                 <button type="button" onClick={() => void handleMarkSelectedOccurrences("done")}>Mark as Done</button>
-                <button type="button" onClick={() => void handleMarkSelectedOccurrences("skipped")}>Skip this occurrence</button>
-                <button type="button" onClick={() => void handleMoveSelectedOccurrences()}>Move to date</button>
-                <button type="button" className="danger" onClick={() => void handleDeleteSelectedFromMenu()}>Delete</button>
+                <button type="button" onClick={() => void handleSkipSelectedTasks()}>Skip task</button>
+                {!showMoveDateInput ? (
+                  <button type="button" onClick={() => { setShowMoveDateInput(true); setMoveDateInput(toDateKey(today)); }}>Move to date</button>
+                ) : (
+                  <div className="occurrence-menu-date-row" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="date"
+                      className="occurrence-menu-date-input"
+                      value={moveDateInput}
+                      onChange={(e) => setMoveDateInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") void handleConfirmMoveDate(); }}
+                      autoFocus
+                    />
+                    <button type="button" onClick={() => void handleConfirmMoveDate()} disabled={!moveDateInput}>OK</button>
+                  </div>
+                )}
+                <button type="button" className="danger" onClick={() => void handleDeleteSelectedFromMenu()}>Remove occurrence</button>
               </div>
             )}
           </section>

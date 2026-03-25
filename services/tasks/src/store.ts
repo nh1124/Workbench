@@ -794,3 +794,18 @@ export async function moveTaskOccurrence(
   await upsertTaskException(client, taskId, normalizedTarget, "FORCE_DO", `Moved from ${normalizedSource}`);
   return { taskId, sourceDate: normalizedSource, targetDate: normalizedTarget };
 }
+
+export async function skipTaskOccurrenceException(
+  taskId: string,
+  targetDate: string,
+  lbsAccessToken: string
+): Promise<{ taskId: string; targetDate: string }> {
+  const config = getLbsConfig();
+  const client = createLbsClient(config, lbsAccessToken);
+  const normalizedDate = toDueDateOnly(targetDate);
+  if (!normalizedDate) {
+    throw new Error("targetDate must be in YYYY-MM-DD format");
+  }
+  await upsertTaskException(client, taskId, normalizedDate, "SKIP", "Removed via UI");
+  return { taskId, targetDate: normalizedDate };
+}

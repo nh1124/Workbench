@@ -20,6 +20,7 @@ import {
   listTasks,
   moveTaskOccurrence,
   provisionLbsAccount,
+  skipTaskOccurrenceException,
   updateTaskPin,
   updateTask
 } from "./store.js";
@@ -307,6 +308,27 @@ app.post("/tasks/:id/occurrences/move", requireUserAuth, async (req, res) => {
     const result = await moveTaskOccurrence(
       String(req.params.id),
       parsed.data.sourceDate,
+      parsed.data.targetDate,
+      lbsAccessToken
+    );
+    return res.json(result);
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+app.post("/tasks/:id/occurrences/skip-exception", requireUserAuth, async (req, res) => {
+  try {
+    const parsed = z.object({ targetDate: z.string().min(1) }).safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: parsed.error.flatten() });
+    }
+    const lbsAccessToken = await ensureLbsAccessToken(req);
+    if (!lbsAccessToken) {
+      return res.status(403).json({ message: "LBS account token not provisioned" });
+    }
+    const result = await skipTaskOccurrenceException(
+      String(req.params.id),
       parsed.data.targetDate,
       lbsAccessToken
     );
