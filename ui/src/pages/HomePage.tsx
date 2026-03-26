@@ -1,13 +1,13 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
-import { readWorkbenchSession, tasksApi } from "../lib/api";
+import { Link, useNavigate } from "react-router-dom";
+import { projectsApi, readWorkbenchSession, tasksApi } from "../lib/api";
 import {
   getDefaultLocationPreset,
   getLocationPresetsForTimezone,
   loadUiSettings,
   type UiSettings
 } from "../lib/uiSettings";
-import type { Task, TaskProjectSummary } from "../types/models";
+import type { Task, TaskProjectSummary, TaskScheduleDay, TaskStatus } from "../types/models";
 import "./HomePage.css";
 
 interface CalendarCell {
@@ -167,6 +167,18 @@ function resolveCoordinates(settings: UiSettings): { latitude: number; longitude
   return { latitude: fallback.latitude, longitude: fallback.longitude };
 }
 
+function toTaskStatus(value: string | undefined): TaskStatus {
+  if (value === "done" || value === "skipped") return value;
+  return "todo";
+}
+
+function formatDateKey(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
 function buildMonthCells(monthDate: Date): CalendarCell[] {
   const first = startOfMonth(monthDate);
   const firstWeekday = first.getDay();
@@ -193,9 +205,11 @@ function buildMonthCells(monthDate: Date): CalendarCell[] {
 }
 
 export function HomePage() {
+  const navigate = useNavigate();
   const currentUser = readWorkbenchSession();
   const [allTasks, setAllTasks] = useState<Task[]>([]);
   const [taskProjects, setTaskProjects] = useState<TaskProjectSummary[]>([]);
+  const [projectNameMap, setProjectNameMap] = useState<Map<string, string>>(new Map());
   const [monthCursor, setMonthCursor] = useState(() => startOfMonth(new Date()));
   const [now, setNow] = useState(() => new Date());
   const [settings, setSettings] = useState<UiSettings>(() => loadUiSettings());
@@ -207,6 +221,7 @@ export function HomePage() {
   });
   const [isWeatherOpen, setIsWeatherOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [calendarStatusMap, setCalendarStatusMap] = useState<Map<string, Map<string, TaskStatus>>>(new Map());
   const weatherPanelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -219,9 +234,18 @@ export function HomePage() {
       setIsLoading(true);
 
       try {
-        const [tasks, projects] = await Promise.all([tasksApi.list(undefined, undefined, 200), tasksApi.projects()]);
+        const [tasks, projects, projectList] = await Promise.all([
+          tasksApi.list(undefined, undefined, 200),
+          tasksApi.projects(),
+          projectsApi.list(undefined, "active", 200).catch(() => ({ items: [] }))
+        ]);
         setAllTasks(tasks);
         setTaskProjects(projects);
+        const nameMap = new Map<string, string>();
+        for (const rec of projectList.items) {
+          if (rec.name?.trim()) nameMap.set(rec.id, rec.name.trim());
+        }
+        setProjectNameMap(nameMap);
       } catch {
         // API errors are routed to the global notification center.
       } finally {
@@ -231,6 +255,41 @@ export function HomePage() {
 
     void load();
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadSchedule = async () => {
+      // Compute the full date range visible in the calendar grid for this month
+      const year = monthCursor.getFullYear();
+      const month = monthCursor.getMonth();
+      const firstOfMonth = new Date(year, month, 1);
+      const startOffset = firstOfMonth.getDay();
+      const rangeStart = new Date(year, month, 1 - startOffset);
+      const lastOfMonth = new Date(year, month + 1, 0);
+      const endOffset = 6 - lastOfMonth.getDay();
+      const rangeEnd = new Date(year, month + 1, endOffset);
+
+      try {
+        const scheduleDays = await tasksApi.schedule(formatDateKey(rangeStart), formatDateKey(rangeEnd));
+        if (cancelled) return;
+
+        const csMap = new Map<string, Map<string, TaskStatus>>();
+        for (const day of scheduleDays) {
+          for (const item of day.tasks) {
+            if (!csMap.has(day.date)) csMap.set(day.date, new Map());
+            csMap.get(day.date)!.set(item.taskId, toTaskStatus(item.status));
+          }
+        }
+        setCalendarStatusMap(csMap);
+      } catch {
+        // schedule fetch failure is non-critical; statuses fall back to master task status
+      }
+    };
+
+    void loadSchedule();
+    return () => { cancelled = true; };
+  }, [monthCursor]);
 
   useEffect(() => {
     const reloadSettings = () => {
@@ -374,16 +433,12 @@ export function HomePage() {
         const doneTasks = projectTasks.filter((task) => task.status === "done").length;
         const totalTasks = projectTasks.length;
         const completion = totalTasks === 0 ? 0 : Math.round((doneTasks / totalTasks) * 100);
-        const contextName = projectTasks.find((task) => task.contextName?.trim())?.contextName?.trim();
-        const firstTaskName = projectTasks.find((task) => task.title?.trim())?.title?.trim();
 
-        let displayName = project.projectName?.trim() || contextName || "";
-        if (!displayName || isLikelyIdentifier(displayName) || displayName === project.projectId) {
-          displayName = firstTaskName || displayName;
-        }
-        if (!displayName) {
-          displayName = "Unnamed Task Group";
-        }
+        // Priority: projectsApi name > non-identifier contextName > short project ID prefix
+        const registeredName = projectNameMap.get(project.projectId);
+        const rawContextName = project.projectName?.trim() || projectTasks.find((task) => task.contextName?.trim())?.contextName?.trim();
+        const contextName = rawContextName && !isLikelyIdentifier(rawContextName) ? rawContextName : undefined;
+        const displayName = registeredName || contextName || `Project ${project.projectId.slice(0, 8)}`;
 
         return {
           projectId: project.projectId,
@@ -395,7 +450,7 @@ export function HomePage() {
       })
       .sort((a, b) => b.totalTasks - a.totalTasks)
       .slice(0, 6);
-  }, [allTasks, taskProjects]);
+  }, [allTasks, taskProjects, projectNameMap]);
 
   const monthCells = useMemo(() => buildMonthCells(monthCursor), [monthCursor]);
 
@@ -405,14 +460,21 @@ export function HomePage() {
 
     for (const date of visibleDates) {
       const key = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+      const dateKey = formatDateKey(date);
+      const dateStatuses = calendarStatusMap.get(dateKey);
       map.set(
         key,
-        allTasks.filter((task) => taskOccursOnDate(task, date))
+        allTasks
+          .filter((task) => taskOccursOnDate(task, date))
+          .map((task) => {
+            const status = dateStatuses?.get(task.id);
+            return status !== undefined ? { ...task, status } : task;
+          })
       );
     }
 
     return map;
-  }, [allTasks, monthCells]);
+  }, [allTasks, monthCells, calendarStatusMap]);
 
   if (isLoading) {
     return <p className="info">Loading dashboard...</p>;
@@ -591,7 +653,14 @@ export function HomePage() {
                   >
                     <span>{cell.date.getDate()}</span>
                     {dayTasks.slice(0, 2).map((task) => (
-                      <small key={task.id}>{task.title}</small>
+                      <button
+                        key={task.id}
+                        type="button"
+                        className={`mini-calendar-task${task.status === "done" ? " done" : ""}`}
+                        onClick={(e) => { e.stopPropagation(); navigate("/tasks", { state: { openTaskId: task.id, occurrenceStatus: task.status } }); }}
+                      >
+                        {task.title}
+                      </button>
                     ))}
                   </div>
                 );

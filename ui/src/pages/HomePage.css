@@ -428,7 +428,9 @@
   display: flex;
   align-items: center;
   gap: 0.38rem;
+  flex: 1;
   min-width: 0;
+  overflow: hidden;
 }
 
 .progress-dot {
@@ -532,6 +534,33 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.mini-calendar-cell .mini-calendar-task {
+  display: block;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  text-align: left;
+  cursor: pointer;
+  color: #7d90aa;
+  font-size: 0.62rem;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: inherit;
+}
+
+.mini-calendar-cell .mini-calendar-task:hover {
+  color: #b0c8e8;
+}
+
+.mini-calendar-cell .mini-calendar-task.done {
+  text-decoration: line-through;
+  color: #4e5e72;
 }
 
 .mini-calendar-cell.is-muted {

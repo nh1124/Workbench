@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type UIEvent } from "react";
+import { useLocation } from "react-router-dom";
 import { projectsApi, tasksApi } from "../lib/api";
 import { formatDateTime } from "../lib/format";
 import { pushErrorNotification } from "../lib/notificationService";
 import type { RecurrenceType, Task, TaskHistoryEntry, TaskScheduleDay, TaskStatus } from "../types/models";
 import "./TasksPage.css";
 
-type SortMode = "default" | "load" | "due";
+type SortMode = "load" | "due" | "project";
 
 type SidebarMode = "list" | "calendar";
 type CalendarMode = "month" | "week";
@@ -414,6 +415,7 @@ function StatusCircle({ status }: { status: TaskStatus }) {
 }
 
 export function TasksPage() {
+  const location = useLocation();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [projectOptions, setProjectOptions] = useState<ProjectOption[]>([]);
   const [contextFilter, setContextFilter] = useState("");
@@ -450,8 +452,7 @@ export function TasksPage() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [nowMarker, setNowMarker] = useState(() => new Date());
-  const [sortMode, setSortMode] = useState<SortMode>("default");
-  const [occurrenceGroupMode, setOccurrenceGroupMode] = useState<"date" | "project">("date");
+  const [sortMode, setSortMode] = useState<SortMode>("load");
   const [todayCompletedOpen, setTodayCompletedOpen] = useState(false);
   const [inboxCompletedOpen, setInboxCompletedOpen] = useState(false);
   const [showMoveDateInput, setShowMoveDateInput] = useState(false);
@@ -461,6 +462,8 @@ export function TasksPage() {
   const [inboxDoneRows, setInboxDoneRows] = useState<TaskOccurrenceRow[]>([]);
   const [plannedCount, setPlannedCount] = useState(0);
   const [overdueCount, setOverdueCount] = useState(0);
+  // date-key → taskId → status (for calendar per-date display)
+  const [calendarStatusMap, setCalendarStatusMap] = useState<Map<string, Map<string, TaskStatus>>>(new Map());
   const importRef = useRef<HTMLInputElement>(null);
   const weekTimelineScrollRef = useRef<HTMLDivElement | null>(null);
   const autoScrolledWeekKeyRef = useRef<string>("");
@@ -587,6 +590,18 @@ export function TasksPage() {
       setInboxUpcomingRows(builtInboxUpcoming);
       setInboxDoneRows(builtInboxDone);
 
+      // Build per-date execution status map for calendar display
+      const csMap = new Map<string, Map<string, TaskStatus>>();
+      for (const scheduleDays of [inboxPastSchedule, todaySchedule, inboxUpcomingSchedule]) {
+        for (const day of scheduleDays) {
+          for (const item of day.tasks) {
+            if (!csMap.has(day.date)) csMap.set(day.date, new Map());
+            csMap.get(day.date)!.set(item.taskId, toTaskStatus(item.status));
+          }
+        }
+      }
+      setCalendarStatusMap(csMap);
+
       const mergedTasks = taskList.map((task) => {
         const status = todayStatusMap.get(task.id);
         if (!status) return task;
@@ -622,6 +637,20 @@ export function TasksPage() {
   };
 
   useEffect(() => { void load(); }, [contextFilter]);
+
+  // Handle navigation from other pages with a task to open (e.g., Home calendar click)
+  const openTaskIdHandledRef = useRef<string | null>(null);
+  useEffect(() => {
+    const state = location.state as { openTaskId?: string; occurrenceStatus?: TaskStatus } | null;
+    const openTaskId = state?.openTaskId;
+    if (!openTaskId || tasks.length === 0 || openTaskId === openTaskIdHandledRef.current) return;
+    const task = tasks.find((t) => t.id === openTaskId);
+    if (task) {
+      openTaskIdHandledRef.current = openTaskId;
+      setSidebarMode("list");
+      selectTask(task, state?.occurrenceStatus);
+    }
+  }, [tasks, location.state]);
 
   const buildOccurrenceRowsFromSchedule = (
     scheduleDays: TaskScheduleDay[],
@@ -778,12 +807,18 @@ export function TasksPage() {
         return (a.startTime || "").localeCompare(b.startTime || "");
       });
     }
-    return base.sort((a, b) => {
-      const d = doneOrder(a) - doneOrder(b);
-      if (d !== 0) return d;
-      const dA = a.dueDate || "9999-12-31", dB = b.dueDate || "9999-12-31";
-      return dA !== dB ? dA.localeCompare(dB) : b.updatedAt.localeCompare(a.updatedAt);
-    });
+    if (sortMode === "project") {
+      return base.sort((a, b) => {
+        const d = doneOrder(a) - doneOrder(b);
+        if (d !== 0) return d;
+        const pA = (a.contextName || a.context || "").toLowerCase();
+        const pB = (b.contextName || b.context || "").toLowerCase();
+        if (pA !== pB) return pA.localeCompare(pB);
+        const dA = a.dueDate || "9999-12-31", dB = b.dueDate || "9999-12-31";
+        return dA.localeCompare(dB);
+      });
+    }
+    return base;
   }, [quickFilter, calendarStatusFilter, sidebarMode, tasks, today, todayTaskIds, sortMode]);
 
   const counters = useMemo(() => ({
@@ -901,10 +936,18 @@ export function TasksPage() {
     const map = new Map<string, Task[]>();
     for (const date of visibleDates) {
       const key = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
-      map.set(key, filteredTasks.filter((task) => taskOccursOnDate(task, date)));
+      const dateKey = toDateKey(date);
+      const dateStatuses = calendarStatusMap.get(dateKey);
+      const tasks = filteredTasks
+        .filter((task) => taskOccursOnDate(task, date))
+        .map((task) => {
+          const status = dateStatuses?.get(task.id);
+          return status !== undefined ? { ...task, status } : task;
+        });
+      map.set(key, tasks);
     }
     return map;
-  }, [calendarMode, filteredTasks, monthCells, weekDays]);
+  }, [calendarMode, filteredTasks, monthCells, weekDays, calendarStatusMap]);
 
   const hasTasksInVisiblePeriod = useMemo(
     () => Array.from(tasksByDate.values()).some((items) => items.length > 0),
@@ -1531,21 +1574,10 @@ export function TasksPage() {
                 onChange={(e) => setSortMode(e.target.value as SortMode)}
                 title="Sort tasks"
               >
-                <option value="default">Sort: Default</option>
                 <option value="load">Sort: Load</option>
                 <option value="due">Sort: Due Date</option>
+                <option value="project">Sort: Project</option>
               </select>
-              {(quickFilter === "planned" || quickFilter === "overdue") && (
-                <select
-                  className="sort-select"
-                  value={occurrenceGroupMode}
-                  onChange={(e) => setOccurrenceGroupMode(e.target.value as "date" | "project")}
-                  title="Group by"
-                >
-                  <option value="date">Group: Date</option>
-                  <option value="project">Group: Project</option>
-                </select>
-              )}
               <button type="button" className="icon-button" onClick={handleExport} title="Export CSV"><IcoDownload /></button>
               <button type="button" className="icon-button" onClick={() => importRef.current?.click()} title="Import CSV"><IcoUpload /></button>
               <input ref={importRef} type="file" accept=".csv" style={{ display: "none" }} onChange={handleImport} />
@@ -1773,22 +1805,40 @@ export function TasksPage() {
                     </li>
                   );
                 };
-                // Group upcoming by date
-                const dateGroupMap = new Map<string, TaskOccurrenceRow[]>();
-                for (const row of inboxUpcomingRows) {
-                  const list = dateGroupMap.get(row.date) || [];
-                  list.push(row);
-                  dateGroupMap.set(row.date, list);
+                // Group upcoming by date or project
+                let upcomingGroups: { key: string; label: string; color?: string; rows: TaskOccurrenceRow[] }[];
+                if (sortMode === "project") {
+                  const projectGroupMap = new Map<string, TaskOccurrenceRow[]>();
+                  for (const row of inboxUpcomingRows) {
+                    const key = row.context || "";
+                    const list = projectGroupMap.get(key) || [];
+                    list.push(row);
+                    projectGroupMap.set(key, list);
+                  }
+                  upcomingGroups = Array.from(projectGroupMap.entries())
+                    .sort(([a], [b]) => a.toLowerCase().localeCompare(b.toLowerCase()))
+                    .map(([key, rows]) => {
+                      const masterTask = tasks.find((t) => t.context === key);
+                      const label = resolveContextDisplayName(key, masterTask?.contextName);
+                      return { key, label, color: contextColor(key), rows };
+                    });
+                } else {
+                  const dateGroupMap = new Map<string, TaskOccurrenceRow[]>();
+                  for (const row of inboxUpcomingRows) {
+                    const list = dateGroupMap.get(row.date) || [];
+                    list.push(row);
+                    dateGroupMap.set(row.date, list);
+                  }
+                  upcomingGroups = Array.from(dateGroupMap.entries())
+                    .sort(([a], [b]) => a.localeCompare(b))
+                    .map(([date, rows]) => ({ key: date, label: formatDateHeading(date), rows }));
                 }
-                const upcomingGroups = Array.from(dateGroupMap.entries())
-                  .sort(([a], [b]) => a.localeCompare(b))
-                  .map(([date, rows]) => ({ date, rows }));
                 return (
                   <>
                     {upcomingGroups.map((group) => (
-                      <article key={group.date} className="task-date-group">
+                      <article key={group.key} className="task-date-group">
                         <header>
-                          <h4>{formatDateHeading(group.date)}</h4>
+                          <h4 style={group.color ? { color: group.color } : undefined}>{group.label}</h4>
                           <small>{group.rows.length}</small>
                         </header>
                         <ul>{group.rows.map(renderInboxRow)}</ul>
@@ -1881,7 +1931,7 @@ export function TasksPage() {
               })()
             ) : (quickFilter === "planned" || quickFilter === "overdue") ? (
               <>
-                {(occurrenceGroupMode === "project" ? occurrenceProjectGroups.map((group) => ({
+                {(sortMode === "project" ? occurrenceProjectGroups.map((group) => ({
                   key: group.context,
                   label: group.contextName,
                   dotColor: contextColor(group.context) as string | undefined,
@@ -2016,7 +2066,7 @@ export function TasksPage() {
                         <strong>{cell.date.getDate()}</strong>
                         {dayTasks.slice(0, 3).map((t) => (
                           <button key={t.id} type="button" className={`calendar-task-pill${t.status === "done" ? " done" : ""}`}
-                            onClick={(e) => { e.stopPropagation(); selectTask(t); }}>{t.title}</button>
+                            onClick={(e) => { e.stopPropagation(); selectTask(t, t.status); }}>{t.title}</button>
                         ))}
                         {dayTasks.length > 3 && <small style={{ color: "#6b7280", fontSize: "0.62rem" }}>+{dayTasks.length - 3}</small>}
                       </div>
@@ -2057,7 +2107,7 @@ export function TasksPage() {
                             key={task.id}
                             type="button"
                             className={`calendar-task-pill${task.status === "done" ? " done" : ""}`}
-                            onClick={() => selectTask(task)}
+                            onClick={() => selectTask(task, task.status)}
                             title={task.title}
                           >
                             {task.title}
@@ -2229,7 +2279,7 @@ export function TasksPage() {
                                   width: `calc(${laneWidthPercent}% - 4px)`,
                                   zIndex: event.lane + 1
                                 }}
-                                onClick={() => selectTask(event.task)}
+                                onClick={() => selectTask(event.task, event.task.status)}
                                 title={`${event.task.title} (${event.timeLabel})`}
                               >
                                 <strong>{event.task.title}</strong>
