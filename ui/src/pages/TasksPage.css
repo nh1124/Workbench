@@ -757,8 +757,15 @@ textarea.edit-input { resize: vertical; min-height: 90px; }
   margin-left: auto;
   order: 2;
 }
-.edit-footer-actions { display: flex; gap: 0.4rem; order: 1; }
-.edit-save-btn { background: #4f46e5; color: #fff; }
+.auto-save-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: #6366f1; flex-shrink: 0; align-self: center;
+  animation: auto-save-pulse 1.2s ease-in-out infinite;
+}
+@keyframes auto-save-pulse {
+  0%, 100% { opacity: 0.25; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1); }
+}
 
 .day-tasks-backdrop { position: fixed; inset: 0; background: rgba(2,6,23,0.45); z-index: 40; }
 .day-tasks-panel { position: fixed; top: 80px; right: 12px; bottom: 12px; width: 360px; border: 1px solid var(--line); border-radius: 14px; background: #111827; z-index: 50; display: flex; flex-direction: column; }

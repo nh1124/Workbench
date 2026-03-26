@@ -482,6 +482,7 @@ export function TasksPage() {
   const importRef = useRef<HTMLInputElement>(null);
   const weekTimelineScrollRef = useRef<HTMLDivElement | null>(null);
   const autoScrolledWeekKeyRef = useRef<string>("");
+  const draftRef = useRef<TaskDraft>(emptyDraft);
 
   const today = useMemo(() => startOfDay(new Date()), []);
 
@@ -1018,6 +1019,8 @@ export function TasksPage() {
     if (!error || isAuthError) return null;
     return error;
   }, [error, isAuthError]);
+  // Keep draftRef in sync every render so applyAndSave always reads the freshest draft.
+  draftRef.current = draft;
   const selectedTask = tasks.find((t) => t.id === selectedTaskId) || null;
   const dayDetailTasks = useMemo(() => {
     if (!dayDetailDate) return [];
@@ -1374,40 +1377,35 @@ export function TasksPage() {
     finally { setIsSaving(false); }
   };
 
-  const handleSaveDetail = async () => {
-    if (!draft.title.trim() || !draft.context.trim()) { setError("Title and context are required."); return; }
-    if (!selectedTaskId) return;
+  // Event-driven save — called with the already-updated draft snapshot.
+  const saveDetail = useCallback(async (d: TaskDraft) => {
+    if (!selectedTaskId || !d.title.trim() || !d.context.trim()) return;
     setIsSaving(true); setError(null);
     try {
       const updated = await tasksApi.update(selectedTaskId, {
-        title: draft.title.trim(),
-        notes: draft.notes,
-        context: draft.context,
-        status: draft.status,
-        isLocked: draft.isLocked,
-        baseLoadScore: draft.baseLoadScore,
-        recurrence: draft.recurrence,
-        dueDate: draft.dueDate || undefined,
-        startTime: draft.startTime || undefined,
-        endTime: draft.endTime || undefined,
-        timezone: draft.timezone,
-        active: draft.active,
-        activeFrom: draft.activeFrom || undefined,
-        activeUntil: draft.activeUntil || undefined,
-        mon: draft.mon, tue: draft.tue, wed: draft.wed, thu: draft.thu,
-        fri: draft.fri, sat: draft.sat, sun: draft.sun,
-        intervalDays: draft.intervalDays,
-        anchorDate: draft.anchorDate || undefined,
-        monthDay: draft.monthDay, nthInMonth: draft.nthInMonth, weekdayMon1: draft.weekdayMon1
+        title: d.title.trim(), notes: d.notes, context: d.context,
+        status: d.status, isLocked: d.isLocked, baseLoadScore: d.baseLoadScore,
+        recurrence: d.recurrence, dueDate: d.dueDate || undefined,
+        startTime: d.startTime || undefined, endTime: d.endTime || undefined,
+        timezone: d.timezone, active: d.active,
+        activeFrom: d.activeFrom || undefined, activeUntil: d.activeUntil || undefined,
+        mon: d.mon, tue: d.tue, wed: d.wed, thu: d.thu,
+        fri: d.fri, sat: d.sat, sun: d.sun,
+        intervalDays: d.intervalDays, anchorDate: d.anchorDate || undefined,
+        monthDay: d.monthDay, nthInMonth: d.nthInMonth, weekdayMon1: d.weekdayMon1,
       });
       if (updated) setDraft(taskToDraft(updated));
       await load();
-    } catch {
-      // API errors are routed to the global notification center.
-      setError(null);
-    }
-    finally { setIsSaving(false); }
-  };
+    } catch { setError(null); } finally { setIsSaving(false); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTaskId]);
+
+  // Merge a partial update into the current draft and immediately save.
+  const applyAndSave = useCallback((update: Partial<TaskDraft>) => {
+    const newD = { ...draftRef.current, ...update };
+    setDraft(newD);
+    void saveDetail(newD);
+  }, [saveDetail]);
 
   const handleDeleteDetail = async () => {
     if (!selectedTaskId) return;
@@ -2498,10 +2496,9 @@ export function TasksPage() {
               <button
                 type="button"
                 className={`detail-status-btn ${draft.status}`}
-                onClick={() => setDraft((p) => ({
-                  ...p,
-                  status: p.status === "todo" ? "done" : p.status === "done" ? "skipped" : "todo"
-                }))}
+                onClick={() => applyAndSave({
+                  status: draft.status === "todo" ? "done" : draft.status === "done" ? "skipped" : "todo"
+                })}
                 title={`Status: ${draft.status} (click to cycle)`}
                 aria-label={`Status: ${draft.status}`}
               >
@@ -2515,15 +2512,17 @@ export function TasksPage() {
                 className="tasks-detail-title-input"
                 value={draft.title}
                 onChange={(e) => setDraft((p) => ({ ...p, title: e.target.value }))}
+                onBlur={(e) => applyAndSave({ title: e.target.value })}
                 placeholder="Task title"
                 aria-label="Task title"
               />
             </div>
             <div className="tasks-detail-head-actions">
+              {isSaving && <span className="auto-save-dot" title="Saving…" />}
               <button
                 type="button"
                 className={`detail-lock-btn${draft.isLocked ? " active" : ""}`}
-                onClick={() => setDraft((p) => ({ ...p, isLocked: !p.isLocked }))}
+                onClick={() => applyAndSave({ isLocked: !draft.isLocked })}
                 title={draft.isLocked ? "Locked — click to unlock" : "Unlocked — click to lock"}
                 aria-label={draft.isLocked ? "Unlock task" : "Lock task"}
               >
@@ -2583,7 +2582,7 @@ export function TasksPage() {
               <div className="edit-section">
                 <div className="edit-section-label">Context</div>
                 <select className="edit-input" value={draft.context}
-                  onChange={(e) => setDraft((p) => ({ ...p, context: e.target.value }))}>
+                  onChange={(e) => applyAndSave({ context: e.target.value })}>
                   <option value="">Select context</option>
                   {projectOptions.map((p) => (
                     <option key={p.projectId} value={p.projectId}>{p.projectName || p.projectId}</option>
@@ -2595,6 +2594,8 @@ export function TasksPage() {
                 <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
                   <input type="range" min={0} max={10} step={1} value={draft.baseLoadScore}
                     onChange={(e) => setDraft((p) => ({ ...p, baseLoadScore: Number(e.target.value) }))}
+                    onMouseUp={(e) => applyAndSave({ baseLoadScore: Number((e.target as HTMLInputElement).value) })}
+                    onTouchEnd={(e) => applyAndSave({ baseLoadScore: Number((e.target as HTMLInputElement).value) })}
                     style={{ flex: 1 }} />
                   <span className="load-badge"
                     style={{ color: loadScoreColor(draft.baseLoadScore), borderColor: loadScoreColor(draft.baseLoadScore), flexShrink: 0 }}>
@@ -2608,7 +2609,7 @@ export function TasksPage() {
             <div className="edit-section">
               <div className="edit-section-label">Recurrence</div>
               <select className="edit-input" value={draft.recurrence}
-                onChange={(e) => setDraft((p) => ({ ...p, recurrence: e.target.value as RecurrenceType }))}>
+                onChange={(e) => applyAndSave({ recurrence: e.target.value as RecurrenceType })}>
                 {RECURRENCE_TYPES.map((r) => <option key={r} value={r}>{RECURRENCE_LABELS[r]}</option>)}
               </select>
             </div>
@@ -2621,7 +2622,7 @@ export function TasksPage() {
                   {(["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const).map((d, i) => (
                     <button key={d} type="button"
                       className={draft[d] ? "weekday-btn active" : "weekday-btn"}
-                      onClick={() => setDraft((p) => ({ ...p, [d]: !p[d] }))}>
+                      onClick={() => applyAndSave({ [d]: !draft[d] })}>
                       {weekdays[i]}
                     </button>
                   ))}
@@ -2634,14 +2635,15 @@ export function TasksPage() {
               <div className="edit-section">
                 <div className="edit-section-label">Every N Days</div>
                 <input type="number" min={1} className="edit-input" value={draft.intervalDays}
-                  onChange={(e) => setDraft((p) => ({ ...p, intervalDays: Number(e.target.value) }))} />
+                  onChange={(e) => setDraft((p) => ({ ...p, intervalDays: Number(e.target.value) }))}
+                  onBlur={(e) => applyAndSave({ intervalDays: Number(e.target.value) })} />
               </div>
             )}
             {draft.recurrence === "EVERY_N_DAYS" && (
               <div className="edit-section">
                 <div className="edit-section-label">Anchor Date</div>
                 <input type="date" className="edit-input" value={draft.anchorDate}
-                  onChange={(e) => setDraft((p) => ({ ...p, anchorDate: e.target.value }))} />
+                  onChange={(e) => applyAndSave({ anchorDate: e.target.value })} />
               </div>
             )}
 
@@ -2650,7 +2652,8 @@ export function TasksPage() {
               <div className="edit-section">
                 <div className="edit-section-label">Day of Month</div>
                 <input type="number" min={1} max={31} className="edit-input" value={draft.monthDay}
-                  onChange={(e) => setDraft((p) => ({ ...p, monthDay: Number(e.target.value) }))} />
+                  onChange={(e) => setDraft((p) => ({ ...p, monthDay: Number(e.target.value) }))}
+                  onBlur={(e) => applyAndSave({ monthDay: Number(e.target.value) })} />
               </div>
             )}
             {draft.recurrence === "MONTHLY_NTH_WEEKDAY" && (
@@ -2658,12 +2661,13 @@ export function TasksPage() {
                 <div className="edit-section">
                   <div className="edit-section-label">Nth Week</div>
                   <input type="number" min={1} max={5} className="edit-input" value={draft.nthInMonth}
-                    onChange={(e) => setDraft((p) => ({ ...p, nthInMonth: Number(e.target.value) }))} />
+                    onChange={(e) => setDraft((p) => ({ ...p, nthInMonth: Number(e.target.value) }))}
+                    onBlur={(e) => applyAndSave({ nthInMonth: Number(e.target.value) })} />
                 </div>
                 <div className="edit-section">
                   <div className="edit-section-label">Weekday</div>
                   <select className="edit-input" value={draft.weekdayMon1}
-                    onChange={(e) => setDraft((p) => ({ ...p, weekdayMon1: Number(e.target.value) }))}>
+                    onChange={(e) => applyAndSave({ weekdayMon1: Number(e.target.value) })}>
                     {weekdays.map((d, i) => <option key={d} value={i}>{d}</option>)}
                   </select>
                 </div>
@@ -2675,7 +2679,7 @@ export function TasksPage() {
               <div className="edit-section">
                 <div className="edit-section-label">Due Date</div>
                 <input type="date" className="edit-input" value={draft.dueDate}
-                  onChange={(e) => setDraft((p) => ({ ...p, dueDate: e.target.value }))} />
+                  onChange={(e) => applyAndSave({ dueDate: e.target.value })} />
               </div>
             )}
 
@@ -2684,12 +2688,12 @@ export function TasksPage() {
               <div className="edit-section">
                 <div className="edit-section-label">Start Time</div>
                 <input type="time" className="edit-input" value={draft.startTime}
-                  onChange={(e) => setDraft((p) => ({ ...p, startTime: e.target.value }))} />
+                  onChange={(e) => applyAndSave({ startTime: e.target.value })} />
               </div>
               <div className="edit-section">
                 <div className="edit-section-label">End Time</div>
                 <input type="time" className="edit-input" value={draft.endTime}
-                  onChange={(e) => setDraft((p) => ({ ...p, endTime: e.target.value }))} />
+                  onChange={(e) => applyAndSave({ endTime: e.target.value })} />
               </div>
             </div>
 
@@ -2698,6 +2702,7 @@ export function TasksPage() {
               <div className="edit-section-label">Timezone</div>
               <input className="edit-input" value={draft.timezone}
                 onChange={(e) => setDraft((p) => ({ ...p, timezone: e.target.value }))}
+                onBlur={(e) => applyAndSave({ timezone: e.target.value })}
                 placeholder="e.g. Asia/Tokyo" />
             </div>
 
@@ -2706,6 +2711,7 @@ export function TasksPage() {
               <div className="edit-section-label">Notes</div>
               <textarea className="edit-input" rows={4} value={draft.notes}
                 onChange={(e) => setDraft((p) => ({ ...p, notes: e.target.value }))}
+                onBlur={(e) => applyAndSave({ notes: e.target.value })}
                 placeholder="Notes..." />
             </div>
 
@@ -2723,12 +2729,12 @@ export function TasksPage() {
                       <div className="edit-section">
                         <div className="edit-section-label">Active From</div>
                         <input type="date" className="edit-input" value={draft.activeFrom}
-                          onChange={(e) => setDraft((p) => ({ ...p, activeFrom: e.target.value }))} />
+                          onChange={(e) => applyAndSave({ activeFrom: e.target.value })} />
                       </div>
                       <div className="edit-section">
                         <div className="edit-section-label">Active Until</div>
                         <input type="date" className="edit-input" value={draft.activeUntil}
-                          onChange={(e) => setDraft((p) => ({ ...p, activeUntil: e.target.value }))} />
+                          onChange={(e) => applyAndSave({ activeUntil: e.target.value })} />
                       </div>
                     </div>
                   )}
@@ -2840,15 +2846,6 @@ export function TasksPage() {
             <button type="button" className="edit-delete-btn" onClick={handleDeleteDetail} disabled={isSaving} title="Delete task">
               <IcoTrash />
             </button>
-            <div className="edit-footer-actions">
-              <button type="button" className="ghost-button" onClick={clearDetail} disabled={isSaving}
-                style={{ fontSize: "0.8rem", padding: "0.4rem 0.8rem" }}>
-                Cancel
-              </button>
-              <button type="button" className="edit-save-btn" onClick={handleSaveDetail} disabled={isSaving}>
-                {isSaving ? "Saving…" : "Save"}
-              </button>
-            </div>
           </div>
         </aside>
       )}
