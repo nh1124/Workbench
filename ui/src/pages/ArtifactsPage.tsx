@@ -302,7 +302,7 @@ export function ArtifactsPage() {
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
   const [selectionAnchorId, setSelectionAnchorId] = useState<string | null>(null);
-  const [selectedFolderPath, setSelectedFolderPath] = useState("");
+  const [selectedFolderPath, setSelectedFolderPath] = useState<string | null>(null);
   const [collapsedFolders, setCollapsedFolders] = useState<Record<string, true>>({});
   const [draft, setDraft] = useState<ArtifactEditorDraft>(defaultDraft);
   const [mode, setMode] = useState<"view" | "create-note">("view");
@@ -329,7 +329,7 @@ export function ArtifactsPage() {
   const selectedItemIdSet = useMemo(() => new Set(selectedItemIds), [selectedItemIds]);
 
   const currentFolderPath = useMemo(() => {
-    if (selectedFolderPath) return selectedFolderPath;
+    if (selectedFolderPath !== null) return selectedFolderPath;
     if (mode === "create-note") return parentPath(draft.path);
     if (draft.id) return parentPath(draft.path);
     return "";

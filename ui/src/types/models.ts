@@ -72,6 +72,7 @@ export interface Task {
   sat?: boolean;
   sun?: boolean;
   intervalDays?: number;
+  anchorDate?: string;
   monthDay?: number;
   nthInMonth?: number;
   weekdayMon1?: number;

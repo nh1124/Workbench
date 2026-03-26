@@ -32,6 +32,7 @@ export interface Task {
   sun?: boolean;
   // every-n-days
   intervalDays?: number;
+  anchorDate?: string;
   // monthly
   monthDay?: number;
   nthInMonth?: number;
@@ -64,6 +65,7 @@ export interface TaskInput {
   sat?: boolean;
   sun?: boolean;
   intervalDays?: number;
+  anchorDate?: string;
   monthDay?: number;
   nthInMonth?: number;
   weekdayMon1?: number;

@@ -45,6 +45,7 @@ interface LbsTask {
   sat?: boolean | null;
   sun?: boolean | null;
   interval_days?: number | null;
+  anchor_date?: string | null;
   month_day?: number | null;
   nth_in_month?: number | null;
   weekday_mon1?: number | null;
@@ -200,6 +201,7 @@ function normalizeResponseTask(task: LbsTask): Task {
     sat: task.sat ?? undefined,
     sun: task.sun ?? undefined,
     intervalDays: task.interval_days ?? undefined,
+    anchorDate: toDueDateOnly(task.anchor_date),
     monthDay: task.month_day ?? undefined,
     nthInMonth: task.nth_in_month ?? undefined,
     weekdayMon1: task.weekday_mon1 ?? undefined,
@@ -485,6 +487,11 @@ function buildLbsPayload(input: TaskInput, config: LbsConfig): Record<string, un
   if (input.sat !== undefined) payload.sat = input.sat;
   if (input.sun !== undefined) payload.sun = input.sun;
   if (input.intervalDays !== undefined) payload.interval_days = input.intervalDays;
+  if (input.anchorDate !== undefined) payload.anchor_date = input.anchorDate || null;
+  // For EVERY_N_DAYS, anchor_date is required; fall back to activeFrom if not explicitly set
+  if ((input.recurrence === "EVERY_N_DAYS") && !payload.anchor_date) {
+    payload.anchor_date = input.activeFrom || null;
+  }
   if (input.monthDay !== undefined) payload.month_day = input.monthDay;
   if (input.nthInMonth !== undefined) payload.nth_in_month = input.nthInMonth;
   if (input.weekdayMon1 !== undefined) payload.weekday_mon1 = input.weekdayMon1;
@@ -557,6 +564,7 @@ export async function updateTask(
     sat: updates.sat !== undefined ? updates.sat : (current.sat ?? undefined),
     sun: updates.sun !== undefined ? updates.sun : (current.sun ?? undefined),
     intervalDays: updates.intervalDays !== undefined ? updates.intervalDays : (current.interval_days ?? undefined),
+    anchorDate: updates.anchorDate !== undefined ? (updates.anchorDate || undefined) : (toDueDateOnly(current.anchor_date) ?? undefined),
     monthDay: updates.monthDay !== undefined ? updates.monthDay : (current.month_day ?? undefined),
     nthInMonth: updates.nthInMonth !== undefined ? updates.nthInMonth : (current.nth_in_month ?? undefined),
     weekdayMon1: updates.weekdayMon1 !== undefined ? updates.weekdayMon1 : (current.weekday_mon1 ?? undefined),

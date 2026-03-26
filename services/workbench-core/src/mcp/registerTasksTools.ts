@@ -64,7 +64,11 @@ export function registerTasksTools(server: McpServer, ctx?: ToolContext): void {
         dueDate: z.string().optional(),
         startTime: z.string().optional(),
         endTime: z.string().optional(),
-        timezone: z.string().optional()
+        timezone: z.string().optional(),
+        activeFrom: z.string().optional().describe("Active from date (YYYY-MM-DD)"),
+        activeUntil: z.string().optional().describe("Active until date (YYYY-MM-DD)"),
+        intervalDays: z.number().int().positive().optional().describe("Interval in days (EVERY_N_DAYS only)"),
+        anchorDate: z.string().optional().describe("Anchor date for EVERY_N_DAYS recurrence (YYYY-MM-DD). Defaults to activeFrom if not set.")
       }
     },
     async (payload) => {
@@ -90,7 +94,11 @@ export function registerTasksTools(server: McpServer, ctx?: ToolContext): void {
         dueDate: z.string().optional(),
         startTime: z.string().optional(),
         endTime: z.string().optional(),
-        timezone: z.string().optional()
+        timezone: z.string().optional(),
+        activeFrom: z.string().optional().describe("Active from date (YYYY-MM-DD)"),
+        activeUntil: z.string().optional().describe("Active until date (YYYY-MM-DD)"),
+        intervalDays: z.number().int().positive().optional().describe("Interval in days (EVERY_N_DAYS only)"),
+        anchorDate: z.string().optional().describe("Anchor date for EVERY_N_DAYS recurrence (YYYY-MM-DD)")
       }
     },
     async ({ id, ...payload }) => {

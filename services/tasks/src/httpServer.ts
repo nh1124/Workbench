@@ -81,6 +81,7 @@ const taskInputSchema = z.object({
   sat: z.boolean().optional(),
   sun: z.boolean().optional(),
   intervalDays: z.number().int().positive().optional(),
+  anchorDate: z.string().optional().or(z.literal("")),
   monthDay: z.number().int().min(1).max(31).optional(),
   nthInMonth: z.number().int().min(1).max(5).optional(),
   weekdayMon1: z.number().int().min(0).max(6).optional()

@@ -44,6 +44,7 @@ interface TaskDraft {
   mon: boolean; tue: boolean; wed: boolean; thu: boolean;
   fri: boolean; sat: boolean; sun: boolean;
   intervalDays: number;
+  anchorDate: string;
   monthDay: number;
   nthInMonth: number;
   weekdayMon1: number;
@@ -74,7 +75,7 @@ const emptyDraft: TaskDraft = {
   activeFrom: "", activeUntil: "",
   mon: false, tue: false, wed: false, thu: false,
   fri: false, sat: false, sun: false,
-  intervalDays: 1, monthDay: 1, nthInMonth: 1, weekdayMon1: 0
+  intervalDays: 1, anchorDate: "", monthDay: 1, nthInMonth: 1, weekdayMon1: 0
 };
 
 function taskToDraft(task: Task): TaskDraft {
@@ -101,6 +102,7 @@ function taskToDraft(task: Task): TaskDraft {
     sat: task.sat ?? false,
     sun: task.sun ?? false,
     intervalDays: task.intervalDays ?? 1,
+    anchorDate: task.anchorDate || "",
     monthDay: task.monthDay ?? 1,
     nthInMonth: task.nthInMonth ?? 1,
     weekdayMon1: task.weekdayMon1 ?? 0
@@ -964,9 +966,10 @@ export function TasksPage() {
     return filteredTasks.filter((task) => taskOccursOnDate(task, dayDetailDate));
   }, [dayDetailDate, filteredTasks]);
 
-  const selectTask = (task: Task) => {
+  const selectTask = (task: Task, occurrenceStatus?: TaskStatus) => {
     setSelectedTaskId(task.id);
-    setDraft(taskToDraft(task));
+    const d = taskToDraft(task);
+    setDraft(occurrenceStatus !== undefined ? { ...d, status: occurrenceStatus } : d);
     setHistory([]);
     setHistoryOpen(false);
     setAdvancedOpen(false);
@@ -1116,7 +1119,7 @@ export function TasksPage() {
       setSelectedOccurrenceKeys(new Set([row.key]));
       setLastOccurrenceKey(row.key);
       const masterTask = tasks.find((task) => task.id === row.taskId);
-      if (masterTask) selectTask(masterTask);
+      if (masterTask) selectTask(masterTask, row.status);
     }
   };
 
@@ -1246,6 +1249,7 @@ export function TasksPage() {
         mon: addDraft.mon, tue: addDraft.tue, wed: addDraft.wed, thu: addDraft.thu,
         fri: addDraft.fri, sat: addDraft.sat, sun: addDraft.sun,
         intervalDays: addDraft.intervalDays,
+        anchorDate: isOnce ? undefined : (addDraft.anchorDate || undefined),
         monthDay: addDraft.monthDay, nthInMonth: addDraft.nthInMonth,
         weekdayMon1: addDraft.weekdayMon1
       } as Parameters<typeof tasksApi.create>[0]);
@@ -1284,6 +1288,7 @@ export function TasksPage() {
         mon: draft.mon, tue: draft.tue, wed: draft.wed, thu: draft.thu,
         fri: draft.fri, sat: draft.sat, sun: draft.sun,
         intervalDays: draft.intervalDays,
+        anchorDate: draft.anchorDate || undefined,
         monthDay: draft.monthDay, nthInMonth: draft.nthInMonth, weekdayMon1: draft.weekdayMon1
       });
       if (updated) setDraft(taskToDraft(updated));
@@ -1636,6 +1641,13 @@ export function TasksPage() {
                       <div className="edit-section-label">Every N Days</div>
                       <input type="number" min={1} className="edit-input" value={addDraft.intervalDays}
                         onChange={(e) => setAddDraft((p) => ({ ...p, intervalDays: Number(e.target.value) }))} />
+                    </div>
+                  )}
+                  {addDraft.recurrence === "EVERY_N_DAYS" && (
+                    <div className="edit-section task-add-advanced-span">
+                      <div className="edit-section-label">Anchor Date</div>
+                      <input type="date" className="edit-input" value={addDraft.anchorDate}
+                        onChange={(e) => setAddDraft((p) => ({ ...p, anchorDate: e.target.value }))} />
                     </div>
                   )}
                   {addDraft.recurrence === "MONTHLY_DAY" && (
@@ -2398,6 +2410,13 @@ export function TasksPage() {
                 <div className="edit-section-label">Every N Days</div>
                 <input type="number" min={1} className="edit-input" value={draft.intervalDays}
                   onChange={(e) => setDraft((p) => ({ ...p, intervalDays: Number(e.target.value) }))} />
+              </div>
+            )}
+            {draft.recurrence === "EVERY_N_DAYS" && (
+              <div className="edit-section">
+                <div className="edit-section-label">Anchor Date</div>
+                <input type="date" className="edit-input" value={draft.anchorDate}
+                  onChange={(e) => setDraft((p) => ({ ...p, anchorDate: e.target.value }))} />
               </div>
             )}
 
