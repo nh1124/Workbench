@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type UIEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent as ReactMouseEvent, type UIEvent } from "react";
 import { useLocation } from "react-router-dom";
-import { projectsApi, tasksApi } from "../lib/api";
+import { projectsApi, taskAttachmentsApi, tasksApi, taskSubtasksApi } from "../lib/api";
 import { formatDateTime } from "../lib/format";
 import { pushErrorNotification } from "../lib/notificationService";
-import type { RecurrenceType, Task, TaskHistoryEntry, TaskScheduleDay, TaskStatus } from "../types/models";
+import type { RecurrenceType, Task, TaskAttachment, TaskHistoryEntry, TaskScheduleDay, TaskStatus, TaskSubtask } from "../types/models";
 import "./TasksPage.css";
 
 type SortMode = "load" | "due" | "project";
@@ -407,6 +407,12 @@ const IcoChevronDown = () => (
     <polyline points="6 9 12 15 18 9" />
   </svg>
 );
+const IcoFile = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" style={{ width: "0.85rem", height: "0.85rem", flexShrink: 0 }}>
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+    <polyline points="14 2 14 8 20 8" />
+  </svg>
+);
 
 function StatusCircle({ status }: { status: TaskStatus }) {
   if (status === "done") return <span style={{ color: "#3b82f6" }}><IcoCheckCircle /></span>;
@@ -436,6 +442,15 @@ export function TasksPage() {
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>("list");
   const [calendarMode, setCalendarMode] = useState<CalendarMode>("month");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [selectedOccurrenceDate, setSelectedOccurrenceDate] = useState<string | null>(null);
+  const [attachments, setAttachments] = useState<TaskAttachment[]>([]);
+  const [attachmentsLoading, setAttachmentsLoading] = useState(false);
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const [subtasks, setSubtasks] = useState<TaskSubtask[]>([]);
+  const [subtasksLoading, setSubtasksLoading] = useState(false);
+  const [newSubtaskTitle, setNewSubtaskTitle] = useState("");
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
+  const [fileViewer, setFileViewer] = useState<{ objectUrl: string; filename: string; mimeType: string } | null>(null);
   const [draft, setDraft] = useState<TaskDraft>(emptyDraft);
   const [showAddPanel, setShowAddPanel] = useState(false);
   const [addAdvancedOpen, setAddAdvancedOpen] = useState(false);
@@ -1009,7 +1024,31 @@ export function TasksPage() {
     return filteredTasks.filter((task) => taskOccursOnDate(task, dayDetailDate));
   }, [dayDetailDate, filteredTasks]);
 
-  const selectTask = (task: Task, occurrenceStatus?: TaskStatus) => {
+  const loadAttachments = useCallback(async (taskId: string) => {
+    setAttachmentsLoading(true);
+    try {
+      const data = await taskAttachmentsApi.list(taskId);
+      setAttachments(data);
+    } catch {
+      // Non-critical – silently ignore.
+    } finally {
+      setAttachmentsLoading(false);
+    }
+  }, []);
+
+  const loadSubtasks = useCallback(async (taskId: string, occDate: string) => {
+    setSubtasksLoading(true);
+    try {
+      const data = await taskSubtasksApi.list(taskId, occDate);
+      setSubtasks(data);
+    } catch {
+      // Non-critical – silently ignore.
+    } finally {
+      setSubtasksLoading(false);
+    }
+  }, []);
+
+  const selectTask = (task: Task, occurrenceStatus?: TaskStatus, occurrenceDate?: string) => {
     setSelectedTaskId(task.id);
     const d = taskToDraft(task);
     setDraft(occurrenceStatus !== undefined ? { ...d, status: occurrenceStatus } : d);
@@ -1017,13 +1056,40 @@ export function TasksPage() {
     setHistoryOpen(false);
     setAdvancedOpen(false);
     setShowAddPanel(false);
+    setAttachments([]);
+    setSubtasks([]);
+    setNewSubtaskTitle("");
+    const date = occurrenceDate ?? task.dueDate ?? new Date().toISOString().slice(0, 10);
+    setSelectedOccurrenceDate(date);
+    void loadAttachments(task.id);
+    void loadSubtasks(task.id, date);
   };
 
   const clearDetail = () => {
     setSelectedTaskId(null);
+    setSelectedOccurrenceDate(null);
     setDraft(emptyDraft);
     setHistory([]);
     setAdvancedOpen(false);
+    setAttachments([]);
+    setSubtasks([]);
+    setNewSubtaskTitle("");
+    setFileViewer((prev) => { if (prev) URL.revokeObjectURL(prev.objectUrl); return null; });
+  };
+
+  const closeFileViewer = () => {
+    setFileViewer((prev) => { if (prev) URL.revokeObjectURL(prev.objectUrl); return null; });
+  };
+
+  const handleOpenFileViewer = async (att: TaskAttachment) => {
+    if (!selectedTaskId) return;
+    try {
+      const { blob, filename, mimeType } = await taskAttachmentsApi.fetchBlob(selectedTaskId, att.id);
+      const objectUrl = URL.createObjectURL(blob);
+      setFileViewer({ objectUrl, filename, mimeType });
+    } catch {
+      pushErrorNotification("Failed to open file.");
+    }
   };
 
   const openAddPanel = () => {
@@ -1162,7 +1228,7 @@ export function TasksPage() {
       setSelectedOccurrenceKeys(new Set([row.key]));
       setLastOccurrenceKey(row.key);
       const masterTask = tasks.find((task) => task.id === row.taskId);
-      if (masterTask) selectTask(masterTask, row.status);
+      if (masterTask) selectTask(masterTask, row.status, row.date);
     }
   };
 
@@ -1370,6 +1436,70 @@ export function TasksPage() {
     const next = !historyOpen;
     setHistoryOpen(next);
     if (next && history.length === 0) void loadHistory();
+  };
+
+  const handleAttachFiles = async (files: FileList | File[]) => {
+    if (!selectedTaskId) return;
+    const fileArray = Array.from(files);
+    for (const file of fileArray) {
+      try {
+        const created = await taskAttachmentsApi.upload(selectedTaskId, file);
+        setAttachments((prev) => [...prev, created]);
+      } catch {
+        // Error notification handled in api layer.
+      }
+    }
+  };
+
+  const handleAttachmentDrop = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDraggingOver(false);
+    if (e.dataTransfer.files.length > 0) {
+      void handleAttachFiles(e.dataTransfer.files);
+    }
+  };
+
+  const handleDeleteAttachment = async (attachmentId: string) => {
+    if (!selectedTaskId) return;
+    try {
+      await taskAttachmentsApi.remove(selectedTaskId, attachmentId);
+      setAttachments((prev) => prev.filter((a) => a.id !== attachmentId));
+    } catch {
+      pushErrorNotification("Failed to delete attachment.");
+    }
+  };
+
+  const handleAddSubtask = async () => {
+    if (!selectedTaskId || !selectedOccurrenceDate || !newSubtaskTitle.trim()) return;
+    try {
+      const created = await taskSubtasksApi.create(selectedTaskId, selectedOccurrenceDate, newSubtaskTitle.trim());
+      setSubtasks((prev) => [...prev, created]);
+      setNewSubtaskTitle("");
+    } catch {
+      pushErrorNotification("Failed to add subtask.");
+    }
+  };
+
+  const handleToggleSubtask = async (subtask: TaskSubtask) => {
+    if (!selectedTaskId || !selectedOccurrenceDate) return;
+    const next = !subtask.isDone;
+    setSubtasks((prev) => prev.map((s) => s.id === subtask.id ? { ...s, isDone: next } : s));
+    try {
+      await taskSubtasksApi.update(selectedTaskId, selectedOccurrenceDate, subtask.id, { isDone: next });
+    } catch {
+      setSubtasks((prev) => prev.map((s) => s.id === subtask.id ? { ...s, isDone: subtask.isDone } : s));
+      pushErrorNotification("Failed to update subtask.");
+    }
+  };
+
+  const handleDeleteSubtask = async (subtaskId: string) => {
+    if (!selectedTaskId || !selectedOccurrenceDate) return;
+    try {
+      await taskSubtasksApi.remove(selectedTaskId, selectedOccurrenceDate, subtaskId);
+      setSubtasks((prev) => prev.filter((s) => s.id !== subtaskId));
+    } catch {
+      pushErrorNotification("Failed to delete subtask.");
+    }
   };
 
   const handleExport = async () => {
@@ -2365,7 +2495,22 @@ export function TasksPage() {
         <aside className="tasks-detail">
           <div className="tasks-detail-head">
             <div className="tasks-detail-head-left">
-              <div className="tasks-detail-dot" />
+              <button
+                type="button"
+                className={`detail-status-btn ${draft.status}`}
+                onClick={() => setDraft((p) => ({
+                  ...p,
+                  status: p.status === "todo" ? "done" : p.status === "done" ? "skipped" : "todo"
+                }))}
+                title={`Status: ${draft.status} (click to cycle)`}
+                aria-label={`Status: ${draft.status}`}
+              >
+                {draft.status === "done"
+                  ? <IcoCheckCircle />
+                  : draft.status === "skipped"
+                    ? <IcoSkipped />
+                    : <IcoCircle />}
+              </button>
               <input
                 className="tasks-detail-title-input"
                 value={draft.title}
@@ -2374,33 +2519,63 @@ export function TasksPage() {
                 aria-label="Task title"
               />
             </div>
-            <button type="button" className="tasks-detail-close" onClick={clearDetail} aria-label="Close">
-              <IcoX />
-            </button>
+            <div className="tasks-detail-head-actions">
+              <button
+                type="button"
+                className={`detail-lock-btn${draft.isLocked ? " active" : ""}`}
+                onClick={() => setDraft((p) => ({ ...p, isLocked: !p.isLocked }))}
+                title={draft.isLocked ? "Locked — click to unlock" : "Unlocked — click to lock"}
+                aria-label={draft.isLocked ? "Unlock task" : "Lock task"}
+              >
+                {draft.isLocked ? <IcoLock /> : <IcoUnlock />}
+              </button>
+              <button type="button" className="tasks-detail-close" onClick={clearDetail} aria-label="Close">
+                <IcoX />
+              </button>
+            </div>
           </div>
 
           <div className="tasks-detail-body">
             {displayError ? <p className="error" style={{ margin: 0, fontSize: "0.8rem" }}>{displayError}</p> : null}
 
-            {/* Status + Lock row */}
-            <div className="edit-section">
-              <div className="status-lock-row">
-                <div className="status-toggle-row">
-                  {TASK_STATUSES.map((s) => (
-                    <button key={s} type="button"
-                      className={draft.status === s ? `status-toggle active ${s}` : "status-toggle"}
-                      onClick={() => setDraft((p) => ({ ...p, status: s }))}>
-                      <span className="status-toggle-icon" />
-                      {s}
-                    </button>
+            {/* Subtasks — MS ToDo style: directly below the title */}
+            <div className="edit-section subtask-section-top">
+              {subtasksLoading ? (
+                <p style={{ color: "#6b7280", fontSize: "0.75rem", margin: "0.4rem 0" }}>Loading...</p>
+              ) : (
+                <div className="subtask-list">
+                  {subtasks.map((s) => (
+                    <div key={s.id} className="subtask-row">
+                      <button
+                        type="button"
+                        className={`subtask-check${s.isDone ? " done" : ""}`}
+                        onClick={() => void handleToggleSubtask(s)}
+                        aria-label={s.isDone ? "Mark undone" : "Mark done"}
+                      >
+                        {s.isDone ? <IcoCheckCircle /> : <IcoCircle />}
+                      </button>
+                      <span className={`subtask-title${s.isDone ? " done" : ""}`}>{s.title}</span>
+                      <button
+                        type="button"
+                        className="attachment-delete"
+                        onClick={() => void handleDeleteSubtask(s.id)}
+                        aria-label="Delete subtask"
+                      >
+                        <IcoX />
+                      </button>
+                    </div>
                   ))}
+                  <div className="subtask-add-row">
+                    <input
+                      className="subtask-add-input"
+                      placeholder="+ Next step"
+                      value={newSubtaskTitle}
+                      onChange={(e) => setNewSubtaskTitle(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") void handleAddSubtask(); }}
+                    />
+                  </div>
                 </div>
-                <button type="button"
-                  className={draft.isLocked ? "lock-toggle compact active" : "lock-toggle compact"}
-                  onClick={() => setDraft((p) => ({ ...p, isLocked: !p.isLocked }))}>
-                  {draft.isLocked ? <><IcoLock /> Lock</> : <><IcoUnlock /> Lock</>}
-                </button>
-              </div>
+              )}
             </div>
 
             {/* Context + Load Score */}
@@ -2561,6 +2736,75 @@ export function TasksPage() {
               )}
             </div>
 
+            {/* Attachments */}
+            <div className="edit-section">
+              <div className="edit-section-label" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span>Files</span>
+                <button
+                  type="button"
+                  className="ghost-button"
+                  style={{ fontSize: "0.72rem", padding: "0.15rem 0.5rem" }}
+                  onClick={() => attachmentInputRef.current?.click()}
+                  title="Add file"
+                >
+                  + Add
+                </button>
+              </div>
+              <input
+                ref={attachmentInputRef}
+                type="file"
+                multiple
+                style={{ display: "none" }}
+                onChange={(e) => { if (e.target.files) { void handleAttachFiles(e.target.files); e.target.value = ""; } }}
+              />
+              <div
+                className={`attachment-drop-zone${isDraggingOver ? " dragging" : ""}`}
+                onDragOver={(e) => { e.preventDefault(); setIsDraggingOver(true); }}
+                onDragLeave={() => setIsDraggingOver(false)}
+                onDrop={handleAttachmentDrop}
+              >
+                {attachmentsLoading ? (
+                  <p style={{ color: "#6b7280", fontSize: "0.75rem", margin: "0.4rem 0" }}>Loading...</p>
+                ) : attachments.length === 0 ? (
+                  <p style={{ color: "#4b5563", fontSize: "0.75rem", margin: "0.4rem 0" }}>
+                    Drop files here or use Add
+                  </p>
+                ) : (
+                  <div className="attachment-list">
+                    {attachments.map((att) => (
+                      <div key={att.id} className="attachment-row">
+                        <IcoFile />
+                        <button
+                          type="button"
+                          className="attachment-name"
+                          onClick={() => void handleOpenFileViewer(att)}
+                          title={`Open ${att.filename}`}
+                        >
+                          {att.filename}
+                        </button>
+                        {att.sizeBytes != null && (
+                          <span className="attachment-size">
+                            {att.sizeBytes < 1024 * 1024
+                              ? `${Math.round(att.sizeBytes / 1024)} KB`
+                              : `${(att.sizeBytes / (1024 * 1024)).toFixed(1)} MB`}
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          className="attachment-delete"
+                          onClick={() => void handleDeleteAttachment(att.id)}
+                          title="Remove attachment"
+                          aria-label="Remove attachment"
+                        >
+                          <IcoX />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
             {/* Timestamps */}
             <div className="edit-timestamps">
               <small>Created: {formatDateTime(selectedTask.createdAt)}</small>
@@ -2607,6 +2851,63 @@ export function TasksPage() {
             </div>
           </div>
         </aside>
+      )}
+
+      {/* File viewer modal */}
+      {fileViewer && (
+        <div className="file-viewer-overlay" onClick={closeFileViewer} role="dialog" aria-modal="true" aria-label={`Viewing ${fileViewer.filename}`}>
+          <div className="file-viewer-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="file-viewer-header">
+              <span className="file-viewer-name"><IcoFile /> {fileViewer.filename}</span>
+              <div className="file-viewer-header-actions">
+                <button
+                  type="button"
+                  className="file-viewer-action"
+                  title="Download"
+                  onClick={() => {
+                    const a = document.createElement("a");
+                    a.href = fileViewer.objectUrl;
+                    a.download = fileViewer.filename;
+                    a.click();
+                  }}
+                >
+                  <IcoDownload />
+                </button>
+                <button type="button" className="file-viewer-close" onClick={closeFileViewer} aria-label="Close viewer">
+                  <IcoX />
+                </button>
+              </div>
+            </div>
+            <div className="file-viewer-body">
+              {fileViewer.mimeType.startsWith("image/") ? (
+                <img src={fileViewer.objectUrl} alt={fileViewer.filename} className="file-viewer-img" />
+              ) : fileViewer.mimeType === "application/pdf" ? (
+                <iframe src={fileViewer.objectUrl} title={fileViewer.filename} className="file-viewer-iframe" />
+              ) : fileViewer.mimeType.startsWith("text/") ? (
+                <iframe src={fileViewer.objectUrl} title={fileViewer.filename} className="file-viewer-iframe file-viewer-text" />
+              ) : (
+                <div className="file-viewer-unsupported">
+                  <IcoFile />
+                  <p>{fileViewer.filename}</p>
+                  <p style={{ fontSize: "0.8rem", color: "#6b7280" }}>Preview not available for this file type.</p>
+                  <button
+                    type="button"
+                    className="edit-save-btn"
+                    style={{ marginTop: "0.8rem" }}
+                    onClick={() => {
+                      const a = document.createElement("a");
+                      a.href = fileViewer.objectUrl;
+                      a.download = fileViewer.filename;
+                      a.click();
+                    }}
+                  >
+                    <IcoDownload /> Download
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </section>
   );

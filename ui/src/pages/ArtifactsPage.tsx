@@ -990,14 +990,15 @@ export function ArtifactsPage() {
   };
 
   const handleFolderDragOver = (event: DragEvent<HTMLButtonElement>, targetFolderPath: string) => {
+    const hasFiles = event.dataTransfer.types.includes("Files");
     const dragItem = resolveDraggedItemFromEvent(event);
-    if (!dragItem) {
+    if (!dragItem && !hasFiles) {
       setDropTargetPath(null);
       return;
     }
     event.preventDefault();
     event.stopPropagation();
-    event.dataTransfer.dropEffect = "move";
+    event.dataTransfer.dropEffect = hasFiles ? "copy" : "move";
     setDropTargetPath(normalizePath(targetFolderPath));
   };
 
@@ -1504,6 +1505,7 @@ export function ArtifactsPage() {
       <input
         ref={uploadInputRef}
         type="file"
+        multiple
         className="va-hidden-upload"
         onChange={(event) => void handleUploadFiles(event.target.files)}
       />

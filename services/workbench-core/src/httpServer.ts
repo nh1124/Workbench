@@ -2287,6 +2287,153 @@ app.post("/api/tasks/import", express.text({ type: "text/csv", limit: "10mb" }),
   }
 });
 
+// ── Task Attachments ────────────────────────────────────────────────────────
+
+app.get("/api/tasks/:id/attachments", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  try {
+    const result = await tasksClient.listAttachments(authContext.accessToken, String(req.params.id));
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/tasks/:id/attachments", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const taskId = encodeURIComponent(String(req.params.id));
+  const target = `${serviceBaseUrls.tasks}/tasks/${taskId}/attachments`;
+  const contentType = req.header("content-type");
+
+  try {
+    const upstream = await fetch(target, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${authContext.accessToken}`,
+        ...(contentType ? { "Content-Type": contentType } : {})
+      },
+      body: req as any,
+      duplex: "half"
+    } as RequestInit & { duplex: "half" });
+
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    const responseContentType = upstream.headers.get("content-type");
+    if (responseContentType) res.setHeader("Content-Type", responseContentType);
+    return res.status(upstream.status).send(buffer);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Upload proxy failed";
+    return res.status(502).json({ message });
+  }
+});
+
+app.get("/api/tasks/:id/attachments/:attachmentId/download", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const taskId = encodeURIComponent(String(req.params.id));
+  const attachmentId = encodeURIComponent(String(req.params.attachmentId));
+  const query = new URLSearchParams();
+  if (typeof req.query.download === "string") query.set("download", req.query.download);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  const target = `${serviceBaseUrls.tasks}/tasks/${taskId}/attachments/${attachmentId}/download${suffix}`;
+
+  try {
+    const upstream = await fetch(target, {
+      headers: { Authorization: `Bearer ${authContext.accessToken}` }
+    });
+
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    const contentType = upstream.headers.get("content-type");
+    const disposition = upstream.headers.get("content-disposition");
+    const length = upstream.headers.get("content-length");
+
+    if (contentType) res.setHeader("Content-Type", contentType);
+    if (disposition) res.setHeader("Content-Disposition", disposition);
+    if (length) res.setHeader("Content-Length", length);
+
+    return res.status(upstream.status).send(buffer);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Download proxy failed";
+    return res.status(502).json({ message });
+  }
+});
+
+app.delete("/api/tasks/:id/attachments/:attachmentId", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  try {
+    await tasksClient.deleteAttachment(authContext.accessToken, String(req.params.id), String(req.params.attachmentId));
+    return res.status(204).send();
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+// ── Task Subtasks ────────────────────────────────────────────────────────────
+
+app.get("/api/tasks/:id/occurrences/:date/subtasks", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  try {
+    const result = await tasksClient.listSubtasks(authContext.accessToken, String(req.params.id), String(req.params.date));
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/tasks/:id/occurrences/:date/subtasks", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  try {
+    const result = await tasksClient.createSubtask(
+      authContext.accessToken,
+      String(req.params.id),
+      String(req.params.date),
+      req.body?.title
+    );
+    return res.status(201).json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.patch("/api/tasks/:id/occurrences/:date/subtasks/:subtaskId", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  try {
+    const result = await tasksClient.updateSubtask(
+      authContext.accessToken,
+      String(req.params.id),
+      String(req.params.date),
+      String(req.params.subtaskId),
+      req.body
+    );
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.delete("/api/tasks/:id/occurrences/:date/subtasks/:subtaskId", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  try {
+    await tasksClient.deleteSubtask(
+      authContext.accessToken,
+      String(req.params.id),
+      String(req.params.date),
+      String(req.params.subtaskId)
+    );
+    return res.status(204).send();
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // MCP HTTP endpoint (Streamable HTTP transport, stateless)
 // Requires Bearer token authentication. Tools are accessible at POST /mcp.

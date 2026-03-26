@@ -343,7 +343,104 @@ export const tasksClient = {
       method: "POST",
       headers: { "Content-Type": "text/csv" },
       body: csvContent
-    })
+    }),
+
+  // ── Attachments ─────────────────────────────────────────────────────────────
+  listAttachments: (token: string, taskId: string) =>
+    serviceRequest<unknown[]>(tasksService, `/tasks/${encodeURIComponent(taskId)}/attachments`, token),
+
+  uploadAttachment: async (
+    token: string,
+    taskId: string,
+    payload: { filename: string; mimeType?: string; contentBase64: string }
+  ) => {
+    const fileBuffer = Buffer.from(payload.contentBase64, "base64");
+    const formData = new FormData();
+    formData.append(
+      "file",
+      new Blob([fileBuffer], { type: payload.mimeType || "application/octet-stream" }),
+      payload.filename
+    );
+
+    const response = await fetch(`${tasksService.baseUrl}/tasks/${encodeURIComponent(taskId)}/attachments`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: formData
+    });
+
+    const text = await response.text();
+    if (!response.ok) {
+      throw new InternalServiceError(tasksService.id, response.status, text || `HTTP ${response.status}`);
+    }
+    return JSON.parse(text) as unknown;
+  },
+
+  downloadAttachment: async (token: string, taskId: string, attachmentId: string, asAttachment = true) => {
+    const suffix = asAttachment ? "?download=1" : "";
+    const response = await fetch(
+      `${tasksService.baseUrl}/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}/download${suffix}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
+    const arrayBuffer = await response.arrayBuffer();
+    if (!response.ok) {
+      const text = Buffer.from(arrayBuffer).toString("utf8");
+      throw new InternalServiceError(tasksService.id, response.status, text || `HTTP ${response.status}`);
+    }
+
+    const contentDisposition = response.headers.get("content-disposition");
+    const fileName = decodeContentDispositionFilename(contentDisposition) ?? attachmentId;
+    const mimeType = response.headers.get("content-type") ?? "application/octet-stream";
+    const sizeBytes = arrayBuffer.byteLength;
+    const contentBase64 = Buffer.from(arrayBuffer).toString("base64");
+    return { attachmentId, fileName, mimeType, sizeBytes, contentBase64 };
+  },
+
+  deleteAttachment: (token: string, taskId: string, attachmentId: string) =>
+    serviceRequest<void>(
+      tasksService,
+      `/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}`,
+      token,
+      { method: "DELETE" }
+    ),
+
+  // ── Subtasks ─────────────────────────────────────────────────────────────────
+  listSubtasks: (token: string, taskId: string, occurrenceDate: string) =>
+    serviceRequest<unknown[]>(
+      tasksService,
+      `/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(occurrenceDate)}/subtasks`,
+      token
+    ),
+
+  createSubtask: (token: string, taskId: string, occurrenceDate: string, title: string) =>
+    serviceRequest<unknown>(
+      tasksService,
+      `/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(occurrenceDate)}/subtasks`,
+      token,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title }) }
+    ),
+
+  updateSubtask: (
+    token: string,
+    taskId: string,
+    occurrenceDate: string,
+    subtaskId: string,
+    updates: { title?: string; isDone?: boolean; sortOrder?: number }
+  ) =>
+    serviceRequest<unknown>(
+      tasksService,
+      `/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(occurrenceDate)}/subtasks/${encodeURIComponent(subtaskId)}`,
+      token,
+      { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(updates) }
+    ),
+
+  deleteSubtask: (token: string, taskId: string, occurrenceDate: string, subtaskId: string) =>
+    serviceRequest<void>(
+      tasksService,
+      `/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(occurrenceDate)}/subtasks/${encodeURIComponent(subtaskId)}`,
+      token,
+      { method: "DELETE" }
+    )
 };
 
 function requireLbs(): ServiceConfig {

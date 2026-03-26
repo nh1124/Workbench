@@ -19,10 +19,12 @@ import type {
   ServiceProvisioningState,
   StoredIntegrationConfig,
   Task,
+  TaskAttachment,
   TaskHistoryEntry,
   TaskProjectSummary,
   TaskScheduleDay,
   TaskStatus,
+  TaskSubtask,
   WorkbenchAuthResponse,
   WorkbenchRefreshResponse,
   WorkbenchUserSession
@@ -654,6 +656,148 @@ export const tasksApi = {
       })
     );
   }
+};
+
+export const taskAttachmentsApi = {
+  list: (taskId: string): Promise<TaskAttachment[]> =>
+    fetchJson<TaskAttachment[]>(`${coreBaseUrl()}/api/tasks/${encodeURIComponent(taskId)}/attachments`),
+
+  upload: async (taskId: string, file: File): Promise<TaskAttachment> => {
+    await initializeSessionStorage();
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const requestUpload = async (): Promise<Response> =>
+      fetch(`${coreBaseUrl()}/api/tasks/${encodeURIComponent(taskId)}/attachments`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: formData
+      });
+
+    let response = await requestUpload();
+    if (response.status === 401) {
+      const session = readStoredSession();
+      if (session?.refreshToken) {
+        await refreshAccessToken(session.refreshToken);
+        response = await requestUpload();
+      }
+    }
+
+    if (!response.ok) {
+      const text = await response.text();
+      let message = `Upload failed: ${response.status}`;
+      try {
+        const parsed = JSON.parse(text) as { message?: string };
+        if (parsed.message) message = parsed.message;
+      } catch { /* ignore */ }
+      pushErrorNotification(message, "Upload Error");
+      throw new Error(message);
+    }
+
+    return response.json() as Promise<TaskAttachment>;
+  },
+
+  download: async (taskId: string, attachmentId: string, inline = false): Promise<void> => {
+    await initializeSessionStorage();
+    const suffix = inline ? "" : "?download=1";
+    const url = `${coreBaseUrl()}/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}/download${suffix}`;
+
+    const requestDownload = async (): Promise<Response> =>
+      fetch(url, { headers: authHeaders() });
+
+    let response = await requestDownload();
+    if (response.status === 401) {
+      const session = readStoredSession();
+      if (session?.refreshToken) {
+        await refreshAccessToken(session.refreshToken);
+        response = await requestDownload();
+      }
+    }
+
+    if (!response.ok) {
+      throw new Error(`Download failed: ${response.status}`);
+    }
+
+    const blob = await response.blob();
+    const disposition = response.headers.get("content-disposition") ?? "";
+    const utf8Match = disposition.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+    const quotedMatch = disposition.match(/filename\s*=\s*"([^"]+)"/i);
+    const filename = utf8Match?.[1]
+      ? decodeURIComponent(utf8Match[1])
+      : (quotedMatch?.[1] ?? attachmentId);
+
+    if (inline) {
+      const objectUrl = URL.createObjectURL(blob);
+      window.open(objectUrl, "_blank");
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+    } else {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    }
+  },
+
+  fetchBlob: async (taskId: string, attachmentId: string): Promise<{ blob: Blob; filename: string; mimeType: string }> => {
+    await initializeSessionStorage();
+    const url = `${coreBaseUrl()}/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}/download`;
+    const requestFetch = async (): Promise<Response> => fetch(url, { headers: authHeaders() });
+    let response = await requestFetch();
+    if (response.status === 401) {
+      const session = readStoredSession();
+      if (session?.refreshToken) {
+        await refreshAccessToken(session.refreshToken);
+        response = await requestFetch();
+      }
+    }
+    if (!response.ok) throw new Error(`Fetch failed: ${response.status}`);
+    const blob = await response.blob();
+    const disposition = response.headers.get("content-disposition") ?? "";
+    const utf8Match = disposition.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+    const quotedMatch = disposition.match(/filename\s*=\s*"([^"]+)"/i);
+    const filename = utf8Match?.[1]
+      ? decodeURIComponent(utf8Match[1])
+      : (quotedMatch?.[1] ?? attachmentId);
+    const mimeType = (response.headers.get("content-type") ?? blob.type ?? "").split(";")[0].trim();
+    return { blob, filename, mimeType };
+  },
+
+  remove: (taskId: string, attachmentId: string): Promise<void> =>
+    fetchJson<void>(
+      `${coreBaseUrl()}/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}`,
+      { method: "DELETE" }
+    )
+};
+
+export const taskSubtasksApi = {
+  list: (taskId: string, occurrenceDate: string): Promise<TaskSubtask[]> =>
+    fetchJson<TaskSubtask[]>(
+      `${coreBaseUrl()}/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(occurrenceDate)}/subtasks`
+    ),
+
+  create: (taskId: string, occurrenceDate: string, title: string): Promise<TaskSubtask> =>
+    fetchJson<TaskSubtask>(
+      `${coreBaseUrl()}/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(occurrenceDate)}/subtasks`,
+      { method: "POST", body: JSON.stringify({ title }) }
+    ),
+
+  update: (
+    taskId: string,
+    occurrenceDate: string,
+    subtaskId: string,
+    updates: { title?: string; isDone?: boolean; sortOrder?: number }
+  ): Promise<TaskSubtask> =>
+    fetchJson<TaskSubtask>(
+      `${coreBaseUrl()}/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(occurrenceDate)}/subtasks/${encodeURIComponent(subtaskId)}`,
+      { method: "PATCH", body: JSON.stringify(updates) }
+    ),
+
+  remove: (taskId: string, occurrenceDate: string, subtaskId: string): Promise<void> =>
+    fetchJson<void>(
+      `${coreBaseUrl()}/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(occurrenceDate)}/subtasks/${encodeURIComponent(subtaskId)}`,
+      { method: "DELETE" }
+    )
 };
 
 export const projectsApi = {

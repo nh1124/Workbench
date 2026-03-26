@@ -123,6 +123,43 @@ export async function ensureTasksSchema(): Promise<void> {
             PRIMARY KEY (owner_username, task_id)
           );
         `);
+
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS task_attachments (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            owner_username TEXT NOT NULL,
+            filename TEXT NOT NULL,
+            mime_type TEXT,
+            size_bytes BIGINT,
+            storage_path TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          );
+        `);
+
+        await pool.query(`
+          CREATE INDEX IF NOT EXISTS idx_task_attachments_owner_task
+          ON task_attachments(owner_username, task_id);
+        `);
+
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS task_subtasks (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            owner_username TEXT NOT NULL,
+            occurrence_date TEXT NOT NULL,
+            title TEXT NOT NULL,
+            is_done BOOLEAN NOT NULL DEFAULT FALSE,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          );
+        `);
+
+        await pool.query(`
+          CREATE INDEX IF NOT EXISTS idx_task_subtasks_owner_task_date
+          ON task_subtasks(owner_username, task_id, occurrence_date);
+        `);
       });
     })();
   }

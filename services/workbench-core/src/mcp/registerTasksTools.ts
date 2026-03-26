@@ -547,6 +547,159 @@ export function registerTasksTools(server: McpServer, ctx?: ToolContext): void {
     }
   );
 
+  // ── Attachments ───────────────────────────────────────────────────────────
+
+  server.registerTool(
+    "tasks.attachments.list",
+    {
+      title: "List Task Attachments",
+      description: "List all file attachments for a task.",
+      inputSchema: {
+        taskId: z.string().min(1).describe("Task ID")
+      }
+    },
+    async ({ taskId }) => {
+      const result = await runWithAuth(ctx.accessToken, () => tasksClient.listAttachments(ctx.accessToken, taskId));
+      return asMcpText(result);
+    }
+  );
+
+  server.registerTool(
+    "tasks.attachments.upload",
+    {
+      title: "Upload Task Attachment",
+      description: "Upload a file as an attachment to a task. Provide the file content as a base64-encoded string.",
+      inputSchema: {
+        taskId: z.string().min(1).describe("Task ID"),
+        filename: z.string().min(1).describe("Original filename including extension"),
+        mimeType: z.string().optional().describe("MIME type, e.g. application/pdf"),
+        contentBase64: z.string().min(1).describe("Base64-encoded file content")
+      }
+    },
+    async ({ taskId, filename, mimeType, contentBase64 }) => {
+      const result = await runWithAuth(ctx.accessToken, () =>
+        tasksClient.uploadAttachment(ctx.accessToken, taskId, { filename, mimeType, contentBase64 })
+      );
+      return asMcpText(result);
+    }
+  );
+
+  server.registerTool(
+    "tasks.attachments.download",
+    {
+      title: "Download Task Attachment",
+      description: "Download a task attachment and return its content as base64.",
+      inputSchema: {
+        taskId: z.string().min(1).describe("Task ID"),
+        attachmentId: z.string().min(1).describe("Attachment ID")
+      }
+    },
+    async ({ taskId, attachmentId }) => {
+      const result = await runWithAuth(ctx.accessToken, () =>
+        tasksClient.downloadAttachment(ctx.accessToken, taskId, attachmentId)
+      );
+      return asMcpText(result);
+    }
+  );
+
+  server.registerTool(
+    "tasks.attachments.delete",
+    {
+      title: "Delete Task Attachment",
+      description: "Permanently delete a file attachment from a task.",
+      inputSchema: {
+        taskId: z.string().min(1).describe("Task ID"),
+        attachmentId: z.string().min(1).describe("Attachment ID")
+      }
+    },
+    async ({ taskId, attachmentId }) => {
+      await runWithAuth(ctx.accessToken, () =>
+        tasksClient.deleteAttachment(ctx.accessToken, taskId, attachmentId)
+      );
+      return asMcpText({ status: "ok" });
+    }
+  );
+
+  // ── Subtasks ──────────────────────────────────────────────────────────────
+
+  server.registerTool(
+    "tasks.subtasks.list",
+    {
+      title: "List Subtasks",
+      description: "List subtasks for a specific task occurrence (taskId + date).",
+      inputSchema: {
+        taskId: z.string().min(1).describe("Task ID"),
+        occurrenceDate: z.string().min(1).describe("Occurrence date (YYYY-MM-DD)")
+      }
+    },
+    async ({ taskId, occurrenceDate }) => {
+      const result = await runWithAuth(ctx.accessToken, () =>
+        tasksClient.listSubtasks(ctx.accessToken, taskId, occurrenceDate)
+      );
+      return asMcpText(result);
+    }
+  );
+
+  server.registerTool(
+    "tasks.subtasks.create",
+    {
+      title: "Create Subtask",
+      description: "Add a new subtask to a specific task occurrence.",
+      inputSchema: {
+        taskId: z.string().min(1).describe("Task ID"),
+        occurrenceDate: z.string().min(1).describe("Occurrence date (YYYY-MM-DD)"),
+        title: z.string().min(1).describe("Subtask title")
+      }
+    },
+    async ({ taskId, occurrenceDate, title }) => {
+      const result = await runWithAuth(ctx.accessToken, () =>
+        tasksClient.createSubtask(ctx.accessToken, taskId, occurrenceDate, title)
+      );
+      return asMcpText(result);
+    }
+  );
+
+  server.registerTool(
+    "tasks.subtasks.update",
+    {
+      title: "Update Subtask",
+      description: "Update a subtask's title, done state, or sort order.",
+      inputSchema: {
+        taskId: z.string().min(1).describe("Task ID"),
+        occurrenceDate: z.string().min(1).describe("Occurrence date (YYYY-MM-DD)"),
+        subtaskId: z.string().min(1).describe("Subtask ID"),
+        title: z.string().optional().describe("New title"),
+        isDone: z.boolean().optional().describe("Mark as done or undone"),
+        sortOrder: z.number().int().min(0).optional().describe("New sort order")
+      }
+    },
+    async ({ taskId, occurrenceDate, subtaskId, title, isDone, sortOrder }) => {
+      const result = await runWithAuth(ctx.accessToken, () =>
+        tasksClient.updateSubtask(ctx.accessToken, taskId, occurrenceDate, subtaskId, { title, isDone, sortOrder })
+      );
+      return asMcpText(result);
+    }
+  );
+
+  server.registerTool(
+    "tasks.subtasks.delete",
+    {
+      title: "Delete Subtask",
+      description: "Permanently delete a subtask.",
+      inputSchema: {
+        taskId: z.string().min(1).describe("Task ID"),
+        occurrenceDate: z.string().min(1).describe("Occurrence date (YYYY-MM-DD)"),
+        subtaskId: z.string().min(1).describe("Subtask ID")
+      }
+    },
+    async ({ taskId, occurrenceDate, subtaskId }) => {
+      await runWithAuth(ctx.accessToken, () =>
+        tasksClient.deleteSubtask(ctx.accessToken, taskId, occurrenceDate, subtaskId)
+      );
+      return asMcpText({ status: "ok" });
+    }
+  );
+
   // ── LBS: Expansion ────────────────────────────────────────────────────────
 
   server.registerTool(

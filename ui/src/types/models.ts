@@ -80,6 +80,26 @@ export interface Task {
   updatedAt: string;
 }
 
+export interface TaskAttachment {
+  id: string;
+  taskId: string;
+  filename: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  createdAt: string;
+}
+
+export interface TaskSubtask {
+  id: string;
+  taskId: string;
+  occurrenceDate: string;
+  title: string;
+  isDone: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface TaskHistoryEntry {
   id: string | number;
   taskId: string;

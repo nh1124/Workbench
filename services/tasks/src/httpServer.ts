@@ -1,11 +1,26 @@
 import cors from "cors";
 import { config as loadEnv } from "dotenv";
 import express from "express";
+import multer from "multer";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { requireInternalApiKey, requireUserAuth } from "./auth.js";
+import {
+  createAttachment,
+  deleteAttachment,
+  deleteAttachmentsForTask,
+  listAttachments,
+  readAttachmentData
+} from "./attachmentsStore.js";
 import { ensureTasksSchema, findServiceAccountByCoreUserId } from "./db.js";
+import {
+  createSubtask,
+  deleteSubtask,
+  deleteSubtasksForTask,
+  listSubtasks,
+  updateSubtask
+} from "./subtasksStore.js";
 import {
   completeTaskOccurrence,
   createTask,
@@ -41,6 +56,11 @@ function requireEnv(name: string): string {
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 }
+});
 
 function handleError(res: express.Response, error: unknown): express.Response {
   const message = error instanceof Error ? error.message : "Unexpected server error";
@@ -442,12 +462,134 @@ app.delete("/tasks/:id", requireUserAuth, async (req, res) => {
     if (!lbsAccessToken) {
       return res.status(403).json({ message: "LBS account token not provisioned" });
     }
-    const deleted = await deleteTask(String(req.params.id), owner, lbsAccessToken);
+    const taskId = String(req.params.id);
+    const deleted = await deleteTask(taskId, owner, lbsAccessToken);
 
     if (!deleted) {
       return res.status(404).json({ message: "Task not found" });
     }
 
+    // Cascade: remove locally-stored attachments and subtasks.
+    await Promise.all([
+      deleteAttachmentsForTask(taskId, owner),
+      deleteSubtasksForTask(taskId, owner)
+    ]);
+
+    return res.status(204).send();
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+// ── Attachments ───────────────────────────────────────────────────────────────
+
+app.get("/tasks/:id/attachments", requireUserAuth, async (req, res) => {
+  try {
+    const owner = req.authUser?.coreUserId;
+    if (!owner) return res.status(401).json({ message: "Missing auth context" });
+    const attachments = await listAttachments(String(req.params.id), owner);
+    return res.json(attachments);
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+app.post("/tasks/:id/attachments", requireUserAuth, upload.single("file"), async (req, res) => {
+  try {
+    const owner = req.authUser?.coreUserId;
+    if (!owner) return res.status(401).json({ message: "Missing auth context" });
+    if (!req.file) return res.status(400).json({ message: "File is required" });
+    const created = await createAttachment(String(req.params.id), owner, req.file);
+    return res.status(201).json(created);
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+app.get("/tasks/:id/attachments/:attachmentId/download", requireUserAuth, async (req, res) => {
+  try {
+    const owner = req.authUser?.coreUserId;
+    if (!owner) return res.status(401).json({ message: "Missing auth context" });
+    const data = await readAttachmentData(String(req.params.attachmentId), String(req.params.id), owner);
+    if (!data) return res.status(404).json({ message: "Attachment not found" });
+    const asAttachment = String(req.query.download ?? "") === "1";
+    res.setHeader("Content-Type", data.mimeType);
+    res.setHeader("Content-Length", String(data.buffer.length));
+    res.setHeader(
+      "Content-Disposition",
+      `${asAttachment ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(data.filename)}`
+    );
+    return res.send(data.buffer);
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+app.delete("/tasks/:id/attachments/:attachmentId", requireUserAuth, async (req, res) => {
+  try {
+    const owner = req.authUser?.coreUserId;
+    if (!owner) return res.status(401).json({ message: "Missing auth context" });
+    const deleted = await deleteAttachment(String(req.params.attachmentId), String(req.params.id), owner);
+    if (!deleted) return res.status(404).json({ message: "Attachment not found" });
+    return res.status(204).send();
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+// ── Subtasks ──────────────────────────────────────────────────────────────────
+
+const subtaskInputSchema = z.object({ title: z.string().min(1) });
+const subtaskUpdateSchema = z.object({
+  title: z.string().min(1).optional(),
+  isDone: z.boolean().optional(),
+  sortOrder: z.number().int().min(0).optional()
+});
+
+app.get("/tasks/:id/occurrences/:date/subtasks", requireUserAuth, async (req, res) => {
+  try {
+    const owner = req.authUser?.coreUserId;
+    if (!owner) return res.status(401).json({ message: "Missing auth context" });
+    const subtasks = await listSubtasks(String(req.params.id), String(req.params.date), owner);
+    return res.json(subtasks);
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+app.post("/tasks/:id/occurrences/:date/subtasks", requireUserAuth, async (req, res) => {
+  try {
+    const owner = req.authUser?.coreUserId;
+    if (!owner) return res.status(401).json({ message: "Missing auth context" });
+    const parsed = subtaskInputSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
+    const created = await createSubtask(String(req.params.id), String(req.params.date), owner, parsed.data.title);
+    return res.status(201).json(created);
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+app.patch("/tasks/:id/occurrences/:date/subtasks/:subtaskId", requireUserAuth, async (req, res) => {
+  try {
+    const owner = req.authUser?.coreUserId;
+    if (!owner) return res.status(401).json({ message: "Missing auth context" });
+    const parsed = subtaskUpdateSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
+    const updated = await updateSubtask(String(req.params.subtaskId), String(req.params.id), owner, parsed.data);
+    if (!updated) return res.status(404).json({ message: "Subtask not found" });
+    return res.json(updated);
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+app.delete("/tasks/:id/occurrences/:date/subtasks/:subtaskId", requireUserAuth, async (req, res) => {
+  try {
+    const owner = req.authUser?.coreUserId;
+    if (!owner) return res.status(401).json({ message: "Missing auth context" });
+    const deleted = await deleteSubtask(String(req.params.subtaskId), String(req.params.id), owner);
+    if (!deleted) return res.status(404).json({ message: "Subtask not found" });
     return res.status(204).send();
   } catch (error) {
     return handleError(res, error);
