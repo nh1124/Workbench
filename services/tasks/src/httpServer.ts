@@ -32,6 +32,11 @@ import {
   importTasksCsv,
   listTaskProjects,
   listTaskPins,
+  listTaskToday,
+  addTaskToToday,
+  removeTaskFromToday,
+  updateTaskScheduleItem,
+  listTaskScheduleCalendar,
   listTasks,
   moveTaskOccurrence,
   provisionLbsAccount,
@@ -247,6 +252,122 @@ app.get("/tasks/pins", requireUserAuth, async (req, res) => {
     }
     const taskIds = await listTaskPins(owner);
     return res.json({ taskIds });
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+// ── Today ("My Day") and Schedule ────────────────────────────────────────────
+// NOTE: These routes MUST be registered before any /tasks/:id routes so that
+// Express doesn't mistake "today", "schedule-calendar", "schedule-items" for a task ID.
+
+const taskTodayAddSchema = z.object({
+  taskId: z.string().min(1),
+  scheduledDate: z.string().min(1),
+  // occurrenceDate may be empty for tasks with no due date (ONCE + no due_date).
+  // In that case the store will fall back to scheduledDate as the LBS completion target.
+  occurrenceDate: z.string().optional().default(""),
+  startTime: z.string().optional(),
+  endTime: z.string().optional(),
+  timezone: z.string().optional()
+});
+
+const scheduleItemUpdateSchema = z.object({
+  scheduledDate: z.string().optional(),
+  occurrenceDate: z.string().optional(),
+  startTime: z.string().nullable().optional(),
+  endTime: z.string().nullable().optional(),
+  timezone: z.string().nullable().optional()
+});
+
+// GET /tasks/today?date=YYYY-MM-DD
+// Returns TodayTask[] — full task objects enriched with occurrenceDate + schedule info.
+app.get("/tasks/today", requireUserAuth, async (req, res) => {
+  const owner = req.authUser?.coreUserId;
+  const date = typeof req.query.date === "string" ? req.query.date : undefined;
+  console.log(`[tasks-service] GET /tasks/today  owner=${owner ?? "?"} date=${date ?? "?"}`);
+  try {
+    const lbsAccessToken = await ensureLbsAccessToken(req);
+    if (!owner) return res.status(401).json({ message: "Missing auth context" });
+    if (!lbsAccessToken) return res.status(403).json({ message: "LBS account token not provisioned" });
+    if (!date) return res.status(400).json({ message: "date query parameter is required (YYYY-MM-DD)" });
+    const tasks = await listTaskToday(owner, date, lbsAccessToken);
+    console.log(`[tasks-service] GET /tasks/today  returned ${tasks.length} TodayTask(s) for ${date}`);
+    return res.json(tasks);
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+// POST /tasks/today — add a schedule item (= "add to My Day")
+// Body: { taskId, scheduledDate, occurrenceDate, startTime?, endTime?, timezone? }
+// scheduledDate  = the calendar date to work on the task (today when called from My Day button)
+// occurrenceDate = LBS execution date (may differ for Overdue/Planned tasks)
+app.post("/tasks/today", requireUserAuth, async (req, res) => {
+  const owner = req.authUser?.coreUserId;
+  console.log(`[tasks-service] POST /tasks/today  owner=${owner ?? "?"} body=${JSON.stringify(req.body)}`);
+  try {
+    const parsed = taskTodayAddSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
+    if (!owner) return res.status(401).json({ message: "Missing auth context" });
+    const { taskId, scheduledDate, occurrenceDate, startTime, endTime, timezone } = parsed.data;
+    const result = await addTaskToToday(owner, taskId, scheduledDate, occurrenceDate, { startTime, endTime, timezone });
+    console.log(`[tasks-service] POST /tasks/today  created scheduleId=${result.id} taskId=${taskId}`);
+    return res.status(201).json(result);
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+// DELETE /tasks/today/:taskId?scheduledDate=YYYY-MM-DD — remove all schedule items for task on date
+app.delete("/tasks/today/:taskId", requireUserAuth, async (req, res) => {
+  const owner = req.authUser?.coreUserId;
+  const taskId = String(req.params.taskId);
+  const scheduledDate = typeof req.query.scheduledDate === "string" ? req.query.scheduledDate : undefined;
+  console.log(`[tasks-service] DELETE /tasks/today/${taskId}  owner=${owner ?? "?"} scheduledDate=${scheduledDate ?? "?"}`);
+  try {
+    if (!owner) return res.status(401).json({ message: "Missing auth context" });
+    if (!scheduledDate) return res.status(400).json({ message: "scheduledDate query parameter is required (YYYY-MM-DD)" });
+    const result = await removeTaskFromToday(owner, taskId, scheduledDate);
+    console.log(`[tasks-service] DELETE /tasks/today/${taskId}  removed ${result.removed} item(s)`);
+    return res.json(result);
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+// GET /tasks/schedule-calendar?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
+// Returns ScheduleCalendarDay[] grouped by scheduled_date.
+app.get("/tasks/schedule-calendar", requireUserAuth, async (req, res) => {
+  const owner = req.authUser?.coreUserId;
+  const startDate = typeof req.query.startDate === "string" ? req.query.startDate : undefined;
+  const endDate = typeof req.query.endDate === "string" ? req.query.endDate : undefined;
+  console.log(`[tasks-service] GET /tasks/schedule-calendar  owner=${owner ?? "?"} ${startDate}→${endDate}`);
+  try {
+    const lbsAccessToken = await ensureLbsAccessToken(req);
+    if (!owner) return res.status(401).json({ message: "Missing auth context" });
+    if (!lbsAccessToken) return res.status(403).json({ message: "LBS account token not provisioned" });
+    if (!startDate || !endDate) return res.status(400).json({ message: "startDate and endDate query parameters are required" });
+    const days = await listTaskScheduleCalendar(owner, startDate, endDate, lbsAccessToken);
+    return res.json(days);
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+// PUT /tasks/schedule-items/:id — update a schedule item's time/date fields
+app.put("/tasks/schedule-items/:id", requireUserAuth, async (req, res) => {
+  const owner = req.authUser?.coreUserId;
+  const scheduleId = parseInt(String(req.params.id), 10);
+  console.log(`[tasks-service] PUT /tasks/schedule-items/${scheduleId}  owner=${owner ?? "?"} body=${JSON.stringify(req.body)}`);
+  try {
+    if (!owner) return res.status(401).json({ message: "Missing auth context" });
+    if (isNaN(scheduleId)) return res.status(400).json({ message: "id must be a number" });
+    const parsed = scheduleItemUpdateSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
+    const result = await updateTaskScheduleItem(owner, scheduleId, parsed.data);
+    if (!result) return res.status(404).json({ message: "Schedule item not found" });
+    return res.json(result);
   } catch (error) {
     return handleError(res, error);
   }

@@ -1,0 +1,267 @@
+/* ── tasks-calendar.css ───────────────────────────────────────────────────────
+ * Due calendar (month + week timeline) and schedule calendar (month + week).
+ * Class names preserved exactly from TasksPage.css.
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/* ── Due calendar shell ─────────────────────────────────────────────────────── */
+.task-calendar-shell { border: 1px solid var(--line); border-radius: 12px; background: #0b1220; min-height: 520px; overflow: hidden; position: relative; }
+.calendar-head-row { display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; border-bottom: 1px solid var(--line); }
+.calendar-head-row > div { display: flex; align-items: center; gap: 0.35rem; }
+.calendar-head-row .icon-button {
+  width: 1.6rem;
+  height: 1.6rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  font-size: 0.78rem;
+}
+.calendar-head-row strong {
+  line-height: 1;
+}
+
+/* ── Month grid ─────────────────────────────────────────────────────────────── */
+.calendar-weekdays { display: grid; grid-template-columns: repeat(7,1fr); gap: 1px; background: var(--line); }
+.calendar-weekdays span { text-align: center; background: #0f172a; color: #64748b; font-size: 0.58rem; letter-spacing: 0.12em; text-transform: uppercase; padding: 0.35rem 0; }
+.calendar-month-grid { display: grid; grid-template-columns: repeat(7,1fr); gap: 1px; background: var(--line); }
+.calendar-cell { min-height: 88px; background: #0f172a; padding: 0.26rem 0.3rem; display: grid; align-content: start; gap: 0.12rem; cursor: pointer; }
+.calendar-cell.muted { opacity: 0.42; }
+.calendar-cell.is-today { box-shadow: inset 0 0 0 1px rgba(56,189,248,0.35); }
+.calendar-cell strong { font-size: 0.68rem; color: #94a3b8; }
+.calendar-task-pill { width: 100%; border: 0; border-radius: 4px; background: rgba(30,41,59,0.9); color: #cbd5e1; padding: 0.12rem 0.24rem; font-size: 0.58rem; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-left: 2px solid rgba(34,211,238,0.45); }
+.calendar-task-pill.done { color: #6b7280; text-decoration: line-through; border-left-color: rgba(100,116,139,0.7); }
+
+/* ── Week timeline ──────────────────────────────────────────────────────────── */
+.calendar-week-timeline {
+  --calendar-scrollbar-compensation: 10px;
+  display: flex;
+  flex-direction: column;
+  min-height: 580px;
+  background: #0b1220;
+}
+.calendar-week-timeline-head,
+.calendar-week-all-day-row,
+.calendar-week-grid {
+  display: grid;
+  grid-template-columns: 56px repeat(7, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--line);
+}
+.calendar-week-timeline-head,
+.calendar-week-all-day-row {
+  box-sizing: border-box;
+  padding-right: var(--calendar-scrollbar-compensation);
+}
+.calendar-week-time-col {
+  background: #0b1220;
+  border-right: 1px solid rgba(51, 65, 85, 0.35);
+}
+.calendar-week-time-col-head {
+  min-height: 50px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #475569;
+}
+.calendar-week-day-head {
+  min-height: 50px;
+  background: #0f172a;
+  padding: 0.35rem 0.24rem 0.28rem;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 0.08rem;
+}
+.calendar-week-day-head small {
+  font-size: 0.56rem;
+  letter-spacing: 0.13em;
+  color: #64748b;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+.calendar-week-day-head strong {
+  font-size: 0.95rem;
+  line-height: 1.1;
+  color: #cbd5e1;
+}
+.calendar-week-day-head.is-today strong { color: #67e8f9; }
+.calendar-week-all-day-row { border-top: 1px solid rgba(51, 65, 85, 0.35); }
+.calendar-week-all-day-label {
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.55rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #64748b;
+  font-weight: 700;
+}
+.calendar-week-all-day-cell {
+  min-height: 54px;
+  background: #0f172a;
+  padding: 0.22rem;
+  display: grid;
+  align-content: start;
+  gap: 0.15rem;
+}
+.calendar-week-more {
+  font-size: 0.56rem;
+  color: #64748b;
+  padding-left: 0.15rem;
+}
+.calendar-week-scroll {
+  flex: 1;
+  min-height: 340px;
+  max-height: clamp(460px, 62vh, 780px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  border-top: 1px solid rgba(51, 65, 85, 0.35);
+}
+.calendar-week-grid { align-items: stretch; }
+.calendar-week-time-axis {
+  position: relative;
+  background: #0b1220;
+  border-right: 1px solid rgba(51, 65, 85, 0.35);
+}
+.calendar-week-time-label {
+  position: absolute;
+  left: 0;
+  right: 0;
+  transform: translateY(-0.5em);
+  padding-right: 0.38rem;
+  text-align: right;
+  font-size: 0.56rem;
+  color: #475569;
+  letter-spacing: 0.04em;
+  line-height: 1;
+}
+.calendar-week-day-column {
+  position: relative;
+  background: #0f172a;
+  overflow: hidden;
+}
+.calendar-week-hour-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1px solid rgba(51, 65, 85, 0.28);
+  pointer-events: none;
+}
+.calendar-week-now-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 2px solid rgba(59, 130, 246, 0.95);
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.16), 0 0 10px rgba(59, 130, 246, 0.45);
+  z-index: 14;
+  pointer-events: none;
+}
+.calendar-week-event-block {
+  position: absolute;
+  left: 0.2rem;
+  width: calc(100% - 0.4rem);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-left: 2px solid rgba(34, 211, 238, 0.75);
+  border-radius: 6px;
+  background: rgba(30, 41, 59, 0.86);
+  color: #e2e8f0;
+  padding: 0.18rem 0.24rem;
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: 0.07rem;
+  text-align: left;
+  overflow: hidden;
+}
+.calendar-week-event-block strong {
+  font-size: 0.6rem;
+  line-height: 1.15;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.calendar-week-event-block span {
+  font-size: 0.54rem;
+  color: #67e8f9;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.calendar-week-event-time {
+  font-size: 0.5rem;
+  color: #94a3b8;
+  line-height: 1.15;
+}
+.calendar-week-event-block.title-priority .calendar-week-event-time {
+  display: none;
+}
+.calendar-week-event-block.title-only span,
+.calendar-week-event-block.title-only .calendar-week-event-time {
+  display: none;
+}
+.calendar-week-event-block.done {
+  border-left-color: rgba(100, 116, 139, 0.85);
+  border-color: rgba(100, 116, 139, 0.42);
+  color: #94a3b8;
+}
+.calendar-week-event-block.done strong,
+.calendar-week-event-block.done span,
+.calendar-week-event-block.done .calendar-week-event-time {
+  text-decoration: line-through;
+  color: #94a3b8;
+}
+.calendar-state-card { position: absolute; inset: 0; background: rgba(2,6,23,0.86); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.5rem; }
+.calendar-state-card h4 { margin: 0; }
+.calendar-state-card p { margin: 0; color: #94a3b8; font-size: 0.78rem; }
+.calendar-empty-hint { position: absolute; right: 0.6rem; bottom: 0.55rem; border: 1px solid var(--line); border-radius: 8px; background: rgba(15,23,42,0.95); padding: 0.28rem 0.45rem; font-size: 0.62rem; color: #64748b; }
+
+/* ── Schedule calendar ──────────────────────────────────────────────────────── */
+
+/* Schedule pill time prefix */
+.schedule-pill-time { font-size: 0.53rem; color: #38bdf8; margin-right: 0.18rem; font-variant-numeric: tabular-nums; }
+
+/* Schedule week view */
+.schedule-week-view { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+.schedule-week-head { display: grid; grid-template-columns: repeat(7,1fr); gap: 1px; background: var(--line); flex-shrink: 0; }
+.schedule-week-day-head { background: #0f172a; display: flex; flex-direction: column; align-items: center; padding: 0.35rem 0; gap: 0.1rem; }
+.schedule-week-day-head small { font-size: 0.58rem; letter-spacing: 0.1em; text-transform: uppercase; color: #64748b; }
+.schedule-week-day-head strong { font-size: 0.82rem; color: #cbd5e1; }
+.schedule-week-day-head.is-today strong { color: #38bdf8; }
+.schedule-week-body { display: grid; grid-template-columns: repeat(7,1fr); gap: 1px; background: var(--line); flex: 1; overflow-y: auto; align-content: start; }
+.schedule-week-col { background: #0f172a; padding: 0.3rem 0.25rem; display: flex; flex-direction: column; gap: 0.22rem; min-height: 80px; }
+.schedule-week-col.is-today { box-shadow: inset 0 0 0 1px rgba(56,189,248,0.25); }
+.schedule-week-empty { flex: 1; }
+.schedule-week-item { border: 0; border-radius: 5px; background: rgba(30,41,59,0.9); color: #cbd5e1; padding: 0.22rem 0.3rem; font-size: 0.62rem; text-align: left; cursor: pointer; display: flex; flex-direction: column; gap: 0.08rem; border-left: 2px solid rgba(34,211,238,0.5); transition: background 0.12s; width: 100%; }
+.schedule-week-item:hover { background: rgba(30,41,59,1); }
+.schedule-week-item.done { color: #6b7280; text-decoration: line-through; border-left-color: rgba(100,116,139,0.5); }
+.schedule-item-time { font-size: 0.54rem; color: #38bdf8; font-variant-numeric: tabular-nums; }
+.schedule-item-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── Day tasks panel (calendar click popup) ─────────────────────────────────── */
+.day-tasks-backdrop { position: fixed; inset: 0; background: rgba(2,6,23,0.45); z-index: 40; }
+.day-tasks-panel { position: fixed; top: 80px; right: 12px; bottom: 12px; width: 360px; border: 1px solid var(--line); border-radius: 14px; background: #111827; z-index: 50; display: flex; flex-direction: column; }
+.day-tasks-head { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); padding: 0.8rem; }
+.day-tasks-head h3 { margin: 0; }
+.day-tasks-head p { margin: 0.2rem 0 0; color: #94a3b8; font-size: 0.8rem; }
+.day-tasks-body { flex: 1; overflow: auto; padding: 0.7rem; display: grid; gap: 0.5rem; }
+.day-task-card { border: 1px solid var(--line); border-radius: 10px; padding: 0.55rem; background: #0f172a; cursor: pointer; }
+.day-task-card-top { display: flex; align-items: center; gap: 0.4rem; }
+.day-task-card-meta { display: flex; justify-content: space-between; margin-top: 0.3rem; }
+.day-tasks-empty { opacity: 0.5; display: grid; place-items: center; padding: 2rem 0; }
+
+/* ── Responsive overrides ───────────────────────────────────────────────────── */
+@media (max-width: 980px) {
+  .calendar-week-timeline { --calendar-scrollbar-compensation: 8px; }
+  .calendar-week-timeline-head,
+  .calendar-week-all-day-row,
+  .calendar-week-grid { grid-template-columns: 48px repeat(7, minmax(0, 1fr)); }
+  .calendar-week-event-block { left: 0.14rem; width: calc(100% - 0.28rem); padding: 0.14rem 0.16rem; }
+  .calendar-week-event-block span,
+  .calendar-week-event-time { display: none; }
+}

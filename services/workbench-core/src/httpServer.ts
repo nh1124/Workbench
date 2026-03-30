@@ -2191,6 +2191,56 @@ app.get("/api/tasks/projects", async (req, res) => {
   }
 });
 
+// ── These literal-path GET routes MUST come before GET /api/tasks/:id ──────
+
+app.get("/api/tasks/export", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  try {
+    const csv = await tasksClient.exportCsv(authContext.accessToken);
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", 'attachment; filename="tasks.csv"');
+    return res.send(csv);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+// GET /api/tasks/today?date=YYYY-MM-DD → TodayTask[] (task + occurrenceDate)
+app.get("/api/tasks/today", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  const date = typeof req.query.date === "string" ? req.query.date : undefined;
+  console.log(`[workbench-core] GET /api/tasks/today  date=${date ?? "?"}`);
+  if (!date) return res.status(400).json({ message: "date query parameter is required (YYYY-MM-DD)" });
+  try {
+    const result = await tasksClient.today(authContext.accessToken, date);
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+// GET /api/tasks/schedule-calendar?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
+// Returns ScheduleCalendarDay[] grouped by scheduled_date.
+// NOTE: Must be registered before GET /api/tasks/:id to prevent Express from
+//       matching "schedule-calendar" as a task ID.
+app.get("/api/tasks/schedule-calendar", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  const startDate = typeof req.query.startDate === "string" ? req.query.startDate : undefined;
+  const endDate = typeof req.query.endDate === "string" ? req.query.endDate : undefined;
+  console.log(`[workbench-core] GET /api/tasks/schedule-calendar  ${startDate}→${endDate}`);
+  if (!startDate || !endDate) return res.status(400).json({ message: "startDate and endDate query parameters are required" });
+  try {
+    const result = await tasksClient.scheduleCalendar(authContext.accessToken, startDate, endDate);
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
 app.get("/api/tasks/:id/history", async (req, res) => {
   const authContext = await requireAuthenticatedContext(req, res);
   if (!authContext) return;
@@ -2246,20 +2296,6 @@ app.delete("/api/tasks/:id", async (req, res) => {
   try {
     await tasksClient.remove(authContext.accessToken, String(req.params.id));
     return res.status(204).send();
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.get("/api/tasks/export", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
-  if (!authContext) return;
-
-  try {
-    const csv = await tasksClient.exportCsv(authContext.accessToken);
-    res.setHeader("Content-Type", "text/csv");
-    res.setHeader("Content-Disposition", 'attachment; filename="tasks.csv"');
-    return res.send(csv);
   } catch (error) {
     return respondInternalError(res, error);
   }
@@ -2429,6 +2465,73 @@ app.delete("/api/tasks/:id/occurrences/:date/subtasks/:subtaskId", async (req, r
       String(req.params.subtaskId)
     );
     return res.status(204).send();
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+// ── Task Today ("My Day") and Schedule ──────────────────────────────────────
+// NOTE: GET /api/tasks/today is registered before GET /api/tasks/:id (above).
+// Only POST, DELETE, schedule-calendar, and schedule-items remain here.
+
+// POST /api/tasks/today — add a schedule item (= "add to My Day")
+// Body: { taskId: string, scheduledDate: string, occurrenceDate: string, startTime?, endTime?, timezone? }
+// scheduledDate  = calendar date to work on the task (today when called from My Day button)
+// occurrenceDate = LBS execution date (may differ for Overdue/Planned tasks)
+app.post("/api/tasks/today", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  console.log(`[workbench-core] POST /api/tasks/today  body=${JSON.stringify(req.body)}`);
+  try {
+    const { taskId, scheduledDate, occurrenceDate, startTime, endTime, timezone } = req.body as {
+      taskId?: unknown; scheduledDate?: unknown; occurrenceDate?: unknown;
+      startTime?: unknown; endTime?: unknown; timezone?: unknown;
+    };
+    // occurrenceDate may be "" for tasks with no LBS due date (ONCE + no due_date);
+    // the tasks-service will fall back to scheduledDate in that case.
+    if (typeof taskId !== "string" || !taskId || typeof scheduledDate !== "string" || !scheduledDate || typeof occurrenceDate !== "string") {
+      return res.status(400).json({ message: "taskId, scheduledDate, and occurrenceDate (all strings) are required" });
+    }
+    const opts = {
+      startTime: typeof startTime === "string" ? startTime : undefined,
+      endTime: typeof endTime === "string" ? endTime : undefined,
+      timezone: typeof timezone === "string" ? timezone : undefined
+    };
+    const result = await tasksClient.addToday(authContext.accessToken, taskId, scheduledDate, occurrenceDate, opts);
+    return res.status(201).json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+// DELETE /api/tasks/today/:taskId?scheduledDate=YYYY-MM-DD — remove from Today
+app.delete("/api/tasks/today/:taskId", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  const taskId = String(req.params.taskId);
+  const scheduledDate = typeof req.query.scheduledDate === "string" ? req.query.scheduledDate : undefined;
+  console.log(`[workbench-core] DELETE /api/tasks/today/${taskId}  scheduledDate=${scheduledDate ?? "?"}`);
+  if (!scheduledDate) return res.status(400).json({ message: "scheduledDate query parameter is required (YYYY-MM-DD)" });
+  try {
+    const result = await tasksClient.removeFromToday(authContext.accessToken, taskId, scheduledDate);
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+// PUT /api/tasks/schedule-items/:id — update a schedule item's time/date fields
+app.put("/api/tasks/schedule-items/:id", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  const scheduleId = parseInt(req.params.id, 10);
+  console.log(`[workbench-core] PUT /api/tasks/schedule-items/${scheduleId}  body=${JSON.stringify(req.body)}`);
+  if (isNaN(scheduleId)) return res.status(400).json({ message: "id must be a number" });
+  try {
+    const patch = req.body as { scheduledDate?: string; occurrenceDate?: string; startTime?: string | null; endTime?: string | null; timezone?: string | null };
+    const result = await tasksClient.updateScheduleItem(authContext.accessToken, scheduleId, patch);
+    if (!result) return res.status(404).json({ message: "Schedule item not found" });
+    return res.json(result);
   } catch (error) {
     return respondInternalError(res, error);
   }

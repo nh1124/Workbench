@@ -440,6 +440,60 @@ export const tasksClient = {
       `/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(occurrenceDate)}/subtasks/${encodeURIComponent(subtaskId)}`,
       token,
       { method: "DELETE" }
+    ),
+
+  // ── Today ("My Day") and Schedule ────────────────────────────────────────────
+  // Returns TodayTask[] — Task objects enriched with occurrenceDate + schedule info.
+  today: (token: string, date: string) =>
+    serviceRequest<unknown[]>(tasksService, `/tasks/today${buildQuery({ date })}`, token),
+
+  addToday: (
+    token: string,
+    taskId: string,
+    scheduledDate: string,
+    occurrenceDate: string,
+    opts?: { startTime?: string; endTime?: string; timezone?: string }
+  ) =>
+    serviceRequest<{ id: number; taskId: string; occurrenceDate: string; scheduledDate: string }>(
+      tasksService,
+      "/tasks/today",
+      token,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ taskId, scheduledDate, occurrenceDate, ...opts })
+      }
+    ),
+
+  removeFromToday: (token: string, taskId: string, scheduledDate: string) =>
+    serviceRequest<{ taskId: string; scheduledDate: string; removed: number }>(
+      tasksService,
+      `/tasks/today/${encodeURIComponent(taskId)}${buildQuery({ scheduledDate })}`,
+      token,
+      { method: "DELETE" }
+    ),
+
+  scheduleCalendar: (token: string, startDate: string, endDate: string) =>
+    serviceRequest<unknown[]>(
+      tasksService,
+      `/tasks/schedule-calendar${buildQuery({ startDate, endDate })}`,
+      token
+    ),
+
+  updateScheduleItem: (
+    token: string,
+    scheduleId: number,
+    patch: { scheduledDate?: string; occurrenceDate?: string; startTime?: string | null; endTime?: string | null; timezone?: string | null }
+  ) =>
+    serviceRequest<{ id: number; taskId: string; occurrenceDate: string; scheduledDate: string }>(
+      tasksService,
+      `/tasks/schedule-items/${scheduleId}`,
+      token,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch)
+      }
     )
 };
 

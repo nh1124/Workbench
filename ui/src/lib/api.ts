@@ -25,6 +25,9 @@ import type {
   TaskScheduleDay,
   TaskStatus,
   TaskSubtask,
+  TodayTask,
+  ScheduleItem,
+  ScheduleCalendarDay,
   WorkbenchAuthResponse,
   WorkbenchRefreshResponse,
   WorkbenchUserSession
@@ -587,6 +590,35 @@ export const tasksApi = {
       method: "PUT",
       body: JSON.stringify({ pinned })
     }),
+  todayList: (date: string): Promise<TodayTask[]> =>
+    fetchJson<TodayTask[]>(`${coreBaseUrl()}/api/tasks/today?date=${encodeURIComponent(date)}`),
+  addToToday: (
+    taskId: string,
+    scheduledDate: string,
+    occurrenceDate: string,
+    opts?: { startTime?: string; endTime?: string; timezone?: string }
+  ): Promise<ScheduleItem> =>
+    fetchJson<ScheduleItem>(
+      `${coreBaseUrl()}/api/tasks/today`,
+      { method: "POST", body: JSON.stringify({ taskId, scheduledDate, occurrenceDate, ...opts }) }
+    ),
+  removeFromToday: (taskId: string, scheduledDate: string): Promise<{ taskId: string; scheduledDate: string; removed: number }> =>
+    fetchJson<{ taskId: string; scheduledDate: string; removed: number }>(
+      `${coreBaseUrl()}/api/tasks/today/${encodeURIComponent(taskId)}?scheduledDate=${encodeURIComponent(scheduledDate)}`,
+      { method: "DELETE" }
+    ),
+  scheduleCalendar: (startDate: string, endDate: string): Promise<ScheduleCalendarDay[]> => {
+    const params = new URLSearchParams({ startDate, endDate });
+    return fetchJson<ScheduleCalendarDay[]>(`${coreBaseUrl()}/api/tasks/schedule-calendar?${params.toString()}`);
+  },
+  updateScheduleItem: (
+    scheduleId: number,
+    patch: { scheduledDate?: string; occurrenceDate?: string; startTime?: string | null; endTime?: string | null; timezone?: string | null }
+  ): Promise<ScheduleItem> =>
+    fetchJson<ScheduleItem>(
+      `${coreBaseUrl()}/api/tasks/schedule-items/${scheduleId}`,
+      { method: "PUT", body: JSON.stringify(patch) }
+    ),
   completeOccurrence: (id: string, targetDate: string, status: TaskStatus): Promise<{ taskId: string; targetDate: string; status: TaskStatus }> =>
     fetchJson<{ taskId: string; targetDate: string; status: TaskStatus }>(
       `${coreBaseUrl()}/api/tasks/${encodeURIComponent(id)}/occurrences/complete`,

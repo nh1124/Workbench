@@ -700,6 +700,134 @@ export function registerTasksTools(server: McpServer, ctx?: ToolContext): void {
     }
   );
 
+  // ── Today ("My Day") and Schedule ────────────────────────────────────────
+
+  server.registerTool(
+    "tasks.today.list",
+    {
+      title: "List Today's Tasks",
+      description:
+        "Return full task objects for the Today (My Day) view on a given date. " +
+        "Merges explicit schedule entries with LBS-due tasks for that date. " +
+        "Each item includes occurrenceDate (LBS execution date), scheduledDate, " +
+        "and optional startTime/endTime/timezone from the schedule entry. " +
+        "date must be YYYY-MM-DD.",
+      inputSchema: {
+        date: z.string().min(1).describe("Target date (YYYY-MM-DD)")
+      }
+    },
+    async ({ date }) => {
+      const result = await runWithAuth(ctx.accessToken, () => tasksClient.today(ctx.accessToken, date));
+      return asMcpText(result);
+    }
+  );
+
+  server.registerTool(
+    "tasks.today.add",
+    {
+      title: "Add Task to My Day (Schedule Item)",
+      description:
+        "Add a task occurrence to a specific date's Today (My Day) list by creating a schedule entry. " +
+        "scheduledDate = the calendar date to work on the task (usually today). " +
+        "occurrenceDate = LBS execution date (may differ for Overdue/Planned tasks). " +
+        "Optionally provide startTime (HH:MM), endTime (HH:MM), and timezone (e.g. Asia/Tokyo).",
+      inputSchema: {
+        taskId: z.string().min(1).describe("Task ID"),
+        scheduledDate: z.string().min(1).describe("Calendar date to work on the task (YYYY-MM-DD, usually today)"),
+        occurrenceDate: z.string().min(1).describe("LBS execution date for completion (YYYY-MM-DD)"),
+        startTime: z.string().optional().describe("Scheduled start time (HH:MM, optional)"),
+        endTime: z.string().optional().describe("Scheduled end time (HH:MM, optional)"),
+        timezone: z.string().optional().describe("Timezone for start/end times (e.g. Asia/Tokyo, optional)")
+      }
+    },
+    async ({ taskId, scheduledDate, occurrenceDate, startTime, endTime, timezone }) => {
+      const result = await runWithAuth(ctx.accessToken, () =>
+        tasksClient.addToday(ctx.accessToken, taskId, scheduledDate, occurrenceDate, { startTime, endTime, timezone })
+      );
+      return asMcpText(result);
+    }
+  );
+
+  server.registerTool(
+    "tasks.today.remove",
+    {
+      title: "Remove Task from My Day",
+      description:
+        "Remove all schedule entries for a task on a given scheduled date, " +
+        "removing it from the Today (My Day) list for that day. " +
+        "scheduledDate is the date it was scheduled to (usually today).",
+      inputSchema: {
+        taskId: z.string().min(1).describe("Task ID"),
+        scheduledDate: z.string().min(1).describe("Scheduled date to remove from (YYYY-MM-DD)")
+      }
+    },
+    async ({ taskId, scheduledDate }) => {
+      const result = await runWithAuth(ctx.accessToken, () =>
+        tasksClient.removeFromToday(ctx.accessToken, taskId, scheduledDate)
+      );
+      return asMcpText(result);
+    }
+  );
+
+  server.registerTool(
+    "tasks.schedule.calendar",
+    {
+      title: "Get Schedule Calendar",
+      description:
+        "Return explicitly scheduled task occurrences grouped by scheduled_date " +
+        "over a date range. Each entry includes scheduleId, taskId, title, context, " +
+        "status, occurrenceDate, scheduledDate, and optional time fields. " +
+        "startDate and endDate must be YYYY-MM-DD.",
+      inputSchema: {
+        startDate: z.string().min(1).describe("Start of date range (YYYY-MM-DD)"),
+        endDate: z.string().min(1).describe("End of date range (YYYY-MM-DD)")
+      }
+    },
+    async ({ startDate, endDate }) => {
+      const result = await runWithAuth(ctx.accessToken, () =>
+        tasksClient.scheduleCalendar(ctx.accessToken, startDate, endDate)
+      );
+      return asMcpText(result);
+    }
+  );
+
+  server.registerTool(
+    "tasks.schedule.update",
+    {
+      title: "Update Schedule Item",
+      description:
+        "Update the time or date fields of an existing schedule item by its ID. " +
+        "All fields are optional — only the provided fields will be updated. " +
+        "Pass null for startTime/endTime/timezone to clear them.",
+      inputSchema: {
+        scheduleId: z.number().describe("Schedule item ID (numeric)"),
+        scheduledDate: z.string().optional().describe("New scheduled date (YYYY-MM-DD)"),
+        occurrenceDate: z.string().optional().describe("New LBS execution date (YYYY-MM-DD)"),
+        startTime: z.string().nullable().optional().describe("New start time (HH:MM) or null to clear"),
+        endTime: z.string().nullable().optional().describe("New end time (HH:MM) or null to clear"),
+        timezone: z.string().nullable().optional().describe("New timezone or null to clear")
+      }
+    },
+    async ({ scheduleId, scheduledDate, occurrenceDate, startTime, endTime, timezone }) => {
+      const patch: {
+        scheduledDate?: string;
+        occurrenceDate?: string;
+        startTime?: string | null;
+        endTime?: string | null;
+        timezone?: string | null;
+      } = {};
+      if (scheduledDate !== undefined) patch.scheduledDate = scheduledDate;
+      if (occurrenceDate !== undefined) patch.occurrenceDate = occurrenceDate;
+      if (startTime !== undefined) patch.startTime = startTime;
+      if (endTime !== undefined) patch.endTime = endTime;
+      if (timezone !== undefined) patch.timezone = timezone;
+      const result = await runWithAuth(ctx.accessToken, () =>
+        tasksClient.updateScheduleItem(ctx.accessToken, scheduleId, patch)
+      );
+      return asMcpText(result);
+    }
+  );
+
   // ── LBS: Expansion ────────────────────────────────────────────────────────
 
   server.registerTool(

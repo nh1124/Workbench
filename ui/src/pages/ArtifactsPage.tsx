@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Link, useSearchParams } from "react-router-dom";
@@ -111,8 +111,60 @@ function isPdf(item: ArtifactEditorDraft): boolean {
   return /\.pdf$/i.test(item.path);
 }
 
+function isImage(item: ArtifactEditorDraft): boolean {
+  const mime = (item.mimeType ?? "").toLowerCase();
+  if (mime.startsWith("image/")) return true;
+  return /\.(png|jpe?g|gif|webp|svg|bmp|ico|tiff?)$/i.test(item.path);
+}
+
 function isMarkdownFilePath(itemPath: string): boolean {
   return /\.(md|markdown)$/i.test(itemPath.trim());
+}
+
+function extractYoutubeId(url: string): string | null {
+  try {
+    const u = new URL(url);
+    if (u.hostname === "youtu.be") return u.pathname.slice(1).split("?")[0];
+    if (u.hostname === "youtube.com" || u.hostname === "www.youtube.com") {
+      const v = u.searchParams.get("v");
+      if (v) return v;
+      const m = u.pathname.match(/\/(?:embed|shorts|v)\/([^/?&]+)/);
+      if (m) return m[1];
+    }
+  } catch {
+    // ignore invalid URLs
+  }
+  return null;
+}
+
+function isExternalUrl(href: string): boolean {
+  return /^https?:\/\//i.test(href);
+}
+
+function resolveMarkdownRef(markdownFilePath: string, href: string): string {
+  if (!href) return href;
+  if (href.startsWith("/")) return normalizePath(href.slice(1));
+  const dir = parentPath(markdownFilePath);
+  return normalizePath(joinPath(dir, href));
+}
+
+function relativeArtifactPath(fromFilePath: string, toFilePath: string): string {
+  const fromDir = normalizePath(parentPath(fromFilePath));
+  const to = normalizePath(toFilePath);
+  if (fromDir && to.startsWith(fromDir + "/")) return to.slice(fromDir.length + 1);
+  return to;
+}
+
+/** Convert leading `-- ` / `--- ` bullet syntax to standard indented Markdown list syntax. */
+function preprocessMarkdownBullets(md: string): string {
+  return md
+    .split("\n")
+    .map((line) => {
+      if (/^--- /.test(line)) return "    - " + line.slice(4);
+      if (/^-- /.test(line)) return "  - " + line.slice(3);
+      return line;
+    })
+    .join("\n");
 }
 
 function itemToDraft(item: ArtifactItem): ArtifactEditorDraft {
@@ -290,6 +342,114 @@ const IcoFloppy = () => (
   </svg>
 );
 
+const IcoExpand = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+    <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+  </svg>
+);
+
+const IcoCompress = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+    <path d="M4 14h6v6M14 4h6v6M10 20l-7-7M20 10l-7 7" />
+  </svg>
+);
+
+
+interface MarkdownRendererCtx {
+  items: ArtifactItem[];
+  currentPath: string;
+  selectItem: (item: ArtifactItem) => void;
+}
+
+const MarkdownRendererContext = createContext<MarkdownRendererCtx | null>(null);
+
+function resolveArtifactSrc(src: string, currentPath: string): string {
+  // Leading `/` → absolute artifact path (strip slash)
+  if (src.startsWith("/")) return normalizePath(src.slice(1));
+  // Otherwise: relative to the markdown file's directory
+  return resolveMarkdownRef(currentPath, src);
+}
+
+function MarkdownImageComponent({ src, alt }: { src?: string; alt?: string }) {
+  // All hooks must be called unconditionally (Rules of Hooks)
+  const ctx = useContext(MarkdownRendererContext);
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const youtubeId = src ? extractYoutubeId(src) : null;
+  const isExternal = isExternalUrl(src ?? "");
+
+  useEffect(() => {
+    if (youtubeId || !src || !ctx || isExternal) return;
+
+    const artifactPath = resolveArtifactSrc(src, ctx.currentPath);
+    const item = ctx.items.find((i) => normalizePath(i.path) === artifactPath);
+    if (!item) return;
+
+    let cancelled = false;
+    let url: string | null = null;
+    void artifactsApi.downloadFile(item.id).then((blob) => {
+      if (cancelled) return;
+      url = URL.createObjectURL(blob);
+      setBlobUrl(url);
+    });
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [src, ctx, youtubeId, isExternal]);
+
+  // YouTube URL in img syntax → embed as video player
+  if (youtubeId) {
+    return (
+      <span className="va-md-embed-block">
+        <iframe
+          className="va-md-youtube"
+          src={`https://www.youtube-nocookie.com/embed/${youtubeId}`}
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          allowFullScreen
+          title={alt || "YouTube video"}
+        />
+      </span>
+    );
+  }
+
+  const displaySrc = isExternal ? src : blobUrl;
+  if (!displaySrc) return <span className="va-md-img-loading">[{alt ?? src}]</span>;
+  if (/\.pdf$/i.test(src ?? "")) {
+    return <iframe src={displaySrc} className="va-md-pdf-embed" title={alt ?? "PDF"} />;
+  }
+  return <img src={displaySrc} alt={alt} className="va-md-img" />;
+}
+
+function MarkdownLinkComponent({ href, children }: { href?: string; children?: ReactNode }) {
+  const ctx = useContext(MarkdownRendererContext);
+  if (!href) return <>{children}</>;
+
+  const youtubeId = extractYoutubeId(href);
+  if (youtubeId) {
+    return (
+      <span className="va-md-embed-block">
+        <iframe
+          className="va-md-youtube"
+          src={`https://www.youtube-nocookie.com/embed/${youtubeId}`}
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          allowFullScreen
+          title="YouTube video"
+        />
+      </span>
+    );
+  }
+
+  return (
+    <a href={href} target="_blank" rel="noopener noreferrer">
+      {children}
+    </a>
+  );
+}
+
+const MARKDOWN_COMPONENTS = {
+  img: MarkdownImageComponent,
+  a: MarkdownLinkComponent,
+};
 
 export function ArtifactsPage() {
   const ROOT_DROP_PATH = "";
@@ -312,14 +472,19 @@ export function ArtifactsPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [notePreviewMode, setNotePreviewMode] = useState<"edit" | "preview">("edit");
   const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
+  const [imageBlobUrl, setImageBlobUrl] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<TreeContextMenuState | null>(null);
   const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
   const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirmState | null>(null);
   const [createFolderState, setCreateFolderState] = useState<CreateFolderState | null>(null);
+  const [editorExpanded, setEditorExpanded] = useState(false);
 
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const editorRef = useRef<HTMLTextAreaElement | null>(null);
   const draggingItemRef = useRef<ArtifactItem | null>(null);
+  const handleSaveRef = useRef<() => Promise<void>>(async () => {});
+  const shortcutStateRef = useRef({ canSave: false, isSaving: false, markdownEditorVisible: false });
 
   const treeRoot = useMemo(() => buildTree(items), [items]);
   const visibleSelectableItemIds = useMemo(
@@ -574,6 +739,33 @@ export function ArtifactsPage() {
   }, [draft.id, draft.kind, draft.mimeType, draft.path]);
 
   useEffect(() => {
+    if (!draft.id || draft.kind !== "file" || !isImage(draft)) {
+      if (imageBlobUrl) URL.revokeObjectURL(imageBlobUrl);
+      setImageBlobUrl(null);
+      return;
+    }
+
+    let cancelled = false;
+    let objectUrl: string | null = null;
+
+    void artifactsApi
+      .downloadFile(draft.id, false)
+      .then((blob) => {
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setImageBlobUrl(objectUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setImageBlobUrl(null);
+      });
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [draft.id, draft.kind, draft.mimeType, draft.path]);
+
+  useEffect(() => {
     if (!contextMenu) return;
 
     const handleEscape = (event: globalThis.KeyboardEvent) => {
@@ -603,6 +795,44 @@ export function ArtifactsPage() {
     });
     setSelectionAnchorId((prev) => (prev && existingIds.has(prev) ? prev : null));
   }, [items]);
+
+  useEffect(() => {
+    const handler = (e: globalThis.KeyboardEvent) => {
+      const { canSave: cs, isSaving: is, markdownEditorVisible: mev } = shortcutStateRef.current;
+      // Ctrl+S: save
+      if (e.ctrlKey && !e.shiftKey && e.key === "s") {
+        e.preventDefault();
+        if (cs && !is) void handleSaveRef.current();
+        return;
+      }
+      // Ctrl+Shift+V: toggle edit/preview
+      if (e.ctrlKey && e.shiftKey && e.key === "V") {
+        if (mev) {
+          e.preventDefault();
+          setNotePreviewMode((prev) => (prev === "edit" ? "preview" : "edit"));
+        }
+        return;
+      }
+      // Ctrl+Shift+↑: expand editor
+      if (e.ctrlKey && e.shiftKey && e.key === "ArrowUp") {
+        if (mev) {
+          e.preventDefault();
+          setEditorExpanded(true);
+        }
+        return;
+      }
+      // Ctrl+Shift+↓: shrink editor
+      if (e.ctrlKey && e.shiftKey && e.key === "ArrowDown") {
+        if (mev) {
+          e.preventDefault();
+          setEditorExpanded(false);
+        }
+        return;
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []); // stable: reads via refs, sets via stable setState
 
   const updateSelection = (itemId: string, shiftKey: boolean) => {
     if (shiftKey && selectionAnchorId) {
@@ -751,6 +981,83 @@ export function ArtifactsPage() {
     }
   };
 
+  const handleEditorDrop = async (event: DragEvent<HTMLTextAreaElement>) => {
+    const files = event.dataTransfer.files;
+    if (!files || files.length === 0) return;
+    event.preventDefault();
+
+    const insertPos = event.currentTarget.selectionStart ?? draft.contentMarkdown.length;
+    const uploadDir = parentPath(draft.path) || undefined;
+
+    setIsSaving(true);
+    setError(null);
+    let insertedText = "";
+
+    try {
+      for (const file of Array.from(files)) {
+        const uploaded = await artifactsApi.uploadFile({
+          projectId: draft.projectId,
+          projectName: draft.projectName || undefined,
+          directoryPath: uploadDir,
+          file
+        });
+        const rel = relativeArtifactPath(draft.path, uploaded.path);
+        const isImage = /^image\//i.test(file.type) || /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(file.name);
+        insertedText += isImage ? `![${file.name}](${rel})\n` : `[${file.name}](${rel})\n`;
+      }
+      await loadTree();
+      setDraft((prev) => ({
+        ...prev,
+        contentMarkdown:
+          prev.contentMarkdown.slice(0, insertPos) + insertedText + prev.contentMarkdown.slice(insertPos)
+      }));
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : "Upload failed.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleEditorPaste = async (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(event.clipboardData.files).filter((f) => /^image\//i.test(f.type));
+    if (files.length === 0) return;
+    event.preventDefault();
+
+    const insertPos = event.currentTarget.selectionStart ?? draft.contentMarkdown.length;
+    const uploadDir = parentPath(draft.path) || undefined;
+
+    setIsSaving(true);
+    setError(null);
+    let insertedText = "";
+
+    try {
+      for (const file of files) {
+        // Give pasted images a timestamped filename if they lack one
+        const name = file.name && file.name !== "image.png" ? file.name
+          : `paste-${Date.now()}.${file.type.split("/")[1] ?? "png"}`;
+        const namedFile = new File([file], name, { type: file.type });
+        const uploaded = await artifactsApi.uploadFile({
+          projectId: draft.projectId,
+          projectName: draft.projectName || undefined,
+          directoryPath: uploadDir,
+          file: namedFile
+        });
+        const rel = relativeArtifactPath(draft.path, uploaded.path);
+        insertedText += `![${name}](${rel})\n`;
+      }
+      await loadTree();
+      setDraft((prev) => ({
+        ...prev,
+        contentMarkdown:
+          prev.contentMarkdown.slice(0, insertPos) + insertedText + prev.contentMarkdown.slice(insertPos)
+      }));
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : "Upload failed.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!canSave) {
       setError("Title, path は必須です。");
@@ -798,6 +1105,10 @@ export function ArtifactsPage() {
       setIsSaving(false);
     }
   };
+
+  // Keep refs in sync for stable keyboard shortcut handler
+  handleSaveRef.current = handleSave;
+  shortcutStateRef.current = { canSave, isSaving, markdownEditorVisible };
 
   const createDeleteConfirmState = (ids: string[]): DeleteConfirmState | null => {
     const normalized = [...new Set(ids.map((id) => id.trim()).filter((id) => id.length > 0))];
@@ -1275,7 +1586,7 @@ export function ArtifactsPage() {
               </div>
             </header>
 
-            <section className="va-form-grid">
+            <section className={`va-form-grid${editorExpanded ? " editor-expanded" : ""}`}>
               <label className="span-2">
                 <span className="va-field-label">Title *</span>
                 <input
@@ -1315,37 +1626,65 @@ export function ArtifactsPage() {
                 <div className="span-2 va-content-section">
                   <div className="va-content-head">
                     <span className="va-field-label">Content (Markdown)</span>
-                    <div className="va-content-mode">
+                    <div className="va-content-head-right">
+                      <div className="va-content-mode">
+                        <button
+                          type="button"
+                          className={notePreviewMode === "edit" ? "active" : undefined}
+                          onClick={() => setNotePreviewMode("edit")}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className={notePreviewMode === "preview" ? "active" : undefined}
+                          onClick={() => setNotePreviewMode("preview")}
+                        >
+                          Preview
+                        </button>
+                      </div>
                       <button
                         type="button"
-                        className={notePreviewMode === "edit" ? "active" : undefined}
-                        onClick={() => setNotePreviewMode("edit")}
+                        className="va-icon-btn va-expand-btn"
+                        onClick={() => setEditorExpanded((v) => !v)}
+                        title={editorExpanded ? "Collapse (Ctrl+Shift+↓)" : "Expand (Ctrl+Shift+↑)"}
+                        aria-label={editorExpanded ? "Collapse editor" : "Expand editor"}
                       >
-                        Edit
-                      </button>
-                      <button
-                        type="button"
-                        className={notePreviewMode === "preview" ? "active" : undefined}
-                        onClick={() => setNotePreviewMode("preview")}
-                      >
-                        Preview
+                        {editorExpanded ? <IcoCompress /> : <IcoExpand />}
                       </button>
                     </div>
                   </div>
 
                   {notePreviewMode === "edit" ? (
                     <textarea
+                      ref={editorRef}
                       rows={14}
                       value={draft.contentMarkdown}
                       onChange={(event) => setDraft((prev) => ({ ...prev, contentMarkdown: event.target.value }))}
+                      onDragOver={(event) => { event.preventDefault(); }}
+                      onDrop={(event) => { void handleEditorDrop(event); }}
+                      onPaste={(event) => { void handleEditorPaste(event); }}
                       placeholder="# note"
                     />
                   ) : (
                     <div className="va-markdown-preview">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {draft.contentMarkdown || "_No content_"}
-                      </ReactMarkdown>
+                      <MarkdownRendererContext.Provider value={{ items, currentPath: draft.path, selectItem }}>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_COMPONENTS}>
+                          {preprocessMarkdownBullets(draft.contentMarkdown || "_No content_")}
+                        </ReactMarkdown>
+                      </MarkdownRendererContext.Provider>
                     </div>
+                  )}
+                </div>
+              ) : null}
+
+              {draft.kind === "file" && isImage(draft) ? (
+                <div className="span-2 va-preview-section">
+                  <span className="va-field-label">Preview</span>
+                  {imageBlobUrl ? (
+                    <img src={imageBlobUrl} alt={draft.title} className="va-image-preview" />
+                  ) : (
+                    <div className="va-empty">Loading image preview...</div>
                   )}
                 </div>
               ) : null}

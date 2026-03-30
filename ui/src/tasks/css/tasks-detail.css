@@ -1,0 +1,373 @@
+/* ── tasks-detail.css ─────────────────────────────────────────────────────────
+ * Task detail / edit panel, edit sections, status controls, history,
+ * subtasks, attachments, file viewer modal.
+ * Class names preserved exactly from TasksPage.css.
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/* ── Detail panel shell ─────────────────────────────────────────────────────── */
+.tasks-detail {
+  border-left: 1px solid var(--line);
+  background: #111827;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  min-width: 0;
+  position: relative;
+}
+.tasks-detail-head { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; padding: 0.85rem 1rem 0.7rem; border-bottom: 1px solid var(--line); }
+.tasks-detail-head-left { display: flex; align-items: center; gap: 0.5rem; min-width: 0; flex: 1; }
+.tasks-detail-dot { width: 0.55rem; height: 0.55rem; border-radius: 999px; background: #22d3ee; }
+.tasks-detail-title-input { width: 100%; border: 0; background: transparent; color: #e5e7eb; font-size: 1.05rem; font-weight: 700; padding: 0.12rem 0.2rem; border-radius: 6px; }
+.tasks-detail-title-input:focus { outline: 1px solid rgba(34,211,238,0.4); background: rgba(15,23,42,0.65); }
+.tasks-detail-close { width: 1.7rem; height: 1.7rem; border: 0; background: transparent; color: #64748b; display: grid; place-items: center; border-radius: 8px; }
+.tasks-detail-close:hover { background: rgba(255,255,255,0.04); color: #cbd5e1; }
+.tasks-detail-head-actions { display: flex; align-items: center; gap: 0.2rem; flex-shrink: 0; }
+.detail-status-btn {
+  width: 1.7rem; height: 1.7rem; border: 0; background: transparent;
+  display: grid; place-items: center; border-radius: 8px; flex-shrink: 0;
+  padding: 0; line-height: 1;
+  color: #4b5563; transition: color 0.15s, background 0.15s;
+}
+.detail-status-btn:hover { background: rgba(255,255,255,0.06); color: #94a3b8; }
+.detail-status-btn.todo { color: #fbbf24; }
+.detail-status-btn.done { color: #34d399; }
+.detail-status-btn.skipped { color: #64748b; }
+.detail-lock-btn {
+  width: 1.7rem; height: 1.7rem; border: 1px solid transparent; background: transparent;
+  display: grid; place-items: center; border-radius: 8px; flex-shrink: 0;
+  padding: 0; line-height: 1;
+  color: #64748b; transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+.detail-lock-btn:hover { background: rgba(255,255,255,0.04); color: #cbd5e1; }
+.detail-lock-btn.active { color: #fbbf24; border-color: rgba(251,191,36,0.4); background: rgba(251,191,36,0.08); }
+.tasks-detail-body { flex: 1; overflow: auto; padding: 0.85rem 1rem; display: flex; flex-direction: column; gap: 0.9rem; }
+.subtask-section-top { padding-bottom: 0.3rem; border-bottom: 1px solid var(--line); margin-bottom: -0.1rem; }
+
+/* ── Edit sections ──────────────────────────────────────────────────────────── */
+.edit-section { display: flex; flex-direction: column; gap: 0.35rem; }
+.edit-section-label { font-size: 0.62rem; letter-spacing: 0.15em; text-transform: uppercase; color: #64748b; font-weight: 800; }
+.edit-two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
+.edit-input { width: 100%; border: 1px solid transparent; border-radius: 10px; background: #1f2937; color: #f3f4f6; padding: 0.58rem 0.7rem; }
+.edit-input:focus { outline: none; border-color: rgba(34,211,238,0.4); }
+textarea.edit-input { resize: vertical; min-height: 90px; }
+
+/* ── Detail cards ───────────────────────────────────────────────────────────── */
+.detail-card {
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 12px;
+  background: rgba(15,23,42,0.55);
+  padding: 0.75rem 0.85rem 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.detail-card-label-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; }
+.detail-card-label {
+  font-size: 0.6rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #38bdf8;
+  font-weight: 800;
+}
+.detail-card-date { margin-top: 0; }
+.detail-card-date.has-value { border-color: rgba(34,211,238,0.3); }
+.detail-card-recurring-note { font-size: 0.72rem; color: #64748b; margin: 0.1rem 0 0; }
+.detail-card-loading { font-size: 0.72rem; color: #64748b; margin: 0.2rem 0 0; }
+.detail-card-remove-btn {
+  border: 0; background: transparent; color: #64748b;
+  font-size: 0.7rem; cursor: pointer; padding: 0.1rem 0.3rem;
+  border-radius: 5px; line-height: 1;
+}
+.detail-card-remove-btn:hover { color: #f87171; background: rgba(248,113,113,0.08); }
+
+/* ── Status / lock controls ─────────────────────────────────────────────────── */
+.status-lock-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+}
+.status-toggle-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.35rem;
+}
+.status-toggle {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.35rem;
+  border: 1px solid rgba(255,255,255,0.1); border-radius: 999px;
+  background: rgba(255,255,255,0.04); color: #94a3b8;
+  width: 100%;
+  min-width: 0;
+  white-space: nowrap;
+  padding: 0.32rem 0.58rem; font-size: 0.8rem; text-transform: capitalize;
+}
+.status-toggle:hover { color: #e2e8f0; }
+.status-toggle.active { background: rgba(8,145,178,0.2); color: #cffafe; border-color: rgba(34,211,238,0.35); }
+.status-toggle.active.todo { border-color: #fbbf24; color: #fbbf24; background: rgba(251,191,36,0.1); }
+.status-toggle.active.done { border-color: #34d399; color: #34d399; background: rgba(52,211,153,0.1); }
+.status-toggle.active.skipped { border-color: #94a3b8; color: #94a3b8; background: rgba(148,163,184,0.12); }
+.status-toggle-icon { width: 0.72rem; height: 0.72rem; border: 1.4px solid currentColor; border-radius: 999px; }
+.lock-toggle {
+  display: inline-flex; align-items: center; gap: 0.35rem;
+  border: 1px solid rgba(255,255,255,0.1); border-radius: 8px;
+  background: rgba(255,255,255,0.04); color: #94a3b8;
+  padding: 0.35rem 0.68rem;
+}
+.lock-toggle.compact { border-radius: 999px; min-height: 2rem; }
+.lock-toggle.active { border-color: #fbbf24; color: #fbbf24; background: rgba(251,191,36,0.1); }
+
+/* ── Weekday picker ─────────────────────────────────────────────────────────── */
+.weekday-picker { display: flex; gap: 0.28rem; flex-wrap: wrap; }
+.weekday-btn {
+  width: auto;
+  min-width: 2.5rem;
+  padding: 0 0.42rem;
+  height: 2.2rem;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: rgba(255,255,255,0.04);
+  color: #94a3b8;
+  white-space: nowrap;
+  font-size: 0.72rem;
+  line-height: 1;
+}
+.weekday-btn.active { color: #67e8f9; border-color: rgba(34,211,238,0.4); background: rgba(8,145,178,0.2); }
+
+/* ── History section ────────────────────────────────────────────────────────── */
+.history-toggle {
+  width: 100%; border: 1px solid var(--line); border-radius: 8px;
+  background: rgba(255,255,255,0.03); color: #94a3b8;
+  display: flex; align-items: center; gap: 0.5rem; text-align: left;
+  padding: 0.42rem 0.65rem; font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase; font-weight: 800;
+}
+.history-toggle:hover { color: #e2e8f0; }
+.history-body { margin-top: 0.35rem; border: 1px solid var(--line); border-radius: 8px; background: rgba(0,0,0,0.2); overflow: hidden; }
+.advanced-body { padding: 0 0.35rem; }
+.history-entry { display: flex; justify-content: space-between; align-items: center; padding: 0.38rem 0.6rem; border-bottom: 1px solid rgba(255,255,255,0.06); }
+.history-entry:last-child { border-bottom: 0; }
+.history-date { color: #94a3b8; font-size: 0.68rem; }
+.history-status { border-radius: 999px; padding: 0.1rem 0.45rem; font-size: 0.64rem; text-transform: capitalize; }
+.history-status.done { color: #86efac; background: rgba(134,239,172,0.12); }
+.history-status.skipped { color: #94a3b8; background: rgba(148,163,184,0.12); }
+.history-status.todo { color: #fbbf24; background: rgba(251,191,36,0.12); }
+
+/* ── Edit footer ────────────────────────────────────────────────────────────── */
+.edit-timestamps { border-top: 1px solid var(--line); padding-top: 0.45rem; display: grid; gap: 0.15rem; }
+.edit-footer {
+  border-top: 1px solid var(--line);
+  padding: 0.65rem 0.8rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  position: sticky;
+  bottom: 0;
+  background: #111827;
+  z-index: 3;
+}
+.edit-delete-btn {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 10px;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: #64748b;
+  margin-left: auto;
+  order: 2;
+}
+.auto-save-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: #6366f1; flex-shrink: 0; align-self: center;
+  animation: auto-save-pulse 1.2s ease-in-out infinite;
+}
+@keyframes auto-save-pulse {
+  0%, 100% { opacity: 0.25; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+/* ── Attachments ─────────────────────────────────────────────────────────────── */
+.attachment-drop-zone {
+  border: 1.5px dashed rgba(255,255,255,0.12);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  min-height: 2.5rem;
+  transition: border-color 0.15s, background 0.15s;
+}
+.attachment-drop-zone.dragging {
+  border-color: rgba(139,92,246,0.7);
+  background: rgba(139,92,246,0.08);
+}
+.attachment-list { display: flex; flex-direction: column; gap: 0.25rem; }
+.attachment-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  color: #d1d5db;
+  padding: 0.2rem 0.3rem;
+  border-radius: 0.3rem;
+  transition: background 0.1s;
+}
+.attachment-row:hover { background: rgba(255,255,255,0.05); }
+.attachment-name {
+  flex: 1;
+  text-align: left;
+  background: none;
+  border: none;
+  color: #a78bfa;
+  font-size: 0.78rem;
+  cursor: pointer;
+  padding: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachment-name:hover { text-decoration: underline; }
+.attachment-size { color: #6b7280; font-size: 0.7rem; flex-shrink: 0; }
+.attachment-delete {
+  background: none;
+  border: none;
+  color: #6b7280;
+  cursor: pointer;
+  padding: 0.1rem;
+  display: flex;
+  align-items: center;
+  border-radius: 0.2rem;
+  flex-shrink: 0;
+}
+.attachment-delete:hover { color: #f87171; background: rgba(248,113,113,0.1); }
+
+/* ── Subtasks ─────────────────────────────────────────────────────────────────── */
+.subtask-list { display: flex; flex-direction: column; gap: 0.2rem; }
+.subtask-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.2rem 0.3rem;
+  border-radius: 0.3rem;
+  font-size: 0.82rem;
+  transition: background 0.1s;
+}
+.subtask-row:hover { background: rgba(255,255,255,0.05); }
+.subtask-check {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  color: #6b7280;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  transition: color 0.15s;
+}
+.subtask-check:hover { color: #a78bfa; }
+.subtask-check.done { color: #34d399; }
+.subtask-title { flex: 1; color: #d1d5db; line-height: 1.3; }
+.subtask-title.done { text-decoration: line-through; color: #6b7280; }
+.subtask-add-row { padding: 0.15rem 0.3rem; }
+.subtask-add-input {
+  width: 100%;
+  background: none;
+  border: none;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+  color: #d1d5db;
+  font-size: 0.82rem;
+  padding: 0.25rem 0;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.subtask-add-input::placeholder { color: #4b5563; }
+.subtask-add-input:focus { border-bottom-color: #a78bfa; }
+
+/* ── File Viewer Modal ──────────────────────────────────────────────────────── */
+.file-viewer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  backdrop-filter: blur(3px);
+}
+.file-viewer-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(92vw, 1100px);
+  height: min(90vh, 800px);
+  background: #111827;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 24px 80px rgba(0,0,0,0.7);
+}
+.file-viewer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.65rem 1rem;
+  border-bottom: 1px solid var(--line);
+  gap: 0.6rem;
+  flex-shrink: 0;
+}
+.file-viewer-name {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: #d1d5db;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-viewer-header-actions { display: flex; align-items: center; gap: 0.2rem; flex-shrink: 0; }
+.file-viewer-action {
+  width: 1.8rem; height: 1.8rem; border: 0; background: transparent;
+  color: #64748b; display: grid; place-items: center; border-radius: 8px;
+}
+.file-viewer-action:hover { background: rgba(255,255,255,0.06); color: #e2e8f0; }
+.file-viewer-close {
+  width: 1.8rem; height: 1.8rem; border: 0; background: transparent;
+  color: #64748b; display: grid; place-items: center; border-radius: 8px;
+}
+.file-viewer-close:hover { background: rgba(255,255,255,0.06); color: #f87171; }
+.file-viewer-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #0f172a;
+}
+.file-viewer-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.file-viewer-iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: white;
+}
+.file-viewer-text { background: #1e293b; color: #e2e8f0; }
+.file-viewer-unsupported {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  color: #64748b;
+  font-size: 0.9rem;
+  text-align: center;
+  padding: 2rem;
+}
+
+/* ── Responsive overrides ───────────────────────────────────────────────────── */
+@media (max-width: 980px) {
+  .edit-two-col,
+  .task-add-advanced-grid { grid-template-columns: 1fr; }
+}

@@ -80,6 +80,52 @@ export interface Task {
   updatedAt: string;
 }
 
+/**
+ * A Task enriched with schedule information.
+ * occurrenceDate = LBS execution date used when completing the task.
+ * scheduledDate  = the calendar date this item appears on (Today / Schedule calendar).
+ * scheduleId is present when the item comes from an explicit schedule entry;
+ * undefined when it is an LBS-auto-shown task (occurrence_date = today, no DB entry).
+ */
+export interface TodayTask extends Task {
+  occurrenceDate: string;
+  scheduledDate: string;
+  scheduleId?: number;
+  startTime?: string;
+  endTime?: string;
+  timezone?: string;
+}
+
+export interface ScheduleItem {
+  id: number;
+  taskId: string;
+  occurrenceDate: string;
+  scheduledDate: string;
+  startTime?: string;
+  endTime?: string;
+  timezone?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ScheduleCalendarItem {
+  scheduleId: number;
+  taskId: string;
+  title: string;
+  context: string;
+  status: TaskStatus;
+  occurrenceDate: string;
+  scheduledDate: string;
+  startTime?: string;
+  endTime?: string;
+  timezone?: string;
+}
+
+export interface ScheduleCalendarDay {
+  date: string;
+  items: ScheduleCalendarItem[];
+}
+
 export interface TaskAttachment {
   id: string;
   taskId: string;

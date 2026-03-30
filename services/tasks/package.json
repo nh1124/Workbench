@@ -6,7 +6,8 @@
   "scripts": {
     "dev:http": "tsx src/httpServer.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/httpServer.js"
+    "start": "node dist/httpServer.js",
+    "test": "tsx --test src/__tests__/**/*.test.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -23,8 +24,6 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/multer": "^1.4.12",
     "@types/node": "^24.0.13",
-    "@types/pg": "^8.11.11",
-    "tsx": "^4.19.3",
-    "typescript": "^5.8.2"
+    "@types/pg": "^8.11.11"
   }
 }
