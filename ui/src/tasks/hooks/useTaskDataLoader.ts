@@ -6,7 +6,7 @@
  * Behavior is identical to the `load()` function that lived in TasksPage.tsx.
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { projectsApi, tasksApi } from "../../lib/api";
 import { buildInboxRows } from "../../lib/inboxBuilder";
 import { pushErrorNotification } from "../../lib/notificationService";
@@ -29,7 +29,7 @@ export interface TaskDataState {
   inboxDoneRows: TaskOccurrenceRow[];
   plannedCount: number;
   overdueCount: number;
-  /** date-key → taskId → TaskStatus (for calendar per-date display) */
+  /** date-key ↁEtaskId ↁETaskStatus (for calendar per-date display) */
   calendarStatusMap: Map<string, Map<string, TaskStatus>>;
   isLoading: boolean;
   error: string | null;
@@ -67,6 +67,16 @@ export function useTaskDataLoader(
   const [calendarStatusMap, setCalendarStatusMap] = useState<Map<string, Map<string, TaskStatus>>>(new Map());
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const selectedTaskIdRef = useRef<string | null>(selectedTaskId);
+  const onTaskGoneRef = useRef(onTaskGone);
+
+  useEffect(() => {
+    selectedTaskIdRef.current = selectedTaskId;
+  }, [selectedTaskId]);
+
+  useEffect(() => {
+    onTaskGoneRef.current = onTaskGone;
+  }, [onTaskGone]);
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -172,8 +182,9 @@ export function useTaskDataLoader(
         )
       );
 
-      if (selectedTaskId && !mergedTasks.find((t) => t.id === selectedTaskId)) {
-        onTaskGone();
+      const currentSelectedTaskId = selectedTaskIdRef.current;
+      if (currentSelectedTaskId && !mergedTasks.find((t) => t.id === currentSelectedTaskId)) {
+        onTaskGoneRef.current();
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : "Failed to load tasks.";
@@ -186,9 +197,6 @@ export function useTaskDataLoader(
     } finally {
       setIsLoading(false);
     }
-  // contextFilter and selectedTaskId intentionally not in dep array —
-  // callers control when load() is triggered.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contextFilter]);
 
   return {
@@ -213,3 +221,4 @@ export function useTaskDataLoader(
     setInboxDoneRows
   };
 }
+

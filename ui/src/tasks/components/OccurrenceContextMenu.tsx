@@ -1,7 +1,7 @@
 /**
  * OccurrenceContextMenu.tsx
  * Fixed-position context menu for multi-selected occurrence rows.
- * Receives all state and handlers as props — no internal state.
+ * Receives all state and handlers as props  Eno internal state.
  */
 
 import type { TaskOccurrenceRow } from "../types";
@@ -88,11 +88,12 @@ export function OccurrenceContextMenu({
       <button type="button" className="danger" onClick={onDeleteSelected}>Remove occurrence</button>
       <hr className="occurrence-menu-divider" />
       {anyNotInToday && (
-        <button type="button" onClick={() => onToggleToday(true)}>☀ Add to Today</button>
+        <button type="button" onClick={() => onToggleToday(true)}>Add to Today</button>
       )}
       {anyInToday && (
-        <button type="button" onClick={() => onToggleToday(false)}>✕ Remove from Today</button>
+        <button type="button" onClick={() => onToggleToday(false)}>Remove from Today</button>
       )}
     </div>
   );
 }
+

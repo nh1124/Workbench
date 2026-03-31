@@ -98,7 +98,7 @@ describe("filterTasksByMode", () => {
     expect(result.map((t) => t.id)).toEqual(["a"]);
   });
 
-  it("list/today falls back to todayTaskIds when myDay empty", () => {
+  it("list/today is empty when myDay is empty", () => {
     const result = filterTasksByMode(tasks, {
       sidebarMode: "list",
       calendarStatusFilter: "all",
@@ -107,7 +107,7 @@ describe("filterTasksByMode", () => {
       todayTaskIds: new Set(["b", "c"]),
       today: TODAY,
     });
-    expect(result.map((t) => t.id)).toEqual(["b", "c"]);
+    expect(result).toEqual([]);
   });
 
   it("list/myday keeps only pinned tasks", () => {
@@ -225,7 +225,7 @@ describe("computeTaskCounters", () => {
     expect(counters.today).toBe(3);
   });
 
-  it("returns todayTaskIds.size when myDay is empty", () => {
+  it("returns 0 for today count when myDay is empty", () => {
     const counters = computeTaskCounters([], {
       myDayFlaggedIds: new Set(),
       todayTaskIds: new Set(["x", "y"]),
@@ -234,7 +234,7 @@ describe("computeTaskCounters", () => {
       overdueCount: 0,
       inboxUpcomingCount: 0,
     });
-    expect(counters.today).toBe(2);
+    expect(counters.today).toBe(0);
   });
 
   it("counts pinned tasks as myday", () => {

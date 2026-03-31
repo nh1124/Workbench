@@ -32,18 +32,22 @@ import {
   importTasksCsv,
   listTaskProjects,
   listTaskPins,
-  listTaskToday,
-  addTaskToToday,
-  removeTaskFromToday,
-  updateTaskScheduleItem,
-  listTaskScheduleCalendar,
   listTasks,
-  moveTaskOccurrence,
   provisionLbsAccount,
-  skipTaskOccurrenceException,
   updateTaskPin,
   updateTask
 } from "./store.js";
+import {
+  moveTaskOccurrence,
+  skipTaskOccurrenceException
+} from "./taskExceptionStore.js";
+import {
+  addTaskToToday,
+  listTaskScheduleCalendar,
+  listTaskToday,
+  removeTaskFromToday,
+  updateTaskScheduleItem
+} from "./taskScheduleStore.js";
 import { RECURRENCE_TYPES, TASK_STATUSES } from "./types.js";
 
 const __filename = fileURLToPath(import.meta.url);

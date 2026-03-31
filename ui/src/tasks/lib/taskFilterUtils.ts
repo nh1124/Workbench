@@ -9,7 +9,6 @@
  *   tasks/lib/taskFilterUtils → lib/taskRecurrenceUtils, tasks/types, types/models
  */
 
-import { taskOccursOnDate } from "../../lib/taskRecurrenceUtils";
 import type { Task } from "../../types/models";
 import type {
   CalendarStatusFilter, QuickFilter, SidebarMode, SortMode
@@ -33,7 +32,7 @@ export interface FilterTasksOpts {
 export function filterTasksByMode(tasks: Task[], opts: FilterTasksOpts): Task[] {
   const {
     sidebarMode, calendarStatusFilter,
-    quickFilter, myDayFlaggedIds, todayTaskIds, today
+    quickFilter, myDayFlaggedIds
   } = opts;
 
   if (sidebarMode === "calendar") {
@@ -44,10 +43,9 @@ export function filterTasksByMode(tasks: Task[], opts: FilterTasksOpts): Task[] 
 
   // list / schedule mode
   if (quickFilter === "today") {
-    const activeIds = myDayFlaggedIds.size > 0 ? myDayFlaggedIds : todayTaskIds;
-    return activeIds.size > 0
-      ? tasks.filter((t) => activeIds.has(t.id))
-      : tasks.filter((task) => taskOccursOnDate(task, today));
+    return myDayFlaggedIds.size > 0
+      ? tasks.filter((t) => myDayFlaggedIds.has(t.id))
+      : [];
   }
   if (quickFilter === "myday") {
     return tasks.filter((t) => t.isPinned === true);
@@ -131,12 +129,9 @@ export function computeTaskCounters(
   tasks: Task[],
   opts: TaskCounterOpts
 ): TaskCounters {
-  const { myDayFlaggedIds, todayTaskIds, today, plannedCount, overdueCount, inboxUpcomingCount } = opts;
-  const activeIds = myDayFlaggedIds.size > 0 ? myDayFlaggedIds : todayTaskIds;
+  const { myDayFlaggedIds, plannedCount, overdueCount, inboxUpcomingCount } = opts;
   return {
-    today: activeIds.size > 0
-      ? activeIds.size
-      : tasks.filter((task) => taskOccursOnDate(task, today)).length,
+    today: myDayFlaggedIds.size,
     myday: tasks.filter((t) => t.isPinned === true).length,
     planned: plannedCount,
     overdue: overdueCount,

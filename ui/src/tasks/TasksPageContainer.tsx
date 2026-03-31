@@ -1,4 +1,4 @@
-/**
+﻿/**
  * TasksPageContainer.tsx
  * Assembly point: wires useTaskDataLoader, useOccurrencePaging,
  * useTaskSelection, and useTaskMutations together; manages UI-only
@@ -14,16 +14,14 @@ import {
   type DragEvent, type MouseEvent as ReactMouseEvent, type UIEvent
 } from "react";
 import { useLocation } from "react-router-dom";
-import { tasksApi } from "../lib/api";
-import { formatDateTime } from "../lib/format";
+import { readWorkbenchSession, tasksApi } from "../lib/api";
+import { pushErrorNotification } from "../lib/notificationService";
 import {
   buildMonthCells,
   contextColor,
   hourLabel,
   isAuthErrorMessage,
-  loadScoreColor,
   normalizeText,
-  parseTimeToMinutes,
 } from "../lib/taskDisplayUtils";
 import {
   addDays, addMonths, formatDateHeading, isSameDay, startOfDay, startOfMonth,
@@ -43,9 +41,9 @@ import { useTaskSelection } from "./hooks/useTaskSelection";
 import { filterAndSortTasks, computeTaskCounters } from "./lib/taskFilterUtils";
 import { sortOccurrenceRows, groupOccurrencesByProject } from "./lib/taskOccurrenceDisplayUtils";
 import { buildTasksByDate, filterScheduleItems } from "./lib/taskCalendarUtils";
+import { layoutTimedItems } from "./lib/timelineLayoutUtils";
 import {
   emptyDraft,
-  RECURRENCE_LABELS, RECURRENCE_TYPES,
   TIMELINE_END_HOUR, TIMELINE_HOUR_HEIGHT, TIMELINE_START_HOUR,
   taskToDraft,
   weekdays,
@@ -53,13 +51,16 @@ import {
   type TaskOccurrenceRow,
 } from "./types";
 import { OccurrenceContextMenu } from "./components/OccurrenceContextMenu";
-import {
-  IcoCal, IcoCalSmall, IcoCheckCircle, IcoChevron, IcoChevronDown,
-  IcoClock, IcoCircle, IcoClipboard, IcoDownload, IcoFile, IcoFolder,
-  IcoHistory, IcoInbox, IcoList, IcoLock, IcoPin, IcoPlus,
-  IcoRefresh, IcoRepeat, IcoSkipped, IcoSun, IcoTrash, IcoUnlock,
-  IcoUpload, IcoX, IcoZap, StatusCircle,
-} from "./components/icons";
+import { FileViewerModal } from "./components/FileViewerModal";
+import { CalendarDayDetailPanel } from "./components/CalendarDayDetailPanel";
+import { TaskDetailPanel } from "./components/TaskDetailPanel";
+import { TaskListContent } from "./components/TaskListContent";
+import { TaskOccurrenceRowItem } from "./components/TaskOccurrenceRowItem";
+import { TaskQuickAddPanel } from "./components/TaskQuickAddPanel";
+import { TodaySuggestionCard } from "./components/TodaySuggestionCard";
+import { TasksCenterHeader } from "./components/TasksCenterHeader";
+import { TasksSecondarySidebar } from "./components/TasksSecondarySidebar";
+import { IcoClock } from "./components/icons";
 
 // ── CSS ─────────────────────────────────────────────────────────────────────
 import "./css/tasks-layout.css";
@@ -90,12 +91,15 @@ export function TasksPageContainer() {
   const [scheduleDays, setScheduleDays] = useState<ScheduleCalendarDay[]>([]);
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [scheduleRefreshTick, setScheduleRefreshTick] = useState(0);
+  const [todaySuggestionHandled, setTodaySuggestionHandled] = useState(false);
+  const [todaySuggestionApplying, setTodaySuggestionApplying] = useState(false);
 
   const importRef = useRef<HTMLInputElement>(null);
   const weekTimelineScrollRef = useRef<HTMLDivElement | null>(null);
   const autoScrolledWeekKeyRef = useRef<string>("");
 
   const today = useMemo(() => startOfDay(new Date()), []);
+  const todayKey = useMemo(() => toDateKey(today), [today]);
 
   // ── Clock tick (every 30s for now-marker) ──────────────────────────────
   useEffect(() => {
@@ -131,7 +135,7 @@ export function TasksPageContainer() {
     loadOccurrencePage,
     resetOccurrences,
     setOccurrenceRows,
-  } = useOccurrencePaging(contextFilter, quickFilter);
+  } = useOccurrencePaging(contextFilter);
 
   // Reload occurrence page when quick filter switches to planned/overdue
   useEffect(() => {
@@ -242,6 +246,25 @@ export function TasksPageContainer() {
   // Keep draftRef current every render (avoids stale closures in applyAndSave)
   draftRef.current = draft;
 
+  const todaySuggestionDecisionKey = useMemo(() => {
+    const username = readWorkbenchSession()?.username ?? "guest";
+    return `tasks.today.suggestion.${username}.${todayKey}`;
+  }, [todayKey]);
+  const scheduledTodayTaskIds = useMemo(
+    () => new Set(todayRows.map((row) => row.taskId)),
+    [todayRows]
+  );
+  const dueTodayOutsideTodayTasks = useMemo(() => {
+    return tasks.filter((task) => (
+      task.status === "todo" &&
+      task.dueDate === todayKey &&
+      !scheduledTodayTaskIds.has(task.id)
+    ));
+  }, [tasks, todayKey, scheduledTodayTaskIds]);
+  const showTodaySuggestion = sidebarMode === "list" &&
+    !todaySuggestionHandled &&
+    dueTodayOutsideTodayTasks.length > 0;
+
   // ── selectTask / clearDetail helpers (need local state setters) ──────────
 
   const selectTask = useCallback((task: Task, occurrenceStatus?: TaskStatus, occurrenceDate?: string) => {
@@ -310,6 +333,34 @@ export function TasksPageContainer() {
     const rows = getSelectedOccurrenceRows(activeOccurrenceRows);
     await _handleToggleToday(isToday, rows, setTodayRows, setMyDayFlaggedIds, closeMenu);
   };
+
+  const markTodaySuggestionHandled = useCallback((action: "add" | "cancel") => {
+    try {
+      localStorage.setItem(todaySuggestionDecisionKey, action);
+    } catch {
+      // Ignore storage failures; keep in-memory behavior.
+    }
+    setTodaySuggestionHandled(true);
+  }, [todaySuggestionDecisionKey]);
+
+  const handleAddDueTodaySuggestion = useCallback(async () => {
+    if (dueTodayOutsideTodayTasks.length === 0 || todaySuggestionApplying) return;
+    markTodaySuggestionHandled("add");
+    setTodaySuggestionApplying(true);
+    try {
+      const uniqueTaskIds = Array.from(new Set(dueTodayOutsideTodayTasks.map((task) => task.id)));
+      await Promise.all(uniqueTaskIds.map((taskId) => tasksApi.addToToday(taskId, todayKey, todayKey)));
+      await load();
+    } catch {
+      pushErrorNotification("Failed to add due-today tasks to Today.");
+    } finally {
+      setTodaySuggestionApplying(false);
+    }
+  }, [dueTodayOutsideTodayTasks, load, markTodaySuggestionHandled, todayKey, todaySuggestionApplying]);
+
+  const handleDismissDueTodaySuggestion = useCallback(() => {
+    markTodaySuggestionHandled("cancel");
+  }, [markTodaySuggestionHandled]);
 
   // ── Resolve context display name ──────────────────────────────────────────
 
@@ -435,6 +486,19 @@ export function TasksPageContainer() {
 
   // ── Effects ───────────────────────────────────────────────────────────────
 
+  // Initial + context-filter reload
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  useEffect(() => {
+    try {
+      setTodaySuggestionHandled(localStorage.getItem(todaySuggestionDecisionKey) !== null);
+    } catch {
+      setTodaySuggestionHandled(false);
+    }
+  }, [todaySuggestionDecisionKey]);
+
   // Load schedule calendar data when in schedule mode
   useEffect(() => {
     if (sidebarMode !== "schedule") return;
@@ -530,477 +594,113 @@ export function TasksPageContainer() {
   const renderOccurrenceRow = (row: TaskOccurrenceRow) => {
     const masterTask = tasks.find((t) => t.id === row.taskId);
     const contextName = resolveContextDisplayName(row.context, masterTask?.contextName);
-    const selected = selectedOccurrenceKeys.has(row.key);
-    const itemClass = [
-      selected ? "task-list-item active" : "task-list-item",
-      selected ? "occurrence-selected" : "",
-    ].filter(Boolean).join(" ");
     return (
-      <li key={row.key}>
-        <div className={itemClass}>
-          <button type="button" className="task-circle"
-            onClick={() => void handleToggleOccurrenceDone(row)} aria-label="Toggle done">
-            <StatusCircle status={row.status} />
-          </button>
-          <button type="button" className="task-list-main"
-            onClick={(event) => handleOccurrenceClick(event, row)}
-            onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); ensureContextSelection(row, event.clientX, event.clientY); }}>
-            <span className={`task-title${row.status === "done" ? " done" : ""}`}>{row.title}</span>
-            <span className="task-meta-row">
-              {typeof row.load === "number" && (
-                <span className="load-badge" style={{ color: loadScoreColor(row.load), borderColor: loadScoreColor(row.load) }}>
-                  <IcoZap />{row.load}
-                </span>
-              )}
-              <span className="context-badge" style={{ color: contextColor(row.context) }}>{contextName}</span>
-              {row.status !== "done" && <span className="due-badge">{formatDateHeading(row.date)}</span>}
-              {(row.startTime || row.endTime) && (
-                <span className="time-badge"><IcoClock />{row.startTime || "--:--"}{row.endTime ? ` - ${row.endTime}` : ""}</span>
-              )}
-              {row.isLocked && <span style={{ color: "#fbbf24" }}><IcoLock /></span>}
-            </span>
-          </button>
-          <span style={{ color: "#374151", flexShrink: 0 }}><IcoChevron /></span>
-        </div>
-      </li>
+      <TaskOccurrenceRowItem
+        key={row.key}
+        row={row}
+        selected={selectedOccurrenceKeys.has(row.key)}
+        contextName={contextName}
+        contextColorValue={contextColor(row.context)}
+        onToggleDone={(item) => { void handleToggleOccurrenceDone(item); }}
+        onOpen={(event, item) => { handleOccurrenceClick(event, item); }}
+        onOpenContextMenu={(event, item) => {
+          ensureContextSelection(item, event.clientX, event.clientY);
+        }}
+      />
     );
   };
-
-  // ── Timeline event layout helper ──────────────────────────────────────────
-  type TimedEvent<T> = T & { clippedStart: number; clippedEnd: number; top: number; height: number; timeLabel: string; lane: number; laneCount: number };
-
-  function layoutTimedItems<T extends { startTime?: string; endTime?: string }>(items: T[]): TimedEvent<T>[] {
-    const sorted = items
-      .map((item) => {
-        const startMinuteRaw = parseTimeToMinutes(item.startTime);
-        const endMinuteRaw = parseTimeToMinutes(item.endTime);
-        const fallbackStart = endMinuteRaw !== null ? Math.max(TIMELINE_START_HOUR * 60, endMinuteRaw - 60) : TIMELINE_START_HOUR * 60;
-        const startMinute = startMinuteRaw ?? fallbackStart;
-        const fallbackEnd = Math.min(TIMELINE_END_HOUR * 60, startMinute + 60);
-        const rawEnd = endMinuteRaw ?? fallbackEnd;
-        const clippedStart = Math.max(TIMELINE_START_HOUR * 60, Math.min(startMinute, TIMELINE_END_HOUR * 60));
-        const boundedEnd = Math.max(clippedStart + 30, rawEnd);
-        const clippedEnd = Math.min(TIMELINE_END_HOUR * 60, boundedEnd);
-        if (clippedStart >= TIMELINE_END_HOUR * 60 || clippedEnd <= TIMELINE_START_HOUR * 60) return null;
-        const top = ((clippedStart - TIMELINE_START_HOUR * 60) / 60) * TIMELINE_HOUR_HEIGHT;
-        const height = Math.max(22, ((clippedEnd - clippedStart) / 60) * TIMELINE_HOUR_HEIGHT);
-        const timeLabel = item.startTime ? `${item.startTime}${item.endTime ? ` - ${item.endTime}` : ""}` : hourLabel(Math.floor(clippedStart / 60));
-        return { ...item, clippedStart, clippedEnd, top, height, timeLabel, lane: 0, laneCount: 1 };
-      })
-      .filter((x): x is NonNullable<typeof x> => x !== null)
-      .sort((a, b) => a.clippedStart !== b.clippedStart ? a.clippedStart - b.clippedStart : a.clippedEnd - b.clippedEnd);
-
-    // Lane assignment for overlapping events
-    const active: Array<{ lane: number; end: number }> = [];
-    let clusterIndexes: number[] = [];
-    let clusterMax = 1;
-    for (let i = 0; i < sorted.length; i++) {
-      const ev = sorted[i];
-      for (let ai = active.length - 1; ai >= 0; ai--) {
-        if (active[ai].end <= ev.clippedStart) active.splice(ai, 1);
-      }
-      if (active.length === 0 && clusterIndexes.length > 0) {
-        for (const ci of clusterIndexes) sorted[ci].laneCount = clusterMax;
-        clusterIndexes = []; clusterMax = 1;
-      }
-      const used = new Set(active.map((a) => a.lane));
-      let lane = 0;
-      while (used.has(lane)) lane++;
-      ev.lane = lane;
-      active.push({ lane, end: ev.clippedEnd });
-      clusterIndexes.push(i);
-      clusterMax = Math.max(clusterMax, lane + 1);
-    }
-    if (clusterIndexes.length > 0) for (const ci of clusterIndexes) sorted[ci].laneCount = clusterMax;
-    return sorted;
-  }
 
   // ── JSX ───────────────────────────────────────────────────────────────────
 
   return (
     <section className={selectedTask ? "tasks-shell has-detail" : "tasks-shell"}>
 
-      {/* ── Left secondary sidebar ─────────────────────── */}
-      <aside className="tasks-secondary">
-        <header className="tasks-secondary-head">
-          <h2><IcoClipboard /> Tasks</h2>
-        </header>
-        <div className="tasks-secondary-group" style={{ borderTop: 0, paddingTop: 0 }}>
-          <button type="button" className={sidebarMode === "list" ? "sidebar-tab active" : "sidebar-tab"} onClick={() => setSidebarMode("list")}><IcoList /> Task List</button>
-          <button type="button" className={sidebarMode === "calendar" ? "sidebar-tab active" : "sidebar-tab"} onClick={() => setSidebarMode("calendar")}><IcoCal /> Due Calendar</button>
-          <button type="button" className={sidebarMode === "schedule" ? "sidebar-tab active" : "sidebar-tab"} onClick={() => setSidebarMode("schedule")}><IcoCal /> Schedule</button>
-        </div>
-
-        {sidebarMode === "list" && (
-          <>
-            <div className="tasks-secondary-group">
-              <p>Task Filters</p>
-              <button type="button" className={quickFilter === "today" ? "filter-item active" : "filter-item"} onClick={() => setQuickFilter("today")}>
-                <span className="filter-item-left"><IcoSun /><span>Today</span></span><small>{counters.today}</small>
-              </button>
-              <button type="button" className={quickFilter === "myday" ? "filter-item active" : "filter-item"} onClick={() => setQuickFilter("myday")}>
-                <span className="filter-item-left"><IcoCheckCircle /><span>My Day</span></span><small>{counters.myday}</small>
-              </button>
-              <button type="button" className={quickFilter === "planned" ? "filter-item active" : "filter-item"} onClick={() => setQuickFilter("planned")}>
-                <span className="filter-item-left"><IcoCalSmall /><span>Planned</span></span><small>{counters.planned}</small>
-              </button>
-              <button type="button" className={quickFilter === "overdue" ? "filter-item active" : "filter-item"} onClick={() => setQuickFilter("overdue")}>
-                <span className="filter-item-left"><IcoClock /><span>Overdue</span></span><small>{counters.overdue}</small>
-              </button>
-              <button type="button" className={quickFilter === "inbox" ? "filter-item active" : "filter-item"} onClick={() => setQuickFilter("inbox")}>
-                <span className="filter-item-left"><IcoInbox /><span>Inbox</span></span><small>{counters.inbox}</small>
-              </button>
-            </div>
-            <div className="tasks-secondary-group">
-              <p>Projects</p>
-              <button type="button" className={contextFilter === "" ? "filter-item active" : "filter-item"} onClick={() => setContextFilter("")}>
-                <span className="filter-item-left"><IcoFolder /><span>All Projects</span></span>
-              </button>
-              {projectOptions.map((p) => (
-                <button key={p.projectId} type="button"
-                  className={contextFilter === p.projectId ? "filter-item active" : "filter-item"}
-                  onClick={() => setContextFilter(p.projectId)}>
-                  <span className="filter-item-left">
-                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: contextColor(p.projectId), flexShrink: 0, display: "inline-block" }} />
-                    <span>{p.projectName || p.projectId}</span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          </>
-        )}
-
-        {(sidebarMode === "calendar" || sidebarMode === "schedule") && (
-          <>
-            <div className="tasks-secondary-group">
-              <p>Calendar Status</p>
-              <button type="button" className={calendarStatusFilter === "all" ? "filter-item active" : "filter-item"} onClick={() => setCalendarStatusFilter("all")}>
-                <span className="filter-item-left"><IcoFolder /><span>All Status</span></span>
-              </button>
-              <button type="button" className={calendarStatusFilter === "open" ? "filter-item active" : "filter-item"} onClick={() => setCalendarStatusFilter("open")}>
-                <span className="filter-item-left"><IcoCircle /><span>Open Only</span></span>
-              </button>
-              <button type="button" className={calendarStatusFilter === "done" ? "filter-item active" : "filter-item"} onClick={() => setCalendarStatusFilter("done")}>
-                <span className="filter-item-left"><IcoCheckCircle /><span>Done Only</span></span>
-              </button>
-            </div>
-            <div className="tasks-secondary-group">
-              <p>Projects</p>
-              <button type="button" className={contextFilter === "" ? "filter-item active" : "filter-item"} onClick={() => setContextFilter("")}>
-                <span className="filter-item-left"><IcoFolder /><span>All Projects</span></span>
-              </button>
-              {projectOptions.map((p) => (
-                <button key={p.projectId} type="button"
-                  className={contextFilter === p.projectId ? "filter-item active" : "filter-item"}
-                  onClick={() => setContextFilter(p.projectId)}>
-                  <span className="filter-item-left">
-                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: contextColor(p.projectId), flexShrink: 0, display: "inline-block" }} />
-                    <span>{p.projectName || p.projectId}</span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          </>
-        )}
-      </aside>
+      {/* Left secondary sidebar */}
+      <TasksSecondarySidebar
+        sidebarMode={sidebarMode}
+        setSidebarMode={setSidebarMode}
+        quickFilter={quickFilter}
+        setQuickFilter={setQuickFilter}
+        counters={counters}
+        contextFilter={contextFilter}
+        setContextFilter={setContextFilter}
+        projectOptions={projectOptions}
+        calendarStatusFilter={calendarStatusFilter}
+        setCalendarStatusFilter={setCalendarStatusFilter}
+      />
 
       {/* ── Center column ─────────────────────────────── */}
       <div className="tasks-center" onScroll={handleCenterScroll}>
         {/* Header */}
-        {(sidebarMode === "calendar" || sidebarMode === "schedule") ? (
-          <header className="tasks-center-head tasks-center-head-calendar">
-            <div className="calendar-nav-cluster">
-              <button type="button" className="calendar-nav-btn" onClick={movePrevPeriod}>{"<"}</button>
-              <button type="button" className="calendar-nav-today" onClick={jumpToday}>Today</button>
-              <button type="button" className="calendar-nav-btn" onClick={moveNextPeriod}>{">"}</button>
-              <strong>{periodLabel}</strong>
-            </div>
-            <div className="tasks-head-actions calendar-head-actions">
-              <div className="calendar-view-toggle">
-                <button type="button" className={calendarMode === "month" ? "active" : ""} onClick={() => setCalendarMode("month")} aria-label="Month view"><IcoCal /></button>
-                <button type="button" className={calendarMode === "week" ? "active" : ""} onClick={() => setCalendarMode("week")} aria-label="Week view"><IcoList /></button>
-              </div>
-              {sidebarMode === "schedule"
-                ? <button type="button" className="icon-button" onClick={() => setScheduleRefreshTick((n) => n + 1)} title="Refresh Schedule"><IcoRefresh /></button>
-                : <button type="button" className="icon-button" onClick={() => void load()} title="Refresh"><IcoRefresh /></button>
-              }
-            </div>
-          </header>
-        ) : (
-          <header className="tasks-center-head">
-            <div>
-              <p>{new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</p>
-            </div>
-            <div className="tasks-head-actions">
-              <select className="sort-select" value={sortMode} onChange={(e) => setSortMode(e.target.value as SortMode)}>
-                <option value="load">Sort: Load</option>
-                <option value="due">Sort: Due Date</option>
-                <option value="project">Sort: Project</option>
-              </select>
-              <button type="button" className="icon-button" onClick={handleExport} title="Export CSV"><IcoDownload /></button>
-              <button type="button" className="icon-button" onClick={() => importRef.current?.click()} title="Import CSV"><IcoUpload /></button>
-              <input ref={importRef} type="file" accept=".csv" style={{ display: "none" }} onChange={handleImport} />
-              <button type="button" className="icon-button" onClick={() => void load()} title="Refresh"><IcoRefresh /></button>
-              <button type="button" className="tasks-add-btn" onClick={openAddPanel}>+ Add</button>
-            </div>
-          </header>
-        )}
+        <TasksCenterHeader
+          sidebarMode={sidebarMode}
+          calendarMode={calendarMode}
+          periodLabel={periodLabel}
+          onMovePrevPeriod={movePrevPeriod}
+          onJumpToday={jumpToday}
+          onMoveNextPeriod={moveNextPeriod}
+          onSetCalendarMode={setCalendarMode}
+          onRefreshList={() => { void load(); }}
+          onRefreshSchedule={() => setScheduleRefreshTick((n) => n + 1)}
+          sortMode={sortMode}
+          onSetSortMode={setSortMode}
+          onExport={handleExport}
+          onImport={handleImport}
+          importRef={importRef}
+          onOpenAddPanel={openAddPanel}
+        />
 
         {displayError && <p className="error" style={{ margin: "0 0 0.5rem", fontSize: "0.8rem" }}>{displayError}</p>}
+        {showTodaySuggestion && (
+          <TodaySuggestionCard
+            count={dueTodayOutsideTodayTasks.length}
+            onAddToToday={() => { void handleAddDueTodaySuggestion(); }}
+            onCancel={handleDismissDueTodaySuggestion}
+            disabled={todaySuggestionApplying}
+          />
+        )}
 
-        {/* ── Quick Add Panel ── */}
+        {/* Quick Add Panel */}
         {showAddPanel && sidebarMode === "list" && (
-          <div className="task-add-panel">
-            <p className="task-add-panel-kicker">New Task</p>
-            <div className="task-add-panel-body">
-              <div className="task-add-row">
-                <input className="task-add-title-input" placeholder="Task name..." value={addDraft.title}
-                  onChange={(e) => setAddDraft((p) => ({ ...p, title: e.target.value }))}
-                  onKeyDown={(e) => e.key === "Enter" && void handleAddTask()} />
-              </div>
-              <div className={addDraft.recurrence === "ONCE" ? "task-add-compact-row" : "task-add-compact-row without-date"}>
-                <label className="task-add-select task-add-select-context">
-                  <span className="task-add-select-icon"><IcoFolder /></span>
-                  <input list="task-context-options" className="task-add-context-input"
-                    placeholder="Type or select context" value={addContextInput}
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      setAddContextInput(value);
-                      const matched = resolveExistingContextOption(value);
-                      setAddDraft((p) => ({ ...p, context: matched?.projectId || "" }));
-                    }} />
-                  <datalist id="task-context-options">
-                    {projectOptions.map((p) => <option key={p.projectId} value={p.projectName || p.projectId} />)}
-                  </datalist>
-                </label>
-                <label className="task-add-select task-add-select-load">
-                  <span className="task-add-select-icon">#</span>
-                  <input type="number" min={0} max={10} value={addDraft.baseLoadScore}
-                    onChange={(e) => setAddDraft((p) => ({ ...p, baseLoadScore: Number(e.target.value) }))} />
-                </label>
-                {addDraft.recurrence === "ONCE" && (
-                  <label className="task-add-select task-add-select-date">
-                    <span className="task-add-select-icon"><IcoCalSmall /></span>
-                    <input type="date" value={addDraft.dueDate}
-                      onChange={(e) => setAddDraft((p) => ({ ...p, dueDate: e.target.value }))} />
-                  </label>
-                )}
-              </div>
-              <button type="button" className="task-add-more-btn" onClick={() => setAddAdvancedOpen((prev) => !prev)}>
-                <span className={addAdvancedOpen ? "task-add-more-chevron open" : "task-add-more-chevron"}><IcoChevron /></span>
-                More options
-              </button>
-              {addAdvancedOpen && (
-                <div className="task-add-advanced-grid">
-                  <div className="edit-section task-add-advanced-span">
-                    <div className="edit-section-label">Recurrence</div>
-                    <select className="edit-input" value={addDraft.recurrence}
-                      onChange={(e) => {
-                        const recurrence = e.target.value as typeof addDraft.recurrence;
-                        setAddDraft((p) => ({ ...p, recurrence, dueDate: recurrence === "ONCE" ? p.dueDate : "", activeFrom: recurrence === "ONCE" ? "" : p.activeFrom, activeUntil: recurrence === "ONCE" ? "" : p.activeUntil }));
-                      }}>
-                      {RECURRENCE_TYPES.map((r) => <option key={r} value={r}>{RECURRENCE_LABELS[r]}</option>)}
-                    </select>
-                  </div>
-                  {addDraft.recurrence === "WEEKLY" && (
-                    <div className="edit-section task-add-advanced-span">
-                      <div className="weekday-picker">
-                        {(["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const).map((d, i) => (
-                          <button key={d} type="button" className={addDraft[d] ? "weekday-btn active" : "weekday-btn"}
-                            onClick={() => setAddDraft((p) => ({ ...p, [d]: !p[d] }))}>{weekdays[i]}</button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {addDraft.recurrence === "EVERY_N_DAYS" && (
-                    <>
-                      <div className="edit-section task-add-advanced-span">
-                        <div className="edit-section-label">Every N Days</div>
-                        <input type="number" min={1} className="edit-input" value={addDraft.intervalDays}
-                          onChange={(e) => setAddDraft((p) => ({ ...p, intervalDays: Number(e.target.value) }))} />
-                      </div>
-                      <div className="edit-section task-add-advanced-span">
-                        <div className="edit-section-label">Anchor Date</div>
-                        <input type="date" className="edit-input" value={addDraft.anchorDate}
-                          onChange={(e) => setAddDraft((p) => ({ ...p, anchorDate: e.target.value }))} />
-                      </div>
-                    </>
-                  )}
-                  {addDraft.recurrence === "MONTHLY_DAY" && (
-                    <div className="edit-section">
-                      <div className="edit-section-label">Day of Month</div>
-                      <input type="number" min={1} max={31} className="edit-input" value={addDraft.monthDay}
-                        onChange={(e) => setAddDraft((p) => ({ ...p, monthDay: Number(e.target.value) }))} />
-                    </div>
-                  )}
-                  {addDraft.recurrence === "MONTHLY_NTH_WEEKDAY" && (
-                    <>
-                      <div className="edit-section">
-                        <div className="edit-section-label">Nth Week</div>
-                        <input type="number" min={1} max={5} className="edit-input" value={addDraft.nthInMonth}
-                          onChange={(e) => setAddDraft((p) => ({ ...p, nthInMonth: Number(e.target.value) }))} />
-                      </div>
-                      <div className="edit-section">
-                        <div className="edit-section-label">Weekday</div>
-                        <select className="edit-input" value={addDraft.weekdayMon1}
-                          onChange={(e) => setAddDraft((p) => ({ ...p, weekdayMon1: Number(e.target.value) }))}>
-                          {weekdays.map((d, i) => <option key={d} value={i}>{d}</option>)}
-                        </select>
-                      </div>
-                    </>
-                  )}
-                  {addDraft.recurrence !== "ONCE" && (
-                    <>
-                      <div className="edit-section">
-                        <div className="edit-section-label">Active From</div>
-                        <input type="date" className="edit-input" value={addDraft.activeFrom}
-                          onChange={(e) => setAddDraft((p) => ({ ...p, activeFrom: e.target.value }))} />
-                      </div>
-                      <div className="edit-section">
-                        <div className="edit-section-label">Active Until</div>
-                        <input type="date" className="edit-input" value={addDraft.activeUntil}
-                          onChange={(e) => setAddDraft((p) => ({ ...p, activeUntil: e.target.value }))} />
-                      </div>
-                    </>
-                  )}
-                  <div className="edit-two-col task-add-advanced-span">
-                    <div className="edit-section">
-                      <div className="edit-section-label">Start Time</div>
-                      <input type="time" className="edit-input" value={addDraft.startTime}
-                        onChange={(e) => setAddDraft((p) => ({ ...p, startTime: e.target.value }))} />
-                    </div>
-                    <div className="edit-section">
-                      <div className="edit-section-label">End Time</div>
-                      <input type="time" className="edit-input" value={addDraft.endTime}
-                        onChange={(e) => setAddDraft((p) => ({ ...p, endTime: e.target.value }))} />
-                    </div>
-                  </div>
-                  <div className="edit-section">
-                    <div className="edit-section-label">Timezone</div>
-                    <input className="edit-input" value={addDraft.timezone}
-                      onChange={(e) => setAddDraft((p) => ({ ...p, timezone: e.target.value }))} />
-                  </div>
-                  <div className="edit-section task-add-advanced-notes">
-                    <div className="edit-section-label">Notes</div>
-                    <textarea className="edit-input" value={addDraft.notes}
-                      onChange={(e) => setAddDraft((p) => ({ ...p, notes: e.target.value }))} />
-                  </div>
-                </div>
-              )}
-              <div className="task-add-actions">
-                <button type="button" className="task-add-cancel"
-                  onClick={() => { setShowAddPanel(false); setAddAdvancedOpen(false); setAddContextInput(""); }}>Cancel</button>
-                <button type="button" className="task-add-submit" onClick={handleAddTask} disabled={isSaving}>
-                  {isSaving ? "Creating..." : "Add Task"}
-                </button>
-              </div>
-            </div>
-          </div>
+          <TaskQuickAddPanel
+            addDraft={addDraft}
+            setAddDraft={setAddDraft}
+            addContextInput={addContextInput}
+            setAddContextInput={setAddContextInput}
+            addAdvancedOpen={addAdvancedOpen}
+            setAddAdvancedOpen={setAddAdvancedOpen}
+            projectOptions={projectOptions}
+            resolveExistingContextOption={resolveExistingContextOption}
+            isSaving={isSaving}
+            onCancel={() => {
+              setShowAddPanel(false);
+              setAddAdvancedOpen(false);
+              setAddContextInput("");
+            }}
+            onAddTask={() => { void handleAddTask(); }}
+          />
         )}
 
         {sidebarMode === "list" ? (
-          /* ── Task List ── */
-          <section className="task-list-section">
-            {activeOccurrenceRows.length === 0 && !isLoading && (
-              <div style={{ textAlign: "center", opacity: 0.35, padding: "3rem 0" }}>
-                <IcoPlus />
-                <p style={{ margin: "0.5rem 0 0", fontSize: "0.7rem", fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.15em" }}>No Tasks</p>
-              </div>
-            )}
-
-            {quickFilter === "inbox" ? (
-              /* ── Inbox ── */
-              (() => {
-                let upcomingGroups: { key: string; label: string; color?: string; rows: TaskOccurrenceRow[] }[];
-                if (sortMode === "project") {
-                  const pgm = new Map<string, TaskOccurrenceRow[]>();
-                  for (const row of inboxUpcomingRows) {
-                    const key = row.context || "";
-                    pgm.set(key, [...(pgm.get(key) || []), row]);
-                  }
-                  upcomingGroups = Array.from(pgm.entries())
-                    .sort(([a], [b]) => a.toLowerCase().localeCompare(b.toLowerCase()))
-                    .map(([key, rows]) => {
-                      const masterTask = tasks.find((t) => t.context === key);
-                      return { key, label: resolveContextDisplayName(key, masterTask?.contextName), color: contextColor(key), rows };
-                    });
-                } else {
-                  const dgm = new Map<string, TaskOccurrenceRow[]>();
-                  for (const row of inboxUpcomingRows) dgm.set(row.date, [...(dgm.get(row.date) || []), row]);
-                  upcomingGroups = Array.from(dgm.entries()).sort(([a], [b]) => a.localeCompare(b))
-                    .map(([date, rows]) => ({ key: date, label: formatDateHeading(date), rows }));
-                }
-                return (
-                  <>
-                    {upcomingGroups.map((group) => (
-                      <article key={group.key} className="task-date-group">
-                        <header>
-                          <h4 style={group.color ? { color: group.color } : undefined}>{group.label}</h4>
-                          <small>{group.rows.length}</small>
-                        </header>
-                        <ul>{group.rows.map(renderOccurrenceRow)}</ul>
-                      </article>
-                    ))}
-                    {inboxDoneRows.length > 0 && (
-                      <article className="task-project-block task-completed-section">
-                        <header style={{ cursor: "pointer" }} onClick={() => setInboxCompletedOpen((v) => !v)}>
-                          <h4 style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
-                            <span className={inboxCompletedOpen ? "task-add-more-chevron open" : "task-add-more-chevron"}><IcoChevron /></span>
-                            Completed
-                          </h4>
-                          <small>{inboxDoneRows.length}</small>
-                        </header>
-                        {inboxCompletedOpen && <ul className="task-flat-occurrence-list">{inboxDoneRows.map(renderOccurrenceRow)}</ul>}
-                      </article>
-                    )}
-                  </>
-                );
-              })()
-            ) : (quickFilter === "today" || quickFilter === "myday") ? (
-              /* ── Today / MyDay ── */
-              (() => {
-                const activeRows = activeOccurrenceRows.filter((r) => r.status !== "done");
-                const doneRows = activeOccurrenceRows.filter((r) => r.status === "done");
-                return (
-                  <>
-                    {activeRows.length > 0 && <ul className="task-flat-occurrence-list">{activeRows.map(renderOccurrenceRow)}</ul>}
-                    {doneRows.length > 0 && (
-                      <article className="task-project-block task-completed-section">
-                        <header style={{ cursor: "pointer" }} onClick={() => setTodayCompletedOpen((v) => !v)}>
-                          <h4 style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
-                            <span className={todayCompletedOpen ? "task-add-more-chevron open" : "task-add-more-chevron"}><IcoChevron /></span>
-                            Completed
-                          </h4>
-                          <small>{doneRows.length}</small>
-                        </header>
-                        {todayCompletedOpen && <ul className="task-flat-occurrence-list">{doneRows.map(renderOccurrenceRow)}</ul>}
-                      </article>
-                    )}
-                  </>
-                );
-              })()
-            ) : (quickFilter === "planned" || quickFilter === "overdue") ? (
-              /* ── Planned / Overdue ── */
-              <>
-                {(sortMode === "project"
-                  ? occurrenceProjectGroups.map((g) => ({ key: g.context, label: g.contextName, dotColor: contextColor(g.context) as string | undefined, rows: g.rows }))
-                  : occurrenceDateGroups.map((g) => ({ key: g.date, label: formatDateHeading(g.date), dotColor: undefined as string | undefined, rows: g.rows }))
-                ).map((group) => (
-                  <article key={group.key} className="task-date-group">
-                    <header>
-                      <h4 style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
-                        {group.dotColor && <span style={{ width: 6, height: 6, borderRadius: "50%", background: group.dotColor, display: "inline-block", flexShrink: 0 }} />}
-                        {group.label}
-                      </h4>
-                      <small>{group.rows.length}</small>
-                    </header>
-                    <ul>{group.rows.map(renderOccurrenceRow)}</ul>
-                  </article>
-                ))}
-                {occurrenceLoading && <p style={{ color: "#64748b", fontSize: "0.74rem", margin: "0.5rem 0 0.25rem" }}>Loading more...</p>}
-              </>
-            ) : null}
-
+          <>
+            <TaskListContent
+              quickFilter={quickFilter}
+              sortMode={sortMode}
+              isLoading={isLoading}
+              activeOccurrenceRows={activeOccurrenceRows}
+              tasks={tasks}
+              inboxUpcomingRows={inboxUpcomingRows}
+              inboxDoneRows={inboxDoneRows}
+              inboxCompletedOpen={inboxCompletedOpen}
+              setInboxCompletedOpen={setInboxCompletedOpen}
+              todayCompletedOpen={todayCompletedOpen}
+              setTodayCompletedOpen={setTodayCompletedOpen}
+              occurrenceProjectGroups={occurrenceProjectGroups}
+              occurrenceDateGroups={occurrenceDateGroups}
+              occurrenceLoading={occurrenceLoading}
+              resolveContextDisplayName={resolveContextDisplayName}
+              renderOccurrenceRow={renderOccurrenceRow}
+            />
             <OccurrenceContextMenu
               visible={occurrenceMenu.visible}
               x={occurrenceMenu.x}
@@ -1019,7 +719,7 @@ export function TasksPageContainer() {
               onDeleteSelected={() => void handleDeleteSelectedFromMenu()}
               onToggleToday={(add) => void handleToggleTodayForSelected(add)}
             />
-          </section>
+          </>
 
         ) : sidebarMode === "calendar" ? (
           /* ── Due Calendar ── */
@@ -1217,382 +917,65 @@ export function TasksPageContainer() {
 
         {/* Day tasks panel (calendar month click) */}
         {dayDetailDate && sidebarMode === "calendar" && (
-          <>
-            <div className="day-tasks-backdrop" onClick={() => setDayDetailDate(null)} />
-            <div className="day-tasks-panel">
-              <div className="day-tasks-head">
-                <div>
-                  <h3>{dayDetailDate.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</h3>
-                </div>
-                <button type="button" className="tasks-detail-close" onClick={() => setDayDetailDate(null)}><IcoX /></button>
-              </div>
-              <div className="day-tasks-body">
-                {dayDetailTasks.length === 0 ? (
-                  <div className="day-tasks-empty"><IcoPlus /><p>Clear Schedule</p></div>
-                ) : dayDetailTasks.map((t) => (
-                  <div key={t.id} className="day-task-card" onClick={() => { selectTask(t); setDayDetailDate(null); }}>
-                    <div className="day-task-card-top">
-                      <StatusCircle status={t.status} />
-                      <span>{t.title}</span>
-                    </div>
-                    <div className="day-task-card-meta">
-                      <span style={{ color: contextColor(t.context) }}>{resolveContextDisplayName(t.context, t.contextName)}</span>
-                      <span><IcoZap /> {t.baseLoadScore}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </>
+          <CalendarDayDetailPanel
+            dayDetailDate={dayDetailDate}
+            dayDetailTasks={dayDetailTasks}
+            onClose={() => setDayDetailDate(null)}
+            onSelectTask={(task) => {
+              selectTask(task);
+              setDayDetailDate(null);
+            }}
+            resolveContextDisplayName={resolveContextDisplayName}
+            contextColor={contextColor}
+          />
         )}
       </div>
 
-      {/* ── Right detail panel ─────────────────────────── */}
+      {/* Right detail panel */}
       {selectedTask && (
-        <button type="button" className="tasks-detail-backdrop" onClick={clearDetail} aria-label="Close detail panel" />
-      )}
-      {selectedTask && (
-        <aside className="tasks-detail">
-          <div className="tasks-detail-head">
-            <div className="tasks-detail-head-left">
-              <button type="button" className={`detail-status-btn ${draft.status}`}
-                onClick={() => applyAndSave({ status: draft.status === "todo" ? "done" : draft.status === "done" ? "skipped" : "todo" })}
-                title={`Status: ${draft.status}`}>
-                {draft.status === "done" ? <IcoCheckCircle /> : draft.status === "skipped" ? <IcoSkipped /> : <IcoCircle />}
-              </button>
-              <input className="tasks-detail-title-input" value={draft.title}
-                onChange={(e) => setDraft((p) => ({ ...p, title: e.target.value }))}
-                onBlur={(e) => applyAndSave({ title: e.target.value })} placeholder="Task title" />
-            </div>
-            <div className="tasks-detail-head-actions">
-              {isSaving && <span className="auto-save-dot" title="Saving…" />}
-              <button type="button" className={`detail-lock-btn${draft.isLocked ? " active" : ""}`}
-                onClick={() => applyAndSave({ isLocked: !draft.isLocked })}
-                title={draft.isLocked ? "Locked — click to unlock" : "Unlocked — click to lock"}>
-                {draft.isLocked ? <IcoLock /> : <IcoUnlock />}
-              </button>
-              <button type="button" className="tasks-detail-close" onClick={clearDetail} aria-label="Close"><IcoX /></button>
-            </div>
-          </div>
-
-          <div className="tasks-detail-body">
-            {displayError && <p className="error" style={{ margin: 0, fontSize: "0.8rem" }}>{displayError}</p>}
-
-            {/* Subtasks */}
-            <div className="edit-section subtask-section-top">
-              {subtasksLoading ? (
-                <p style={{ color: "#6b7280", fontSize: "0.75rem", margin: "0.4rem 0" }}>Loading...</p>
-              ) : (
-                <div className="subtask-list">
-                  {subtasks.map((s) => (
-                    <div key={s.id} className="subtask-row">
-                      <button type="button" className={`subtask-check${s.isDone ? " done" : ""}`}
-                        onClick={() => void handleToggleSubtask(s)}>
-                        {s.isDone ? <IcoCheckCircle /> : <IcoCircle />}
-                      </button>
-                      <span className={`subtask-title${s.isDone ? " done" : ""}`}>{s.title}</span>
-                      <button type="button" className="attachment-delete" onClick={() => void handleDeleteSubtask(s.id)}><IcoX /></button>
-                    </div>
-                  ))}
-                  <div className="subtask-add-row">
-                    <input className="subtask-add-input" placeholder="+ Next step" value={newSubtaskTitle}
-                      onChange={(e) => setNewSubtaskTitle(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === "Enter") void handleAddSubtask(); }} />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Context + Load */}
-            <div className="edit-two-col">
-              <div className="edit-section">
-                <div className="edit-section-label">Context</div>
-                <select className="edit-input" value={draft.context} onChange={(e) => applyAndSave({ context: e.target.value })}>
-                  <option value="">Select context</option>
-                  {projectOptions.map((p) => <option key={p.projectId} value={p.projectId}>{p.projectName || p.projectId}</option>)}
-                </select>
-              </div>
-              <div className="edit-section">
-                <div className="edit-section-label">Load (0‒10)</div>
-                <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-                  <input type="range" min={0} max={10} step={1} value={draft.baseLoadScore}
-                    onChange={(e) => setDraft((p) => ({ ...p, baseLoadScore: Number(e.target.value) }))}
-                    onMouseUp={(e) => applyAndSave({ baseLoadScore: Number((e.target as HTMLInputElement).value) })}
-                    onTouchEnd={(e) => applyAndSave({ baseLoadScore: Number((e.target as HTMLInputElement).value) })}
-                    style={{ flex: 1 }} />
-                  <span className="load-badge" style={{ color: loadScoreColor(draft.baseLoadScore), borderColor: loadScoreColor(draft.baseLoadScore), flexShrink: 0 }}>{draft.baseLoadScore}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Recurrence */}
-            <div className="edit-section">
-              <div className="edit-section-label">Recurrence</div>
-              <select className="edit-input" value={draft.recurrence} onChange={(e) => applyAndSave({ recurrence: e.target.value as typeof draft.recurrence })}>
-                {RECURRENCE_TYPES.map((r) => <option key={r} value={r}>{RECURRENCE_LABELS[r]}</option>)}
-              </select>
-            </div>
-
-            {draft.recurrence === "WEEKLY" && (
-              <div className="edit-section">
-                <div className="edit-section-label">Days</div>
-                <div className="weekday-picker">
-                  {(["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const).map((d, i) => (
-                    <button key={d} type="button" className={draft[d] ? "weekday-btn active" : "weekday-btn"}
-                      onClick={() => applyAndSave({ [d]: !draft[d] })}>{weekdays[i]}</button>
-                  ))}
-                </div>
-              </div>
-            )}
-            {draft.recurrence === "EVERY_N_DAYS" && (
-              <>
-                <div className="edit-section">
-                  <div className="edit-section-label">Every N Days</div>
-                  <input type="number" min={1} className="edit-input" value={draft.intervalDays}
-                    onChange={(e) => setDraft((p) => ({ ...p, intervalDays: Number(e.target.value) }))}
-                    onBlur={(e) => applyAndSave({ intervalDays: Number(e.target.value) })} />
-                </div>
-                <div className="edit-section">
-                  <div className="edit-section-label">Anchor Date</div>
-                  <input type="date" className="edit-input" value={draft.anchorDate}
-                    onChange={(e) => applyAndSave({ anchorDate: e.target.value })} />
-                </div>
-              </>
-            )}
-            {draft.recurrence === "MONTHLY_DAY" && (
-              <div className="edit-section">
-                <div className="edit-section-label">Day of Month</div>
-                <input type="number" min={1} max={31} className="edit-input" value={draft.monthDay}
-                  onChange={(e) => setDraft((p) => ({ ...p, monthDay: Number(e.target.value) }))}
-                  onBlur={(e) => applyAndSave({ monthDay: Number(e.target.value) })} />
-              </div>
-            )}
-            {draft.recurrence === "MONTHLY_NTH_WEEKDAY" && (
-              <div className="edit-two-col">
-                <div className="edit-section">
-                  <div className="edit-section-label">Nth Week</div>
-                  <input type="number" min={1} max={5} className="edit-input" value={draft.nthInMonth}
-                    onChange={(e) => setDraft((p) => ({ ...p, nthInMonth: Number(e.target.value) }))}
-                    onBlur={(e) => applyAndSave({ nthInMonth: Number(e.target.value) })} />
-                </div>
-                <div className="edit-section">
-                  <div className="edit-section-label">Weekday</div>
-                  <select className="edit-input" value={draft.weekdayMon1} onChange={(e) => applyAndSave({ weekdayMon1: Number(e.target.value) })}>
-                    {weekdays.map((d, i) => <option key={d} value={i}>{d}</option>)}
-                  </select>
-                </div>
-              </div>
-            )}
-
-            {/* Due Date card */}
-            <div className="detail-card">
-              <div className="detail-card-label">Due Date</div>
-              {draft.recurrence === "ONCE" ? (
-                <input type="date" className="edit-input detail-card-date" value={draft.dueDate}
-                  onChange={(e) => applyAndSave({ dueDate: e.target.value })} />
-              ) : (
-                <p className="detail-card-recurring-note">Recurring — controlled by schedule</p>
-              )}
-              <div className="edit-two-col" style={{ marginTop: "0.45rem" }}>
-                <div className="edit-section">
-                  <div className="edit-section-label">Start Time</div>
-                  <input type="time" className="edit-input" value={draft.startTime}
-                    onChange={(e) => applyAndSave({ startTime: e.target.value })} />
-                </div>
-                <div className="edit-section">
-                  <div className="edit-section-label">End Time</div>
-                  <input type="time" className="edit-input" value={draft.endTime}
-                    onChange={(e) => applyAndSave({ endTime: e.target.value })} />
-                </div>
-              </div>
-              <div className="edit-section" style={{ marginTop: "0.45rem" }}>
-                <div className="edit-section-label">Timezone</div>
-                <input className="edit-input" value={draft.timezone}
-                  onChange={(e) => setDraft((p) => ({ ...p, timezone: e.target.value }))}
-                  onBlur={(e) => applyAndSave({ timezone: e.target.value })} placeholder="e.g. Asia/Tokyo" />
-              </div>
-            </div>
-
-            {/* Scheduled Date card */}
-            <div className="detail-card">
-              <div className="detail-card-label-row">
-                <span className="detail-card-label">Scheduled Date</span>
-                {scheduleItemId != null && (
-                  <button type="button" className="detail-card-remove-btn" onClick={() => void handleRemoveScheduleItem()}>✕</button>
-                )}
-              </div>
-              {scheduleItemLoading ? (
-                <p className="detail-card-loading">Loading…</p>
-              ) : scheduleDraft ? (
-                <>
-                  <input type="date"
-                    className={`edit-input detail-card-date${scheduleItemId != null ? " has-value" : ""}`}
-                    value={scheduleDraft.scheduledDate}
-                    onChange={(e) => setScheduleDraft((p) => p ? { ...p, scheduledDate: e.target.value } : p)}
-                    onBlur={() => void handleSaveScheduleItem()} />
-                  <div className="edit-two-col" style={{ marginTop: "0.45rem" }}>
-                    <div className="edit-section">
-                      <div className="edit-section-label">Start Time</div>
-                      <input type="time" className="edit-input" value={scheduleDraft.startTime}
-                        onChange={(e) => setScheduleDraft((p) => p ? { ...p, startTime: e.target.value } : p)}
-                        onBlur={() => void handleSaveScheduleItem()} />
-                    </div>
-                    <div className="edit-section">
-                      <div className="edit-section-label">End Time</div>
-                      <input type="time" className="edit-input" value={scheduleDraft.endTime}
-                        onChange={(e) => setScheduleDraft((p) => p ? { ...p, endTime: e.target.value } : p)}
-                        onBlur={() => void handleSaveScheduleItem()} />
-                    </div>
-                  </div>
-                  <div className="edit-section" style={{ marginTop: "0.45rem" }}>
-                    <div className="edit-section-label">Timezone</div>
-                    <input className="edit-input" value={scheduleDraft.timezone}
-                      onChange={(e) => setScheduleDraft((p) => p ? { ...p, timezone: e.target.value } : p)}
-                      onBlur={() => void handleSaveScheduleItem()} placeholder="e.g. Asia/Tokyo" />
-                  </div>
-                </>
-              ) : null}
-            </div>
-
-            {/* Notes */}
-            <div className="edit-section">
-              <div className="edit-section-label">Notes</div>
-              <textarea className="edit-input" rows={4} value={draft.notes}
-                onChange={(e) => setDraft((p) => ({ ...p, notes: e.target.value }))}
-                onBlur={(e) => applyAndSave({ notes: e.target.value })} placeholder="Notes..." />
-            </div>
-
-            {/* Advanced settings */}
-            <div className="edit-section">
-              <button type="button" className="history-toggle" onClick={() => setAdvancedOpen((v) => !v)}>
-                <IcoHistory /><span>Advanced Setting</span>
-                <span style={{ marginLeft: "auto", transform: advancedOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.15s" }}><IcoChevronDown /></span>
-              </button>
-              {advancedOpen && (
-                <div className="history-body advanced-body">
-                  {draft.recurrence !== "ONCE" && (
-                    <div className="edit-two-col" style={{ padding: "0 0.2rem 0.45rem" }}>
-                      <div className="edit-section">
-                        <div className="edit-section-label">Active From</div>
-                        <input type="date" className="edit-input" value={draft.activeFrom}
-                          onChange={(e) => applyAndSave({ activeFrom: e.target.value })} />
-                      </div>
-                      <div className="edit-section">
-                        <div className="edit-section-label">Active Until</div>
-                        <input type="date" className="edit-input" value={draft.activeUntil}
-                          onChange={(e) => applyAndSave({ activeUntil: e.target.value })} />
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Attachments */}
-            <div className="edit-section">
-              <div className="edit-section-label" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span>Files</span>
-                <button type="button" className="ghost-button" style={{ fontSize: "0.72rem", padding: "0.15rem 0.5rem" }}
-                  onClick={() => attachmentInputRef.current?.click()}>+ Add</button>
-              </div>
-              <input ref={attachmentInputRef} type="file" multiple style={{ display: "none" }}
-                onChange={(e) => { if (e.target.files) { void mutations.handleAttachFiles(e.target.files); e.target.value = ""; } }} />
-              <div className={`attachment-drop-zone${isDraggingOver ? " dragging" : ""}`}
-                onDragOver={(e) => { e.preventDefault(); setIsDraggingOver(true); }}
-                onDragLeave={() => setIsDraggingOver(false)}
-                onDrop={handleAttachmentDrop}>
-                {attachmentsLoading ? (
-                  <p style={{ color: "#6b7280", fontSize: "0.75rem", margin: "0.4rem 0" }}>Loading...</p>
-                ) : attachments.length === 0 ? (
-                  <p style={{ color: "#4b5563", fontSize: "0.75rem", margin: "0.4rem 0" }}>Drop files here or use Add</p>
-                ) : (
-                  <div className="attachment-list">
-                    {attachments.map((att) => (
-                      <div key={att.id} className="attachment-row">
-                        <IcoFile />
-                        <button type="button" className="attachment-name" onClick={() => void handleOpenFileViewer(att)}>{att.filename}</button>
-                        {att.sizeBytes != null && (
-                          <span className="attachment-size">
-                            {att.sizeBytes < 1024 * 1024 ? `${Math.round(att.sizeBytes / 1024)} KB` : `${(att.sizeBytes / (1024 * 1024)).toFixed(1)} MB`}
-                          </span>
-                        )}
-                        <button type="button" className="attachment-delete" onClick={() => void handleDeleteAttachment(att.id)}><IcoX /></button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Timestamps */}
-            <div className="edit-timestamps">
-              <small>Created: {formatDateTime(selectedTask.createdAt)}</small>
-              <small>Updated: {formatDateTime(selectedTask.updatedAt)}</small>
-            </div>
-
-            {/* Execution History */}
-            <div className="edit-section">
-              <button type="button" className="history-toggle" onClick={handleHistoryToggle}>
-                <IcoHistory /><span>Execution History</span>
-                <span style={{ marginLeft: "auto" }}><IcoChevronDown /></span>
-              </button>
-              {historyOpen && (
-                <div className="history-body">
-                  {historyLoading ? (
-                    <p style={{ color: "#6b7280", fontSize: "0.75rem", margin: "0.5rem 0" }}>Loading...</p>
-                  ) : history.length === 0 ? (
-                    <p style={{ color: "#4b5563", fontSize: "0.75rem", margin: "0.5rem 0" }}>No history found.</p>
-                  ) : history.map((h, i) => (
-                    <div key={i} className="history-entry">
-                      <span className="history-date">{h.targetDate}</span>
-                      <span className={`history-status ${h.status}`}>{h.status}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Footer */}
-          <div className="edit-footer">
-            <button type="button" className="edit-delete-btn" onClick={handleDeleteDetail} disabled={isSaving} title="Delete task"><IcoTrash /></button>
-          </div>
-        </aside>
+        <TaskDetailPanel
+          selectedTask={selectedTask}
+          draft={draft}
+          setDraft={setDraft}
+          isSaving={isSaving}
+          displayError={displayError}
+          clearDetail={clearDetail}
+          applyAndSave={applyAndSave}
+          subtasksLoading={subtasksLoading}
+          subtasks={subtasks}
+          newSubtaskTitle={newSubtaskTitle}
+          setNewSubtaskTitle={setNewSubtaskTitle}
+          handleAddSubtask={handleAddSubtask}
+          handleToggleSubtask={handleToggleSubtask}
+          handleDeleteSubtask={handleDeleteSubtask}
+          projectOptions={projectOptions}
+          scheduleItemId={scheduleItemId}
+          scheduleItemLoading={scheduleItemLoading}
+          scheduleDraft={scheduleDraft}
+          setScheduleDraft={setScheduleDraft}
+          handleSaveScheduleItem={handleSaveScheduleItem}
+          handleRemoveScheduleItem={handleRemoveScheduleItem}
+          advancedOpen={advancedOpen}
+          setAdvancedOpen={setAdvancedOpen}
+          attachmentsLoading={attachmentsLoading}
+          attachments={attachments}
+          attachmentInputRef={attachmentInputRef}
+          isDraggingOver={isDraggingOver}
+          setIsDraggingOver={setIsDraggingOver}
+          handleAttachFiles={mutations.handleAttachFiles}
+          handleAttachmentDrop={handleAttachmentDrop}
+          handleOpenFileViewer={handleOpenFileViewer}
+          handleDeleteAttachment={handleDeleteAttachment}
+          historyOpen={historyOpen}
+          historyLoading={historyLoading}
+          history={history}
+          handleHistoryToggle={handleHistoryToggle}
+          handleDeleteDetail={handleDeleteDetail}
+        />
       )}
 
-      {/* File viewer modal */}
-      {fileViewer && (
-        <div className="file-viewer-overlay" onClick={closeFileViewer} role="dialog" aria-modal="true">
-          <div className="file-viewer-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="file-viewer-header">
-              <span className="file-viewer-name"><IcoFile /> {fileViewer.filename}</span>
-              <div className="file-viewer-header-actions">
-                <button type="button" className="file-viewer-action" title="Download"
-                  onClick={() => { const a = document.createElement("a"); a.href = fileViewer.objectUrl; a.download = fileViewer.filename; a.click(); }}>
-                  <IcoDownload />
-                </button>
-                <button type="button" className="file-viewer-close" onClick={closeFileViewer}><IcoX /></button>
-              </div>
-            </div>
-            <div className="file-viewer-body">
-              {fileViewer.mimeType.startsWith("image/") ? (
-                <img src={fileViewer.objectUrl} alt={fileViewer.filename} className="file-viewer-img" />
-              ) : fileViewer.mimeType === "application/pdf" || fileViewer.mimeType.startsWith("text/") ? (
-                <iframe src={fileViewer.objectUrl} title={fileViewer.filename} className={`file-viewer-iframe${fileViewer.mimeType.startsWith("text/") ? " file-viewer-text" : ""}`} />
-              ) : (
-                <div className="file-viewer-unsupported">
-                  <IcoFile />
-                  <p>{fileViewer.filename}</p>
-                  <p style={{ fontSize: "0.8rem", color: "#6b7280" }}>Preview not available for this file type.</p>
-                  <button type="button" onClick={() => { const a = document.createElement("a"); a.href = fileViewer.objectUrl; a.download = fileViewer.filename; a.click(); }}>
-                    <IcoDownload /> Download
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      <FileViewerModal fileViewer={fileViewer} onClose={closeFileViewer} />
     </section>
   );
 }
+

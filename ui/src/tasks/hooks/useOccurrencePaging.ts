@@ -8,9 +8,10 @@
 import { useMemo, useState } from "react";
 import { tasksApi } from "../../lib/api";
 import { addDays, startOfDay, toDateKey } from "../../lib/taskDateUtils";
-import type { QuickFilter, TaskOccurrenceRow } from "../types";
+import type { TaskOccurrenceRow } from "../types";
 import { OCCURRENCE_PAGE_DAYS, toTaskStatus } from "../types";
 import type { TaskScheduleDay } from "../../types/models";
+import { computeOccurrenceHasMore } from "../lib/occurrencePagingUtils";
 
 /** Build flat occurrence rows from a raw schedule response. */
 function buildOccurrenceRowsFromSchedule(
@@ -66,8 +67,7 @@ export interface OccurrencePagingActions {
 }
 
 export function useOccurrencePaging(
-  contextFilter: string,
-  quickFilter: QuickFilter
+  contextFilter: string
 ): OccurrencePagingState & OccurrencePagingActions {
   const [occurrenceRows, setOccurrenceRows] = useState<TaskOccurrenceRow[]>([]);
   const [occurrenceCursorDate, setOccurrenceCursorDate] = useState<Date | null>(null);
@@ -116,6 +116,7 @@ export function useOccurrencePaging(
         mode === "planned"
           ? addDays(endDate, 1)
           : addDays(startDate, -1);
+      const withinHorizon = computeOccurrenceHasMore(mode, todayDate, nextCursor);
 
       if (reset) {
         setOccurrenceRows(rows);
@@ -133,7 +134,9 @@ export function useOccurrencePaging(
         });
       }
       setOccurrenceCursorDate(nextCursor);
-      setOccurrenceHasMore(rows.length > 0);
+      // Keep paging even when a window has no rows.
+      // Planned/Overdue can be sparse, so an empty page is not the end signal.
+      setOccurrenceHasMore(withinHorizon);
     } catch {
       setOccurrenceHasMore(false);
     } finally {

@@ -1,11 +1,21 @@
-import { config as loadEnv } from "dotenv";
 import { createHash } from "node:crypto";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { cacheTasks, listPinnedTaskIds, setTaskPinned, upsertServiceAccount } from "./db.js";
-import { LbsClient, type LbsClientConfig, type LbsScheduleDay } from "./lbsClient.js";
+import type { LbsScheduleDay } from "./lbsClient.js";
+import {
+  applyResolvedStatus,
+  createLbsClient,
+  getLbsConfig,
+  normalizeResponseTask,
+  resolveStatusTargetDate,
+  toDueDateOnly,
+  toLbsStatus,
+  toUiStatus,
+  toValidRecurrence,
+  todayInTimezone,
+  type LbsConfig,
+  type LbsTask
+} from "./lbsTaskService.js";
 import type {
-  RecurrenceType,
   Task,
   TaskHistoryEntry,
   TaskInput,
@@ -14,200 +24,12 @@ import type {
   TaskStatus
 } from "./types.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-loadEnv({ path: path.resolve(__dirname, "../.env") });
-
-const defaultTimezone = "Asia/Tokyo";
-
-interface LbsTask {
-  task_id: string;
-  task_name: string;
-  context: string;
-  base_load_score: number;
-  active: boolean;
-  rule_type: string;
-  due_date?: string | null;
-  notes?: string | null;
-  status?: string | null;
-  is_locked?: boolean | null;
-  start_time?: string | null;
-  end_time?: string | null;
-  created_at?: string;
-  updated_at?: string;
-  timezone?: string | null;
-  meta_payload?: Record<string, unknown>;
-  mon?: boolean | null;
-  tue?: boolean | null;
-  wed?: boolean | null;
-  thu?: boolean | null;
-  fri?: boolean | null;
-  sat?: boolean | null;
-  sun?: boolean | null;
-  interval_days?: number | null;
-  anchor_date?: string | null;
-  month_day?: number | null;
-  nth_in_month?: number | null;
-  weekday_mon1?: number | null;
-  start_date?: string | null;
-  end_date?: string | null;
-}
-
 interface LbsHistoryEntry {
   id?: string | number;
   task_id?: string;
   target_date?: string;
   status?: string;
   created_at?: string;
-}
-
-interface LbsResolvedTask {
-  status?: string | null;
-}
-
-interface LbsConfig {
-  baseUrl: string;
-  authBaseUrl: string;
-  authLoginPath: string;
-  authUserCreatePath: string;
-  accountPasswordSeed: string;
-  apiKey?: string;
-  token?: string;
-  timezone: string;
-  forceOverride: boolean;
-  defaultActive: boolean;
-}
-
-function toClientConfig(config: LbsConfig): LbsClientConfig {
-  return {
-    baseUrl: config.baseUrl,
-    authBaseUrl: config.authBaseUrl,
-    authLoginPath: config.authLoginPath,
-    authUserCreatePath: config.authUserCreatePath,
-    timezone: config.timezone,
-    apiKey: config.apiKey,
-    sharedToken: config.token
-  };
-}
-
-function createLbsClient(config: LbsConfig, authToken?: string): LbsClient {
-  return new LbsClient(toClientConfig(config), authToken);
-}
-
-function requireEnv(name: string): string {
-  const value = process.env[name]?.trim();
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-  return value;
-}
-
-function getLbsConfig(): LbsConfig {
-  const baseUrl = requireEnv("TASKS_LBS_BASE_URL").replace(/\/+$/, "");
-  const authBaseUrl = (process.env.TASKS_LBS_AUTH_BASE_URL?.trim() || baseUrl).replace(/\/+$/, "");
-  const authLoginPath = process.env.TASKS_LBS_AUTH_LOGIN_PATH?.trim() || "/auth/login";
-  const authUserCreatePath = process.env.TASKS_LBS_AUTH_USER_CREATE_PATH?.trim() || "/users/";
-  const accountPasswordSeed = process.env.TASKS_LBS_ACCOUNT_PASSWORD_SEED?.trim() || "workbench-tasks-lbs-seed";
-  const forceOverride = (process.env.TASKS_LBS_FORCE_OVERRIDE ?? "true").toLowerCase() !== "false";
-  const defaultActive = (process.env.TASKS_LBS_DEFAULT_ACTIVE ?? "true").toLowerCase() !== "false";
-
-  return {
-    baseUrl,
-    authBaseUrl,
-    authLoginPath,
-    authUserCreatePath,
-    accountPasswordSeed,
-    apiKey: process.env.TASKS_LBS_API_KEY?.trim() || undefined,
-    token: process.env.TASKS_LBS_AUTH_TOKEN?.trim() || undefined,
-    timezone: process.env.TASKS_LBS_TIMEZONE?.trim() || defaultTimezone,
-    forceOverride,
-    defaultActive
-  };
-}
-
-function toValidRecurrence(value: string | null | undefined): RecurrenceType {
-  const valid = ["ONCE", "WEEKLY", "EVERY_N_DAYS", "MONTHLY_DAY", "MONTHLY_NTH_WEEKDAY"] as const;
-  if (value && valid.includes(value as RecurrenceType)) return value as RecurrenceType;
-  return "ONCE";
-}
-
-function toLbsStatus(status: TaskStatus): "todo" | "done" | "skipped" {
-  if (status === "done") return "done";
-  if (status === "skipped") return "skipped";
-  return "todo";
-}
-
-function toUiStatus(lbsStatus?: string | null): TaskStatus {
-  if (lbsStatus === "done") return "done";
-  if (lbsStatus === "skipped") return "skipped";
-  return "todo";
-}
-
-function toDueDateOnly(value?: string | null): string | undefined {
-  if (!value) return undefined;
-  const trimmed = value.trim();
-  const leadingDate = /^(\d{4})-(\d{2})-(\d{2})(?:$|[T\s])/.exec(trimmed);
-  if (leadingDate) {
-    return `${leadingDate[1]}-${leadingDate[2]}-${leadingDate[3]}`;
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return undefined;
-  return date.toISOString().slice(0, 10);
-}
-
-function todayInTimezone(timezone: string, baseDate: Date = new Date()): string {
-  try {
-    const parts = new Intl.DateTimeFormat("en-CA", {
-      timeZone: timezone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit"
-    }).formatToParts(baseDate);
-    const year = parts.find((part) => part.type === "year")?.value;
-    const month = parts.find((part) => part.type === "month")?.value;
-    const day = parts.find((part) => part.type === "day")?.value;
-    if (year && month && day) return `${year}-${month}-${day}`;
-  } catch {
-    // fall through to UTC fallback
-  }
-  return new Date().toISOString().slice(0, 10);
-}
-
-function normalizeResponseTask(task: LbsTask): Task {
-  const now = new Date().toISOString();
-  const context = (task.context || "inbox").trim() || "inbox";
-  return {
-    id: task.task_id,
-    title: task.task_name,
-    notes: task.notes || "",
-    context,
-    contextName: context,
-    status: toUiStatus(task.status),
-    isLocked: task.is_locked === true,
-    baseLoadScore: typeof task.base_load_score === "number" ? task.base_load_score : 1,
-    recurrence: toValidRecurrence(task.rule_type),
-    dueDate: toDueDateOnly(task.due_date),
-    startTime: task.start_time || undefined,
-    endTime: task.end_time || undefined,
-    timezone: task.timezone || undefined,
-    active: task.active !== false,
-    activeFrom: toDueDateOnly(task.start_date),
-    activeUntil: toDueDateOnly(task.end_date),
-    mon: task.mon ?? undefined,
-    tue: task.tue ?? undefined,
-    wed: task.wed ?? undefined,
-    thu: task.thu ?? undefined,
-    fri: task.fri ?? undefined,
-    sat: task.sat ?? undefined,
-    sun: task.sun ?? undefined,
-    intervalDays: task.interval_days ?? undefined,
-    anchorDate: toDueDateOnly(task.anchor_date),
-    monthDay: task.month_day ?? undefined,
-    nthInMonth: task.nth_in_month ?? undefined,
-    weekdayMon1: task.weekday_mon1 ?? undefined,
-    createdAt: task.created_at || task.updated_at || now,
-    updatedAt: task.updated_at || task.created_at || now
-  };
 }
 
 interface LbsAuthTokenResponse {
@@ -348,18 +170,6 @@ export async function provisionLbsAccount(coreUserId: string, usernameSnapshot: 
   await upsertServiceAccount(coreUserId, usernameSnapshot, tokens);
 }
 
-function resolveStatusTargetDate(
-  recurrence: RecurrenceType | undefined,
-  dueDate: string | undefined,
-  timezone: string,
-  fallbackTimezone: string
-): string {
-  if ((recurrence ?? "ONCE") === "ONCE") {
-    return toDueDateOnly(dueDate) || todayInTimezone(timezone || fallbackTimezone);
-  }
-  return todayInTimezone(timezone || fallbackTimezone);
-}
-
 async function setTaskCompletion(
   taskId: string,
   lbsAccessToken: string,
@@ -369,38 +179,6 @@ async function setTaskCompletion(
   const config = getLbsConfig();
   const client = createLbsClient(config, lbsAccessToken);
   await client.completeTask(taskId, toDueDateOnly(targetDate) || targetDate, toLbsStatus(status));
-}
-
-function resolveTargetDate(task: Task, fallbackTimezone: string): string {
-  return resolveStatusTargetDate(task.recurrence, task.dueDate, task.timezone || fallbackTimezone, fallbackTimezone);
-}
-
-async function applyResolvedStatus(
-  task: Task,
-  lbsAccessToken: string,
-  fallbackTimezone: string,
-  overrideDate?: string  // when set, use this date instead of resolveTargetDate()
-): Promise<Task> {
-  const targetDate = overrideDate ?? resolveTargetDate(task, fallbackTimezone);
-  const config = getLbsConfig();
-  const client = createLbsClient(config, lbsAccessToken);
-  try {
-    const resolved = (await client.resolveTask(task.id, targetDate)) as unknown as LbsResolvedTask;
-    return { ...task, status: toUiStatus(resolved.status) };
-  } catch {
-    try {
-      const history = (await client.getTaskHistory(task.id, targetDate, targetDate)) as unknown as LbsHistoryEntry[];
-      if (history.length === 0) {
-        return task;
-      }
-      const latest = history
-        .slice()
-        .sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""))[0];
-      return { ...task, status: toUiStatus(latest.status) };
-    } catch {
-      return task;
-    }
-  }
 }
 
 export async function listTasks(
@@ -635,7 +413,7 @@ export async function deleteTask(id: string, _ownerUsername: string, lbsAccessTo
 }
 
 export async function exportTasksCsv(lbsAccessToken: string): Promise<string> {
-  // NOTE: LBS has no export-csv endpoint — GET /tasks/export-csv would match
+  // NOTE: LBS has no export-csv endpoint - GET /tasks/export-csv would match
   // the /tasks/{task_id} route and return {"detail":"Task not found"}.
   // We build the CSV ourselves by fetching all tasks via listTasks().
   console.log(`[tasks-service] exportTasksCsv  fetching all tasks from LBS`);
@@ -719,225 +497,6 @@ export async function listTaskPins(ownerUsername: string): Promise<string[]> {
   return listPinnedTaskIds(ownerUsername);
 }
 
-// ── Schedule / Today extension ────────────────────────────────────────────────
-
-import {
-  type ScheduleItemRow,
-  addScheduleItem,
-  removeItemsByTaskAndScheduledDate,
-  updateItem as updateScheduleItemInStore,
-  listItemsByScheduledDate,
-  listItemsByDateRange
-} from "./scheduleItemsStore.js";
-import type { ScheduleCalendarDay, ScheduleCalendarItem, TodayTask } from "./types.js";
-
-interface ScheduleItemInput {
-  taskId: string;
-  occurrenceDate: string;
-  scheduledDate: string;
-  startTime?: string;
-  endTime?: string;
-  timezone?: string;
-}
-
-/**
- * List Today tasks for the given date.
- *
- * Merges two sources:
- *   1. Explicit schedule entries (scheduled_date = date) from task_occurrence_schedule.
- *   2. LBS-due tasks (occurrence_date = date from LBS schedule) not already covered
- *      by an explicit schedule entry with the same task_id + occurrence_date.
- *
- * Each item carries occurrenceDate for LBS completion and optional time fields.
- * applyResolvedStatus is called with occurrenceDate to get the correct status.
- */
-export async function listTaskToday(
-  ownerUsername: string,
-  date: string,
-  lbsAccessToken: string
-): Promise<TodayTask[]> {
-  console.log(`[tasks-service] listTaskToday  owner=${ownerUsername} date=${date}`);
-
-  const config = getLbsConfig();
-  const client = createLbsClient(config, lbsAccessToken);
-  const pinnedIds = new Set(await listPinnedTaskIds(ownerUsername));
-
-  // 1. Explicit schedule entries for this date.
-  const scheduleItems = await listItemsByScheduledDate(ownerUsername, date);
-  console.log(`[tasks-service] listTaskToday  ${scheduleItems.length} explicit schedule item(s) for ${date}`);
-
-  // Build a set of task_id+occurrence_date keys already covered by explicit entries.
-  const coveredKeys = new Set(scheduleItems.map((item) => `${item.taskId}@${item.occurrenceDate}`));
-
-  // 2. LBS-due tasks for this date (those not yet covered).
-  let lbsDueTasks: Array<{ taskId: string; occurrenceDate: string }> = [];
-  try {
-    const days = (await client.getSchedule(date, date)) as LbsScheduleDay[];
-    const todayDay = days.find((d) => d.date === date);
-    lbsDueTasks = (todayDay?.tasks ?? [])
-      .map((t) => ({ taskId: t.task_id, occurrenceDate: date }))
-      .filter((t) => !coveredKeys.has(`${t.taskId}@${t.occurrenceDate}`));
-    console.log(`[tasks-service] listTaskToday  ${lbsDueTasks.length} LBS-auto task(s) for ${date}`);
-  } catch (err) {
-    console.warn(`[tasks-service] listTaskToday  failed to fetch LBS schedule for ${date}: ${err instanceof Error ? err.message : String(err)}`);
-  }
-
-  // Resolve all entries to TodayTask.
-  const resolveEntry = async (
-    taskId: string,
-    occurrenceDate: string,
-    scheduleItem?: ScheduleItemRow
-  ): Promise<TodayTask | null> => {
-    try {
-      const raw = (await client.getTask(taskId)) as unknown as LbsTask;
-      const normalized = normalizeResponseTask(raw);
-      const resolved = await applyResolvedStatus(normalized, lbsAccessToken, config.timezone, occurrenceDate);
-      const todayTask: TodayTask = {
-        ...resolved,
-        isPinned: pinnedIds.has(resolved.id),
-        occurrenceDate,
-        scheduledDate: scheduleItem?.scheduledDate ?? date,
-        scheduleId: scheduleItem?.id,
-        startTime: scheduleItem?.startTime,
-        endTime: scheduleItem?.endTime,
-        timezone: scheduleItem?.timezone
-      };
-      return todayTask;
-    } catch (err) {
-      console.warn(
-        `[tasks-service] listTaskToday  skipping ${taskId}@${occurrenceDate} — LBS error: ${err instanceof Error ? err.message : String(err)}`
-      );
-      return null;
-    }
-  };
-
-  const explicitTasks = await Promise.all(
-    scheduleItems.map((item) => resolveEntry(item.taskId, item.occurrenceDate, item))
-  );
-  const lbsAutoTasks = await Promise.all(
-    lbsDueTasks.map((t) => resolveEntry(t.taskId, t.occurrenceDate))
-  );
-
-  const result = [...explicitTasks, ...lbsAutoTasks].filter((t): t is TodayTask => t !== null);
-  console.log(`[tasks-service] listTaskToday  returning ${result.length} TodayTask(s) for ${date}`);
-  return result;
-}
-
-/**
- * Add a schedule item (= "add to Today" or "schedule for a date").
- * scheduledDate = the calendar date to work on the task.
- * occurrenceDate = LBS execution date for completion.
- * Optional: startTime, endTime, timezone.
- */
-export async function addTaskToToday(
-  ownerUsername: string,
-  taskId: string,
-  scheduledDate: string,
-  occurrenceDate: string,
-  opts?: { startTime?: string; endTime?: string; timezone?: string }
-): Promise<ScheduleItemRow> {
-  // For tasks with no LBS occurrence date (e.g. ONCE with no due_date), fall back to scheduledDate.
-  // This lets "no-due-date" tasks be pinned to a work day without crashing LBS completion.
-  const effectiveOccurrenceDate = occurrenceDate || scheduledDate;
-  console.log(`[tasks-service] addTaskToToday  owner=${ownerUsername} taskId=${taskId} scheduledDate=${scheduledDate} occurrenceDate=${effectiveOccurrenceDate}${occurrenceDate !== effectiveOccurrenceDate ? " (fallback)" : ""}`);
-  const result = await addScheduleItem(ownerUsername, taskId, effectiveOccurrenceDate, scheduledDate, opts);
-  console.log(`[tasks-service] addTaskToToday  created scheduleId=${result.id}`);
-  return result;
-}
-
-/**
- * Update an existing schedule item's time/date fields.
- */
-export async function updateTaskScheduleItem(
-  ownerUsername: string,
-  scheduleId: number,
-  patch: { scheduledDate?: string; occurrenceDate?: string; startTime?: string | null; endTime?: string | null; timezone?: string | null }
-): Promise<ScheduleItemRow | undefined> {
-  console.log(`[tasks-service] updateTaskScheduleItem  owner=${ownerUsername} scheduleId=${scheduleId}`);
-  return updateScheduleItemInStore(ownerUsername, scheduleId, patch);
-}
-
-/**
- * Remove all explicit schedule items for a task on a given scheduled date.
- * (Removes the "Add to My Day" pin; LBS-auto tasks still appear via listTaskToday.)
- */
-export async function removeTaskFromToday(
-  ownerUsername: string,
-  taskId: string,
-  scheduledDate: string
-): Promise<{ taskId: string; scheduledDate: string; removed: number }> {
-  console.log(`[tasks-service] removeTaskFromToday  owner=${ownerUsername} taskId=${taskId} scheduledDate=${scheduledDate}`);
-  const removed = await removeItemsByTaskAndScheduledDate(ownerUsername, taskId, scheduledDate);
-  console.log(`[tasks-service] removeTaskFromToday  removed ${removed} item(s)`);
-  return { taskId, scheduledDate, removed };
-}
-
-/**
- * List schedule calendar items over a date range, enriched with task details.
- * Groups by scheduled_date for the calendar view.
- */
-export async function listTaskScheduleCalendar(
-  ownerUsername: string,
-  startDate: string,
-  endDate: string,
-  lbsAccessToken: string
-): Promise<ScheduleCalendarDay[]> {
-  console.log(`[tasks-service] listTaskScheduleCalendar  owner=${ownerUsername} ${startDate}→${endDate}`);
-
-  const items = await listItemsByDateRange(ownerUsername, startDate, endDate);
-  if (items.length === 0) return [];
-
-  const config = getLbsConfig();
-  const client = createLbsClient(config, lbsAccessToken);
-
-  // Resolve each item to a ScheduleCalendarItem.
-  const resolved = await Promise.all(
-    items.map(async (item): Promise<ScheduleCalendarItem | null> => {
-      try {
-        const raw = (await client.getTask(item.taskId)) as unknown as LbsTask;
-        const normalized = normalizeResponseTask(raw);
-        const withStatus = await applyResolvedStatus(normalized, lbsAccessToken, config.timezone, item.occurrenceDate);
-        return {
-          scheduleId: item.id,
-          taskId: item.taskId,
-          title: withStatus.title,
-          context: withStatus.context,
-          status: withStatus.status,
-          occurrenceDate: item.occurrenceDate,
-          scheduledDate: item.scheduledDate,
-          startTime: item.startTime,
-          endTime: item.endTime,
-          timezone: item.timezone
-        };
-      } catch (err) {
-        console.warn(
-          `[tasks-service] listTaskScheduleCalendar  skipping ${item.taskId}@${item.occurrenceDate} — ${err instanceof Error ? err.message : String(err)}`
-        );
-        return null;
-      }
-    })
-  );
-
-  // Group by scheduled_date.
-  const byDate = new Map<string, ScheduleCalendarItem[]>();
-  for (const item of resolved) {
-    if (!item) continue;
-    const list = byDate.get(item.scheduledDate) ?? [];
-    list.push(item);
-    byDate.set(item.scheduledDate, list);
-  }
-
-  const days: ScheduleCalendarDay[] = [];
-  for (const [date, calItems] of [...byDate.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-    days.push({ date, items: calItems });
-  }
-  console.log(`[tasks-service] listTaskScheduleCalendar  returning ${days.length} day(s)`);
-  return days;
-}
-
-// Keep ScheduleItemInput type visible for httpServer usage (via re-export pattern).
-export type { ScheduleItemInput, ScheduleItemRow };
-
 export async function updateTaskPin(ownerUsername: string, taskId: string, pinned: boolean): Promise<{ taskId: string; pinned: boolean }> {
   await setTaskPinned(ownerUsername, taskId, pinned);
   return { taskId, pinned };
@@ -1005,93 +564,4 @@ export async function completeTaskOccurrence(
   }
   await client.completeTask(taskId, normalizedDate, toLbsStatus(status));
   return { taskId, targetDate: normalizedDate, status };
-}
-
-function extractExceptionId(record: Record<string, unknown>): number | undefined {
-  const id = record.id;
-  if (typeof id === "number") return id;
-  if (typeof id === "string" && id.trim()) {
-    const parsed = Number(id);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return undefined;
-}
-
-function extractExceptionDate(record: Record<string, unknown>): string | undefined {
-  const value = record.target_date;
-  if (typeof value === "string") return toDueDateOnly(value);
-  return undefined;
-}
-
-async function upsertTaskException(
-  client: LbsClient,
-  taskId: string,
-  targetDate: string,
-  exceptionType: "SKIP" | "FORCE_DO",
-  notes: string
-): Promise<void> {
-  const payload = {
-    task_id: taskId,
-    target_date: targetDate,
-    exception_type: exceptionType,
-    notes,
-    is_locked: false
-  };
-  try {
-    await client.createException(payload, true);
-    return;
-  } catch {
-    const listed = await client.listExceptions(taskId, targetDate, targetDate);
-    const exact = listed.find((row) => extractExceptionDate(row) === targetDate);
-    const exceptionId = exact ? extractExceptionId(exact) : undefined;
-    if (!exceptionId) {
-      throw new Error(`Failed to upsert exception for ${taskId} on ${targetDate}`);
-    }
-    await client.updateException(
-      exceptionId,
-      {
-        exception_type: exceptionType,
-        notes,
-        is_locked: false
-      },
-      true
-    );
-  }
-}
-
-export async function moveTaskOccurrence(
-  taskId: string,
-  sourceDate: string,
-  targetDate: string,
-  lbsAccessToken: string
-): Promise<{ taskId: string; sourceDate: string; targetDate: string }> {
-  const config = getLbsConfig();
-  const client = createLbsClient(config, lbsAccessToken);
-  const normalizedSource = toDueDateOnly(sourceDate);
-  const normalizedTarget = toDueDateOnly(targetDate);
-  if (!normalizedSource || !normalizedTarget) {
-    throw new Error("sourceDate and targetDate must be in YYYY-MM-DD format");
-  }
-  if (normalizedSource === normalizedTarget) {
-    return { taskId, sourceDate: normalizedSource, targetDate: normalizedTarget };
-  }
-
-  await upsertTaskException(client, taskId, normalizedSource, "SKIP", `Moved to ${normalizedTarget}`);
-  await upsertTaskException(client, taskId, normalizedTarget, "FORCE_DO", `Moved from ${normalizedSource}`);
-  return { taskId, sourceDate: normalizedSource, targetDate: normalizedTarget };
-}
-
-export async function skipTaskOccurrenceException(
-  taskId: string,
-  targetDate: string,
-  lbsAccessToken: string
-): Promise<{ taskId: string; targetDate: string }> {
-  const config = getLbsConfig();
-  const client = createLbsClient(config, lbsAccessToken);
-  const normalizedDate = toDueDateOnly(targetDate);
-  if (!normalizedDate) {
-    throw new Error("targetDate must be in YYYY-MM-DD format");
-  }
-  await upsertTaskException(client, taskId, normalizedDate, "SKIP", "Removed via UI");
-  return { taskId, targetDate: normalizedDate };
 }
