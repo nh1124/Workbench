@@ -21,6 +21,7 @@ export function FileViewerModal({ fileViewer, onClose }: FileViewerModalProps) {
               type="button"
               className="file-viewer-action"
               title="Download"
+              aria-label="Download file"
               onClick={() => {
                 const a = document.createElement("a");
                 a.href = fileViewer.objectUrl;
@@ -30,7 +31,13 @@ export function FileViewerModal({ fileViewer, onClose }: FileViewerModalProps) {
             >
               <IcoDownload />
             </button>
-            <button type="button" className="file-viewer-close" onClick={onClose}>
+            <button
+              type="button"
+              className="file-viewer-close"
+              onClick={onClose}
+              aria-label="Close file preview"
+              title="Close file preview"
+            >
               <IcoX />
             </button>
           </div>

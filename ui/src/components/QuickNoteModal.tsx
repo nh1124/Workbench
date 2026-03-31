@@ -224,7 +224,7 @@ export function QuickNoteModal({ open, onClose, standalone = false }: QuickNoteM
       return;
     }
 
-    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
       event.preventDefault();
       if (!isSaving) {
         void handleSave();
@@ -267,6 +267,7 @@ export function QuickNoteModal({ open, onClose, standalone = false }: QuickNoteM
           Content
           <textarea
             ref={contentInputRef}
+            autoFocus
             rows={8}
             value={draft.content}
             onChange={(event) => setDraft((prev) => ({ ...prev, content: event.target.value }))}

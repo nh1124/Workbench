@@ -44,6 +44,7 @@ export function TaskQuickAddPanel({
             className="task-add-title-input"
             placeholder="Task name..."
             value={addDraft.title}
+            aria-label="Task name"
             onChange={(e) => setAddDraft((p) => ({ ...p, title: e.target.value }))}
             onKeyDown={(e) => {
               if (e.key === "Enter") onAddTask();
@@ -66,6 +67,7 @@ export function TaskQuickAddPanel({
               className="task-add-context-input"
               placeholder="Type or select context"
               value={addContextInput}
+              aria-label="Task context"
               onChange={(e) => {
                 const value = e.target.value;
                 setAddContextInput(value);
@@ -86,6 +88,7 @@ export function TaskQuickAddPanel({
               min={0}
               max={10}
               value={addDraft.baseLoadScore}
+              aria-label="Task load score"
               onChange={(e) =>
                 setAddDraft((p) => ({ ...p, baseLoadScore: Number(e.target.value) }))
               }
@@ -99,6 +102,7 @@ export function TaskQuickAddPanel({
               <input
                 type="date"
                 value={addDraft.dueDate}
+                aria-label="Due date"
                 onChange={(e) => setAddDraft((p) => ({ ...p, dueDate: e.target.value }))}
               />
             </label>
@@ -121,6 +125,7 @@ export function TaskQuickAddPanel({
               <select
                 className="edit-input"
                 value={addDraft.recurrence}
+                aria-label="Recurrence"
                 onChange={(e) => {
                   const recurrence = e.target.value as typeof addDraft.recurrence;
                   setAddDraft((p) => ({
@@ -148,6 +153,7 @@ export function TaskQuickAddPanel({
                       type="button"
                       className={addDraft[d] ? "weekday-btn active" : "weekday-btn"}
                       onClick={() => setAddDraft((p) => ({ ...p, [d]: !p[d] }))}
+                      aria-label={`Toggle ${weekdays[i]}`}
                     >
                       {weekdays[i]}
                     </button>
@@ -164,6 +170,7 @@ export function TaskQuickAddPanel({
                     min={1}
                     className="edit-input"
                     value={addDraft.intervalDays}
+                    aria-label="Every N days interval"
                     onChange={(e) =>
                       setAddDraft((p) => ({ ...p, intervalDays: Number(e.target.value) }))
                     }
@@ -175,6 +182,7 @@ export function TaskQuickAddPanel({
                     type="date"
                     className="edit-input"
                     value={addDraft.anchorDate}
+                    aria-label="Anchor date"
                     onChange={(e) => setAddDraft((p) => ({ ...p, anchorDate: e.target.value }))}
                   />
                 </div>
@@ -189,6 +197,7 @@ export function TaskQuickAddPanel({
                   max={31}
                   className="edit-input"
                   value={addDraft.monthDay}
+                  aria-label="Day of month"
                   onChange={(e) => setAddDraft((p) => ({ ...p, monthDay: Number(e.target.value) }))}
                 />
               </div>
@@ -203,6 +212,7 @@ export function TaskQuickAddPanel({
                     max={5}
                     className="edit-input"
                     value={addDraft.nthInMonth}
+                    aria-label="Nth week of month"
                     onChange={(e) =>
                       setAddDraft((p) => ({ ...p, nthInMonth: Number(e.target.value) }))
                     }
@@ -213,6 +223,7 @@ export function TaskQuickAddPanel({
                   <select
                     className="edit-input"
                     value={addDraft.weekdayMon1}
+                    aria-label="Weekday for monthly nth recurrence"
                     onChange={(e) =>
                       setAddDraft((p) => ({ ...p, weekdayMon1: Number(e.target.value) }))
                     }
@@ -234,6 +245,7 @@ export function TaskQuickAddPanel({
                     type="date"
                     className="edit-input"
                     value={addDraft.activeFrom}
+                    aria-label="Active from date"
                     onChange={(e) => setAddDraft((p) => ({ ...p, activeFrom: e.target.value }))}
                   />
                 </div>
@@ -243,6 +255,7 @@ export function TaskQuickAddPanel({
                     type="date"
                     className="edit-input"
                     value={addDraft.activeUntil}
+                    aria-label="Active until date"
                     onChange={(e) => setAddDraft((p) => ({ ...p, activeUntil: e.target.value }))}
                   />
                 </div>
@@ -255,6 +268,7 @@ export function TaskQuickAddPanel({
                   type="time"
                   className="edit-input"
                   value={addDraft.startTime}
+                  aria-label="Start time"
                   onChange={(e) => setAddDraft((p) => ({ ...p, startTime: e.target.value }))}
                 />
               </div>
@@ -264,6 +278,7 @@ export function TaskQuickAddPanel({
                   type="time"
                   className="edit-input"
                   value={addDraft.endTime}
+                  aria-label="End time"
                   onChange={(e) => setAddDraft((p) => ({ ...p, endTime: e.target.value }))}
                 />
               </div>
@@ -273,6 +288,7 @@ export function TaskQuickAddPanel({
               <input
                 className="edit-input"
                 value={addDraft.timezone}
+                aria-label="Timezone"
                 onChange={(e) => setAddDraft((p) => ({ ...p, timezone: e.target.value }))}
               />
             </div>
@@ -281,6 +297,7 @@ export function TaskQuickAddPanel({
               <textarea
                 className="edit-input"
                 value={addDraft.notes}
+                aria-label="Notes"
                 onChange={(e) => setAddDraft((p) => ({ ...p, notes: e.target.value }))}
               />
             </div>

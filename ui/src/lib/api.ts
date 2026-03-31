@@ -83,6 +83,16 @@ async function invokeNative<T>(command: string, args?: Record<string, unknown>):
   return window.__TAURI_INTERNALS__!.invoke<T>(command, args);
 }
 
+export async function closeQuickNoteWindow(): Promise<void> {
+  if (isTauriNativeRuntime()) {
+    await invokeNative<void>("close_quick_note_window");
+    return;
+  }
+  if (typeof window !== "undefined") {
+    window.close();
+  }
+}
+
 async function loadSessionFromStorage(): Promise<StoredAuthSession | undefined> {
   if (isTauriNativeRuntime()) {
     const raw = await invokeNative<string | null>(NATIVE_SESSION_COMMANDS.read);

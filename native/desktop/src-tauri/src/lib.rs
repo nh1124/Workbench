@@ -1,4 +1,11 @@
-use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{WebviewUrl, WebviewWindowBuilder};
+#[cfg(desktop)]
+use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(desktop)]
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg(desktop)]
+static QUICK_NOTE_WINDOW_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(target_os = "windows")]
 mod secure_storage {
@@ -120,17 +127,21 @@ fn secure_session_clear() -> Result<(), String> {
 }
 
 #[cfg(desktop)]
-fn open_or_focus_quick_note_window(app: &tauri::AppHandle) -> Result<(), String> {
-  if let Some(window) = app.get_webview_window("quick-note") {
-    let _ = window.unminimize();
-    let _ = window.show();
-    let _ = window.set_focus();
-    return Ok(());
-  }
+fn build_quick_note_window_label() -> String {
+  let ts = SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .map(|value| value.as_millis())
+    .unwrap_or(0);
+  let seq = QUICK_NOTE_WINDOW_COUNTER.fetch_add(1, Ordering::Relaxed);
+  format!("quick-note-{ts}-{seq}")
+}
 
+#[cfg(desktop)]
+fn open_new_quick_note_window(app: &tauri::AppHandle) -> Result<(), String> {
+  let window_label = build_quick_note_window_label();
   WebviewWindowBuilder::new(
     app,
-    "quick-note",
+    window_label,
     WebviewUrl::App("index.html?quick-note-window=1".into()),
   )
   .title("Quick Note")
@@ -138,18 +149,31 @@ fn open_or_focus_quick_note_window(app: &tauri::AppHandle) -> Result<(), String>
   .resizable(true)
   .focused(true)
   .build()
-  .map(|_| ())
+  .and_then(|window| {
+    window.set_always_on_top(true)?;
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+    Ok(())
+  })
   .map_err(|error| format!("failed to open quick note window: {error}"))
 }
 
 #[cfg(not(desktop))]
-fn open_or_focus_quick_note_window(_app: &tauri::AppHandle) -> Result<(), String> {
+fn open_new_quick_note_window(_app: &tauri::AppHandle) -> Result<(), String> {
   Err("quick note window is not supported on this platform".to_string())
 }
 
 #[tauri::command]
 fn open_quick_note_window(app: tauri::AppHandle) -> Result<(), String> {
-  open_or_focus_quick_note_window(&app)
+  open_new_quick_note_window(&app)
+}
+
+#[tauri::command]
+fn close_quick_note_window(window: tauri::WebviewWindow) -> Result<(), String> {
+  window
+    .close()
+    .map_err(|error| format!("failed to close quick note window: {error}"))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -172,7 +196,7 @@ pub fn run() {
                 return;
               }
               if shortcut == &win_alt_n_handler || shortcut == &ctrl_alt_n_handler {
-                let _ = open_or_focus_quick_note_window(app);
+                let _ = open_new_quick_note_window(app);
               }
             })
             .build(),
@@ -195,7 +219,8 @@ pub fn run() {
       secure_session_save,
       secure_session_read,
       secure_session_clear,
-      open_quick_note_window
+      open_quick_note_window,
+      close_quick_note_window
     ])
     .run(tauri::generate_context!())
     .expect("error while running workbench native application");

@@ -41,19 +41,19 @@ export function TasksCenterHeader({
     return (
       <header className="tasks-center-head tasks-center-head-calendar">
         <div className="calendar-nav-cluster">
-          <button type="button" className="calendar-nav-btn" onClick={onMovePrevPeriod}>{"<"}</button>
-          <button type="button" className="calendar-nav-today" onClick={onJumpToday}>Today</button>
-          <button type="button" className="calendar-nav-btn" onClick={onMoveNextPeriod}>{">"}</button>
+          <button type="button" className="calendar-nav-btn" onClick={onMovePrevPeriod} aria-label="Previous period" title="Previous period">{"<"}</button>
+          <button type="button" className="calendar-nav-today" onClick={onJumpToday} aria-label="Jump to today" title="Jump to today">Today</button>
+          <button type="button" className="calendar-nav-btn" onClick={onMoveNextPeriod} aria-label="Next period" title="Next period">{">"}</button>
           <strong>{periodLabel}</strong>
         </div>
         <div className="tasks-head-actions calendar-head-actions">
           <div className="calendar-view-toggle">
-            <button type="button" className={calendarMode === "month" ? "active" : ""} onClick={() => onSetCalendarMode("month")} aria-label="Month view"><IcoCal /></button>
-            <button type="button" className={calendarMode === "week" ? "active" : ""} onClick={() => onSetCalendarMode("week")} aria-label="Week view"><IcoList /></button>
+            <button type="button" className={calendarMode === "month" ? "active" : ""} onClick={() => onSetCalendarMode("month")} aria-label="Month view" title="Month view"><IcoCal /></button>
+            <button type="button" className={calendarMode === "week" ? "active" : ""} onClick={() => onSetCalendarMode("week")} aria-label="Week view" title="Week view"><IcoList /></button>
           </div>
           {sidebarMode === "schedule"
-            ? <button type="button" className="icon-button" onClick={onRefreshSchedule} title="Refresh Schedule"><IcoRefresh /></button>
-            : <button type="button" className="icon-button" onClick={onRefreshList} title="Refresh"><IcoRefresh /></button>
+            ? <button type="button" className="icon-button" onClick={onRefreshSchedule} title="Refresh Schedule" aria-label="Refresh schedule"><IcoRefresh /></button>
+            : <button type="button" className="icon-button" onClick={onRefreshList} title="Refresh" aria-label="Refresh list"><IcoRefresh /></button>
           }
         </div>
       </header>
@@ -66,15 +66,15 @@ export function TasksCenterHeader({
         <p>{new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</p>
       </div>
       <div className="tasks-head-actions">
-        <select className="sort-select" value={sortMode} onChange={(e) => onSetSortMode(e.target.value as SortMode)}>
+        <select className="sort-select" value={sortMode} onChange={(e) => onSetSortMode(e.target.value as SortMode)} aria-label="Sort task list">
           <option value="load">Sort: Load</option>
           <option value="due">Sort: Due Date</option>
           <option value="project">Sort: Project</option>
         </select>
-        <button type="button" className="icon-button" onClick={onExport} title="Export CSV"><IcoDownload /></button>
-        <button type="button" className="icon-button" onClick={() => importRef.current?.click()} title="Import CSV"><IcoUpload /></button>
-        <input ref={importRef} type="file" accept=".csv" style={{ display: "none" }} onChange={onImport} />
-        <button type="button" className="icon-button" onClick={onRefreshList} title="Refresh"><IcoRefresh /></button>
+        <button type="button" className="icon-button" onClick={onExport} title="Export CSV" aria-label="Export CSV"><IcoDownload /></button>
+        <button type="button" className="icon-button" onClick={() => importRef.current?.click()} title="Import CSV" aria-label="Import CSV"><IcoUpload /></button>
+        <input ref={importRef} type="file" accept=".csv" style={{ display: "none" }} onChange={onImport} aria-label="Import CSV file" />
+        <button type="button" className="icon-button" onClick={onRefreshList} title="Refresh" aria-label="Refresh list"><IcoRefresh /></button>
         <button type="button" className="tasks-add-btn" onClick={onOpenAddPanel}>+ Add</button>
       </div>
     </header>

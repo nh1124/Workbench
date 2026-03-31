@@ -1,4 +1,4 @@
-import { readWorkbenchSession } from "../lib/api";
+import { closeQuickNoteWindow, readWorkbenchSession } from "../lib/api";
 import { QuickNoteModal } from "../components/QuickNoteModal";
 
 export function QuickNoteWindowPage() {
@@ -22,7 +22,7 @@ export function QuickNoteWindowPage() {
   }
 
   const closeWindow = () => {
-    window.close();
+    void closeQuickNoteWindow();
   };
 
   return <QuickNoteModal open onClose={closeWindow} standalone />;

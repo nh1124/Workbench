@@ -104,7 +104,8 @@ export function Layout() {
         const left = Math.max(0, window.screenX + Math.round((window.outerWidth - width) / 2));
         const top = Math.max(0, window.screenY + Math.round((window.outerHeight - height) / 2));
         const features = `popup=yes,width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=no`;
-        const quickNoteWindow = window.open("/?quick-note-window=1", "workbench-quick-note", features);
+        const quickNoteWindowName = `workbench-quick-note-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+        const quickNoteWindow = window.open("/?quick-note-window=1", quickNoteWindowName, features);
         if (quickNoteWindow) {
           quickNoteWindow.focus();
         } else {

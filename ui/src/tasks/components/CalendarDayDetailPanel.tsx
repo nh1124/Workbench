@@ -26,7 +26,15 @@ export function CalendarDayDetailPanel({
           <div>
             <h3>{dayDetailDate.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</h3>
           </div>
-          <button type="button" className="tasks-detail-close" onClick={onClose}><IcoX /></button>
+          <button
+            type="button"
+            className="tasks-detail-close"
+            onClick={onClose}
+            aria-label="Close day details"
+            title="Close day details"
+          >
+            <IcoX />
+          </button>
         </div>
         <div className="day-tasks-body">
           {dayDetailTasks.length === 0 ? (

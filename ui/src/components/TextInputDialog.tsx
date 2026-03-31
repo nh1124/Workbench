@@ -43,13 +43,6 @@ export function TextInputDialog({
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         onCancel();
-        return;
-      }
-      if (event.key === "Enter") {
-        const normalized = value.trim();
-        if (normalized) {
-          onConfirm(normalized);
-        }
       }
     };
 
@@ -58,7 +51,7 @@ export function TextInputDialog({
       window.clearTimeout(timer);
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [onCancel, onConfirm, open, value]);
+  }, [onCancel, open]);
 
   if (!open) {
     return null;
@@ -87,6 +80,21 @@ export function TextInputDialog({
               ref={inputRef}
               value={value}
               onChange={(event) => setValue(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  onCancel();
+                  return;
+                }
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  const next = value.trim();
+                  if (!next || busy) {
+                    return;
+                  }
+                  onConfirm(next);
+                }
+              }}
               placeholder={placeholder}
               disabled={busy}
             />

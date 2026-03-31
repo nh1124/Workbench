@@ -143,6 +143,7 @@ export function TaskDetailPanel({
                 })
               }
               title={`Status: ${draft.status}`}
+              aria-label={`Task status ${draft.status}`}
             >
               {draft.status === "done" ? (
                 <IcoCheckCircle />
@@ -158,6 +159,7 @@ export function TaskDetailPanel({
               onChange={(e) => setDraft((p) => ({ ...p, title: e.target.value }))}
               onBlur={(e) => applyAndSave({ title: e.target.value })}
               placeholder="Task title"
+              aria-label="Task title"
             />
           </div>
           <div className="tasks-detail-head-actions">
@@ -171,6 +173,7 @@ export function TaskDetailPanel({
                   ? "Locked - click to unlock"
                   : "Unlocked - click to lock"
               }
+              aria-label={draft.isLocked ? "Unlock task" : "Lock task"}
             >
               {draft.isLocked ? <IcoLock /> : <IcoUnlock />}
             </button>
@@ -207,6 +210,8 @@ export function TaskDetailPanel({
                       onClick={() => {
                         void handleToggleSubtask(s);
                       }}
+                      aria-label={s.isDone ? `Mark subtask not done: ${s.title}` : `Mark subtask done: ${s.title}`}
+                      title={s.isDone ? "Mark as not done" : "Mark as done"}
                     >
                       {s.isDone ? <IcoCheckCircle /> : <IcoCircle />}
                     </button>
@@ -217,6 +222,8 @@ export function TaskDetailPanel({
                       onClick={() => {
                         void handleDeleteSubtask(s.id);
                       }}
+                      aria-label={`Delete subtask: ${s.title}`}
+                      title="Delete subtask"
                     >
                       <IcoX />
                     </button>
@@ -227,6 +234,7 @@ export function TaskDetailPanel({
                     className="subtask-add-input"
                     placeholder="+ Next step"
                     value={newSubtaskTitle}
+                    aria-label="Add subtask"
                     onChange={(e) => setNewSubtaskTitle(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
@@ -245,6 +253,7 @@ export function TaskDetailPanel({
               <select
                 className="edit-input"
                 value={draft.context}
+                aria-label="Context"
                 onChange={(e) => applyAndSave({ context: e.target.value })}
               >
                 <option value="">Select context</option>
@@ -264,6 +273,7 @@ export function TaskDetailPanel({
                   max={10}
                   step={1}
                   value={draft.baseLoadScore}
+                  aria-label="Load score"
                   onChange={(e) =>
                     setDraft((p) => ({ ...p, baseLoadScore: Number(e.target.value) }))
                   }
@@ -294,6 +304,7 @@ export function TaskDetailPanel({
             <select
               className="edit-input"
               value={draft.recurrence}
+              aria-label="Recurrence"
               onChange={(e) =>
                 applyAndSave({ recurrence: e.target.value as typeof draft.recurrence })
               }
@@ -316,6 +327,7 @@ export function TaskDetailPanel({
                     type="button"
                     className={draft[d] ? "weekday-btn active" : "weekday-btn"}
                     onClick={() => applyAndSave({ [d]: !draft[d] })}
+                    aria-label={`Toggle ${weekdays[i]}`}
                   >
                     {weekdays[i]}
                   </button>
@@ -332,6 +344,7 @@ export function TaskDetailPanel({
                   min={1}
                   className="edit-input"
                   value={draft.intervalDays}
+                  aria-label="Every N days interval"
                   onChange={(e) =>
                     setDraft((p) => ({ ...p, intervalDays: Number(e.target.value) }))
                   }
@@ -344,6 +357,7 @@ export function TaskDetailPanel({
                   type="date"
                   className="edit-input"
                   value={draft.anchorDate}
+                  aria-label="Anchor date"
                   onChange={(e) => applyAndSave({ anchorDate: e.target.value })}
                 />
               </div>
@@ -358,6 +372,7 @@ export function TaskDetailPanel({
                 max={31}
                 className="edit-input"
                 value={draft.monthDay}
+                aria-label="Day of month"
                 onChange={(e) => setDraft((p) => ({ ...p, monthDay: Number(e.target.value) }))}
                 onBlur={(e) => applyAndSave({ monthDay: Number(e.target.value) })}
               />
@@ -373,6 +388,7 @@ export function TaskDetailPanel({
                   max={5}
                   className="edit-input"
                   value={draft.nthInMonth}
+                  aria-label="Nth week of month"
                   onChange={(e) => setDraft((p) => ({ ...p, nthInMonth: Number(e.target.value) }))}
                   onBlur={(e) => applyAndSave({ nthInMonth: Number(e.target.value) })}
                 />
@@ -382,6 +398,7 @@ export function TaskDetailPanel({
                 <select
                   className="edit-input"
                   value={draft.weekdayMon1}
+                  aria-label="Weekday for monthly nth recurrence"
                   onChange={(e) => applyAndSave({ weekdayMon1: Number(e.target.value) })}
                 >
                   {weekdays.map((d, i) => (
@@ -401,6 +418,7 @@ export function TaskDetailPanel({
                 type="date"
                 className="edit-input detail-card-date"
                 value={draft.dueDate}
+                aria-label="Due date"
                 onChange={(e) => applyAndSave({ dueDate: e.target.value })}
               />
             ) : (
@@ -413,6 +431,7 @@ export function TaskDetailPanel({
                   type="time"
                   className="edit-input"
                   value={draft.startTime}
+                  aria-label="Start time"
                   onChange={(e) => applyAndSave({ startTime: e.target.value })}
                 />
               </div>
@@ -422,6 +441,7 @@ export function TaskDetailPanel({
                   type="time"
                   className="edit-input"
                   value={draft.endTime}
+                  aria-label="End time"
                   onChange={(e) => applyAndSave({ endTime: e.target.value })}
                 />
               </div>
@@ -431,6 +451,7 @@ export function TaskDetailPanel({
               <input
                 className="edit-input"
                 value={draft.timezone}
+                aria-label="Timezone"
                 onChange={(e) => setDraft((p) => ({ ...p, timezone: e.target.value }))}
                 onBlur={(e) => applyAndSave({ timezone: e.target.value })}
                 placeholder="e.g. Asia/Tokyo"
@@ -448,6 +469,8 @@ export function TaskDetailPanel({
                   onClick={() => {
                     void handleRemoveScheduleItem();
                   }}
+                  aria-label="Remove scheduled date"
+                  title="Remove scheduled date"
                 >
                   <IcoX />
                 </button>
@@ -461,6 +484,7 @@ export function TaskDetailPanel({
                   type="date"
                   className={`edit-input detail-card-date${scheduleItemId != null ? " has-value" : ""}`}
                   value={scheduleDraft.scheduledDate}
+                  aria-label="Scheduled date"
                   onChange={(e) =>
                     setScheduleDraft((p) =>
                       p ? { ...p, scheduledDate: e.target.value } : p
@@ -477,6 +501,7 @@ export function TaskDetailPanel({
                       type="time"
                       className="edit-input"
                       value={scheduleDraft.startTime}
+                      aria-label="Scheduled start time"
                       onChange={(e) =>
                         setScheduleDraft((p) => (p ? { ...p, startTime: e.target.value } : p))
                       }
@@ -491,6 +516,7 @@ export function TaskDetailPanel({
                       type="time"
                       className="edit-input"
                       value={scheduleDraft.endTime}
+                      aria-label="Scheduled end time"
                       onChange={(e) =>
                         setScheduleDraft((p) => (p ? { ...p, endTime: e.target.value } : p))
                       }
@@ -505,6 +531,7 @@ export function TaskDetailPanel({
                   <input
                     className="edit-input"
                     value={scheduleDraft.timezone}
+                    aria-label="Scheduled timezone"
                     onChange={(e) =>
                       setScheduleDraft((p) => (p ? { ...p, timezone: e.target.value } : p))
                     }
@@ -524,6 +551,7 @@ export function TaskDetailPanel({
               className="edit-input"
               rows={4}
               value={draft.notes}
+              aria-label="Notes"
               onChange={(e) => setDraft((p) => ({ ...p, notes: e.target.value }))}
               onBlur={(e) => applyAndSave({ notes: e.target.value })}
               placeholder="Notes..."
@@ -587,6 +615,7 @@ export function TaskDetailPanel({
                 className="ghost-button"
                 style={{ fontSize: "0.72rem", padding: "0.15rem 0.5rem" }}
                 onClick={() => attachmentInputRef.current?.click()}
+                aria-label="Add attachment"
               >
                 + Add
               </button>
@@ -596,6 +625,7 @@ export function TaskDetailPanel({
               type="file"
               multiple
               style={{ display: "none" }}
+              aria-label="Attachment files"
               onChange={(e) => {
                 if (!e.target.files) return;
                 void handleAttachFiles(e.target.files);
@@ -630,6 +660,7 @@ export function TaskDetailPanel({
                         onClick={() => {
                           void handleOpenFileViewer(att);
                         }}
+                        aria-label={`Open attachment: ${att.filename}`}
                       >
                         {att.filename}
                       </button>
@@ -646,6 +677,8 @@ export function TaskDetailPanel({
                         onClick={() => {
                           void handleDeleteAttachment(att.id);
                         }}
+                        aria-label={`Delete attachment: ${att.filename}`}
+                        title="Delete attachment"
                       >
                         <IcoX />
                       </button>
@@ -701,6 +734,7 @@ export function TaskDetailPanel({
             }}
             disabled={isSaving}
             title="Delete task"
+            aria-label="Delete task"
           >
             <IcoTrash />
           </button>

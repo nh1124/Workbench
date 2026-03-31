@@ -80,6 +80,8 @@ export function OccurrenceContextMenu({
             value={moveDateInput}
             onChange={(e) => onMoveDateChange(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") onConfirmMove(); }}
+            aria-label="Move selected tasks to date"
+            title="Move selected tasks to date"
             autoFocus
           />
           <button type="button" onClick={onConfirmMove} disabled={!moveDateInput}>OK</button>
