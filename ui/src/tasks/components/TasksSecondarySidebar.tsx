@@ -54,19 +54,19 @@ export function TasksSecondarySidebar({
         <>
           <div className="tasks-secondary-group">
             <p>Task Filters</p>
-            <button type="button" className={quickFilter === "today" ? "filter-item active" : "filter-item"} onClick={() => setQuickFilter("today")}>
+            <button type="button" className={quickFilter === "today" ? "filter-item quick-filter active" : "filter-item quick-filter"} onClick={() => setQuickFilter("today")}>
               <span className="filter-item-left"><IcoSun /><span>Today</span></span><small>{counters.today}</small>
             </button>
-            <button type="button" className={quickFilter === "myday" ? "filter-item active" : "filter-item"} onClick={() => setQuickFilter("myday")}>
+            <button type="button" className={quickFilter === "myday" ? "filter-item quick-filter active" : "filter-item quick-filter"} onClick={() => setQuickFilter("myday")}>
               <span className="filter-item-left"><IcoCheckCircle /><span>My Day</span></span><small>{counters.myday}</small>
             </button>
-            <button type="button" className={quickFilter === "planned" ? "filter-item active" : "filter-item"} onClick={() => setQuickFilter("planned")}>
+            <button type="button" className={quickFilter === "planned" ? "filter-item quick-filter active" : "filter-item quick-filter"} onClick={() => setQuickFilter("planned")}>
               <span className="filter-item-left"><IcoCal /><span>Planned</span></span><small>{counters.planned}</small>
             </button>
-            <button type="button" className={quickFilter === "overdue" ? "filter-item active" : "filter-item"} onClick={() => setQuickFilter("overdue")}>
+            <button type="button" className={quickFilter === "overdue" ? "filter-item quick-filter active" : "filter-item quick-filter"} onClick={() => setQuickFilter("overdue")}>
               <span className="filter-item-left"><IcoClock /><span>Overdue</span></span><small>{counters.overdue}</small>
             </button>
-            <button type="button" className={quickFilter === "inbox" ? "filter-item active" : "filter-item"} onClick={() => setQuickFilter("inbox")}>
+            <button type="button" className={quickFilter === "inbox" ? "filter-item quick-filter active" : "filter-item quick-filter"} onClick={() => setQuickFilter("inbox")}>
               <span className="filter-item-left"><IcoInbox /><span>Inbox</span></span><small>{counters.inbox}</small>
             </button>
           </div>
@@ -77,10 +77,13 @@ export function TasksSecondarySidebar({
             </button>
             {projectOptions.map((p) => (
               <button key={p.projectId} type="button"
-                className={contextFilter === p.projectId ? "filter-item active" : "filter-item"}
+                className={contextFilter === p.projectId ? "filter-item project-filter-item active" : "filter-item project-filter-item"}
                 onClick={() => setContextFilter(p.projectId)}>
                 <span className="filter-item-left">
-                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: contextColor(p.projectId), flexShrink: 0, display: "inline-block" }} />
+                  <span
+                    className="project-color-dot"
+                    style={{ background: contextColor(p.projectId) }}
+                  />
                   <span>{p.projectName || p.projectId}</span>
                 </span>
               </button>
@@ -110,10 +113,13 @@ export function TasksSecondarySidebar({
             </button>
             {projectOptions.map((p) => (
               <button key={p.projectId} type="button"
-                className={contextFilter === p.projectId ? "filter-item active" : "filter-item"}
+                className={contextFilter === p.projectId ? "filter-item project-filter-item active" : "filter-item project-filter-item"}
                 onClick={() => setContextFilter(p.projectId)}>
                 <span className="filter-item-left">
-                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: contextColor(p.projectId), flexShrink: 0, display: "inline-block" }} />
+                  <span
+                    className="project-color-dot"
+                    style={{ background: contextColor(p.projectId) }}
+                  />
                   <span>{p.projectName || p.projectId}</span>
                 </span>
               </button>
