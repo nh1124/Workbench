@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+﻿import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { notesApi, projectsApi } from "../lib/api";
 import { normalizeProjectName } from "../lib/format";
 import { pushNotification } from "../lib/notificationService";
@@ -241,15 +241,17 @@ export function QuickNoteModal({ open, onClose, standalone = false }: QuickNoteM
       onClick={(event) => event.stopPropagation()}
       onKeyDown={handleModalKeyDown}
     >
-      <header className="quick-note-head">
-        <div>
-          <h2>Quick Note</h2>
-          <p>Capture now with Win + Alt + N</p>
-        </div>
-        <button type="button" className="quick-note-close" onClick={close} aria-label="Close quick note">
-          ×
-        </button>
-      </header>
+            {!standalone ? (
+        <header className="quick-note-head">
+          <div>
+            <h2>Quick Note</h2>
+            <p>Capture now with Win + Alt + N</p>
+          </div>
+          <button type="button" className="quick-note-close" onClick={close} aria-label="Close quick note">
+            x
+          </button>
+        </header>
+      ) : null}
 
       <div className="quick-note-body">
         {error ? <p className="quick-note-error">{error}</p> : null}
@@ -296,8 +298,7 @@ export function QuickNoteModal({ open, onClose, standalone = false }: QuickNoteM
               <span key={tag} className="quick-note-tag-chip">
                 {tag}
                 <button type="button" onClick={() => removeTag(tag)} aria-label={`Remove ${tag}`}>
-                  ×
-                </button>
+                  ﾃ・                </button>
               </span>
             ))}
             <input
@@ -333,3 +334,4 @@ export function QuickNoteModal({ open, onClose, standalone = false }: QuickNoteM
     </div>
   );
 }
+
