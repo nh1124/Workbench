@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import JSZip from "jszip";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Link, useSearchParams } from "react-router-dom";
@@ -133,6 +134,36 @@ function formatSize(value?: number): string {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function sanitizeExportFilename(value: string): string {
+  const trimmed = value.trim();
+  const fallback = "artifact";
+  if (!trimmed) return fallback;
+  const sanitized = trimmed
+    .replace(/[<>:"/\\|?*\u0000-\u001f]+/g, "_")
+    .replace(/\s+/g, " ")
+    .trim();
+  return sanitized || fallback;
+}
+
+function ensureItemExportFilename(item: ArtifactItem): string {
+  const base = leafPath(item.path) || item.title || "artifact";
+  if (item.kind === "note" && !/\.[a-z0-9]+$/i.test(base)) {
+    return `${base}.md`;
+  }
+  return base;
+}
+
+function triggerBlobDownload(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = sanitizeExportFilename(filename);
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
 }
 
 function isPdf(item: ArtifactEditorDraft): boolean {
@@ -579,6 +610,13 @@ function placeCaretAtBlockStart(block: HTMLElement): void {
   range.collapse(true);
   selection.removeAllRanges();
   selection.addRange(range);
+}
+
+function hasMeaningfulBlockContent(block: HTMLElement): boolean {
+  if (block.dataset.mdKind === "table") {
+    return true;
+  }
+  return (block.textContent ?? "").replace(/\u200b/g, "").trim().length > 0;
 }
 
 interface EditorTextTransformResult {
@@ -1040,6 +1078,7 @@ export function ArtifactsPage() {
   const notionEditorRef = useRef<HTMLDivElement | null>(null);
   const draggingItemRef = useRef<ArtifactItem | null>(null);
   const tableSelectionDragRef = useRef<TableSelectionState | null>(null);
+  const handleCreateNoteRef = useRef<() => void>(() => {});
   const handleSaveRef = useRef<() => Promise<void>>(async () => {});
   const shortcutStateRef = useRef({ canSave: false, isSaving: false, markdownEditorVisible: false });
   const notionSyncRef = useRef<{ itemId?: string; markdown: string }>({ itemId: undefined, markdown: "" });
@@ -1098,7 +1137,7 @@ export function ArtifactsPage() {
   const contextMenuPosition = useMemo(() => {
     if (!contextMenu) return null;
     const menuWidth = 180;
-    const menuHeight = 180;
+    const menuHeight = 232;
     const margin = 8;
     const maxX = window.innerWidth - menuWidth - margin;
     const maxY = window.innerHeight - menuHeight - margin;
@@ -1140,6 +1179,25 @@ export function ArtifactsPage() {
     }
     return [];
   }, [contextMenu, items, selectedItemIds]);
+
+  const contextExportCandidates = useMemo(() => {
+    if (!contextMenu) {
+      return [] as ArtifactItem[];
+    }
+    if (selectedItemIds.length > 0) {
+      return selectedItemIds
+        .map((id) => itemsById.get(id))
+        .filter((item): item is ArtifactItem => Boolean(item));
+    }
+    if (contextMenu.target.type === "item") {
+      return [contextMenu.target.item];
+    }
+    const folderPath = normalizePath(contextMenu.target.folderPath);
+    if (!folderPath) {
+      return items.filter((item) => item.kind !== "folder");
+    }
+    return items.filter((item) => item.kind !== "folder" && normalizePath(item.path).startsWith(`${folderPath}/`));
+  }, [contextMenu, items, itemsById, selectedItemIds]);
 
   const resolveProjectFromFilter = (): ProjectOption => {
     if (projectFilter.trim()) {
@@ -1406,14 +1464,23 @@ export function ArtifactsPage() {
   useEffect(() => {
     const handler = (e: globalThis.KeyboardEvent) => {
       const { canSave: cs, isSaving: is, markdownEditorVisible: mev } = shortcutStateRef.current;
+      const key = e.key.toLowerCase();
+      // Ctrl+N: new note
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && key === "n") {
+        e.preventDefault();
+        if (!is) {
+          handleCreateNoteRef.current();
+        }
+        return;
+      }
       // Ctrl+S: save
-      if (e.ctrlKey && !e.shiftKey && e.key === "s") {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && key === "s") {
         e.preventDefault();
         if (cs && !is) void handleSaveRef.current();
         return;
       }
       // Ctrl+Shift+V: cycle edit/preview/live
-      if (e.ctrlKey && e.shiftKey && e.key === "V") {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && key === "v") {
         if (mev) {
           e.preventDefault();
           setNotePreviewMode((prev) => (prev === "edit" ? "preview" : prev === "preview" ? "live" : "edit"));
@@ -2203,7 +2270,23 @@ export function ArtifactsPage() {
       }
 
       const nextKind = kind === "bullet" ? "bullet" : "paragraph";
+      const trailingRange = range.cloneRange();
+      trailingRange.setEnd(currentBlock, currentBlock.childNodes.length);
+      const trailingContent = trailingRange.extractContents();
+
+      if (!hasMeaningfulBlockContent(currentBlock)) {
+        currentBlock.innerHTML = "<br>";
+      }
+
       const nextBlock = createNotionBlock(nextKind, level);
+      nextBlock.innerHTML = "";
+      if (trailingContent.childNodes.length > 0) {
+        nextBlock.appendChild(trailingContent);
+      }
+      if (!hasMeaningfulBlockContent(nextBlock)) {
+        nextBlock.innerHTML = "<br>";
+      }
+
       if (currentBlock.nextSibling) {
         editor.insertBefore(nextBlock, currentBlock.nextSibling);
       } else {
@@ -2263,6 +2346,7 @@ export function ArtifactsPage() {
   };
 
   // Keep refs in sync for stable keyboard shortcut handler
+  handleCreateNoteRef.current = handleStartCreateNote;
   handleSaveRef.current = handleSave;
   shortcutStateRef.current = { canSave, isSaving, markdownEditorVisible };
 
@@ -2361,16 +2445,119 @@ export function ArtifactsPage() {
 
     try {
       const blob = await artifactsApi.downloadFile(draft.id, true);
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = draft.title || "artifact";
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      URL.revokeObjectURL(url);
+      triggerBlobDownload(blob, draft.title || "artifact");
     } catch {
       // Global notification already shown.
+    }
+  };
+
+  const downloadExportBlobForItem = async (item: ArtifactItem): Promise<Blob> => {
+    try {
+      return await artifactsApi.downloadFile(item.id, true);
+    } catch {
+      if (item.kind === "note") {
+        const fresh = await artifactsApi.getItem(item.id);
+        const content = fresh.contentMarkdown ?? item.contentMarkdown ?? "";
+        return new Blob([content], { type: "text/markdown;charset=utf-8" });
+      }
+      throw new Error(`Failed to export "${item.title}".`);
+    }
+  };
+
+  const buildContextExportPlan = () => {
+    if (!contextMenu) {
+      return null;
+    }
+
+    const roots =
+      selectedItemIds.length > 0
+        ? selectedItemIds.map((id) => itemsById.get(id)).filter((item): item is ArtifactItem => Boolean(item))
+        : contextMenu.target.type === "item"
+          ? [contextMenu.target.item]
+          : [];
+
+    if (roots.length > 0) {
+      const folderRoots = roots.filter((item) => item.kind === "folder");
+      const directFiles = roots.filter((item) => item.kind !== "folder");
+      const expandedFiles = folderRoots.flatMap((folder) => {
+        const normalizedFolderPath = normalizePath(folder.path);
+        return items.filter(
+          (item) => item.kind !== "folder" && normalizePath(item.path).startsWith(`${normalizedFolderPath}/`)
+        );
+      });
+      const fileMap = new Map<string, ArtifactItem>();
+      [...directFiles, ...expandedFiles].forEach((item) => {
+        fileMap.set(item.id, item);
+      });
+      const files = [...fileMap.values()];
+      const forceZip = roots.length > 1 || folderRoots.length > 0;
+      const zipName =
+        roots.length === 1 && roots[0].kind === "folder"
+          ? `${sanitizeExportFilename(leafPath(roots[0].path) || "root")}.zip`
+          : `artifacts-export-${new Date().toISOString().replace(/[:.]/g, "-")}.zip`;
+      return {
+        files,
+        forceZip,
+        zipName,
+        baseFolderPath: roots.length === 1 && roots[0].kind === "folder" ? normalizePath(roots[0].path) : ""
+      };
+    }
+
+    if (contextMenu.target.type === "item") {
+      return {
+        files: [contextMenu.target.item],
+        forceZip: false,
+        zipName: `${sanitizeExportFilename(ensureItemExportFilename(contextMenu.target.item))}.zip`,
+        baseFolderPath: ""
+      };
+    }
+
+    const targetFolderPath = normalizePath(contextMenu.target.folderPath);
+    const files = !targetFolderPath
+      ? items.filter((item) => item.kind !== "folder")
+      : items.filter((item) => item.kind !== "folder" && normalizePath(item.path).startsWith(`${targetFolderPath}/`));
+    return {
+      files,
+      forceZip: true,
+      zipName: `${sanitizeExportFilename(leafPath(targetFolderPath) || "root")}.zip`,
+      baseFolderPath: targetFolderPath
+    };
+  };
+
+  const handleContextExport = async () => {
+    const plan = buildContextExportPlan();
+    if (!plan || plan.files.length === 0) {
+      setError("No exportable files found.");
+      return;
+    }
+
+    setIsSaving(true);
+    setError(null);
+    try {
+      if (!plan.forceZip && plan.files.length === 1) {
+        const item = plan.files[0];
+        const blob = await downloadExportBlobForItem(item);
+        triggerBlobDownload(blob, ensureItemExportFilename(item));
+        return;
+      }
+
+      const zip = new JSZip();
+      for (const item of plan.files) {
+        const blob = await downloadExportBlobForItem(item);
+        const normalizedPath = normalizePath(item.path);
+        const relativePath =
+          plan.baseFolderPath && normalizedPath.startsWith(`${plan.baseFolderPath}/`)
+            ? normalizedPath.slice(plan.baseFolderPath.length + 1)
+            : normalizedPath || ensureItemExportFilename(item);
+        zip.file(relativePath || ensureItemExportFilename(item), blob);
+      }
+      const zipBlob = await zip.generateAsync({ type: "blob" });
+      triggerBlobDownload(zipBlob, plan.zipName);
+    } catch (exportError) {
+      const message = exportError instanceof Error ? exportError.message : "Export failed.";
+      setError(message);
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -2995,6 +3182,23 @@ export function ArtifactsPage() {
             }
           >
             Copy Path
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              executeContextAction(async () => {
+                await handleContextExport();
+              })
+            }
+            disabled={contextExportCandidates.length === 0}
+          >
+            {selectedItemIds.length > 1 || contextExportCandidates.length > 1
+              ? "Export Selected"
+              : contextMenu.target.type === "item"
+                ? contextMenu.target.item.kind === "folder"
+                  ? "Export Folder"
+                  : "Export File"
+                : "Export Folder"}
           </button>
           <button
             type="button"
