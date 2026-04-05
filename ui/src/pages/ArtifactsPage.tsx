@@ -1555,6 +1555,23 @@ export function ArtifactsPage() {
     }
   };
 
+  const getSelectedNotionBlocks = (editor: HTMLDivElement, range: Range): HTMLElement[] => {
+    if (range.collapsed) {
+      const single = findNotionBlock(editor, range.startContainer);
+      return single ? [single] : [];
+    }
+    const blocks = Array.from(editor.children).filter(
+      (node): node is HTMLElement => node instanceof HTMLElement && Boolean(node.dataset.mdKind)
+    );
+    return blocks.filter((block) => {
+      try {
+        return range.intersectsNode(block);
+      } catch {
+        return false;
+      }
+    });
+  };
+
   const handleNotionEditorKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const editor = notionEditorRef.current;
     if (!editor) return;
@@ -1563,6 +1580,7 @@ export function ArtifactsPage() {
     const range = selection.getRangeAt(0);
     const currentBlock = findNotionBlock(editor, range.startContainer);
     if (!currentBlock) return;
+    const selectedBlocks = getSelectedNotionBlocks(editor, range);
 
     const withCtrl = event.ctrlKey || event.metaKey;
     const isInsideTableCell =
@@ -1585,8 +1603,64 @@ export function ArtifactsPage() {
       return;
     }
 
+    if (withCtrl && event.shiftKey && event.key.toLowerCase() === "n") {
+      event.preventDefault();
+      document.execCommand("removeFormat");
+      for (const block of selectedBlocks) {
+        if (block.dataset.mdKind === "bullet" || block.dataset.mdKind === "heading") {
+          block.dataset.mdKind = "paragraph";
+          delete block.dataset.mdLevel;
+          normalizeNotionBlockElement(block);
+        }
+      }
+      syncDraftFromNotionEditor();
+      return;
+    }
+
     if (isInsideTableCell) {
       return;
+    }
+
+    if (!withCtrl && !event.altKey && event.key === "Tab" && range.collapsed && currentBlock.dataset.mdKind === "bullet") {
+      const beforeRange = document.createRange();
+      beforeRange.setStart(currentBlock, 0);
+      beforeRange.setEnd(range.startContainer, range.startOffset);
+      const atBlockStart = beforeRange.toString().length === 0;
+      if (!atBlockStart) {
+        return;
+      }
+
+      event.preventDefault();
+      const currentLevel = Number(currentBlock.dataset.mdLevel || "1");
+      if (event.shiftKey) {
+        if (currentLevel <= 1) {
+          currentBlock.dataset.mdKind = "paragraph";
+          delete currentBlock.dataset.mdLevel;
+        } else {
+          currentBlock.dataset.mdLevel = String(currentLevel - 1);
+        }
+      } else {
+        currentBlock.dataset.mdLevel = String(Math.min(3, currentLevel + 1));
+      }
+      normalizeNotionBlockElement(currentBlock);
+      syncDraftFromNotionEditor();
+      return;
+    }
+
+    if (!withCtrl && !event.altKey && event.key === "Backspace" && range.collapsed && currentBlock.dataset.mdKind === "bullet") {
+      const beforeRange = document.createRange();
+      beforeRange.setStart(currentBlock, 0);
+      beforeRange.setEnd(range.startContainer, range.startOffset);
+      const atBlockStart = beforeRange.toString().length === 0;
+      if (atBlockStart) {
+        event.preventDefault();
+        currentBlock.dataset.mdKind = "paragraph";
+        delete currentBlock.dataset.mdLevel;
+        normalizeNotionBlockElement(currentBlock);
+        placeCaretAtBlockStart(currentBlock);
+        syncDraftFromNotionEditor();
+        return;
+      }
     }
 
     if (withCtrl && (event.key === ">" || (event.shiftKey && event.key === "."))) {
