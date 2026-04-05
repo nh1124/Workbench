@@ -1,7 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import JSZip from "jszip";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { Link, useSearchParams } from "react-router-dom";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { TextInputDialog } from "../components/TextInputDialog";
@@ -239,7 +237,9 @@ function escapeHtml(value: string): string {
 
 function markdownInlineToHtml(value: string): string {
   const escaped = escapeHtml(value);
-  return escaped.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  return escaped
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/~~([^~]+)~~/g, "<del>$1</del>");
 }
 
 function parseMarkdownTableRow(line: string): string[] | null {
@@ -515,6 +515,9 @@ function inlineNodeToMarkdown(node: Node): string {
   if (element.tagName === "STRONG" || element.tagName === "B") {
     return `**${inner}**`;
   }
+  if (element.tagName === "DEL" || element.tagName === "S" || element.tagName === "STRIKE") {
+    return `~~${inner}~~`;
+  }
   return inner;
 }
 
@@ -726,6 +729,52 @@ function transformBoldAtSelection(
   }
 
   const nextText = `${text.slice(0, selectionStart)}**${selected}**${text.slice(selectionEnd)}`;
+  return {
+    nextText,
+    nextSelectionStart: selectionStart + 2,
+    nextSelectionEnd: selectionEnd + 2
+  };
+}
+
+function transformStrikeAtSelection(
+  text: string,
+  selectionStart: number,
+  selectionEnd: number
+): EditorTextTransformResult {
+  if (selectionStart === selectionEnd) {
+    const nextText = `${text.slice(0, selectionStart)}~~~~${text.slice(selectionEnd)}`;
+    const nextPos = selectionStart + 2;
+    return {
+      nextText,
+      nextSelectionStart: nextPos,
+      nextSelectionEnd: nextPos
+    };
+  }
+
+  const selected = text.slice(selectionStart, selectionEnd);
+  if (selected.startsWith("~~") && selected.endsWith("~~") && selected.length >= 4) {
+    const unwrapped = selected.slice(2, -2);
+    const nextText = `${text.slice(0, selectionStart)}${unwrapped}${text.slice(selectionEnd)}`;
+    const nextEnd = selectionStart + unwrapped.length;
+    return {
+      nextText,
+      nextSelectionStart: selectionStart,
+      nextSelectionEnd: nextEnd
+    };
+  }
+
+  const hasOuterStrike = selectionStart >= 2 && text.slice(selectionStart - 2, selectionStart) === "~~"
+    && text.slice(selectionEnd, selectionEnd + 2) === "~~";
+  if (hasOuterStrike) {
+    const nextText = `${text.slice(0, selectionStart - 2)}${selected}${text.slice(selectionEnd + 2)}`;
+    return {
+      nextText,
+      nextSelectionStart: selectionStart - 2,
+      nextSelectionEnd: selectionEnd - 2
+    };
+  }
+
+  const nextText = `${text.slice(0, selectionStart)}~~${selected}~~${text.slice(selectionEnd)}`;
   return {
     nextText,
     nextSelectionStart: selectionStart + 2,
@@ -1060,7 +1109,7 @@ export function ArtifactsPage() {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [notePreviewMode, setNotePreviewMode] = useState<"edit" | "preview" | "live">("edit");
+  const [notePreviewMode, setNotePreviewMode] = useState<"edit" | "live">("edit");
   const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
   const [imageBlobUrl, setImageBlobUrl] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<TreeContextMenuState | null>(null);
@@ -1479,11 +1528,11 @@ export function ArtifactsPage() {
         if (cs && !is) void handleSaveRef.current();
         return;
       }
-      // Ctrl+Shift+V: cycle edit/preview/live
+      // Ctrl+Shift+V: toggle edit/live
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && key === "v") {
         if (mev) {
           e.preventDefault();
-          setNotePreviewMode((prev) => (prev === "edit" ? "preview" : prev === "preview" ? "live" : "edit"));
+          setNotePreviewMode((prev) => (prev === "edit" ? "live" : "edit"));
         }
         return;
       }
@@ -1508,7 +1557,9 @@ export function ArtifactsPage() {
     return () => window.removeEventListener("keydown", handler);
   }, []); // stable: reads via refs, sets via stable setState
 
-  const updateSelection = (itemId: string, shiftKey: boolean) => {
+  const updateSelection = (itemId: string, options?: { shiftKey?: boolean; toggleKey?: boolean }) => {
+    const shiftKey = Boolean(options?.shiftKey);
+    const toggleKey = Boolean(options?.toggleKey);
     if (shiftKey && selectionAnchorId) {
       const anchorIndex = visibleSelectableItemIds.indexOf(selectionAnchorId);
       const currentIndex = visibleSelectableItemIds.indexOf(itemId);
@@ -1519,18 +1570,32 @@ export function ArtifactsPage() {
         return;
       }
     }
+    if (toggleKey) {
+      setSelectedItemIds((prev) =>
+        prev.includes(itemId)
+          ? prev.filter((id) => id !== itemId)
+          : [...prev, itemId]
+      );
+      setSelectionAnchorId(itemId);
+      return;
+    }
     setSelectedItemIds([itemId]);
     setSelectionAnchorId(itemId);
   };
 
-  const selectItem = (item: ArtifactItem, options?: { shiftKey?: boolean }) => {
+  const selectItem = (item: ArtifactItem, options?: { shiftKey?: boolean; toggleKey?: boolean }) => {
     const withShift = Boolean(options?.shiftKey);
-    setMobileTreeVisible(false);
-    setSelectedItemId(item.id);
-    updateSelection(item.id, withShift);
-    setSelectedFolderPath(parentPath(item.path));
-    setError(null);
-    setTagInput("");
+    const withToggle = Boolean(options?.toggleKey);
+    updateSelection(item.id, { shiftKey: withShift, toggleKey: withToggle });
+
+    // Shift/Ctrl multi-select should not force pane transition.
+    if (!withShift && !withToggle) {
+      setMobileTreeVisible(false);
+      setSelectedItemId(item.id);
+      setSelectedFolderPath(parentPath(item.path));
+      setError(null);
+      setTagInput("");
+    }
   };
 
   const toggleFolder = (folderPath: string) => {
@@ -2117,6 +2182,13 @@ export function ArtifactsPage() {
       return;
     }
 
+    const isStrikeToggle = event.key === "-" || event.code === "Minus" || event.code === "NumpadSubtract";
+    if (isStrikeToggle) {
+      event.preventDefault();
+      applyEditorTransform(transformStrikeAtSelection(text, selectionStart, selectionEnd));
+      return;
+    }
+
     const isIncrease = event.key === ">" || (event.shiftKey && event.key === ".");
     if (isIncrease) {
       const transformed = transformSelectedLinesLevel(text, selectionStart, selectionEnd, 1);
@@ -2186,6 +2258,14 @@ export function ArtifactsPage() {
     if (withCtrl && event.key.toLowerCase() === "b") {
       event.preventDefault();
       document.execCommand("bold");
+      syncDraftFromNotionEditor();
+      return;
+    }
+
+    const isStrikeToggle = event.key === "-" || event.code === "Minus" || event.code === "NumpadSubtract";
+    if (withCtrl && isStrikeToggle) {
+      event.preventDefault();
+      document.execCommand("strikeThrough");
       syncDraftFromNotionEditor();
       return;
     }
@@ -2754,9 +2834,13 @@ export function ArtifactsPage() {
                   .filter(Boolean)
                   .join(" ")}
                 onClick={(event) => {
-                  setSelectedFolderPath(childFolder.path);
+                  const withToggle = event.ctrlKey || event.metaKey;
+                  const withShift = event.shiftKey;
+                  if (!withShift && !withToggle) {
+                    setSelectedFolderPath(childFolder.path);
+                  }
                   if (childFolder.folderItem) {
-                    updateSelection(childFolder.folderItem.id, event.shiftKey);
+                    updateSelection(childFolder.folderItem.id, { shiftKey: withShift, toggleKey: withToggle });
                   }
                 }}
                 onDoubleClick={() => setSelectedFolderPath(childFolder.path)}
@@ -2798,7 +2882,7 @@ export function ArtifactsPage() {
                 ]
                   .filter(Boolean)
                   .join(" ")}
-                onClick={(event) => selectItem(item, { shiftKey: event.shiftKey })}
+                onClick={(event) => selectItem(item, { shiftKey: event.shiftKey, toggleKey: event.ctrlKey || event.metaKey })}
                 onContextMenu={(event) => openContextMenu(event, { type: "item", item })}
                 draggable
                 onDragStart={(event) => handleDragStart(event, item)}
@@ -2999,7 +3083,9 @@ export function ArtifactsPage() {
               {markdownEditorVisible ? (
                 <div className="span-2 va-content-section">
                   <div className="va-content-head">
-                    <span className="va-field-label">Content (Markdown)</span>
+                    <span className="va-field-label">
+                      {editorExpanded ? (draft.title.trim() || leafPath(draft.path) || "Untitled") : "Content (Markdown)"}
+                    </span>
                     <div className="va-content-head-right">
                       <div className="va-content-mode">
                         <button
@@ -3008,13 +3094,6 @@ export function ArtifactsPage() {
                           onClick={() => setNotePreviewMode("edit")}
                         >
                           Edit
-                        </button>
-                        <button
-                          type="button"
-                          className={notePreviewMode === "preview" ? "active" : undefined}
-                          onClick={() => setNotePreviewMode("preview")}
-                        >
-                          Preview
                         </button>
                         <button
                           type="button"
@@ -3048,14 +3127,6 @@ export function ArtifactsPage() {
                       onPaste={(event) => { void handleEditorPaste(event); }}
                       placeholder="# note"
                     />
-                  ) : notePreviewMode === "preview" ? (
-                    <div className="va-markdown-preview">
-                      <MarkdownRendererContext.Provider value={{ items, currentPath: draft.path, selectItem }}>
-                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_COMPONENTS}>
-                          {preprocessMarkdownBullets(draft.contentMarkdown || "_No content_")}
-                        </ReactMarkdown>
-                      </MarkdownRendererContext.Provider>
-                    </div>
                   ) : (
                     <MarkdownRendererContext.Provider value={{ items, currentPath: draft.path, selectItem }}>
                       <div
@@ -3206,7 +3277,9 @@ export function ArtifactsPage() {
               executeContextAction(() => {
                 const basePath =
                   contextMenu.target.type === "item"
-                    ? parentPath(contextMenu.target.item.path)
+                    ? contextMenu.target.item.kind === "folder"
+                      ? contextMenu.target.item.path
+                      : parentPath(contextMenu.target.item.path)
                     : contextMenu.target.folderPath;
                 handleCreateFolder(basePath);
               })

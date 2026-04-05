@@ -5,6 +5,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(desktop)]
+static MAIN_WINDOW_COUNTER: AtomicU64 = AtomicU64::new(1);
+#[cfg(desktop)]
 static QUICK_NOTE_WINDOW_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(target_os = "windows")]
@@ -127,6 +129,47 @@ fn secure_session_clear() -> Result<(), String> {
 }
 
 #[cfg(desktop)]
+fn build_main_window_label() -> String {
+  let ts = SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .map(|value| value.as_millis())
+    .unwrap_or(0);
+  let seq = MAIN_WINDOW_COUNTER.fetch_add(1, Ordering::Relaxed);
+  format!("main-{ts}-{seq}")
+}
+
+#[cfg(desktop)]
+fn open_new_main_window(app: &tauri::AppHandle) -> Result<(), String> {
+  let window_label = build_main_window_label();
+  WebviewWindowBuilder::new(app, window_label, WebviewUrl::App("index.html".into()))
+    .title("Workbench")
+    .inner_size(1280.0, 860.0)
+    .resizable(true)
+    .focused(true)
+    .build()
+    .and_then(|window| {
+      let _ = window.unminimize();
+      let _ = window.show();
+      let _ = window.set_focus();
+      Ok(())
+    })
+    .map_err(|error| format!("failed to open main window: {error}"))
+}
+
+#[cfg(not(desktop))]
+fn open_new_main_window(_app: &tauri::AppHandle) -> Result<(), String> {
+  Err("main window duplication is not supported on this platform".to_string())
+}
+
+#[cfg(desktop)]
+fn should_open_new_main_window(argv: &[String]) -> bool {
+  !argv
+    .iter()
+    .map(|arg| arg.to_ascii_lowercase())
+    .any(|arg| arg.contains("quick-note-window=1"))
+}
+
+#[cfg(desktop)]
 fn build_quick_note_window_label() -> String {
   let ts = SystemTime::now()
     .duration_since(UNIX_EPOCH)
@@ -179,6 +222,16 @@ fn close_quick_note_window(window: tauri::WebviewWindow) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
+    .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+      #[cfg(desktop)]
+      {
+        if should_open_new_main_window(&argv) {
+          if let Err(error) = open_new_main_window(app) {
+            eprintln!("[workbench-native] failed to open window for second instance: {error}");
+          }
+        }
+      }
+    }))
     .setup(|app| {
       #[cfg(desktop)]
       {
