@@ -238,6 +238,7 @@ const noteInputSchema = z.object({
 });
 
 const itemUpdateSchema = z.object({
+  projectId: z.string().optional(),
   title: z.string().optional(),
   path: z.string().optional(),
   scope: artifactScopeSchema.optional(),

@@ -78,6 +78,7 @@ export interface ArtifactFileInput {
 }
 
 export interface ArtifactItemUpdate {
+  projectId?: string;
   title?: string;
   path?: string;
   scope?: ArtifactScope;

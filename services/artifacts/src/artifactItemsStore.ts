@@ -875,7 +875,9 @@ export async function updateArtifactItem(
 
     const nextScope = updates.scope ? normalizeScope(updates.scope) : normalizeScope(existing.scope);
     const nextTags = updates.tags ? normalizeTags(updates.tags) : parseTags(existing.tags_json);
+    const nextProjectId = updates.projectId?.trim() || existing.project_id;
     const nextProjectName = updates.projectName?.trim() || existing.project_name;
+    const projectChanged = nextProjectId !== existing.project_id;
     const requestedPath = updates.path?.trim();
     const requestedTitle = updates.title?.trim();
 
@@ -897,11 +899,15 @@ export async function updateArtifactItem(
       throw new Error("Path is required");
     }
 
-    nextPath = await ensureUniquePath(client, owner, existing.project_id, nextPath, id);
+    if (existing.kind === "folder" && projectChanged) {
+      throw new Error("Changing project for folders is not supported yet.");
+    }
+
+    nextPath = await ensureUniquePath(client, owner, nextProjectId, nextPath, id);
     const nextParentPath = parentPathFromPath(nextPath);
 
     if (existing.kind === "folder" && existing.path !== nextPath) {
-      await upsertFolderByPath(client, owner, existing.project_id, nextProjectName ?? undefined, nextParentPath, nextScope);
+      await upsertFolderByPath(client, owner, nextProjectId, nextProjectName ?? undefined, nextParentPath, nextScope);
 
       await client.query(
         `
@@ -913,6 +919,7 @@ export async function updateArtifactItem(
             scope = $6,
             tags_json = $7::jsonb,
             project_name = $8,
+            project_id = $9,
             version = version + 1,
             updated_at = NOW()
           WHERE id = $1 AND owner_username = $2
@@ -925,7 +932,8 @@ export async function updateArtifactItem(
           nextParentPath,
           nextScope,
           JSON.stringify(nextTags),
-          nextProjectName ?? null
+          nextProjectName ?? null,
+          nextProjectId
         ]
       );
 
@@ -939,7 +947,7 @@ export async function updateArtifactItem(
             AND path LIKE $3 ESCAPE '\\'
           ORDER BY path ASC
         `,
-        [owner, existing.project_id, likePrefix]
+        [owner, nextProjectId, likePrefix]
       );
 
       for (const descendant of descendants.rows) {
@@ -958,7 +966,7 @@ export async function updateArtifactItem(
         );
       }
     } else {
-      await upsertFolderByPath(client, owner, existing.project_id, nextProjectName ?? undefined, nextParentPath, nextScope);
+      await upsertFolderByPath(client, owner, nextProjectId, nextProjectName ?? undefined, nextParentPath, nextScope);
 
       await client.query(
         `
@@ -971,6 +979,7 @@ export async function updateArtifactItem(
             tags_json = $7::jsonb,
             content_markdown = $8,
             project_name = $9,
+            project_id = $10,
             version = version + 1,
             updated_at = NOW()
           WHERE id = $1 AND owner_username = $2
@@ -984,13 +993,17 @@ export async function updateArtifactItem(
           nextScope,
           JSON.stringify(nextTags),
           existing.kind === "note" ? updates.contentMarkdown ?? existing.content_markdown ?? "" : existing.content_markdown ?? "",
-          nextProjectName ?? null
+          nextProjectName ?? null,
+          nextProjectId
         ]
       );
     }
 
     const updated = await readItemRowById(client, id, owner);
-    await touchUpdatedAt(client, owner, existing.project_id, nextParentPath);
+    if (projectChanged) {
+      await touchUpdatedAt(client, owner, existing.project_id, existing.parent_path);
+    }
+    await touchUpdatedAt(client, owner, nextProjectId, nextParentPath);
     await client.query("COMMIT");
 
     if (!updated) {

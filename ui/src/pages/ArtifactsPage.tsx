@@ -177,6 +177,22 @@ export function ArtifactsPage() {
   }, [draft.path, draft.title]);
 
   const hasDetailSelection = Boolean(selectedItemId || mode === "create-note");
+  const detailProjectOptions = useMemo(() => {
+    const map = new Map<string, ProjectOption>();
+    for (const option of projectOptions) {
+      map.set(option.projectId, option);
+    }
+    const currentProjectId = draft.projectId.trim();
+    if (currentProjectId && !map.has(currentProjectId)) {
+      map.set(currentProjectId, {
+        projectId: currentProjectId,
+        projectName: draft.projectName.trim() || currentProjectId
+      });
+    }
+    return [...map.values()].sort((a, b) =>
+      (a.projectName || a.projectId).localeCompare(b.projectName || b.projectId)
+    );
+  }, [draft.projectId, draft.projectName, projectOptions]);
 
   const contextMenuPosition = useMemo(() => {
     if (!contextMenu) return null;
@@ -1192,6 +1208,19 @@ export function ArtifactsPage() {
     setError(`Link target not found: ${rawHref}`);
   };
 
+  const handleDraftProjectChange = (nextProjectId: string) => {
+    const normalizedProjectId = nextProjectId.trim();
+    if (!normalizedProjectId) {
+      return;
+    }
+    const selected = detailProjectOptions.find((option) => option.projectId === normalizedProjectId);
+    setDraft((prev) => ({
+      ...prev,
+      projectId: normalizedProjectId,
+      projectName: selected?.projectName ?? normalizedProjectId
+    }));
+  };
+
   const handleStartCreateNote = () => {
     const targetProject = resolveProjectFromFilter();
 
@@ -1695,6 +1724,7 @@ export function ArtifactsPage() {
         const updated = await artifactsApi.updateItem(draft.id, {
           title: draft.title.trim(),
           path: draft.path.trim(),
+          projectId: activeProject.projectId,
           tags: draft.tags,
           contentMarkdown: markdownEditorVisible ? draft.contentMarkdown : undefined,
           projectName: activeProject.projectName
@@ -2226,6 +2256,21 @@ export function ArtifactsPage() {
                     <IcoDownload /> Download
                   </button>
                 ) : null}
+
+                <label className="va-detail-project-picker" title="Item project">
+                  <span>Project</span>
+                  <select
+                    value={draft.projectId || resolveProjectFromFilter().projectId}
+                    onChange={(event) => handleDraftProjectChange(event.target.value)}
+                    disabled={isSaving || detailProjectOptions.length === 0}
+                  >
+                    {detailProjectOptions.map((project) => (
+                      <option key={project.projectId} value={project.projectId}>
+                        {normalizeProjectName(project.projectId, project.projectName)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
 
                 {draft.id ? (
                   <button

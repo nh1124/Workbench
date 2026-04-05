@@ -123,6 +123,12 @@
   color: #d5e3f7;
 }
 
+.va-project-select-wrap select option,
+.va-detail-project-picker select option {
+  background: #141d31;
+  color: #d5e3f7;
+}
+
 .va-action-btn {
   display: inline-flex;
   align-items: center;
@@ -348,6 +354,39 @@
   align-items: center;
   gap: 0.4rem;
   flex-shrink: 0;
+}
+
+.va-detail-project-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid rgba(77, 97, 128, 0.9);
+  border-radius: 9px;
+  background: rgba(14, 24, 42, 0.92);
+  color: #c4d8f3;
+  height: 2rem;
+  padding: 0 0.45rem;
+}
+
+.va-detail-project-picker span {
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #7e9abf;
+}
+
+.va-detail-project-picker select {
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #d2e6ff;
+  font-size: 0.72rem;
+  min-width: 140px;
+  max-width: 220px;
+}
+
+.va-detail-project-picker select:focus {
+  outline: none;
 }
 
 .va-icon-btn {

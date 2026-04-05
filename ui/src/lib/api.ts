@@ -475,6 +475,7 @@ export const artifactsApi = {
     payload: {
       title?: string;
       path?: string;
+      projectId?: string;
       scope?: "private" | "org" | "project";
       tags?: string[];
       contentMarkdown?: string;
