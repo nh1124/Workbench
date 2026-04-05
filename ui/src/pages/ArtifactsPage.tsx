@@ -1,1094 +1,85 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+﻿import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type MouseEvent } from "react";
 import JSZip from "jszip";
 import { Link, useSearchParams } from "react-router-dom";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { TextInputDialog } from "../components/TextInputDialog";
 import { artifactsApi, projectsApi } from "../lib/api";
 import { formatDateTime, normalizeProjectName } from "../lib/format";
-import type { ArtifactItem, ArtifactItemKind, ProjectRecord } from "../types/models";
+import type { ArtifactItem, ProjectRecord } from "../types/models";
+import type {
+  CreateFolderState,
+  DeleteConfirmState,
+  EditorContextMenuState,
+  InsertLinkState,
+  ProjectOption,
+  TableSelectionState,
+  TableContextMenuState,
+  TextSelectionSnapshot,
+  TreeContextMenuState,
+  TreeContextTarget,
+  TreeFolderNode
+} from "../artifacts/types";
+import { defaultDraft, type ArtifactEditorDraft } from "../artifacts/types";
+import {
+  isExternalUrl,
+  isMarkdownFilePath,
+  joinPath,
+  leafPath,
+  normalizePath,
+  parentPath,
+  relativeArtifactPath,
+  resolveMarkdownRef
+} from "../artifacts/utils/path";
+import {
+  ensureItemExportFilename,
+  formatSize,
+  isImage,
+  isPdf,
+  sanitizeExportFilename,
+  triggerBlobDownload
+} from "../artifacts/utils/file";
+import {
+  buildTree,
+  collectVisibleSelectableItemIds,
+  itemToDraft,
+  uniqueProjectOptions
+} from "../artifacts/utils/tree";
+import {
+  clampTableSelectionBounds,
+  createNotionBlock,
+  createNotionTableCell,
+  findNotionBlock,
+  getNotionTableColumnCount,
+  getNotionTableRows,
+  hasMeaningfulBlockContent,
+  markdownToNotionHtml,
+  normalizeNotionBlockElement,
+  normalizeTableSelectionBounds,
+  notionEditorToMarkdown,
+  placeCaretAtBlockStart
+} from "../artifacts/utils/notionMarkdown";
+import {
+  transformBoldAtSelection,
+  transformEnterWithLevelContinuation,
+  transformSelectedLinesLevel,
+  transformStrikeAtSelection,
+  type EditorTextTransformResult
+} from "../artifacts/utils/editorTransforms";
+import {
+  IcoClose,
+  IcoCompress,
+  IcoDownload,
+  IcoExpand,
+  IcoFile,
+  IcoFloppy,
+  IcoFolder,
+  IcoHome,
+  IcoTrash,
+  IcoUpload
+} from "../artifacts/components/ArtifactsIcons";
+import { DirectoryBrowser } from "../artifacts/components/DirectoryBrowser";
 import "./ArtifactsPage.css";
 
-interface ArtifactEditorDraft {
-  id?: string;
-  kind: ArtifactItemKind;
-  title: string;
-  path: string;
-  projectId: string;
-  projectName: string;
-  tags: string[];
-  contentMarkdown: string;
-  mimeType?: string;
-  sizeBytes?: number;
-  version?: number;
-  createdAt?: string;
-  updatedAt?: string;
-}
-
-interface ProjectOption {
-  projectId: string;
-  projectName?: string;
-}
-
-interface TreeFolderNode {
-  name: string;
-  path: string;
-  folderItem?: ArtifactItem;
-  folders: Map<string, TreeFolderNode>;
-  items: ArtifactItem[];
-}
-
-type TreeContextTarget =
-  | { type: "background"; folderPath: string }
-  | { type: "folder"; folderPath: string }
-  | { type: "item"; item: ArtifactItem };
-
-interface TreeContextMenuState {
-  x: number;
-  y: number;
-  target: TreeContextTarget;
-}
-
-interface DeleteConfirmState {
-  ids: string[];
-  count: number;
-  title?: string;
-}
-
-interface CreateFolderState {
-  baseFolderPath: string;
-}
-
-interface ParsedMarkdownTable {
-  header: string[];
-  rows: string[][];
-  nextIndex: number;
-}
-
-interface TableCellPosition {
-  row: number;
-  col: number;
-}
-
-interface TableSelectionState {
-  tableId: string;
-  start: TableCellPosition;
-  end: TableCellPosition;
-}
-
-interface TableSelectionBounds {
-  startRow: number;
-  endRow: number;
-  startCol: number;
-  endCol: number;
-}
-
-interface TableContextMenuState {
-  x: number;
-  y: number;
-  selection: TableSelectionState;
-}
-
-const defaultDraft: ArtifactEditorDraft = {
-  kind: "note",
-  title: "",
-  path: "",
-  projectId: "",
-  projectName: "",
-  tags: [],
-  contentMarkdown: ""
-};
-
-function normalizePath(value: string): string {
-  return value
-    .replace(/\\/g, "/")
-    .split("/")
-    .map((segment) => segment.trim())
-    .filter((segment) => segment.length > 0)
-    .join("/");
-}
-
-function parentPath(itemPath: string): string {
-  const normalized = normalizePath(itemPath);
-  const index = normalized.lastIndexOf("/");
-  return index >= 0 ? normalized.slice(0, index) : "";
-}
-
-function leafPath(itemPath: string): string {
-  const normalized = normalizePath(itemPath);
-  const index = normalized.lastIndexOf("/");
-  return index >= 0 ? normalized.slice(index + 1) : normalized;
-}
-
-function joinPath(basePath: string, leaf: string): string {
-  const base = normalizePath(basePath);
-  const cleanLeaf = normalizePath(leaf);
-  if (!base) return cleanLeaf;
-  if (!cleanLeaf) return base;
-  return `${base}/${cleanLeaf}`;
-}
-
-function formatSize(value?: number): string {
-  if (!value || value <= 0) return "-";
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function sanitizeExportFilename(value: string): string {
-  const trimmed = value.trim();
-  const fallback = "artifact";
-  if (!trimmed) return fallback;
-  const sanitized = trimmed
-    .replace(/[<>:"/\\|?*\u0000-\u001f]+/g, "_")
-    .replace(/\s+/g, " ")
-    .trim();
-  return sanitized || fallback;
-}
-
-function ensureItemExportFilename(item: ArtifactItem): string {
-  const base = leafPath(item.path) || item.title || "artifact";
-  if (item.kind === "note" && !/\.[a-z0-9]+$/i.test(base)) {
-    return `${base}.md`;
-  }
-  return base;
-}
-
-function triggerBlobDownload(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = sanitizeExportFilename(filename);
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
-}
-
-function isPdf(item: ArtifactEditorDraft): boolean {
-  const mime = (item.mimeType ?? "").toLowerCase();
-  if (mime.includes("pdf")) return true;
-  return /\.pdf$/i.test(item.path);
-}
-
-function isImage(item: ArtifactEditorDraft): boolean {
-  const mime = (item.mimeType ?? "").toLowerCase();
-  if (mime.startsWith("image/")) return true;
-  return /\.(png|jpe?g|gif|webp|svg|bmp|ico|tiff?)$/i.test(item.path);
-}
-
-function isMarkdownFilePath(itemPath: string): boolean {
-  return /\.(md|markdown)$/i.test(itemPath.trim());
-}
-
-function extractYoutubeId(url: string): string | null {
-  try {
-    const u = new URL(url);
-    if (u.hostname === "youtu.be") return u.pathname.slice(1).split("?")[0];
-    if (u.hostname === "youtube.com" || u.hostname === "www.youtube.com") {
-      const v = u.searchParams.get("v");
-      if (v) return v;
-      const m = u.pathname.match(/\/(?:embed|shorts|v)\/([^/?&]+)/);
-      if (m) return m[1];
-    }
-  } catch {
-    // ignore invalid URLs
-  }
-  return null;
-}
-
-function isExternalUrl(href: string): boolean {
-  return /^https?:\/\//i.test(href);
-}
-
-function resolveMarkdownRef(markdownFilePath: string, href: string): string {
-  if (!href) return href;
-  if (href.startsWith("/")) return normalizePath(href.slice(1));
-  const dir = parentPath(markdownFilePath);
-  return normalizePath(joinPath(dir, href));
-}
-
-function relativeArtifactPath(fromFilePath: string, toFilePath: string): string {
-  const fromDir = normalizePath(parentPath(fromFilePath));
-  const to = normalizePath(toFilePath);
-  if (fromDir && to.startsWith(fromDir + "/")) return to.slice(fromDir.length + 1);
-  return to;
-}
-
-/** Convert leading `-- ` / `--- ` bullet syntax to standard indented Markdown list syntax. */
-function preprocessMarkdownBullets(md: string): string {
-  return md
-    .split("\n")
-    .map((line) => {
-      if (/^--- /.test(line)) return "    - " + line.slice(4);
-      if (/^-- /.test(line)) return "  - " + line.slice(3);
-      return line;
-    })
-    .join("\n");
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
-function markdownInlineToHtml(value: string): string {
-  const escaped = escapeHtml(value);
-  return escaped
-    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/~~([^~]+)~~/g, "<del>$1</del>");
-}
-
-function parseMarkdownTableRow(line: string): string[] | null {
-  const trimmed = line.trim();
-  if (!trimmed.includes("|")) {
-    return null;
-  }
-  const withoutEdges = trimmed.replace(/^\|/, "").replace(/\|$/, "");
-  const cells = withoutEdges.split(/(?<!\\)\|/).map((cell) => cell.trim().replace(/\\\|/g, "|"));
-  return cells.length > 0 ? cells : null;
-}
-
-function isMarkdownTableSeparatorRow(line: string): boolean {
-  const cells = parseMarkdownTableRow(line);
-  if (!cells || cells.length < 2) {
-    return false;
-  }
-  return cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, "")));
-}
-
-function padMarkdownTableRow(cells: string[], columnCount: number): string[] {
-  if (cells.length >= columnCount) {
-    return cells.slice(0, columnCount);
-  }
-  return [...cells, ...Array.from({ length: columnCount - cells.length }, () => "")];
-}
-
-function tryParseMarkdownTable(lines: string[], startIndex: number): ParsedMarkdownTable | null {
-  if (startIndex + 1 >= lines.length) {
-    return null;
-  }
-  const header = parseMarkdownTableRow(lines[startIndex]);
-  if (!header || header.length < 2) {
-    return null;
-  }
-  if (!isMarkdownTableSeparatorRow(lines[startIndex + 1])) {
-    return null;
-  }
-
-  const separatorCells = parseMarkdownTableRow(lines[startIndex + 1]) ?? [];
-  const columnCount = Math.max(2, header.length, separatorCells.length);
-  const rows: string[][] = [];
-  let cursor = startIndex + 2;
-  while (cursor < lines.length) {
-    const rowLine = lines[cursor];
-    if (!rowLine.trim()) {
-      break;
-    }
-    const rowCells = parseMarkdownTableRow(rowLine);
-    if (!rowCells || rowCells.length < 2) {
-      break;
-    }
-    rows.push(padMarkdownTableRow(rowCells, columnCount));
-    cursor += 1;
-  }
-
-  return {
-    header: padMarkdownTableRow(header, columnCount),
-    rows,
-    nextIndex: cursor
-  };
-}
-
-function createNotionTableCell(tagName: "th" | "td", value = ""): HTMLTableCellElement {
-  const cell = document.createElement(tagName);
-  cell.className = "va-notion-table-cell";
-  cell.innerHTML = value ? markdownInlineToHtml(value) : "<br>";
-  return cell;
-}
-
-function getNotionTableRows(table: HTMLTableElement): HTMLTableRowElement[] {
-  const headerRows = table.tHead ? Array.from(table.tHead.rows) : [];
-  const bodyRows = table.tBodies.length > 0 ? Array.from(table.tBodies[0].rows) : [];
-  return [...headerRows, ...bodyRows];
-}
-
-function getNotionTableColumnCount(table: HTMLTableElement): number {
-  const rows = getNotionTableRows(table);
-  return Math.max(1, ...rows.map((row) => row.cells.length));
-}
-
-function ensureNotionTableBlockStructure(block: HTMLElement): void {
-  let table = block.querySelector("table") as HTMLTableElement | null;
-  if (!table) {
-    table = document.createElement("table");
-    table.className = "va-notion-table";
-    block.innerHTML = "";
-    block.appendChild(table);
-  } else {
-    table.classList.add("va-notion-table");
-  }
-
-  const thead = table.tHead ?? table.createTHead();
-  let headerRow = thead.rows[0];
-  if (!headerRow) {
-    headerRow = thead.insertRow();
-    headerRow.appendChild(createNotionTableCell("th"));
-    headerRow.appendChild(createNotionTableCell("th"));
-  }
-
-  const tbody = table.tBodies[0] ?? table.createTBody();
-  let columnCount = Math.max(1, headerRow.cells.length);
-  if (columnCount < 2) {
-    headerRow.appendChild(createNotionTableCell("th"));
-    columnCount = 2;
-  }
-
-  while (headerRow.cells.length < columnCount) {
-    headerRow.appendChild(createNotionTableCell("th"));
-  }
-  while (headerRow.cells.length > columnCount) {
-    headerRow.deleteCell(headerRow.cells.length - 1);
-  }
-  Array.from(headerRow.cells).forEach((cell) => {
-    if (cell instanceof HTMLTableCellElement) {
-      cell.classList.add("va-notion-table-cell");
-    }
-  });
-
-  if (tbody.rows.length === 0) {
-    const row = tbody.insertRow();
-    for (let i = 0; i < columnCount; i += 1) {
-      row.appendChild(createNotionTableCell("td"));
-    }
-  }
-
-  for (const row of Array.from(tbody.rows)) {
-    while (row.cells.length < columnCount) {
-      row.appendChild(createNotionTableCell("td"));
-    }
-    while (row.cells.length > columnCount) {
-      row.deleteCell(row.cells.length - 1);
-    }
-    Array.from(row.cells).forEach((cell) => {
-      if (cell instanceof HTMLTableCellElement) {
-        cell.classList.add("va-notion-table-cell");
-      }
-    });
-  }
-}
-
-function tableCellToMarkdown(cell: HTMLTableCellElement): string {
-  const inline = Array.from(cell.childNodes).map((node) => inlineNodeToMarkdown(node)).join("");
-  return inline
-    .replace(/\n+/g, "<br>")
-    .replace(/\|/g, "\\|")
-    .trim();
-}
-
-function tableBlockToMarkdown(block: HTMLElement): string {
-  ensureNotionTableBlockStructure(block);
-  const table = block.querySelector("table") as HTMLTableElement | null;
-  if (!table) {
-    return "|  |  |\n| --- | --- |\n|  |  |";
-  }
-
-  const rows = getNotionTableRows(table);
-  if (rows.length === 0) {
-    return "|  |  |\n| --- | --- |\n|  |  |";
-  }
-
-  const columnCount = getNotionTableColumnCount(table);
-  const headerRow = rows[0];
-  const bodyRows = rows.slice(1);
-  const header = Array.from({ length: columnCount }, (_, index) => {
-    const cell = headerRow.cells[index] as HTMLTableCellElement | undefined;
-    return cell ? tableCellToMarkdown(cell) : "";
-  });
-  const separator = Array.from({ length: columnCount }, () => "---");
-  const lines = [
-    `| ${header.join(" | ")} |`,
-    `| ${separator.join(" | ")} |`
-  ];
-
-  for (const row of bodyRows) {
-    const rowCells = Array.from({ length: columnCount }, (_, index) => {
-      const cell = row.cells[index] as HTMLTableCellElement | undefined;
-      return cell ? tableCellToMarkdown(cell) : "";
-    });
-    lines.push(`| ${rowCells.join(" | ")} |`);
-  }
-
-  return lines.join("\n");
-}
-
-function normalizeTableSelectionBounds(selection: TableSelectionState): TableSelectionBounds {
-  return {
-    startRow: Math.min(selection.start.row, selection.end.row),
-    endRow: Math.max(selection.start.row, selection.end.row),
-    startCol: Math.min(selection.start.col, selection.end.col),
-    endCol: Math.max(selection.start.col, selection.end.col)
-  };
-}
-
-function clampTableSelectionBounds(bounds: TableSelectionBounds, rowCount: number, colCount: number): TableSelectionBounds {
-  const maxRow = Math.max(0, rowCount - 1);
-  const maxCol = Math.max(0, colCount - 1);
-  return {
-    startRow: Math.max(0, Math.min(bounds.startRow, maxRow)),
-    endRow: Math.max(0, Math.min(bounds.endRow, maxRow)),
-    startCol: Math.max(0, Math.min(bounds.startCol, maxCol)),
-    endCol: Math.max(0, Math.min(bounds.endCol, maxCol))
-  };
-}
-
-function markdownToNotionHtml(markdown: string): string {
-  const lines = markdown.split("\n");
-  const blocks: string[] = [];
-  let tableIndex = 0;
-
-  for (let i = 0; i < lines.length; i += 1) {
-    const table = tryParseMarkdownTable(lines, i);
-    if (table) {
-      const tableId = `table-${tableIndex + 1}`;
-      tableIndex += 1;
-      const headerHtml = table.header
-        .map((cell) => `<th class="va-notion-table-cell">${cell ? markdownInlineToHtml(cell) : "<br>"}</th>`)
-        .join("");
-      const bodyHtml = table.rows
-        .map(
-          (row) =>
-            `<tr>${row
-              .map((cell) => `<td class="va-notion-table-cell">${cell ? markdownInlineToHtml(cell) : "<br>"}</td>`)
-              .join("")}</tr>`
-        )
-        .join("");
-      const ensuredBodyHtml =
-        bodyHtml ||
-        `<tr>${table.header.map(() => `<td class="va-notion-table-cell"><br></td>`).join("")}</tr>`;
-      blocks.push(
-        `<div class="va-notion-block va-notion-table-wrap" data-md-kind="table" data-table-id="${tableId}"><table class="va-notion-table"><thead><tr>${headerHtml}</tr></thead><tbody>${ensuredBodyHtml}</tbody></table></div>`
-      );
-      i = table.nextIndex - 1;
-      continue;
-    }
-
-    const line = lines[i];
-    const headingMatch = line.match(/^(#{1,3})\s?(.*)$/);
-    if (headingMatch) {
-      const level = headingMatch[1].length;
-      const content = headingMatch[2] ? markdownInlineToHtml(headingMatch[2]) : "<br>";
-      blocks.push(`<p class="va-notion-block va-notion-heading level-${level}" data-md-kind="heading" data-md-level="${level}">${content}</p>`);
-      continue;
-    }
-    const bulletMatch = line.match(/^(-{1,3})\s?(.*)$/);
-    if (bulletMatch) {
-      const level = bulletMatch[1].length;
-      const content = bulletMatch[2] ? markdownInlineToHtml(bulletMatch[2]) : "<br>";
-      blocks.push(`<p class="va-notion-block va-notion-bullet level-${level}" data-md-kind="bullet" data-md-level="${level}">${content}</p>`);
-      continue;
-    }
-    const content = line ? markdownInlineToHtml(line) : "<br>";
-    blocks.push(`<p class="va-notion-block" data-md-kind="paragraph">${content}</p>`);
-  }
-
-  return blocks.join("");
-}
-
-function inlineNodeToMarkdown(node: Node): string {
-  if (node.nodeType === Node.TEXT_NODE) {
-    return (node.nodeValue ?? "").replaceAll("\u00a0", " ");
-  }
-  if (node.nodeType !== Node.ELEMENT_NODE) {
-    return "";
-  }
-
-  const element = node as HTMLElement;
-  if (element.tagName === "BR") {
-    return "\n";
-  }
-
-  const inner = Array.from(element.childNodes).map((child) => inlineNodeToMarkdown(child)).join("");
-  if (element.tagName === "STRONG" || element.tagName === "B") {
-    return `**${inner}**`;
-  }
-  if (element.tagName === "DEL" || element.tagName === "S" || element.tagName === "STRIKE") {
-    return `~~${inner}~~`;
-  }
-  return inner;
-}
-
-function notionEditorToMarkdown(editor: HTMLElement): string {
-  const parts: string[] = [];
-  const blocks = Array.from(editor.children) as HTMLElement[];
-  for (const block of blocks) {
-    const kind = block.dataset.mdKind === "table"
-      ? "table"
-      : block.dataset.mdKind === "bullet"
-      ? "bullet"
-      : block.dataset.mdKind === "heading"
-        ? "heading"
-        : "paragraph";
-    if (kind === "table") {
-      parts.push(tableBlockToMarkdown(block));
-      continue;
-    }
-    const levelRaw = Number(block.dataset.mdLevel || "1");
-    const level = Number.isFinite(levelRaw) ? Math.max(1, Math.min(3, Math.floor(levelRaw))) : 1;
-    const inline = Array.from(block.childNodes).map((node) => inlineNodeToMarkdown(node)).join("");
-    const content = inline.replace(/\n+$/g, "");
-    if (kind === "bullet") {
-      parts.push(`${"-".repeat(level)} ${content}`.trimEnd());
-    } else if (kind === "heading") {
-      parts.push(`${"#".repeat(level)} ${content}`.trimEnd());
-    } else {
-      parts.push(content);
-    }
-  }
-  return parts.join("\n");
-}
-
-function normalizeNotionBlockElement(block: HTMLElement): void {
-  const kind = block.dataset.mdKind === "table" || block.classList.contains("va-notion-table-wrap")
-    ? "table"
-    : block.dataset.mdKind === "bullet"
-    ? "bullet"
-    : block.dataset.mdKind === "heading"
-      ? "heading"
-      : "paragraph";
-  const levelRaw = Number(block.dataset.mdLevel || "1");
-  const level = Number.isFinite(levelRaw) ? Math.max(1, Math.min(3, Math.floor(levelRaw))) : 1;
-  block.dataset.mdKind = kind;
-  if (kind === "table") {
-    delete block.dataset.mdLevel;
-    if (!block.dataset.tableId) {
-      block.dataset.tableId = `table-${Math.floor(Math.random() * 1_000_000_000)}`;
-    }
-    block.className = "va-notion-block va-notion-table-wrap";
-    ensureNotionTableBlockStructure(block);
-    return;
-  }
-  block.className = "va-notion-block";
-  if (kind === "bullet") {
-    block.dataset.mdLevel = String(level);
-    block.classList.add("va-notion-bullet", `level-${level}`);
-  } else if (kind === "heading") {
-    block.dataset.mdLevel = String(level);
-    block.classList.add("va-notion-heading", `level-${level}`);
-  } else {
-    delete block.dataset.mdLevel;
-  }
-}
-
-function createNotionBlock(kind: "paragraph" | "bullet" | "heading", level = 1): HTMLParagraphElement {
-  const block = document.createElement("p");
-  block.dataset.mdKind = kind;
-  if (kind === "bullet" || kind === "heading") {
-    block.dataset.mdLevel = String(Math.max(1, Math.min(3, Math.floor(level))));
-  }
-  block.innerHTML = "<br>";
-  normalizeNotionBlockElement(block);
-  return block;
-}
-
-function findNotionBlock(root: HTMLElement, target: Node | null): HTMLElement | null {
-  let node: Node | null = target;
-  while (node && node !== root) {
-    if (node instanceof HTMLElement && node.dataset.mdKind) {
-      return node;
-    }
-    node = node.parentNode;
-  }
-  return null;
-}
-
-function placeCaretAtBlockStart(block: HTMLElement): void {
-  const selection = window.getSelection();
-  if (!selection) return;
-  const range = document.createRange();
-  range.setStart(block, 0);
-  range.collapse(true);
-  selection.removeAllRanges();
-  selection.addRange(range);
-}
-
-function hasMeaningfulBlockContent(block: HTMLElement): boolean {
-  if (block.dataset.mdKind === "table") {
-    return true;
-  }
-  return (block.textContent ?? "").replace(/\u200b/g, "").trim().length > 0;
-}
-
-interface EditorTextTransformResult {
-  nextText: string;
-  nextSelectionStart: number;
-  nextSelectionEnd: number;
-}
-
-function transformLineLevel(line: string, delta: 1 | -1): string {
-  const matched = line.match(/^(\s*)(-+)\s*(.*)$/);
-  if (delta === 1) {
-    if (matched) {
-      const level = Math.min(matched[2].length + 1, 3);
-      const rest = matched[3];
-      return `${matched[1]}${"-".repeat(level)}${rest ? ` ${rest}` : " "}`;
-    }
-    const indent = (line.match(/^(\s*)/)?.[1] ?? "");
-    const rest = line.trimStart();
-    return `${indent}-${rest ? ` ${rest}` : " "}`;
-  }
-
-  if (!matched) {
-    return line;
-  }
-  const currentLevel = matched[2].length;
-  const nextLevel = Math.max(0, currentLevel - 1);
-  const rest = matched[3];
-  if (nextLevel === 0) {
-    return `${matched[1]}${rest}`;
-  }
-  return `${matched[1]}${"-".repeat(nextLevel)}${rest ? ` ${rest}` : " "}`;
-}
-
-function transformSelectedLinesLevel(
-  text: string,
-  selectionStart: number,
-  selectionEnd: number,
-  delta: 1 | -1
-): EditorTextTransformResult | null {
-  const lineStart = text.lastIndexOf("\n", Math.max(0, selectionStart - 1)) + 1;
-  const lineEndRaw = text.indexOf("\n", selectionEnd);
-  const lineEnd = lineEndRaw >= 0 ? lineEndRaw : text.length;
-  const currentBlock = text.slice(lineStart, lineEnd);
-  const transformedBlock = currentBlock
-    .split("\n")
-    .map((line) => transformLineLevel(line, delta))
-    .join("\n");
-
-  if (transformedBlock === currentBlock) {
-    return null;
-  }
-
-  const nextText = `${text.slice(0, lineStart)}${transformedBlock}${text.slice(lineEnd)}`;
-  if (selectionStart === selectionEnd) {
-    const deltaLen = transformedBlock.length - currentBlock.length;
-    const nextPos = Math.max(lineStart, selectionStart + deltaLen);
-    return {
-      nextText,
-      nextSelectionStart: nextPos,
-      nextSelectionEnd: nextPos
-    };
-  }
-
-  return {
-    nextText,
-    nextSelectionStart: lineStart,
-    nextSelectionEnd: lineStart + transformedBlock.length
-  };
-}
-
-function transformBoldAtSelection(
-  text: string,
-  selectionStart: number,
-  selectionEnd: number
-): EditorTextTransformResult {
-  if (selectionStart === selectionEnd) {
-    const nextText = `${text.slice(0, selectionStart)}****${text.slice(selectionEnd)}`;
-    const nextPos = selectionStart + 2;
-    return {
-      nextText,
-      nextSelectionStart: nextPos,
-      nextSelectionEnd: nextPos
-    };
-  }
-
-  const selected = text.slice(selectionStart, selectionEnd);
-  if (selected.startsWith("**") && selected.endsWith("**") && selected.length >= 4) {
-    const unwrapped = selected.slice(2, -2);
-    const nextText = `${text.slice(0, selectionStart)}${unwrapped}${text.slice(selectionEnd)}`;
-    const nextEnd = selectionStart + unwrapped.length;
-    return {
-      nextText,
-      nextSelectionStart: selectionStart,
-      nextSelectionEnd: nextEnd
-    };
-  }
-
-  const hasOuterBold = selectionStart >= 2 && text.slice(selectionStart - 2, selectionStart) === "**"
-    && text.slice(selectionEnd, selectionEnd + 2) === "**";
-  if (hasOuterBold) {
-    const nextText = `${text.slice(0, selectionStart - 2)}${selected}${text.slice(selectionEnd + 2)}`;
-    return {
-      nextText,
-      nextSelectionStart: selectionStart - 2,
-      nextSelectionEnd: selectionEnd - 2
-    };
-  }
-
-  const nextText = `${text.slice(0, selectionStart)}**${selected}**${text.slice(selectionEnd)}`;
-  return {
-    nextText,
-    nextSelectionStart: selectionStart + 2,
-    nextSelectionEnd: selectionEnd + 2
-  };
-}
-
-function transformStrikeAtSelection(
-  text: string,
-  selectionStart: number,
-  selectionEnd: number
-): EditorTextTransformResult {
-  if (selectionStart === selectionEnd) {
-    const nextText = `${text.slice(0, selectionStart)}~~~~${text.slice(selectionEnd)}`;
-    const nextPos = selectionStart + 2;
-    return {
-      nextText,
-      nextSelectionStart: nextPos,
-      nextSelectionEnd: nextPos
-    };
-  }
-
-  const selected = text.slice(selectionStart, selectionEnd);
-  if (selected.startsWith("~~") && selected.endsWith("~~") && selected.length >= 4) {
-    const unwrapped = selected.slice(2, -2);
-    const nextText = `${text.slice(0, selectionStart)}${unwrapped}${text.slice(selectionEnd)}`;
-    const nextEnd = selectionStart + unwrapped.length;
-    return {
-      nextText,
-      nextSelectionStart: selectionStart,
-      nextSelectionEnd: nextEnd
-    };
-  }
-
-  const hasOuterStrike = selectionStart >= 2 && text.slice(selectionStart - 2, selectionStart) === "~~"
-    && text.slice(selectionEnd, selectionEnd + 2) === "~~";
-  if (hasOuterStrike) {
-    const nextText = `${text.slice(0, selectionStart - 2)}${selected}${text.slice(selectionEnd + 2)}`;
-    return {
-      nextText,
-      nextSelectionStart: selectionStart - 2,
-      nextSelectionEnd: selectionEnd - 2
-    };
-  }
-
-  const nextText = `${text.slice(0, selectionStart)}~~${selected}~~${text.slice(selectionEnd)}`;
-  return {
-    nextText,
-    nextSelectionStart: selectionStart + 2,
-    nextSelectionEnd: selectionEnd + 2
-  };
-}
-
-function transformEnterWithLevelContinuation(
-  text: string,
-  selectionStart: number,
-  selectionEnd: number
-): EditorTextTransformResult | null {
-  if (selectionStart !== selectionEnd) {
-    return null;
-  }
-  const lineStart = text.lastIndexOf("\n", Math.max(0, selectionStart - 1)) + 1;
-  const currentLine = text.slice(lineStart, selectionStart);
-  const matched = currentLine.match(/^(\s*-{1,3})(?:\s+.*)?$/);
-  if (!matched) {
-    return null;
-  }
-  const insert = `\n${matched[1]} `;
-  const nextText = `${text.slice(0, selectionStart)}${insert}${text.slice(selectionEnd)}`;
-  const nextPos = selectionStart + insert.length;
-  return {
-    nextText,
-    nextSelectionStart: nextPos,
-    nextSelectionEnd: nextPos
-  };
-}
-
-function itemToDraft(item: ArtifactItem): ArtifactEditorDraft {
-  return {
-    id: item.id,
-    kind: item.kind,
-    title: item.title,
-    path: item.path,
-    projectId: item.projectId,
-    projectName: item.projectName ?? "",
-    tags: [...item.tags],
-    contentMarkdown: item.contentMarkdown ?? "",
-    mimeType: item.mimeType,
-    sizeBytes: item.sizeBytes,
-    version: item.version,
-    createdAt: item.createdAt,
-    updatedAt: item.updatedAt
-  };
-}
-
-function buildTree(items: ArtifactItem[]): TreeFolderNode {
-  const root: TreeFolderNode = {
-    name: "",
-    path: "",
-    folders: new Map<string, TreeFolderNode>(),
-    items: []
-  };
-
-  const ensureFolder = (folderPath: string): TreeFolderNode => {
-    const normalized = normalizePath(folderPath);
-    if (!normalized) return root;
-
-    const segments = normalized.split("/");
-    let cursor = root;
-    let cursorPath = "";
-
-    for (const segment of segments) {
-      cursorPath = cursorPath ? `${cursorPath}/${segment}` : segment;
-      let child = cursor.folders.get(segment);
-      if (!child) {
-        child = {
-          name: segment,
-          path: cursorPath,
-          folders: new Map<string, TreeFolderNode>(),
-          items: []
-        };
-        cursor.folders.set(segment, child);
-      }
-      cursor = child;
-    }
-
-    return cursor;
-  };
-
-  for (const item of items) {
-    const pathValue = normalizePath(item.path);
-    if (!pathValue) continue;
-
-    if (item.kind === "folder") {
-      const folderNode = ensureFolder(pathValue);
-      folderNode.folderItem = item;
-      continue;
-    }
-
-    const parent = ensureFolder(parentPath(pathValue));
-    parent.items.push(item);
-  }
-
-  return root;
-}
-
-function sortItems(items: ArtifactItem[]): ArtifactItem[] {
-  return [...items].sort((a, b) => {
-    if (a.kind !== b.kind) {
-      if (a.kind === "note") return -1;
-      if (b.kind === "note") return 1;
-    }
-    return a.path.localeCompare(b.path, undefined, { sensitivity: "base" });
-  });
-}
-
-function uniqueProjectOptions(records: ProjectRecord[], pinned?: ProjectOption | null): ProjectOption[] {
-  const map = new Map<string, ProjectOption>();
-  if (pinned?.projectId) {
-    map.set(pinned.projectId, pinned);
-  }
-  for (const record of records) {
-    map.set(record.id, { projectId: record.id, projectName: record.name });
-  }
-  return [...map.values()].sort((a, b) => (a.projectName || a.projectId).localeCompare(b.projectName || b.projectId));
-}
-
-function collectVisibleSelectableItemIds(root: TreeFolderNode, collapsedFolders: Record<string, true>): string[] {
-  const result: string[] = [];
-
-  const visit = (folder: TreeFolderNode) => {
-    const sortedFolders = [...folder.folders.values()].sort((a, b) =>
-      a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
-    );
-    const sortedItems = sortItems(folder.items);
-
-    for (const childFolder of sortedFolders) {
-      if (childFolder.folderItem) {
-        result.push(childFolder.folderItem.id);
-      }
-      if (!collapsedFolders[childFolder.path]) {
-        visit(childFolder);
-      }
-    }
-
-    for (const item of sortedItems) {
-      result.push(item.id);
-    }
-  };
-
-  visit(root);
-  return result;
-}
-
-const IcoHome = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-    <path d="M3 11l9-8 9 8" />
-    <path d="M5 10v10h14V10" />
-  </svg>
-);
-
-const IcoFolder = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-    <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-  </svg>
-);
-
-const IcoFile = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-    <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
-    <path d="M14 3v6h6" />
-  </svg>
-);
-
-const IcoUpload = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-    <path d="M12 16V4" />
-    <path d="M7 9l5-5 5 5" />
-    <path d="M4 20h16" />
-  </svg>
-);
-
-const IcoDownload = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-    <path d="M12 4v12" />
-    <path d="M7 11l5 5 5-5" />
-    <path d="M4 20h16" />
-  </svg>
-);
-
-const IcoTrash = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-    <polyline points="3 6 5 6 21 6" />
-    <path d="M19 6l-1 14H6L5 6M10 11v6M14 11v6" />
-    <path d="M9 6V4h6v2" />
-  </svg>
-);
-
-const IcoClose = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-    <path d="M18 6L6 18M6 6l12 12" />
-  </svg>
-);
-
-const IcoFloppy = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
-    <polyline points="17 21 17 13 7 13 7 21" />
-    <polyline points="7 3 7 8 15 8" />
-  </svg>
-);
-
-const IcoExpand = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-    <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
-  </svg>
-);
-
-const IcoCompress = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-    <path d="M4 14h6v6M14 4h6v6M10 20l-7-7M20 10l-7 7" />
-  </svg>
-);
-
-
-interface MarkdownRendererCtx {
-  items: ArtifactItem[];
-  currentPath: string;
-  selectItem: (item: ArtifactItem) => void;
-}
-
-const MarkdownRendererContext = createContext<MarkdownRendererCtx | null>(null);
-
-function resolveArtifactSrc(src: string, currentPath: string): string {
-  // Leading `/` → absolute artifact path (strip slash)
-  if (src.startsWith("/")) return normalizePath(src.slice(1));
-  // Otherwise: relative to the markdown file's directory
-  return resolveMarkdownRef(currentPath, src);
-}
-
-function MarkdownImageComponent({ src, alt }: { src?: string; alt?: string }) {
-  // All hooks must be called unconditionally (Rules of Hooks)
-  const ctx = useContext(MarkdownRendererContext);
-  const [blobUrl, setBlobUrl] = useState<string | null>(null);
-  const youtubeId = src ? extractYoutubeId(src) : null;
-  const isExternal = isExternalUrl(src ?? "");
-
-  useEffect(() => {
-    if (youtubeId || !src || !ctx || isExternal) return;
-
-    const artifactPath = resolveArtifactSrc(src, ctx.currentPath);
-    const item = ctx.items.find((i) => normalizePath(i.path) === artifactPath);
-    if (!item) return;
-
-    let cancelled = false;
-    let url: string | null = null;
-    void artifactsApi.downloadFile(item.id).then((blob) => {
-      if (cancelled) return;
-      url = URL.createObjectURL(blob);
-      setBlobUrl(url);
-    });
-    return () => {
-      cancelled = true;
-      if (url) URL.revokeObjectURL(url);
-    };
-  }, [src, ctx, youtubeId, isExternal]);
-
-  // YouTube URL in img syntax → embed as video player
-  if (youtubeId) {
-    return (
-      <span className="va-md-embed-block">
-        <iframe
-          className="va-md-youtube"
-          src={`https://www.youtube-nocookie.com/embed/${youtubeId}`}
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-          allowFullScreen
-          title={alt || "YouTube video"}
-        />
-      </span>
-    );
-  }
-
-  const displaySrc = isExternal ? src : blobUrl;
-  if (!displaySrc) return <span className="va-md-img-loading">[{alt ?? src}]</span>;
-  if (/\.pdf$/i.test(src ?? "")) {
-    return <iframe src={displaySrc} className="va-md-pdf-embed" title={alt ?? "PDF"} />;
-  }
-  return <img src={displaySrc} alt={alt} className="va-md-img" />;
-}
-
-function MarkdownLinkComponent({ href, children }: { href?: string; children?: ReactNode }) {
-  const ctx = useContext(MarkdownRendererContext);
-  if (!href) return <>{children}</>;
-
-  const youtubeId = extractYoutubeId(href);
-  if (youtubeId) {
-    return (
-      <span className="va-md-embed-block">
-        <iframe
-          className="va-md-youtube"
-          src={`https://www.youtube-nocookie.com/embed/${youtubeId}`}
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-          allowFullScreen
-          title="YouTube video"
-        />
-      </span>
-    );
-  }
-
-  return (
-    <a href={href} target="_blank" rel="noopener noreferrer">
-      {children}
-    </a>
-  );
-}
-
-const MARKDOWN_COMPONENTS = {
-  img: MarkdownImageComponent,
-  a: MarkdownLinkComponent,
-};
 
 export function ArtifactsPage() {
   const ROOT_DROP_PATH = "";
@@ -1114,11 +105,13 @@ export function ArtifactsPage() {
   const [imageBlobUrl, setImageBlobUrl] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<TreeContextMenuState | null>(null);
   const [tableContextMenu, setTableContextMenu] = useState<TableContextMenuState | null>(null);
+  const [editorContextMenu, setEditorContextMenu] = useState<EditorContextMenuState | null>(null);
   const [tableSelection, setTableSelection] = useState<TableSelectionState | null>(null);
   const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
   const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirmState | null>(null);
   const [createFolderState, setCreateFolderState] = useState<CreateFolderState | null>(null);
+  const [insertLinkState, setInsertLinkState] = useState<InsertLinkState | null>(null);
   const [editorExpanded, setEditorExpanded] = useState(false);
   const [mobileTreeVisible, setMobileTreeVisible] = useState(false);
 
@@ -1131,6 +124,8 @@ export function ArtifactsPage() {
   const handleSaveRef = useRef<() => Promise<void>>(async () => {});
   const shortcutStateRef = useRef({ canSave: false, isSaving: false, markdownEditorVisible: false });
   const notionSyncRef = useRef<{ itemId?: string; markdown: string }>({ itemId: undefined, markdown: "" });
+  const editSelectionRef = useRef<TextSelectionSnapshot | null>(null);
+  const liveSelectionRef = useRef<Range | null>(null);
 
   const treeRoot = useMemo(() => buildTree(items), [items]);
   const visibleSelectableItemIds = useMemo(
@@ -1208,6 +203,19 @@ export function ArtifactsPage() {
       top: Math.max(margin, Math.min(tableContextMenu.y, maxY))
     };
   }, [tableContextMenu]);
+
+  const editorContextMenuPosition = useMemo(() => {
+    if (!editorContextMenu) return null;
+    const menuWidth = 180;
+    const menuHeight = 110;
+    const margin = 8;
+    const maxX = window.innerWidth - menuWidth - margin;
+    const maxY = window.innerHeight - menuHeight - margin;
+    return {
+      left: Math.max(margin, Math.min(editorContextMenu.x, maxX)),
+      top: Math.max(margin, Math.min(editorContextMenu.y, maxY))
+    };
+  }, [editorContextMenu]);
 
   const contextDeleteCandidateIds = useMemo(() => {
     if (!contextMenu) {
@@ -1478,17 +486,19 @@ export function ArtifactsPage() {
   }, [draft.contentMarkdown, draft.id, notePreviewMode, tableSelection]);
 
   useEffect(() => {
-    if (!contextMenu && !tableContextMenu) return;
+    if (!contextMenu && !tableContextMenu && !editorContextMenu) return;
 
     const handleEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") {
         setContextMenu(null);
         setTableContextMenu(null);
+        setEditorContextMenu(null);
       }
     };
     const handleClose = () => {
       setContextMenu(null);
       setTableContextMenu(null);
+      setEditorContextMenu(null);
     };
 
     window.addEventListener("keydown", handleEscape);
@@ -1499,7 +509,7 @@ export function ArtifactsPage() {
       window.removeEventListener("resize", handleClose);
       window.removeEventListener("scroll", handleClose, true);
     };
-  }, [contextMenu, tableContextMenu]);
+  }, [contextMenu, editorContextMenu, tableContextMenu]);
 
   useEffect(() => {
     const existingIds = new Set(items.map((item) => item.id));
@@ -1536,7 +546,7 @@ export function ArtifactsPage() {
         }
         return;
       }
-      // Ctrl+Shift+↑: expand editor
+      // Ctrl+Shift+竊・ expand editor
       if (e.ctrlKey && e.shiftKey && e.key === "ArrowUp") {
         if (mev) {
           e.preventDefault();
@@ -1544,7 +554,7 @@ export function ArtifactsPage() {
         }
         return;
       }
-      // Ctrl+Shift+↓: shrink editor
+      // Ctrl+Shift+竊・ shrink editor
       if (e.ctrlKey && e.shiftKey && e.key === "ArrowDown") {
         if (mev) {
           e.preventDefault();
@@ -1614,6 +624,7 @@ export function ArtifactsPage() {
     event.preventDefault();
     event.stopPropagation();
     setTableContextMenu(null);
+    setEditorContextMenu(null);
     setContextMenu({
       x: event.clientX,
       y: event.clientY,
@@ -1941,6 +952,9 @@ export function ArtifactsPage() {
   const handleNotionEditorContextMenu = (event: MouseEvent<HTMLDivElement>) => {
     const resolved = resolveTableCellFromTarget(event.target);
     if (!resolved) {
+      rememberLiveSelection();
+      setAndApplyTableSelection(null);
+      openEditorContextMenu(event, "live");
       return;
     }
     event.preventDefault();
@@ -1956,12 +970,226 @@ export function ArtifactsPage() {
         ? tableSelection
         : clicked;
     setAndApplyTableSelection(activeSelection);
+    setEditorContextMenu(null);
     setContextMenu(null);
     setTableContextMenu({
       x: event.clientX,
       y: event.clientY,
       selection: activeSelection
     });
+  };
+
+  const handleInsertTableFromEditorContext = () => {
+    if (!editorContextMenu) {
+      return;
+    }
+
+    const template = "| Column 1 | Column 2 |\n| --- | --- |\n|  |  |";
+    if (editorContextMenu.mode === "edit") {
+      const text = draft.contentMarkdown;
+      const fallbackPos = editorRef.current?.selectionStart ?? text.length;
+      const start = editSelectionRef.current?.start ?? fallbackPos;
+      const end = editSelectionRef.current?.end ?? fallbackPos;
+      const prefix = start > 0 && text[start - 1] !== "\n" ? "\n" : "";
+      const suffix = end < text.length && text[end] !== "\n" ? "\n" : "";
+      const insertion = `${prefix}${template}${suffix}`;
+      applyDraftInsertion(insertion);
+      setEditorContextMenu(null);
+      return;
+    }
+
+    const editor = notionEditorRef.current;
+    if (!editor) {
+      setEditorContextMenu(null);
+      return;
+    }
+
+    const block = document.createElement("div");
+    block.dataset.mdKind = "table";
+    block.dataset.tableId = `table-${Math.floor(Math.random() * 1_000_000_000)}`;
+    normalizeNotionBlockElement(block);
+
+    const table = block.querySelector("table");
+    if (table instanceof HTMLTableElement) {
+      const headerRow = table.tHead?.rows[0];
+      if (headerRow) {
+        if (headerRow.cells[0]) headerRow.cells[0].textContent = "Column 1";
+        if (headerRow.cells[1]) headerRow.cells[1].textContent = "Column 2";
+      }
+    }
+
+    let anchorBlock: HTMLElement | null = null;
+    if (liveSelectionRef.current) {
+      anchorBlock = findNotionBlock(editor, liveSelectionRef.current.startContainer);
+    }
+    if (!anchorBlock) {
+      const selection = window.getSelection();
+      if (selection && selection.rangeCount > 0) {
+        anchorBlock = findNotionBlock(editor, selection.getRangeAt(0).startContainer);
+      }
+    }
+
+    if (anchorBlock && anchorBlock.parentElement === editor) {
+      if (anchorBlock.nextSibling) {
+        editor.insertBefore(block, anchorBlock.nextSibling);
+      } else {
+        editor.appendChild(block);
+      }
+    } else {
+      editor.appendChild(block);
+    }
+
+    const firstCell = block.querySelector("tbody td, thead th");
+    if (firstCell instanceof HTMLTableCellElement) {
+      const selection = window.getSelection();
+      if (selection) {
+        const range = document.createRange();
+        range.selectNodeContents(firstCell);
+        range.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+    }
+
+    if (block.dataset.tableId) {
+      setAndApplyTableSelection({
+        tableId: block.dataset.tableId,
+        start: { row: 1, col: 0 },
+        end: { row: 1, col: 0 }
+      });
+    }
+    syncDraftFromNotionEditor();
+    setEditorContextMenu(null);
+  };
+
+  const handleOpenInsertLinkDialog = () => {
+    if (!editorContextMenu) {
+      return;
+    }
+    if (editorContextMenu.mode === "edit") {
+      const textarea = editorRef.current;
+      if (textarea) {
+        rememberEditSelection(textarea);
+      }
+    } else {
+      rememberLiveSelection();
+    }
+    setInsertLinkState({ mode: editorContextMenu.mode });
+    setEditorContextMenu(null);
+  };
+
+  const handleInsertLinkConfirm = (rawUrl: string) => {
+    const href = rawUrl.trim();
+    if (!href || !insertLinkState) {
+      return;
+    }
+
+    if (insertLinkState.mode === "edit") {
+      const text = draft.contentMarkdown;
+      const fallbackPos = editorRef.current?.selectionStart ?? text.length;
+      const start = editSelectionRef.current?.start ?? fallbackPos;
+      const end = editSelectionRef.current?.end ?? fallbackPos;
+      const selectedText = (editSelectionRef.current?.text ?? text.slice(start, end)).trim();
+      const label = selectedText || href;
+      const insertion = `[${label}](${href})`;
+      const nextText = `${text.slice(0, start)}${insertion}${text.slice(end)}`;
+      const cursor = start + insertion.length;
+      applyEditorTransform({
+        nextText,
+        nextSelectionStart: cursor,
+        nextSelectionEnd: cursor
+      });
+      setInsertLinkState(null);
+      return;
+    }
+
+    const editor = notionEditorRef.current;
+    if (!editor) {
+      setInsertLinkState(null);
+      return;
+    }
+
+    editor.focus();
+    const selection = window.getSelection();
+    if (selection) {
+      selection.removeAllRanges();
+      if (liveSelectionRef.current) {
+        selection.addRange(liveSelectionRef.current.cloneRange());
+      }
+    }
+
+    const activeSelection = window.getSelection();
+    if (!activeSelection || activeSelection.rangeCount === 0) {
+      const block = (editor.lastElementChild as HTMLElement | null) ?? createNotionBlock("paragraph");
+      if (!editor.lastElementChild) {
+        editor.appendChild(block);
+      }
+      const anchor = document.createElement("a");
+      anchor.href = href;
+      anchor.textContent = href;
+      block.appendChild(anchor);
+      syncDraftFromNotionEditor();
+      setInsertLinkState(null);
+      return;
+    }
+
+    const range = activeSelection.getRangeAt(0);
+    const selectedText = activeSelection.toString().trim();
+    const label = selectedText || href;
+    const anchor = document.createElement("a");
+    anchor.href = href;
+    anchor.textContent = label;
+    range.deleteContents();
+    range.insertNode(anchor);
+
+    const caret = document.createRange();
+    caret.setStartAfter(anchor);
+    caret.collapse(true);
+    activeSelection.removeAllRanges();
+    activeSelection.addRange(caret);
+
+    syncDraftFromNotionEditor();
+    setInsertLinkState(null);
+  };
+
+  const handleNotionEditorClick = (event: MouseEvent<HTMLDivElement>) => {
+    if (!(event.ctrlKey || event.metaKey)) {
+      return;
+    }
+    if (!(event.target instanceof HTMLElement)) {
+      return;
+    }
+    const anchor = event.target.closest("a");
+    if (!(anchor instanceof HTMLAnchorElement)) {
+      return;
+    }
+
+    const rawHref = anchor.getAttribute("href")?.trim() ?? "";
+    if (!rawHref) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (isExternalUrl(rawHref)) {
+      window.open(rawHref, "_blank", "noopener,noreferrer");
+      return;
+    }
+
+    const href = rawHref.split("#")[0].trim();
+    if (!href) {
+      return;
+    }
+
+    const resolvedPath = normalizePath(resolveMarkdownRef(draft.path, href));
+    const target = items.find((item) => normalizePath(item.path) === resolvedPath);
+    if (target) {
+      selectItem(target);
+      return;
+    }
+
+    setError(`Link target not found: ${rawHref}`);
   };
 
   const handleStartCreateNote = () => {
@@ -2154,6 +1382,64 @@ export function ArtifactsPage() {
       editor.focus();
       editor.setSelectionRange(transform.nextSelectionStart, transform.nextSelectionEnd);
     });
+  };
+
+  const rememberEditSelection = (textarea: HTMLTextAreaElement) => {
+    const text = textarea.value;
+    const start = textarea.selectionStart ?? text.length;
+    const end = textarea.selectionEnd ?? text.length;
+    editSelectionRef.current = {
+      start,
+      end,
+      text: text.slice(start, end)
+    };
+  };
+
+  const rememberLiveSelection = () => {
+    const editor = notionEditorRef.current;
+    const selection = window.getSelection();
+    if (!editor || !selection || selection.rangeCount === 0) {
+      liveSelectionRef.current = null;
+      return;
+    }
+    const range = selection.getRangeAt(0);
+    if (!editor.contains(range.startContainer) || !editor.contains(range.endContainer)) {
+      liveSelectionRef.current = null;
+      return;
+    }
+    liveSelectionRef.current = range.cloneRange();
+  };
+
+  const applyDraftInsertion = (insertedText: string) => {
+    const text = draft.contentMarkdown;
+    const snapshot = editSelectionRef.current;
+    const fallbackPos = editorRef.current?.selectionStart ?? text.length;
+    const start = snapshot?.start ?? fallbackPos;
+    const end = snapshot?.end ?? fallbackPos;
+    const nextText = `${text.slice(0, start)}${insertedText}${text.slice(end)}`;
+    const cursor = start + insertedText.length;
+    applyEditorTransform({
+      nextText,
+      nextSelectionStart: cursor,
+      nextSelectionEnd: cursor
+    });
+  };
+
+  const openEditorContextMenu = (event: MouseEvent<HTMLElement>, mode: "edit" | "live") => {
+    event.preventDefault();
+    event.stopPropagation();
+    setContextMenu(null);
+    setTableContextMenu(null);
+    setEditorContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      mode
+    });
+  };
+
+  const handleEditEditorContextMenu = (event: MouseEvent<HTMLTextAreaElement>) => {
+    rememberEditSelection(event.currentTarget);
+    openEditorContextMenu(event, "edit");
   };
 
   const handleEditorKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -2379,7 +1665,7 @@ export function ArtifactsPage() {
 
   const handleSave = async () => {
     if (!canSave) {
-      setError("Title, path は必須です。");
+      setError("Title and path are required.");
       return;
     }
 
@@ -2778,11 +2064,13 @@ export function ArtifactsPage() {
   const executeContextAction = (action: () => Promise<void> | void) => {
     setContextMenu(null);
     setTableContextMenu(null);
+    setEditorContextMenu(null);
     void action();
   };
 
   const executeTableContextAction = (action: () => void) => {
     setTableContextMenu(null);
+    setEditorContextMenu(null);
     void action();
   };
 
@@ -2793,118 +2081,13 @@ export function ArtifactsPage() {
       tableMenuContext.colCount > (tableMenuContext.bounds.endCol - tableMenuContext.bounds.startCol + 1)
   );
 
-  const renderDirectoryBrowser = (): ReactNode => {
-    const sortedFolders = [...currentFolderNode.folders.values()].sort((a, b) =>
-      a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
-    );
-    const sortedItems = sortItems(currentFolderNode.items);
-
-    return (
-      <ul className="va-tree-list">
-        {currentFolderPath !== "" && (
-          <li>
-            <button
-              type="button"
-              className="va-tree-row folder"
-              onClick={() => setSelectedFolderPath(parentPath(currentFolderPath))}
-            >
-              <span className="va-tree-icon" aria-hidden="true"><IcoFolder /></span>
-              <span className="va-tree-label">..</span>
-            </button>
-          </li>
-        )}
-        {sortedFolders.map((childFolder) => {
-          const isSelected = selectedFolderPath === childFolder.path;
-          const isDropTarget = dropTargetPath === normalizePath(childFolder.path);
-          const draggableFolderItem = childFolder.folderItem;
-          const isFolderItemSelected = Boolean(draggableFolderItem && selectedItemIdSet.has(draggableFolderItem.id));
-
-          return (
-            <li key={`folder-${childFolder.path}`}>
-              <button
-                type="button"
-                className={[
-                  "va-tree-row",
-                  "folder",
-                  isSelected ? "active" : "",
-                  isFolderItemSelected ? "multi-selected" : "",
-                  isDropTarget ? "drop-target" : "",
-                  draggableFolderItem && draggingItemId === draggableFolderItem.id ? "dragging" : ""
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
-                onClick={(event) => {
-                  const withToggle = event.ctrlKey || event.metaKey;
-                  const withShift = event.shiftKey;
-                  if (!withShift && !withToggle) {
-                    setSelectedFolderPath(childFolder.path);
-                  }
-                  if (childFolder.folderItem) {
-                    updateSelection(childFolder.folderItem.id, { shiftKey: withShift, toggleKey: withToggle });
-                  }
-                }}
-                onDoubleClick={() => setSelectedFolderPath(childFolder.path)}
-                onContextMenu={(event) =>
-                  openContextMenu(event, {
-                    type: "folder",
-                    folderPath: childFolder.path
-                  })
-                }
-                draggable={Boolean(draggableFolderItem)}
-                onDragStart={(event) => {
-                  if (!draggableFolderItem) return;
-                  handleDragStart(event, draggableFolderItem);
-                }}
-                onDragEnd={handleDragEnd}
-                onDragEnter={(event) => handleFolderDragOver(event, childFolder.path)}
-                onDragOver={(event) => handleFolderDragOver(event, childFolder.path)}
-                onDrop={(event) => handleFolderDrop(event, childFolder.path)}
-              >
-                <span className="va-tree-icon" aria-hidden="true"><IcoFolder /></span>
-                <span className="va-tree-label">{childFolder.name}</span>
-              </button>
-            </li>
-          );
-        })}
-
-        {sortedItems.map((item) => {
-          const isSelected = selectedItemIdSet.has(item.id);
-          return (
-            <li key={item.id}>
-              <button
-                type="button"
-                className={[
-                  "va-tree-row",
-                  "item",
-                  isSelected ? "active" : "",
-                  isSelected ? "multi-selected" : "",
-                  draggingItemId === item.id ? "dragging" : ""
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
-                onClick={(event) => selectItem(item, { shiftKey: event.shiftKey, toggleKey: event.ctrlKey || event.metaKey })}
-                onContextMenu={(event) => openContextMenu(event, { type: "item", item })}
-                draggable
-                onDragStart={(event) => handleDragStart(event, item)}
-                onDragEnd={handleDragEnd}
-              >
-                <span className="va-tree-icon" aria-hidden="true"><IcoFile /></span>
-                <span className="va-tree-label">{item.title}</span>
-                <small>v{item.version}</small>
-              </button>
-            </li>
-          );
-        })}
-      </ul>
-    );
-  };
-
   return (
     <section
       className="va-artifacts-page"
       onClick={() => {
         setContextMenu(null);
         setTableContextMenu(null);
+        setEditorContextMenu(null);
       }}
     >
       <section className="va-shell panel">
@@ -2978,7 +2161,26 @@ export function ArtifactsPage() {
             onDragOver={handleRootDragOver}
             onDrop={handleRootDrop}
           >
-            {isLoading ? <div className="va-empty">Loading...</div> : renderDirectoryBrowser()}
+            {isLoading ? (
+              <div className="va-empty">Loading...</div>
+            ) : (
+              <DirectoryBrowser
+                currentFolderNode={currentFolderNode}
+                currentFolderPath={currentFolderPath}
+                selectedFolderPath={selectedFolderPath}
+                selectedItemIdSet={selectedItemIdSet}
+                dropTargetPath={dropTargetPath}
+                draggingItemId={draggingItemId}
+                setSelectedFolderPath={(path) => setSelectedFolderPath(path)}
+                updateSelection={updateSelection}
+                openContextMenu={openContextMenu}
+                handleDragStart={handleDragStart}
+                handleDragEnd={handleDragEnd}
+                handleFolderDragOver={handleFolderDragOver}
+                handleFolderDrop={handleFolderDrop}
+                selectItem={selectItem}
+              />
+            )}
             <footer className="va-tree-foot">
               <span>{selectedItemIds.length} selected</span>
               <button
@@ -3107,7 +2309,7 @@ export function ArtifactsPage() {
                         type="button"
                         className="va-icon-btn va-expand-btn"
                         onClick={() => setEditorExpanded((v) => !v)}
-                        title={editorExpanded ? "Collapse (Ctrl+Shift+↓)" : "Expand (Ctrl+Shift+↑)"}
+                        title={editorExpanded ? "Collapse (Ctrl+Shift+竊・" : "Expand (Ctrl+Shift+竊・"}
                         aria-label={editorExpanded ? "Collapse editor" : "Expand editor"}
                       >
                         {editorExpanded ? <IcoCompress /> : <IcoExpand />}
@@ -3122,29 +2324,29 @@ export function ArtifactsPage() {
                       value={draft.contentMarkdown}
                       onChange={(event) => setDraft((prev) => ({ ...prev, contentMarkdown: event.target.value }))}
                       onKeyDown={handleEditorKeyDown}
+                      onContextMenu={handleEditEditorContextMenu}
                       onDragOver={(event) => { event.preventDefault(); }}
                       onDrop={(event) => { void handleEditorDrop(event); }}
                       onPaste={(event) => { void handleEditorPaste(event); }}
                       placeholder="# note"
                     />
                   ) : (
-                    <MarkdownRendererContext.Provider value={{ items, currentPath: draft.path, selectItem }}>
-                      <div
-                        ref={notionEditorRef}
-                        className="va-notion-editor"
-                        contentEditable
-                        suppressContentEditableWarning
-                        onInput={handleNotionEditorInput}
-                        onKeyDown={handleNotionEditorKeyDown}
-                        onMouseDown={handleNotionEditorMouseDown}
-                        onMouseOver={handleNotionEditorMouseOver}
-                        onMouseUp={handleNotionEditorMouseUp}
-                        onContextMenu={handleNotionEditorContextMenu}
-                        onPaste={handleNotionEditorPaste}
-                        onBlur={syncDraftFromNotionEditor}
-                        data-placeholder="Type markdown-like text. Use '- ' for bullet."
-                      />
-                    </MarkdownRendererContext.Provider>
+                    <div
+                      ref={notionEditorRef}
+                      className="va-notion-editor"
+                      contentEditable
+                      suppressContentEditableWarning
+                      onInput={handleNotionEditorInput}
+                      onKeyDown={handleNotionEditorKeyDown}
+                      onMouseDown={handleNotionEditorMouseDown}
+                      onMouseOver={handleNotionEditorMouseOver}
+                      onMouseUp={handleNotionEditorMouseUp}
+                      onClick={handleNotionEditorClick}
+                      onContextMenu={handleNotionEditorContextMenu}
+                      onPaste={handleNotionEditorPaste}
+                      onBlur={syncDraftFromNotionEditor}
+                      data-placeholder="Type markdown-like text. Use '- ' for bullet."
+                    />
                   )}
                 </div>
               ) : null}
@@ -3342,6 +2544,21 @@ export function ArtifactsPage() {
         </div>
       ) : null}
 
+      {editorContextMenu && editorContextMenuPosition ? (
+        <div
+          className="va-context-menu"
+          style={{ left: editorContextMenuPosition.left, top: editorContextMenuPosition.top }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button type="button" onClick={() => handleInsertTableFromEditorContext()}>
+            Insert Table
+          </button>
+          <button type="button" onClick={() => handleOpenInsertLinkDialog()}>
+            Insert Link
+          </button>
+        </div>
+      ) : null}
+
       <ConfirmDialog
         open={Boolean(deleteConfirm)}
         title={deleteConfirm?.count && deleteConfirm.count > 1 ? "Delete Items" : "Delete Item"}
@@ -3376,6 +2593,20 @@ export function ArtifactsPage() {
         }}
       />
 
+      <TextInputDialog
+        open={Boolean(insertLinkState)}
+        title="Insert Link"
+        message={insertLinkState?.mode === "live" ? "Insert link into live editor selection." : "Insert markdown link."}
+        label="URL"
+        placeholder="https://example.com or relative/path.md"
+        confirmLabel="Insert"
+        busy={isSaving}
+        onCancel={() => setInsertLinkState(null)}
+        onConfirm={(value) => {
+          handleInsertLinkConfirm(value);
+        }}
+      />
+
       <input
         ref={uploadInputRef}
         type="file"
@@ -3386,3 +2617,5 @@ export function ArtifactsPage() {
     </section>
   );
 }
+
+

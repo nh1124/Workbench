@@ -507,6 +507,16 @@
   color: #6c84a8;
 }
 
+.va-notion-editor a {
+  color: #6dd0f5;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.va-notion-editor a:hover {
+  color: #a8e8ff;
+}
+
 .va-notion-block {
   margin: 0 0 0.45rem;
   min-height: 1.2em;
