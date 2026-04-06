@@ -109,7 +109,10 @@ export function ArtifactsPage() {
   const tableSelectionDragRef = useRef<TableSelectionState | null>(null);
   const handleCreateNoteRef = useRef<() => void>(() => {});
   const handleSaveRef = useRef<() => Promise<void>>(async () => {});
+  const handleArtifactHistoryNavRef = useRef<(direction: -1 | 1) => void>(() => {});
   const shortcutStateRef = useRef({ canSave: false, isSaving: false, markdownEditorVisible: false });
+  const artifactNavHistoryRef = useRef<{ ids: string[]; index: number }>({ ids: [], index: -1 });
+  const suppressArtifactNavPushRef = useRef(false);
 
   const treeRoot = useMemo(() => buildTree(items), [items]);
   const visibleSelectableItemIds = useMemo(
@@ -520,9 +523,42 @@ export function ArtifactsPage() {
   }, [items]);
 
   useEffect(() => {
+    if (!selectedItemId) {
+      return;
+    }
+
+    if (suppressArtifactNavPushRef.current) {
+      suppressArtifactNavPushRef.current = false;
+      return;
+    }
+
+    const history = artifactNavHistoryRef.current;
+    const currentId = history.index >= 0 ? history.ids[history.index] : null;
+    if (currentId === selectedItemId) {
+      return;
+    }
+
+    const nextIds = history.ids.slice(0, history.index + 1);
+    nextIds.push(selectedItemId);
+    artifactNavHistoryRef.current = { ids: nextIds, index: nextIds.length - 1 };
+  }, [selectedItemId]);
+
+  useEffect(() => {
     const handler = (e: globalThis.KeyboardEvent) => {
       const { canSave: cs, isSaving: is, markdownEditorVisible: mev } = shortcutStateRef.current;
       const key = e.key.toLowerCase();
+
+      if (e.altKey && !e.ctrlKey && !e.metaKey) {
+        const isBack = e.key === "ArrowLeft" || e.key === "<" || (e.shiftKey && e.key === ",");
+        const isForward = e.key === "ArrowRight" || e.key === ">" || (e.shiftKey && e.key === ".");
+        if (isBack || isForward) {
+          e.preventDefault();
+          e.stopPropagation();
+          handleArtifactHistoryNavRef.current(isBack ? -1 : 1);
+          return;
+        }
+      }
+
       // Ctrl+N: new note
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && key === "n") {
         e.preventDefault();
@@ -566,6 +602,24 @@ export function ArtifactsPage() {
     return () => window.removeEventListener("keydown", handler);
   }, []); // stable: reads via refs, sets via stable setState
 
+  useEffect(() => {
+    const handlePointerNav = (event: globalThis.MouseEvent) => {
+      if (event.button !== 3 && event.button !== 4) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      handleArtifactHistoryNavRef.current(event.button === 3 ? -1 : 1);
+    };
+
+    window.addEventListener("mousedown", handlePointerNav, true);
+    window.addEventListener("auxclick", handlePointerNav, true);
+    return () => {
+      window.removeEventListener("mousedown", handlePointerNav, true);
+      window.removeEventListener("auxclick", handlePointerNav, true);
+    };
+  }, []);
+
   const updateSelection = (itemId: string, options?: { shiftKey?: boolean; toggleKey?: boolean }) => {
     const shiftKey = Boolean(options?.shiftKey);
     const toggleKey = Boolean(options?.toggleKey);
@@ -592,6 +646,22 @@ export function ArtifactsPage() {
     setSelectionAnchorId(itemId);
   };
 
+  const activateItem = (item: ArtifactItem, options?: { suppressHistoryPush?: boolean; preserveSelection?: boolean }) => {
+    if (options?.suppressHistoryPush) {
+      suppressArtifactNavPushRef.current = true;
+    }
+    if (!options?.preserveSelection) {
+      setSelectedItemIds([item.id]);
+      setSelectionAnchorId(item.id);
+    }
+    setMobileTreeVisible(false);
+    setSelectedItemId(item.id);
+    setSelectedFolderPath(parentPath(item.path));
+    setError(null);
+    setTagInput("");
+    setMode("view");
+  };
+
   const selectItem = (item: ArtifactItem, options?: { shiftKey?: boolean; toggleKey?: boolean }) => {
     const withShift = Boolean(options?.shiftKey);
     const withToggle = Boolean(options?.toggleKey);
@@ -599,13 +669,29 @@ export function ArtifactsPage() {
 
     // Shift/Ctrl multi-select should not force pane transition.
     if (!withShift && !withToggle) {
-      setMobileTreeVisible(false);
-      setSelectedItemId(item.id);
-      setSelectedFolderPath(parentPath(item.path));
-      setError(null);
-      setTagInput("");
+      activateItem(item, { preserveSelection: true });
     }
   };
+
+  const navigateArtifactHistory = (direction: -1 | 1) => {
+    const history = artifactNavHistoryRef.current;
+    if (history.ids.length === 0) {
+      return;
+    }
+
+    let nextIndex = history.index + direction;
+    while (nextIndex >= 0 && nextIndex < history.ids.length) {
+      const targetId = history.ids[nextIndex];
+      const target = itemsById.get(targetId);
+      if (target) {
+        artifactNavHistoryRef.current = { ids: history.ids, index: nextIndex };
+        activateItem(target, { suppressHistoryPush: true });
+        return;
+      }
+      nextIndex += direction;
+    }
+  };
+  handleArtifactHistoryNavRef.current = navigateArtifactHistory;
 
   const toggleFolder = (folderPath: string) => {
     setCollapsedFolders((prev) => {
