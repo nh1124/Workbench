@@ -14,7 +14,6 @@ import type {
   ProjectOption,
   TableSelectionState,
   TableContextMenuState,
-  TextSelectionSnapshot,
   TreeContextMenuState,
   TreeContextTarget,
   TreeFolderNode
@@ -51,20 +50,10 @@ import {
   findNotionBlock,
   getNotionTableColumnCount,
   getNotionTableRows,
-  hasMeaningfulBlockContent,
-  markdownToNotionHtml,
   normalizeNotionBlockElement,
   normalizeTableSelectionBounds,
-  notionEditorToMarkdown,
-  placeCaretAtBlockStart
 } from "../artifacts/utils/notionMarkdown";
-import {
-  transformBoldAtSelection,
-  transformEnterWithLevelContinuation,
-  transformSelectedLinesLevel,
-  transformStrikeAtSelection,
-  type EditorTextTransformResult
-} from "../artifacts/utils/editorTransforms";
+import { useArtifactsMarkdownEditor } from "../artifacts/hooks/useArtifactsMarkdownEditor";
 import {
   IcoClose,
   IcoCompress,
@@ -116,16 +105,11 @@ export function ArtifactsPage() {
   const [mobileTreeVisible, setMobileTreeVisible] = useState(false);
 
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
-  const editorRef = useRef<HTMLTextAreaElement | null>(null);
-  const notionEditorRef = useRef<HTMLDivElement | null>(null);
   const draggingItemRef = useRef<ArtifactItem | null>(null);
   const tableSelectionDragRef = useRef<TableSelectionState | null>(null);
   const handleCreateNoteRef = useRef<() => void>(() => {});
   const handleSaveRef = useRef<() => Promise<void>>(async () => {});
   const shortcutStateRef = useRef({ canSave: false, isSaving: false, markdownEditorVisible: false });
-  const notionSyncRef = useRef<{ itemId?: string; markdown: string }>({ itemId: undefined, markdown: "" });
-  const editSelectionRef = useRef<TextSelectionSnapshot | null>(null);
-  const liveSelectionRef = useRef<Range | null>(null);
 
   const treeRoot = useMemo(() => buildTree(items), [items]);
   const visibleSelectableItemIds = useMemo(
@@ -169,6 +153,26 @@ export function ArtifactsPage() {
     if (draft.kind === "note") return true;
     return draft.kind === "file" && isMarkdownFilePath(draft.path);
   }, [draft.kind, draft.path, mode]);
+
+  const {
+    editorRef,
+    notionEditorRef,
+    editSelectionRef,
+    liveSelectionRef,
+    rememberEditSelection,
+    rememberLiveSelection,
+    applyDraftInsertion,
+    handleEditorKeyDown,
+    syncDraftFromNotionEditor,
+    handleNotionEditorInput,
+    handleNotionEditorPaste,
+    handleNotionEditorKeyDown
+  } = useArtifactsMarkdownEditor({
+    draft,
+    setDraft,
+    notePreviewMode,
+    items
+  });
 
   const canSave = useMemo(() => {
     if (!draft.title.trim()) return false;
@@ -468,27 +472,6 @@ export function ArtifactsPage() {
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [draft.id, draft.kind, draft.mimeType, draft.path]);
-
-  useEffect(() => {
-    if (notePreviewMode !== "live") {
-      return;
-    }
-    const editor = notionEditorRef.current;
-    if (!editor) return;
-
-    const hasItemChanged = notionSyncRef.current.itemId !== draft.id;
-    const hasMarkdownChanged = notionSyncRef.current.markdown !== draft.contentMarkdown;
-    const isFocused = document.activeElement === editor;
-    if (!hasItemChanged && !hasMarkdownChanged && isFocused) {
-      return;
-    }
-
-    editor.innerHTML = markdownToNotionHtml(draft.contentMarkdown || "");
-    if (editor.children.length === 0) {
-      editor.appendChild(createNotionBlock("paragraph"));
-    }
-    notionSyncRef.current = { itemId: draft.id, markdown: draft.contentMarkdown };
-  }, [draft.contentMarkdown, draft.id, notePreviewMode]);
 
   useEffect(() => {
     if (notePreviewMode !== "live") {
@@ -1108,13 +1091,7 @@ export function ArtifactsPage() {
       const selectedText = (editSelectionRef.current?.text ?? text.slice(start, end)).trim();
       const label = selectedText || href;
       const insertion = `[${label}](${href})`;
-      const nextText = `${text.slice(0, start)}${insertion}${text.slice(end)}`;
-      const cursor = start + insertion.length;
-      applyEditorTransform({
-        nextText,
-        nextSelectionStart: cursor,
-        nextSelectionEnd: cursor
-      });
+      applyDraftInsertion(insertion);
       setInsertLinkState(null);
       return;
     }
@@ -1400,60 +1377,6 @@ export function ArtifactsPage() {
     }
   };
 
-  const applyEditorTransform = (transform: EditorTextTransformResult) => {
-    setDraft((prev) => ({
-      ...prev,
-      contentMarkdown: transform.nextText
-    }));
-    requestAnimationFrame(() => {
-      const editor = editorRef.current;
-      if (!editor) return;
-      editor.focus();
-      editor.setSelectionRange(transform.nextSelectionStart, transform.nextSelectionEnd);
-    });
-  };
-
-  const rememberEditSelection = (textarea: HTMLTextAreaElement) => {
-    const text = textarea.value;
-    const start = textarea.selectionStart ?? text.length;
-    const end = textarea.selectionEnd ?? text.length;
-    editSelectionRef.current = {
-      start,
-      end,
-      text: text.slice(start, end)
-    };
-  };
-
-  const rememberLiveSelection = () => {
-    const editor = notionEditorRef.current;
-    const selection = window.getSelection();
-    if (!editor || !selection || selection.rangeCount === 0) {
-      liveSelectionRef.current = null;
-      return;
-    }
-    const range = selection.getRangeAt(0);
-    if (!editor.contains(range.startContainer) || !editor.contains(range.endContainer)) {
-      liveSelectionRef.current = null;
-      return;
-    }
-    liveSelectionRef.current = range.cloneRange();
-  };
-
-  const applyDraftInsertion = (insertedText: string) => {
-    const text = draft.contentMarkdown;
-    const snapshot = editSelectionRef.current;
-    const fallbackPos = editorRef.current?.selectionStart ?? text.length;
-    const start = snapshot?.start ?? fallbackPos;
-    const end = snapshot?.end ?? fallbackPos;
-    const nextText = `${text.slice(0, start)}${insertedText}${text.slice(end)}`;
-    const cursor = start + insertedText.length;
-    applyEditorTransform({
-      nextText,
-      nextSelectionStart: cursor,
-      nextSelectionEnd: cursor
-    });
-  };
-
   const openEditorContextMenu = (event: MouseEvent<HTMLElement>, mode: "edit" | "live") => {
     event.preventDefault();
     event.stopPropagation();
@@ -1469,301 +1392,6 @@ export function ArtifactsPage() {
   const handleEditEditorContextMenu = (event: MouseEvent<HTMLTextAreaElement>) => {
     rememberEditSelection(event.currentTarget);
     openEditorContextMenu(event, "edit");
-  };
-
-  const handleEditorKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    const text = draft.contentMarkdown;
-    const selectionStart = event.currentTarget.selectionStart ?? text.length;
-    const selectionEnd = event.currentTarget.selectionEnd ?? text.length;
-    const withCtrl = event.ctrlKey || event.metaKey;
-
-    if (!withCtrl && !event.altKey && !event.shiftKey && event.key === "Enter") {
-      const continued = transformEnterWithLevelContinuation(text, selectionStart, selectionEnd);
-      if (continued) {
-        event.preventDefault();
-        applyEditorTransform(continued);
-      }
-      return;
-    }
-
-    if (!withCtrl) {
-      return;
-    }
-
-    const lowerKey = event.key.toLowerCase();
-    if (lowerKey === "b") {
-      event.preventDefault();
-      applyEditorTransform(transformBoldAtSelection(text, selectionStart, selectionEnd));
-      return;
-    }
-
-    const isStrikeToggle = event.key === "-" || event.code === "Minus" || event.code === "NumpadSubtract";
-    if (isStrikeToggle) {
-      event.preventDefault();
-      applyEditorTransform(transformStrikeAtSelection(text, selectionStart, selectionEnd));
-      return;
-    }
-
-    const isIncrease = event.key === ">" || (event.shiftKey && event.key === ".");
-    if (isIncrease) {
-      const transformed = transformSelectedLinesLevel(text, selectionStart, selectionEnd, 1);
-      if (transformed) {
-        event.preventDefault();
-        applyEditorTransform(transformed);
-      }
-      return;
-    }
-
-    const isDecrease = event.key === "<" || (event.shiftKey && event.key === ",");
-    if (isDecrease) {
-      const transformed = transformSelectedLinesLevel(text, selectionStart, selectionEnd, -1);
-      if (transformed) {
-        event.preventDefault();
-        applyEditorTransform(transformed);
-      }
-    }
-  };
-
-  const syncDraftFromNotionEditor = () => {
-    const editor = notionEditorRef.current;
-    if (!editor) return;
-    // Keep only normalized notion blocks so serialization is stable.
-    const children = Array.from(editor.children) as HTMLElement[];
-    if (children.length === 0) {
-      editor.appendChild(createNotionBlock("paragraph"));
-    } else {
-      for (const child of children) {
-        normalizeNotionBlockElement(child);
-      }
-    }
-
-    const markdown = notionEditorToMarkdown(editor);
-    notionSyncRef.current = { itemId: draft.id, markdown };
-    setDraft((prev) => (prev.contentMarkdown === markdown ? prev : { ...prev, contentMarkdown: markdown }));
-  };
-
-  const handleNotionEditorInput = () => {
-    syncDraftFromNotionEditor();
-  };
-
-  const handleNotionEditorPaste = (event: ClipboardEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    const text = event.clipboardData.getData("text/plain");
-    if (text) {
-      document.execCommand("insertText", false, text);
-      syncDraftFromNotionEditor();
-    }
-  };
-
-  const getSelectedNotionBlocks = (editor: HTMLDivElement, range: Range): HTMLElement[] => {
-    if (range.collapsed) {
-      const single = findNotionBlock(editor, range.startContainer);
-      return single ? [single] : [];
-    }
-    const blocks = Array.from(editor.children).filter(
-      (node): node is HTMLElement => node instanceof HTMLElement && Boolean(node.dataset.mdKind)
-    );
-    return blocks.filter((block) => {
-      try {
-        return range.intersectsNode(block);
-      } catch {
-        return false;
-      }
-    });
-  };
-
-  const handleNotionEditorKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const editor = notionEditorRef.current;
-    if (!editor) return;
-    const selection = window.getSelection();
-    if (!selection || selection.rangeCount === 0) return;
-    const range = selection.getRangeAt(0);
-    const currentBlock = findNotionBlock(editor, range.startContainer);
-    if (!currentBlock) return;
-    const selectedBlocks = getSelectedNotionBlocks(editor, range);
-
-    const withCtrl = event.ctrlKey || event.metaKey;
-    const isInsideTableCell =
-      currentBlock.dataset.mdKind === "table" &&
-      event.target instanceof HTMLElement &&
-      event.target.closest("th,td") instanceof HTMLTableCellElement;
-
-    if (withCtrl && event.key.toLowerCase() === "b") {
-      event.preventDefault();
-      document.execCommand("bold");
-      syncDraftFromNotionEditor();
-      return;
-    }
-
-    const isStrikeToggle = event.key === "-" || event.code === "Minus" || event.code === "NumpadSubtract";
-    if (withCtrl && isStrikeToggle) {
-      event.preventDefault();
-      document.execCommand("strikeThrough");
-      syncDraftFromNotionEditor();
-      return;
-    }
-
-    if (withCtrl && event.shiftKey && event.key.toLowerCase() === "n") {
-      event.preventDefault();
-      document.execCommand("removeFormat");
-      for (const block of selectedBlocks) {
-        if (block.dataset.mdKind === "bullet" || block.dataset.mdKind === "heading") {
-          block.dataset.mdKind = "paragraph";
-          delete block.dataset.mdLevel;
-          normalizeNotionBlockElement(block);
-        }
-      }
-      syncDraftFromNotionEditor();
-      return;
-    }
-
-    if (isInsideTableCell) {
-      return;
-    }
-
-    if (!withCtrl && !event.altKey && event.key === "Tab" && range.collapsed && currentBlock.dataset.mdKind === "bullet") {
-      const beforeRange = document.createRange();
-      beforeRange.setStart(currentBlock, 0);
-      beforeRange.setEnd(range.startContainer, range.startOffset);
-      const atBlockStart = beforeRange.toString().length === 0;
-      if (!atBlockStart) {
-        return;
-      }
-
-      event.preventDefault();
-      const currentLevel = Number(currentBlock.dataset.mdLevel || "1");
-      if (event.shiftKey) {
-        if (currentLevel <= 1) {
-          currentBlock.dataset.mdKind = "paragraph";
-          delete currentBlock.dataset.mdLevel;
-        } else {
-          currentBlock.dataset.mdLevel = String(currentLevel - 1);
-        }
-      } else {
-        currentBlock.dataset.mdLevel = String(Math.min(3, currentLevel + 1));
-      }
-      normalizeNotionBlockElement(currentBlock);
-      syncDraftFromNotionEditor();
-      return;
-    }
-
-    if (!withCtrl && !event.altKey && event.key === "Backspace" && range.collapsed && currentBlock.dataset.mdKind === "bullet") {
-      const beforeRange = document.createRange();
-      beforeRange.setStart(currentBlock, 0);
-      beforeRange.setEnd(range.startContainer, range.startOffset);
-      const atBlockStart = beforeRange.toString().length === 0;
-      if (atBlockStart) {
-        event.preventDefault();
-        currentBlock.dataset.mdKind = "paragraph";
-        delete currentBlock.dataset.mdLevel;
-        normalizeNotionBlockElement(currentBlock);
-        placeCaretAtBlockStart(currentBlock);
-        syncDraftFromNotionEditor();
-        return;
-      }
-    }
-
-    if (withCtrl && (event.key === ">" || (event.shiftKey && event.key === "."))) {
-      if (currentBlock.dataset.mdKind === "bullet" || currentBlock.dataset.mdKind === "heading") {
-        event.preventDefault();
-        const currentLevel = Number(currentBlock.dataset.mdLevel || "1");
-        currentBlock.dataset.mdLevel = String(Math.min(3, currentLevel + 1));
-        normalizeNotionBlockElement(currentBlock);
-        syncDraftFromNotionEditor();
-      }
-      return;
-    }
-
-    if (withCtrl && (event.key === "<" || (event.shiftKey && event.key === ","))) {
-      if (currentBlock.dataset.mdKind === "bullet" || currentBlock.dataset.mdKind === "heading") {
-        event.preventDefault();
-        const currentLevel = Number(currentBlock.dataset.mdLevel || "1");
-        if (currentLevel <= 1) {
-          currentBlock.dataset.mdKind = "paragraph";
-          delete currentBlock.dataset.mdLevel;
-        } else {
-          currentBlock.dataset.mdLevel = String(currentLevel - 1);
-        }
-        normalizeNotionBlockElement(currentBlock);
-        syncDraftFromNotionEditor();
-      }
-      return;
-    }
-
-    if (event.key === " " && range.collapsed) {
-      const beforeRange = document.createRange();
-      beforeRange.setStart(currentBlock, 0);
-      beforeRange.setEnd(range.startContainer, range.startOffset);
-      const prefix = beforeRange.toString().trim();
-      const wholeText = (currentBlock.textContent ?? "").trim();
-      if (/^-{1,3}$/.test(prefix) && prefix === wholeText) {
-        event.preventDefault();
-        currentBlock.dataset.mdKind = "bullet";
-        currentBlock.dataset.mdLevel = String(Math.min(3, prefix.length));
-        currentBlock.innerHTML = "<br>";
-        normalizeNotionBlockElement(currentBlock);
-        placeCaretAtBlockStart(currentBlock);
-        syncDraftFromNotionEditor();
-        return;
-      }
-      if (/^#{1,3}$/.test(prefix) && prefix === wholeText) {
-        event.preventDefault();
-        currentBlock.dataset.mdKind = "heading";
-        currentBlock.dataset.mdLevel = String(Math.min(3, prefix.length));
-        currentBlock.innerHTML = "<br>";
-        normalizeNotionBlockElement(currentBlock);
-        placeCaretAtBlockStart(currentBlock);
-        syncDraftFromNotionEditor();
-      }
-      return;
-    }
-
-    if (event.key === "Enter" && range.collapsed) {
-      event.preventDefault();
-      const kind = currentBlock.dataset.mdKind === "bullet"
-        ? "bullet"
-        : currentBlock.dataset.mdKind === "heading"
-          ? "heading"
-          : "paragraph";
-      const level = Number(currentBlock.dataset.mdLevel || "1");
-      const blockText = (currentBlock.textContent ?? "").trim();
-
-      if (kind === "bullet" && blockText.length === 0) {
-        currentBlock.dataset.mdKind = "paragraph";
-        delete currentBlock.dataset.mdLevel;
-        normalizeNotionBlockElement(currentBlock);
-        currentBlock.innerHTML = "<br>";
-        placeCaretAtBlockStart(currentBlock);
-        syncDraftFromNotionEditor();
-        return;
-      }
-
-      const nextKind = kind === "bullet" ? "bullet" : "paragraph";
-      const trailingRange = range.cloneRange();
-      trailingRange.setEnd(currentBlock, currentBlock.childNodes.length);
-      const trailingContent = trailingRange.extractContents();
-
-      if (!hasMeaningfulBlockContent(currentBlock)) {
-        currentBlock.innerHTML = "<br>";
-      }
-
-      const nextBlock = createNotionBlock(nextKind, level);
-      nextBlock.innerHTML = "";
-      if (trailingContent.childNodes.length > 0) {
-        nextBlock.appendChild(trailingContent);
-      }
-      if (!hasMeaningfulBlockContent(nextBlock)) {
-        nextBlock.innerHTML = "<br>";
-      }
-
-      if (currentBlock.nextSibling) {
-        editor.insertBefore(nextBlock, currentBlock.nextSibling);
-      } else {
-        editor.appendChild(nextBlock);
-      }
-      placeCaretAtBlockStart(nextBlock);
-      syncDraftFromNotionEditor();
-    }
   };
 
   const handleSave = async () => {

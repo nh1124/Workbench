@@ -1,4 +1,5 @@
 import type { ParsedMarkdownTable, TableSelectionBounds, TableSelectionState } from "../types";
+import { extractYoutubeId } from "./file";
 
 /** Convert leading `-- ` / `--- ` bullet syntax to standard indented Markdown list syntax. */
 export function preprocessMarkdownBullets(md: string): string {
@@ -24,9 +25,70 @@ function escapeHtml(value: string): string {
 function markdownInlineToHtml(value: string): string {
   const escaped = escapeHtml(value);
   return escaped
+    .replace(/!\[([^\]\n]*)\]\(([^)\s]+)\)/g, '<img class="va-md-img va-md-img-loading" data-md-src="$2" alt="$1" />')
     .replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, '<a href="$2">$1</a>')
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/~~([^~]+)~~/g, "<del>$1</del>");
+}
+
+function parseLineAsMarkdownLink(line: string): { label: string; href: string } | null {
+  const match = line.trim().match(/^\[([^\]\n]*)\]\(([^)\s]+)\)$/);
+  if (!match) {
+    return null;
+  }
+  return { label: match[1] ?? "", href: match[2] ?? "" };
+}
+
+function parseYoutubeSourceFromLine(line: string): string | null {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const link = parseLineAsMarkdownLink(trimmed);
+  if (link?.href && extractYoutubeId(link.href)) {
+    return link.href;
+  }
+
+  if (/^https?:\/\/\S+$/i.test(trimmed) && extractYoutubeId(trimmed)) {
+    return trimmed;
+  }
+
+  return null;
+}
+
+function youtubeEmbedBlockToHtml(source: string): string {
+  const videoId = extractYoutubeId(source);
+  if (!videoId) {
+    return `<p class="va-notion-block" data-md-kind="paragraph">${markdownInlineToHtml(source)}</p>`;
+  }
+  const escapedSource = escapeHtml(source);
+  const embedUrl = `https://www.youtube.com/embed/${videoId}`;
+  return `<div class="va-notion-block va-md-embed-block" data-md-kind="paragraph" data-md-embed-kind="youtube" data-md-src="${escapedSource}"><iframe class="va-md-youtube" src="${embedUrl}" title="YouTube video preview" loading="lazy" allowfullscreen></iframe></div>`;
+}
+
+function ensureNotionYoutubeEmbedBlockStructure(block: HTMLElement): void {
+  const source = block.dataset.mdSrc?.trim() ?? "";
+  const videoId = source ? extractYoutubeId(source) : null;
+  if (!videoId) {
+    delete block.dataset.mdEmbedKind;
+    return;
+  }
+
+  block.classList.add("va-md-embed-block");
+  let frame = block.querySelector("iframe") as HTMLIFrameElement | null;
+  if (!frame) {
+    frame = document.createElement("iframe");
+    block.innerHTML = "";
+    block.appendChild(frame);
+  }
+
+  frame.className = "va-md-youtube";
+  frame.src = `https://www.youtube.com/embed/${videoId}`;
+  frame.title = "YouTube video preview";
+  frame.loading = "lazy";
+  frame.allowFullscreen = true;
+  frame.setAttribute("contenteditable", "false");
 }
 
 function parseMarkdownTableRow(line: string): string[] | null {
@@ -264,6 +326,12 @@ export function markdownToNotionHtml(markdown: string): string {
     }
 
     const line = lines[i];
+    const youtubeSource = parseYoutubeSourceFromLine(line);
+    if (youtubeSource) {
+      blocks.push(youtubeEmbedBlockToHtml(youtubeSource));
+      continue;
+    }
+
     const headingMatch = line.match(/^(#{1,3})\s?(.*)$/);
     if (headingMatch) {
       const level = headingMatch[1].length;
@@ -305,6 +373,14 @@ function inlineNodeToMarkdown(node: Node): string {
   if (element.tagName === "DEL" || element.tagName === "S" || element.tagName === "STRIKE") {
     return `~~${inner}~~`;
   }
+  if (element.tagName === "IMG") {
+    const source = (element.getAttribute("data-md-src") ?? element.getAttribute("src") ?? "").trim();
+    if (!source) {
+      return "";
+    }
+    const alt = (element.getAttribute("alt") ?? "").replaceAll("]", "\\]");
+    return `![${alt}](${source})`;
+  }
   if (element.tagName === "A") {
     const href = element.getAttribute("href")?.trim() ?? "";
     if (!href) {
@@ -320,6 +396,15 @@ export function notionEditorToMarkdown(editor: HTMLElement): string {
   const parts: string[] = [];
   const blocks = Array.from(editor.children) as HTMLElement[];
   for (const block of blocks) {
+    const embedKind = (block.dataset.mdEmbedKind ?? "").trim();
+    if (embedKind === "youtube") {
+      const source = (block.dataset.mdSrc ?? "").trim();
+      if (source) {
+        parts.push(source);
+        continue;
+      }
+    }
+
     const kind = block.dataset.mdKind === "table"
       ? "table"
       : block.dataset.mdKind === "bullet"
@@ -367,6 +452,11 @@ export function normalizeNotionBlockElement(block: HTMLElement): void {
     return;
   }
   block.className = "va-notion-block";
+  const embedKind = (block.dataset.mdEmbedKind ?? "").trim();
+  if (kind === "paragraph" && embedKind === "youtube") {
+    ensureNotionYoutubeEmbedBlockStructure(block);
+    return;
+  }
   if (kind === "bullet") {
     block.dataset.mdLevel = String(level);
     block.classList.add("va-notion-bullet", `level-${level}`);
