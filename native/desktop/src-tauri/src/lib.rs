@@ -146,6 +146,7 @@ fn open_new_main_window(app: &tauri::AppHandle) -> Result<(), String> {
     .inner_size(1280.0, 860.0)
     .resizable(true)
     .focused(true)
+    .disable_drag_drop_handler()
     .build()
     .and_then(|window| {
       let _ = window.unminimize();
@@ -191,6 +192,7 @@ fn open_new_quick_note_window(app: &tauri::AppHandle) -> Result<(), String> {
   .inner_size(560.0, 760.0)
   .resizable(true)
   .focused(true)
+  .disable_drag_drop_handler()
   .build()
   .and_then(|window| {
     window.set_always_on_top(true)?;
@@ -233,6 +235,16 @@ pub fn run() {
       }
     }))
     .setup(|app| {
+      #[cfg(desktop)]
+      {
+        // Close any windows created from tauri.conf.json (they lack disable_drag_drop_handler).
+        // We recreate the main window here so drag-and-drop works correctly in the WebView.
+        use tauri::Manager;
+        for window in app.webview_windows().values() {
+          let _ = window.close();
+        }
+        open_new_main_window(app.handle()).map_err(|e| Box::<dyn std::error::Error>::from(e))?;
+      }
       #[cfg(desktop)]
       {
         use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
