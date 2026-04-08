@@ -14,7 +14,7 @@ const shortcutSections: ShortcutSection[] = [
   {
     title: "Window",
     items: [
-      { label: "New Window", keys: ["Ctrl", "N"] },
+      { label: "New Window", keys: ["Ctrl", "Shift", "N"] },
       { label: "New Window (Taskbar icon)", keys: ["Shift", "Click"] }
     ]
   },
@@ -22,6 +22,7 @@ const shortcutSections: ShortcutSection[] = [
     title: "Notes",
     items: [
       { label: "Quick Note", keys: ["Win", "Alt", "N"] },
+      { label: "Quick Note (Alt)", keys: ["Ctrl", "Alt", "N"] },
       { label: "Undo Delete", keys: ["Ctrl", "Z"] }
     ]
   },
