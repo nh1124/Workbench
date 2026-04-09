@@ -107,6 +107,7 @@ export function ArtifactsPage() {
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const draggingItemRef = useRef<ArtifactItem | null>(null);
   const tableSelectionDragRef = useRef<TableSelectionState | null>(null);
+  const loadTreeRef = useRef<() => Promise<void>>(async () => {});
   const handleCreateNoteRef = useRef<() => void>(() => {});
   const handleSaveRef = useRef<() => Promise<void>>(async () => {});
   const handleArtifactHistoryNavRef = useRef<(direction: -1 | 1) => void>(() => {});
@@ -169,12 +170,14 @@ export function ArtifactsPage() {
     syncDraftFromNotionEditor,
     handleNotionEditorInput,
     handleNotionEditorPaste,
+    handleNotionEditorDrop,
     handleNotionEditorKeyDown
   } = useArtifactsMarkdownEditor({
     draft,
     setDraft,
     notePreviewMode,
-    items
+    items,
+    onImageUploaded: () => loadTreeRef.current(),
   });
 
   const canSave = useMemo(() => {
@@ -368,6 +371,7 @@ export function ArtifactsPage() {
       setIsLoading(false);
     }
   };
+  loadTreeRef.current = loadTree;
 
   useEffect(() => {
     void loadProjects();
@@ -1424,11 +1428,42 @@ export function ArtifactsPage() {
   };
 
   const handleEditorPaste = async (event: ClipboardEvent<HTMLTextAreaElement>) => {
-    const files = Array.from(event.clipboardData.files).filter((f) => /^image\//i.test(f.type));
+    // In WebView2 (Windows/Tauri), clipboardData.files and .items are often empty for screenshots.
+    // navigator.clipboard.read() is the reliable path for WebView2 image paste.
+    // Capture cursor position now before any async suspension.
+    const insertPos = event.currentTarget.selectionStart ?? draft.contentMarkdown.length;
+
+    // 1. Try synchronous DataTransfer sources (works in standard browsers).
+    let files: File[] = Array.from(event.clipboardData.files).filter((f) => /^image\//i.test(f.type));
+    if (files.length === 0) {
+      files = Array.from(event.clipboardData.items)
+        .filter((item) => item.kind === "file" && /^image\//i.test(item.type))
+        .map((item) => item.getAsFile())
+        .filter((f): f is File => f !== null);
+    }
+
+    // 2. Fallback: Clipboard API (needed in WebView2 where DataTransfer images are absent).
+    //    Called inside the paste handler (user gesture) so permission is granted automatically.
+    if (files.length === 0 && typeof navigator.clipboard?.read === "function") {
+      try {
+        const clipItems = await navigator.clipboard.read();
+        for (const clipItem of clipItems) {
+          for (const type of clipItem.types) {
+            if (/^image\//i.test(type)) {
+              const blob = await clipItem.getType(type);
+              const ext = type.split("/")[1] ?? "png";
+              files.push(new File([blob], `paste-${Date.now()}.${ext}`, { type }));
+            }
+          }
+        }
+      } catch {
+        // Permission denied or Clipboard API unavailable — fall through.
+      }
+    }
+
     if (files.length === 0) return;
     event.preventDefault();
 
-    const insertPos = event.currentTarget.selectionStart ?? draft.contentMarkdown.length;
     const uploadDir = parentPath(draft.path) || undefined;
 
     setIsSaving(true);
@@ -2177,6 +2212,8 @@ export function ArtifactsPage() {
                       onClick={handleNotionEditorClick}
                       onContextMenu={handleNotionEditorContextMenu}
                       onPaste={handleNotionEditorPaste}
+                      onDragOver={(event) => { event.preventDefault(); }}
+                      onDrop={handleNotionEditorDrop}
                       onBlur={syncDraftFromNotionEditor}
                       data-placeholder="Type markdown-like text. Use '- ' for bullet."
                     />

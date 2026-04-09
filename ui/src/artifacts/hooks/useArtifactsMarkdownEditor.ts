@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ClipboardEvent, type Dispatch, type KeyboardEvent, type SetStateAction } from "react";
+import { useEffect, useRef, type ClipboardEvent, type Dispatch, type DragEvent, type KeyboardEvent, type SetStateAction } from "react";
 import { artifactsApi } from "../../lib/api";
 import type { ArtifactItem } from "../../types/models";
 import type { ArtifactEditorDraft } from "../types";
@@ -12,7 +12,7 @@ import {
   notionEditorToMarkdown,
   placeCaretAtBlockStart
 } from "../utils/notionMarkdown";
-import { isExternalUrl, normalizePath, resolveMarkdownRef } from "../utils/path";
+import { isExternalUrl, normalizePath, parentPath, relativeArtifactPath, resolveMarkdownRef } from "../utils/path";
 
 type PreviewMode = "edit" | "live";
 
@@ -21,13 +21,16 @@ type UseArtifactsMarkdownEditorParams = {
   setDraft: Dispatch<SetStateAction<ArtifactEditorDraft>>;
   notePreviewMode: PreviewMode;
   items: ArtifactItem[];
+  /** Called after an image is uploaded via paste so the items list can be refreshed. */
+  onImageUploaded: () => Promise<void>;
 };
 
 export function useArtifactsMarkdownEditor({
   draft,
   setDraft,
   notePreviewMode,
-  items
+  items,
+  onImageUploaded,
 }: UseArtifactsMarkdownEditorParams) {
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
   const notionEditorRef = useRef<HTMLDivElement | null>(null);
@@ -165,12 +168,112 @@ export function useArtifactsMarkdownEditor({
   };
 
   const handleNotionEditorPaste = (event: ClipboardEvent<HTMLDivElement>) => {
+    // Try to get image files from clipboard synchronously first.
+    let imageFiles: File[] = Array.from(event.clipboardData.files).filter((f) => /^image\//i.test(f.type));
+    if (imageFiles.length === 0) {
+      imageFiles = Array.from(event.clipboardData.items)
+        .filter((item) => item.kind === "file" && /^image\//i.test(item.type))
+        .map((item) => item.getAsFile())
+        .filter((f): f is File => f !== null);
+    }
+
+    if (imageFiles.length > 0) {
+      // Synchronous path: images found in DataTransfer (standard browsers).
+      event.preventDefault();
+      void uploadAndInsertImages(imageFiles);
+      return;
+    }
+
+    // Text paste (also covers the case where Clipboard API must be tried asynchronously).
     event.preventDefault();
     const text = event.clipboardData.getData("text/plain");
     if (text) {
       document.execCommand("insertText", false, text);
       syncDraftFromNotionEditor();
+      return;
     }
+
+    // Fallback: Clipboard API (needed in WebView2 where DataTransfer images are absent).
+    if (typeof navigator.clipboard?.read === "function") {
+      void (async () => {
+        try {
+          const clipItems = await navigator.clipboard.read();
+          const asyncFiles: File[] = [];
+          for (const clipItem of clipItems) {
+            for (const type of clipItem.types) {
+              if (/^image\//i.test(type)) {
+                const blob = await clipItem.getType(type);
+                const ext = type.split("/")[1] ?? "png";
+                asyncFiles.push(new File([blob], `paste-${Date.now()}.${ext}`, { type }));
+              }
+            }
+          }
+          if (asyncFiles.length > 0) {
+            await uploadAndInsertImages(asyncFiles);
+          }
+        } catch {
+          // Permission denied or Clipboard API unavailable.
+        }
+      })();
+    }
+  };
+
+  const uploadAndInsertImages = async (files: File[]) => {
+    const uploadDir = parentPath(draft.path) || undefined;
+    let insertedText = "";
+    try {
+      for (const file of files) {
+        const name = file.name && file.name !== "image.png"
+          ? file.name
+          : `paste-${Date.now()}.${file.type.split("/")[1] ?? "png"}`;
+        const namedFile = new File([file], name, { type: file.type });
+        const uploaded = await artifactsApi.uploadFile({
+          projectId: draft.projectId,
+          projectName: draft.projectName || undefined,
+          directoryPath: uploadDir,
+          file: namedFile,
+        });
+        const rel = relativeArtifactPath(draft.path, uploaded.path);
+        insertedText += `![${name}](${rel})\n`;
+      }
+    } catch {
+      return;
+    }
+    await onImageUploaded();
+    setDraft((prev) => ({ ...prev, contentMarkdown: prev.contentMarkdown + insertedText }));
+  };
+
+  // Drop handler for the Notion (Live) editor.
+  // The contentEditable div has no native upload support, so we intercept the drop,
+  // upload the files, and append markdown links to the draft — same as handleEditorDrop
+  // does for the textarea, but without a cursor-position offset.
+  const handleNotionEditorDrop = (event: DragEvent<HTMLDivElement>) => {
+    const files = event.dataTransfer.files;
+    if (!files || files.length === 0) return;
+    event.preventDefault();
+
+    const uploadDir = parentPath(draft.path) || undefined;
+
+    void (async () => {
+      let insertedText = "";
+      try {
+        for (const file of Array.from(files)) {
+          const uploaded = await artifactsApi.uploadFile({
+            projectId: draft.projectId,
+            projectName: draft.projectName || undefined,
+            directoryPath: uploadDir,
+            file,
+          });
+          const rel = relativeArtifactPath(draft.path, uploaded.path);
+          const isImg = /^image\//i.test(file.type) || /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(file.name);
+          insertedText += isImg ? `![${file.name}](${rel})\n` : `[${file.name}](${rel})\n`;
+        }
+      } catch {
+        return;
+      }
+      await onImageUploaded();
+      setDraft((prev) => ({ ...prev, contentMarkdown: prev.contentMarkdown + insertedText }));
+    })();
   };
 
   const getSelectedNotionBlocks = (editor: HTMLDivElement, range: Range): HTMLElement[] => {
@@ -658,6 +761,7 @@ export function useArtifactsMarkdownEditor({
     syncDraftFromNotionEditor,
     handleNotionEditorInput,
     handleNotionEditorPaste,
+    handleNotionEditorDrop,
     handleNotionEditorKeyDown
   };
 }
