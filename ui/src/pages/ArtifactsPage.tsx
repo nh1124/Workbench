@@ -2124,7 +2124,9 @@ export function ArtifactsPage() {
           <main className="va-detail-pane">
             <header className="va-detail-head">
               <div className="va-detail-title-block">
-                <span className="va-detail-path">{draft.path || "No item selected"}</span>
+                <span className="va-detail-path" title={draft.path || "No item selected"}>
+                  {draft.path || "No item selected"}
+                </span>
                 {draft.version ? <small>v{draft.version}</small> : null}
               </div>
 
@@ -2226,15 +2228,21 @@ export function ArtifactsPage() {
                 <div className="span-2 va-meta-strip">
                   <div>
                     <small>MIME</small>
-                    <p>{draft.mimeType || "-"}</p>
+                    <p className="va-truncate-1" title={draft.mimeType || "-"}>
+                      {draft.mimeType || "-"}
+                    </p>
                   </div>
                   <div>
                     <small>SIZE</small>
-                    <p>{formatSize(draft.sizeBytes)}</p>
+                    <p className="va-truncate-1" title={formatSize(draft.sizeBytes)}>
+                      {formatSize(draft.sizeBytes)}
+                    </p>
                   </div>
                   <div>
                     <small>UPDATED</small>
-                    <p>{draft.updatedAt ? formatDateTime(draft.updatedAt) : "-"}</p>
+                    <p className="va-truncate-1" title={draft.updatedAt ? formatDateTime(draft.updatedAt) : "-"}>
+                      {draft.updatedAt ? formatDateTime(draft.updatedAt) : "-"}
+                    </p>
                   </div>
                 </div>
               ) : null}

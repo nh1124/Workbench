@@ -326,9 +326,11 @@
   align-items: center;
   justify-content: space-between;
   gap: 0.6rem;
+  min-width: 0;
 }
 
 .va-detail-title-block {
+  flex: 1;
   min-width: 0;
   display: flex;
   align-items: baseline;
@@ -342,6 +344,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 .va-detail-title-block small {
@@ -498,6 +501,10 @@
   gap: 0.7rem;
 }
 
+.va-meta-strip > div {
+  min-width: 0;
+}
+
 .va-meta-strip small {
   display: block;
   color: #6986ab;
@@ -511,6 +518,12 @@
   margin: 0;
   color: #d0def1;
   font-size: 0.74rem;
+}
+
+.va-truncate-1 {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .va-content-section,
