@@ -152,12 +152,16 @@ export function TasksPageContainer() {
     occurrenceMenu,
     showMoveDateInput,
     moveDateInput,
+    showMoveProjectInput,
+    moveProjectInput,
     handleOccurrenceClick: _handleOccClick,
     ensureContextSelection,
     getSelectedOccurrenceRows,
     setOccurrenceMenu,
     setShowMoveDateInput,
     setMoveDateInput,
+    setShowMoveProjectInput,
+    setMoveProjectInput,
     clearSelection,
   } = useTaskSelection();
 
@@ -224,6 +228,7 @@ export function TasksPageContainer() {
     handleMarkSelectedOccurrences: _handleMarkSelected,
     handleSkipSelectedTasks: _handleSkipSelected,
     handleConfirmMoveDate: _handleConfirmMove,
+    handleMoveSelectedToProject: _handleMoveToProject,
     handleDeleteSelectedFromMenu: _handleDeleteSelected,
     handleToggleTodayForSelected: _handleToggleToday,
     handleAttachmentDrop,
@@ -322,6 +327,19 @@ export function TasksPageContainer() {
   const handleConfirmMoveDate = async () => {
     const rows = getSelectedOccurrenceRows(activeOccurrenceRows);
     await _handleConfirmMove(rows, moveDateInput, setOccurrenceRows, setTodayRows, setInboxUpcomingRows, setInboxDoneRows, clearSelection, closeMenu, setShowMoveDateInput, setMoveDateInput);
+  };
+
+  const handleMoveToProjectForSelected = async () => {
+    const rows = getSelectedOccurrenceRows(activeOccurrenceRows);
+    await _handleMoveToProject(
+      rows,
+      moveProjectInput,
+      closeMenu,
+      () => {
+        setShowMoveProjectInput(false);
+        setMoveProjectInput("");
+      }
+    );
   };
 
   const handleDeleteSelectedFromMenu = async () => {
@@ -707,15 +725,29 @@ export function TasksPageContainer() {
               y={occurrenceMenu.y}
               showMoveDateInput={showMoveDateInput}
               moveDateInput={moveDateInput}
+              showMoveProjectInput={showMoveProjectInput}
+              moveProjectInput={moveProjectInput}
               selectedOccurrenceKeys={selectedOccurrenceKeys}
               activeOccurrenceRows={activeOccurrenceRows}
               myDayFlaggedIds={myDayFlaggedIds}
               today={today}
+              projectOptions={projectOptions}
               onMarkDone={() => void handleMarkSelectedOccurrences("done")}
               onSkip={() => void handleSkipSelectedTasks()}
-              onShowMoveDate={() => setShowMoveDateInput(true)}
+              onShowMoveDate={() => {
+                setShowMoveProjectInput(false);
+                setMoveProjectInput("");
+                setShowMoveDateInput(true);
+              }}
               onMoveDateChange={setMoveDateInput}
               onConfirmMove={() => void handleConfirmMoveDate()}
+              onShowMoveProject={() => {
+                setShowMoveDateInput(false);
+                setMoveDateInput("");
+                setShowMoveProjectInput(true);
+              }}
+              onMoveProjectChange={setMoveProjectInput}
+              onConfirmMoveProject={() => void handleMoveToProjectForSelected()}
               onDeleteSelected={() => void handleDeleteSelectedFromMenu()}
               onToggleToday={(add) => void handleToggleTodayForSelected(add)}
             />

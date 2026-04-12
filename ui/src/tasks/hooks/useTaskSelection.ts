@@ -21,6 +21,8 @@ export interface TaskSelectionState {
   occurrenceMenu: OccurrenceMenuState;
   showMoveDateInput: boolean;
   moveDateInput: string;
+  showMoveProjectInput: boolean;
+  moveProjectInput: string;
 }
 
 export interface TaskSelectionActions {
@@ -43,6 +45,8 @@ export interface TaskSelectionActions {
   setOccurrenceMenu: React.Dispatch<React.SetStateAction<OccurrenceMenuState>>;
   setShowMoveDateInput: React.Dispatch<React.SetStateAction<boolean>>;
   setMoveDateInput: React.Dispatch<React.SetStateAction<string>>;
+  setShowMoveProjectInput: React.Dispatch<React.SetStateAction<boolean>>;
+  setMoveProjectInput: React.Dispatch<React.SetStateAction<string>>;
   clearSelection: () => void;
 }
 
@@ -56,12 +60,16 @@ export function useTaskSelection(): TaskSelectionState & TaskSelectionActions {
   });
   const [showMoveDateInput, setShowMoveDateInput] = useState(false);
   const [moveDateInput, setMoveDateInput] = useState("");
+  const [showMoveProjectInput, setShowMoveProjectInput] = useState(false);
+  const [moveProjectInput, setMoveProjectInput] = useState("");
 
   // Close menu on outside click/ESC
   useEffect(() => {
     if (!occurrenceMenu.visible) {
       setShowMoveDateInput(false);
       setMoveDateInput("");
+      setShowMoveProjectInput(false);
+      setMoveProjectInput("");
       return;
     }
     const close = () =>
@@ -167,6 +175,8 @@ export function useTaskSelection(): TaskSelectionState & TaskSelectionActions {
     occurrenceMenu,
     showMoveDateInput,
     moveDateInput,
+    showMoveProjectInput,
+    moveProjectInput,
     handleOccurrenceClick,
     ensureContextSelection,
     getSelectedOccurrenceRows,
@@ -175,6 +185,8 @@ export function useTaskSelection(): TaskSelectionState & TaskSelectionActions {
     setOccurrenceMenu,
     setShowMoveDateInput,
     setMoveDateInput,
+    setShowMoveProjectInput,
+    setMoveProjectInput,
     clearSelection
   };
 }

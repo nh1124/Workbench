@@ -5,6 +5,7 @@
  */
 
 import type { TaskOccurrenceRow } from "../types";
+import type { ProjectOption } from "../../lib/taskDisplayUtils";
 import { toDateKey } from "../../lib/taskDateUtils";
 
 export interface OccurrenceContextMenuProps {
@@ -13,15 +14,21 @@ export interface OccurrenceContextMenuProps {
   y: number;
   showMoveDateInput: boolean;
   moveDateInput: string;
+  showMoveProjectInput: boolean;
+  moveProjectInput: string;
   selectedOccurrenceKeys: Set<string>;
   activeOccurrenceRows: TaskOccurrenceRow[];
   myDayFlaggedIds: Set<string>;
   today: Date;
+  projectOptions: ProjectOption[];
   onMarkDone: () => void;
   onSkip: () => void;
   onShowMoveDate: () => void;
   onMoveDateChange: (value: string) => void;
   onConfirmMove: () => void;
+  onShowMoveProject: () => void;
+  onMoveProjectChange: (value: string) => void;
+  onConfirmMoveProject: () => void;
   onDeleteSelected: () => void;
   onToggleToday: (add: boolean) => void;
 }
@@ -32,15 +39,21 @@ export function OccurrenceContextMenu({
   y,
   showMoveDateInput,
   moveDateInput,
+  showMoveProjectInput,
+  moveProjectInput,
   selectedOccurrenceKeys,
   activeOccurrenceRows,
   myDayFlaggedIds,
   today,
+  projectOptions,
   onMarkDone,
   onSkip,
   onShowMoveDate,
   onMoveDateChange,
   onConfirmMove,
+  onShowMoveProject,
+  onMoveProjectChange,
+  onConfirmMoveProject,
   onDeleteSelected,
   onToggleToday,
 }: OccurrenceContextMenuProps) {
@@ -62,7 +75,12 @@ export function OccurrenceContextMenu({
     >
       <button type="button" onClick={onMarkDone}>Mark as Done</button>
       <button type="button" onClick={onSkip}>Skip task</button>
-      {!showMoveDateInput ? (
+      {!showMoveDateInput && !showMoveProjectInput ? (
+        <>
+          <button type="button" onClick={onShowMoveProject}>Move to project</button>
+        </>
+      ) : null}
+      {!showMoveDateInput && !showMoveProjectInput ? (
         <button
           type="button"
           onClick={() => {
@@ -85,6 +103,26 @@ export function OccurrenceContextMenu({
             autoFocus
           />
           <button type="button" onClick={onConfirmMove} disabled={!moveDateInput}>OK</button>
+        </div>
+      )}
+      {showMoveProjectInput && (
+        <div className="occurrence-menu-date-row" onClick={(e) => e.stopPropagation()}>
+          <select
+            className="occurrence-menu-date-input"
+            value={moveProjectInput}
+            onChange={(e) => onMoveProjectChange(e.target.value)}
+            aria-label="Move selected tasks to project"
+            title="Move selected tasks to project"
+            autoFocus
+          >
+            <option value="">Select project</option>
+            {projectOptions.map((project) => (
+              <option key={project.projectId} value={project.projectId}>
+                {project.projectName || project.projectId}
+              </option>
+            ))}
+          </select>
+          <button type="button" onClick={onConfirmMoveProject} disabled={!moveProjectInput}>OK</button>
         </div>
       )}
       <button type="button" className="danger" onClick={onDeleteSelected}>Remove occurrence</button>

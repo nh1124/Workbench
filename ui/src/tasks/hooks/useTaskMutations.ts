@@ -135,6 +135,12 @@ export interface TaskMutationsActions {
     setShowMoveDateInput: React.Dispatch<React.SetStateAction<boolean>>,
     setMoveDateInput: React.Dispatch<React.SetStateAction<string>>
   ) => Promise<void>;
+  handleMoveSelectedToProject: (
+    selectedRows: TaskOccurrenceRow[],
+    projectId: string,
+    closeMenu: () => void,
+    resetProjectInput: () => void
+  ) => Promise<void>;
   handleDeleteSelectedFromMenu: (
     selectedRows: TaskOccurrenceRow[],
     setOccurrenceRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>,
@@ -623,6 +629,32 @@ export function useTaskMutations(
     }
   };
 
+  const handleMoveSelectedToProject = async (
+    selectedRows: TaskOccurrenceRow[],
+    projectId: string,
+    closeMenu: () => void,
+    resetProjectInput: () => void
+  ) => {
+    if (selectedRows.length === 0 || !projectId.trim()) return;
+    const uniqueTaskIds = Array.from(new Set(selectedRows.map((row) => row.taskId)));
+    const project = projectOptions.find((option) => option.projectId === projectId);
+    try {
+      await Promise.all(
+        uniqueTaskIds.map((taskId) =>
+          tasksApi.update(taskId, {
+            context: projectId,
+            contextName: project?.projectName || projectId
+          })
+        )
+      );
+      closeMenu();
+      resetProjectInput();
+      await refreshAfterOccurrenceMutation();
+    } catch {
+      pushErrorNotification("Failed to move selected tasks to project.");
+    }
+  };
+
   const handleDeleteSelectedFromMenu = async (
     selectedRows: TaskOccurrenceRow[],
     setOccurrenceRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>,
@@ -899,7 +931,7 @@ export function useTaskMutations(
     handleAddTask, handleDeleteDetail,
     handleToggleDone, handleTogglePin,
     handleToggleOccurrenceDone, handleMarkSelectedOccurrences,
-    handleSkipSelectedTasks, handleConfirmMoveDate,
+    handleSkipSelectedTasks, handleConfirmMoveDate, handleMoveSelectedToProject,
     handleDeleteSelectedFromMenu, handleToggleTodayForSelected,
     handleAttachFiles, handleAttachmentDrop, handleDeleteAttachment,
     handleOpenFileViewer, closeFileViewer,
