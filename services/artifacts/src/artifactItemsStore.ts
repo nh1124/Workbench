@@ -1,5 +1,7 @@
-﻿import { createHash, randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PoolClient } from "pg";
@@ -8,6 +10,7 @@ import type {
   ArtifactFileData,
   ArtifactFileInput,
   ArtifactItem,
+  ArtifactPreviewStatus,
   ArtifactItemKind,
   ArtifactProjectSummary,
   ArtifactItemUpdate,
@@ -27,6 +30,11 @@ const storageRoot = path.resolve(
 const FALLBACK_DEFAULT_PROJECT_ID = "default";
 const FALLBACK_DEFAULT_PROJECT_NAME = "default";
 const PROJECTS_STORAGE_DIR = "projects";
+const PREVIEWS_STORAGE_DIR = "_previews";
+const WORD_PREVIEW_PENDING_STATUS: ArtifactPreviewStatus = "pending";
+const WORD_PREVIEW_READY_STATUS: ArtifactPreviewStatus = "ready";
+const WORD_PREVIEW_ERROR_STATUS: ArtifactPreviewStatus = "error";
+const WORD_PREVIEW_TIMEOUT_MS = Number(process.env.ARTIFACTS_WORD_PREVIEW_TIMEOUT_MS || "120000");
 
 type ArtifactItemRow = {
   id: string;
@@ -43,6 +51,11 @@ type ArtifactItemRow = {
   mime_type: string | null;
   size_bytes: string | number | null;
   storage_path: string | null;
+  preview_pdf_storage_path: string | null;
+  preview_pdf_size_bytes: string | number | null;
+  preview_pdf_status: string | null;
+  preview_pdf_error: string | null;
+  preview_pdf_updated_at: string | null;
   version: number;
   created_at: string;
   updated_at: string;
@@ -173,6 +186,26 @@ function parseSizeBytes(raw: string | number | null): number | undefined {
   return undefined;
 }
 
+function normalizePreviewStatus(raw: string | null | undefined): ArtifactPreviewStatus | undefined {
+  const value = raw?.trim().toLowerCase();
+  if (value === WORD_PREVIEW_PENDING_STATUS) return WORD_PREVIEW_PENDING_STATUS;
+  if (value === WORD_PREVIEW_READY_STATUS) return WORD_PREVIEW_READY_STATUS;
+  if (value === WORD_PREVIEW_ERROR_STATUS) return WORD_PREVIEW_ERROR_STATUS;
+  return undefined;
+}
+
+function isWordDocumentFile(filePath: string, mimeType?: string | null): boolean {
+  const normalizedMime = (mimeType ?? "").toLowerCase();
+  if (
+    normalizedMime.includes("application/msword") ||
+    normalizedMime.includes("application/vnd.openxmlformats-officedocument.wordprocessingml.document") ||
+    normalizedMime.includes("application/vnd.ms-word")
+  ) {
+    return true;
+  }
+  return /\.(doc|docx|docm)$/i.test(filePath);
+}
+
 function toArtifactItem(row: ArtifactItemRow, includeContent = false): ArtifactItem {
   const item: ArtifactItem = {
     id: row.id,
@@ -186,6 +219,8 @@ function toArtifactItem(row: ArtifactItemRow, includeContent = false): ArtifactI
     tags: parseTags(row.tags_json),
     mimeType: row.mime_type ?? undefined,
     sizeBytes: parseSizeBytes(row.size_bytes),
+    previewPdfStatus: normalizePreviewStatus(row.preview_pdf_status),
+    previewPdfUpdatedAt: row.preview_pdf_updated_at ? new Date(row.preview_pdf_updated_at).toISOString() : undefined,
     version: row.version,
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString()
@@ -278,6 +313,10 @@ function buildStorageRelativePath(ownerUsername: string, projectId: string, item
   return path.posix.join(ownerStorageSegment(ownerUsername), projectSegment, `${itemId}${ext}`);
 }
 
+function buildPreviewStorageRelativePath(ownerUsername: string, itemId: string): string {
+  return path.posix.join(ownerStorageSegment(ownerUsername), PREVIEWS_STORAGE_DIR, `${itemId}.pdf`);
+}
+
 function resolveStorageAbsolutePath(storagePath: string): string {
   const resolved = path.resolve(storageRoot, storagePath);
   const rootWithSep = storageRoot.endsWith(path.sep) ? storageRoot : `${storageRoot}${path.sep}`;
@@ -285,6 +324,128 @@ function resolveStorageAbsolutePath(storagePath: string): string {
     throw new Error("Invalid storage path");
   }
   return resolved;
+}
+
+async function runProcessWithTimeout(command: string, args: string[], timeoutMs: number): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    let settled = false;
+    let stderr = "";
+    let stdout = "";
+
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill("SIGKILL");
+      reject(new Error(`converter timeout after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    child.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      reject(error);
+    });
+
+    child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      const message = [stderr.trim(), stdout.trim()].filter(Boolean).join(" | ");
+      reject(new Error(message || `converter exited with status ${code ?? "unknown"}`));
+    });
+  });
+}
+
+function resolveOfficeConverterCandidates(): string[] {
+  const explicit = process.env.ARTIFACTS_OFFICE_CONVERTER_CMD?.trim();
+  if (explicit) {
+    return [explicit];
+  }
+
+  if (process.platform === "win32") {
+    return [
+      "soffice",
+      "soffice.exe",
+      "C:\\Program Files\\LibreOffice\\program\\soffice.exe",
+      "C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe"
+    ];
+  }
+
+  if (process.platform === "darwin") {
+    return [
+      "soffice",
+      "/Applications/LibreOffice.app/Contents/MacOS/soffice"
+    ];
+  }
+
+  return ["soffice", "libreoffice"];
+}
+
+async function convertWordFileToPdfBuffer(sourceAbsolutePath: string): Promise<Buffer> {
+  const tmpBase = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-word-preview-"));
+  const outDir = path.join(tmpBase, "out");
+  try {
+    await fs.mkdir(outDir, { recursive: true });
+    const sourceName = path.basename(sourceAbsolutePath);
+    const tempSourcePath = path.join(tmpBase, sourceName);
+    await fs.copyFile(sourceAbsolutePath, tempSourcePath);
+
+    const args = [
+      "--headless",
+      "--convert-to",
+      "pdf:writer_pdf_Export",
+      "--outdir",
+      outDir,
+      tempSourcePath
+    ];
+
+    const attempts: string[] = [];
+    const commands = resolveOfficeConverterCandidates();
+    for (const command of commands) {
+      try {
+        await runProcessWithTimeout(command, args, WORD_PREVIEW_TIMEOUT_MS);
+        break;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        attempts.push(`${command}: ${message}`);
+        continue;
+      }
+    }
+
+    const expectedPdfPath = path.join(outDir, `${path.parse(sourceName).name}.pdf`);
+    let resolvedPdfPath = expectedPdfPath;
+    try {
+      await fs.access(expectedPdfPath);
+    } catch {
+      const outFiles = await fs.readdir(outDir);
+      const discovered = outFiles.find((name) => name.toLowerCase().endsWith(".pdf"));
+      if (!discovered) {
+        throw new Error(
+          `No PDF output found. Converter attempts: ${attempts.join(" || ") || "none"}`
+        );
+      }
+      resolvedPdfPath = path.join(outDir, discovered);
+    }
+
+    return await fs.readFile(resolvedPdfPath);
+  } finally {
+    await fs.rm(tmpBase, { recursive: true, force: true }).catch(() => {
+      // Best-effort cleanup.
+    });
+  }
 }
 
 async function ensureUniquePath(
@@ -346,6 +507,11 @@ async function readItemRowById(client: PoolClient, id: string, ownerUsername: st
         mime_type,
         size_bytes,
         storage_path,
+        preview_pdf_storage_path,
+        preview_pdf_size_bytes,
+        preview_pdf_status,
+        preview_pdf_error,
+        preview_pdf_updated_at,
         version,
         created_at,
         updated_at
@@ -488,7 +654,12 @@ export async function listArtifactItems(projectId: string | undefined, ownerUser
       mime_type,
       size_bytes,
       storage_path,
-      version,
+          preview_pdf_storage_path,
+          preview_pdf_size_bytes,
+          preview_pdf_status,
+          preview_pdf_error,
+          preview_pdf_updated_at,
+          version,
       created_at,
       updated_at
     FROM artifact_items
@@ -633,6 +804,11 @@ export async function createArtifactFolder(input: ArtifactFolderInput, ownerUser
           mime_type,
           size_bytes,
           storage_path,
+          preview_pdf_storage_path,
+          preview_pdf_size_bytes,
+          preview_pdf_status,
+          preview_pdf_error,
+          preview_pdf_updated_at,
           version,
           created_at,
           updated_at
@@ -724,6 +900,11 @@ export async function createArtifactNote(input: ArtifactNoteInput, ownerUsername
           mime_type,
           size_bytes,
           storage_path,
+          preview_pdf_storage_path,
+          preview_pdf_size_bytes,
+          preview_pdf_status,
+          preview_pdf_error,
+          preview_pdf_updated_at,
           version,
           created_at,
           updated_at
@@ -784,6 +965,7 @@ export async function createArtifactFile(input: ArtifactFileInput, ownerUsername
     const id = randomUUID();
     const storagePath = buildStorageRelativePath(owner, projectContext.projectId, id, uniquePath);
     const absoluteStoragePath = resolveStorageAbsolutePath(storagePath);
+    const shouldGenerateWordPreview = isWordDocumentFile(uniquePath, input.mimeType);
 
     await fs.mkdir(path.dirname(absoluteStoragePath), { recursive: true });
     await fs.writeFile(absoluteStoragePath, input.buffer);
@@ -805,9 +987,10 @@ export async function createArtifactFile(input: ArtifactFileInput, ownerUsername
           mime_type,
           size_bytes,
           storage_path,
+          preview_pdf_status,
           version
         )
-        VALUES ($1, $2, $3, $4, 'file', $5, $6, $7, $8, $9::jsonb, '', $10, $11, $12, 1)
+        VALUES ($1, $2, $3, $4, 'file', $5, $6, $7, $8, $9::jsonb, '', $10, $11, $12, $13, 1)
         RETURNING
           id,
           owner_username,
@@ -823,6 +1006,11 @@ export async function createArtifactFile(input: ArtifactFileInput, ownerUsername
           mime_type,
           size_bytes,
           storage_path,
+          preview_pdf_storage_path,
+          preview_pdf_size_bytes,
+          preview_pdf_status,
+          preview_pdf_error,
+          preview_pdf_updated_at,
           version,
           created_at,
           updated_at
@@ -839,7 +1027,8 @@ export async function createArtifactFile(input: ArtifactFileInput, ownerUsername
         JSON.stringify(normalizeTags(input.tags)),
         input.mimeType || "application/octet-stream",
         input.sizeBytes,
-        storagePath
+        storagePath,
+        shouldGenerateWordPreview ? WORD_PREVIEW_PENDING_STATUS : null
       ]
     );
 
@@ -1034,13 +1223,13 @@ export async function deleteArtifactItem(id: string, ownerUsername: string): Pro
       return false;
     }
 
-    const deleteTargets: Array<{ id: string; storage_path: string | null }> = [];
+    const deleteTargets: Array<{ id: string; storage_path: string | null; preview_pdf_storage_path: string | null }> = [];
 
     if (existing.kind === "folder") {
       const likePrefix = `${escapeLikePattern(existing.path)}/%`;
-      const result = await client.query<{ id: string; storage_path: string | null }>(
+      const result = await client.query<{ id: string; storage_path: string | null; preview_pdf_storage_path: string | null }>(
         `
-          SELECT id, storage_path
+          SELECT id, storage_path, preview_pdf_storage_path
           FROM artifact_items
           WHERE owner_username = $1
             AND project_id = $2
@@ -1060,7 +1249,11 @@ export async function deleteArtifactItem(id: string, ownerUsername: string): Pro
         [owner, existing.project_id, existing.path, likePrefix]
       );
     } else {
-      deleteTargets.push({ id: existing.id, storage_path: existing.storage_path });
+      deleteTargets.push({
+        id: existing.id,
+        storage_path: existing.storage_path,
+        preview_pdf_storage_path: existing.preview_pdf_storage_path
+      });
       await client.query(
         `
           DELETE FROM artifact_items
@@ -1074,22 +1267,152 @@ export async function deleteArtifactItem(id: string, ownerUsername: string): Pro
     await client.query("COMMIT");
 
     await Promise.all(
-      deleteTargets
-        .filter((row) => typeof row.storage_path === "string" && row.storage_path.length > 0)
-        .map(async (row) => {
+      deleteTargets.map(async (row) => {
+        const targets = [row.storage_path, row.preview_pdf_storage_path].filter(
+          (value): value is string => typeof value === "string" && value.length > 0
+        );
+        for (const storage of targets) {
           try {
-            const absolutePath = resolveStorageAbsolutePath(row.storage_path!);
+            const absolutePath = resolveStorageAbsolutePath(storage);
             await fs.rm(absolutePath, { force: true });
           } catch {
             // Best effort deletion.
           }
-        })
+        }
+      })
     );
 
     return true;
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function generateWordPreviewPdf(id: string, ownerUsername: string): Promise<ArtifactPreviewStatus | undefined> {
+  await ensureArtifactsSchema();
+  const pool = getArtifactsPool();
+  const owner = normalizeOwner(ownerUsername);
+
+  const client = await pool.connect();
+  let row: ArtifactItemRow | undefined;
+  let previewStoragePath: string | undefined;
+  try {
+    await client.query("BEGIN");
+    row = await readItemRowById(client, id, owner);
+    if (!row || row.kind !== "file" || !row.storage_path) {
+      await client.query("ROLLBACK");
+      return undefined;
+    }
+
+    if (!isWordDocumentFile(row.path, row.mime_type)) {
+      await client.query("ROLLBACK");
+      return undefined;
+    }
+
+    const currentStatus = normalizePreviewStatus(row.preview_pdf_status);
+    if (currentStatus === WORD_PREVIEW_PENDING_STATUS) {
+      await client.query("ROLLBACK");
+      return WORD_PREVIEW_PENDING_STATUS;
+    }
+
+    previewStoragePath = row.preview_pdf_storage_path || buildPreviewStorageRelativePath(owner, row.id);
+
+    await client.query(
+      `
+        UPDATE artifact_items
+        SET
+          preview_pdf_status = $3,
+          preview_pdf_error = NULL
+        WHERE id = $1 AND owner_username = $2
+      `,
+      [row.id, owner, WORD_PREVIEW_PENDING_STATUS]
+    );
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  if (!row || !previewStoragePath) {
+    return undefined;
+  }
+  if (!row.storage_path) {
+    return undefined;
+  }
+
+  const sourceAbsolutePath = resolveStorageAbsolutePath(row.storage_path);
+
+  try {
+    const pdfBuffer = await convertWordFileToPdfBuffer(sourceAbsolutePath);
+    const previewAbsolutePath = resolveStorageAbsolutePath(previewStoragePath);
+    await fs.mkdir(path.dirname(previewAbsolutePath), { recursive: true });
+    await fs.writeFile(previewAbsolutePath, pdfBuffer);
+
+    await pool.query(
+      `
+        UPDATE artifact_items
+        SET
+          preview_pdf_storage_path = $3,
+          preview_pdf_size_bytes = $4,
+          preview_pdf_status = $5,
+          preview_pdf_error = NULL,
+          preview_pdf_updated_at = NOW()
+        WHERE id = $1 AND owner_username = $2
+      `,
+      [row.id, owner, previewStoragePath, pdfBuffer.length, WORD_PREVIEW_READY_STATUS]
+    );
+
+    return WORD_PREVIEW_READY_STATUS;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Word preview conversion failed";
+    await pool.query(
+      `
+        UPDATE artifact_items
+        SET
+          preview_pdf_status = $3,
+          preview_pdf_error = $4
+        WHERE id = $1 AND owner_username = $2
+      `,
+      [row.id, owner, WORD_PREVIEW_ERROR_STATUS, message.slice(0, 800)]
+    );
+    return WORD_PREVIEW_ERROR_STATUS;
+  }
+}
+
+export async function readArtifactPreviewPdfData(id: string, ownerUsername: string): Promise<ArtifactFileData | undefined> {
+  await ensureArtifactsSchema();
+  const pool = getArtifactsPool();
+  const owner = normalizeOwner(ownerUsername);
+
+  const client = await pool.connect();
+  try {
+    const row = await readItemRowById(client, id, owner);
+    if (!row || row.kind !== "file" || !row.preview_pdf_storage_path) {
+      return undefined;
+    }
+    if (normalizePreviewStatus(row.preview_pdf_status) !== WORD_PREVIEW_READY_STATUS) {
+      return undefined;
+    }
+
+    const absolutePath = resolveStorageAbsolutePath(row.preview_pdf_storage_path);
+    const fileBuffer = await fs.readFile(absolutePath);
+    const item = toArtifactItem(row, false);
+
+    const sourceBase = path.basename(row.path, path.extname(row.path));
+    return {
+      item,
+      buffer: fileBuffer,
+      mimeType: "application/pdf",
+      fileName: `${sourceBase}.pdf`
+    };
+  } catch {
+    return undefined;
   } finally {
     client.release();
   }

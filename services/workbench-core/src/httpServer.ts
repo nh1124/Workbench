@@ -2011,6 +2011,36 @@ app.get("/api/artifacts/items/:id/download", async (req, res) => {
   }
 });
 
+app.get("/api/artifacts/items/:id/preview-pdf", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const id = encodeURIComponent(String(req.params.id));
+  const target = `${serviceBaseUrls.artifacts}/artifacts/items/${id}/preview-pdf`;
+
+  try {
+    const upstream = await fetch(target, {
+      headers: {
+        Authorization: `Bearer ${authContext.accessToken}`
+      }
+    });
+
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    const contentType = upstream.headers.get("content-type");
+    const disposition = upstream.headers.get("content-disposition");
+    const length = upstream.headers.get("content-length");
+
+    if (contentType) res.setHeader("Content-Type", contentType);
+    if (disposition) res.setHeader("Content-Disposition", disposition);
+    if (length) res.setHeader("Content-Length", length);
+
+    return res.status(upstream.status).send(buffer);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Preview proxy failed";
+    return res.status(502).json({ message });
+  }
+});
+
 app.get("/api/artifacts/:id", async (req, res) => {
   const authContext = await requireAuthenticatedContext(req, res);
   if (!authContext) return;

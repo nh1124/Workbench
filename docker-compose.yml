@@ -38,6 +38,32 @@ services:
     volumes:
       - artifacts_pgdata:/var/lib/postgresql/data
 
+  artifacts:
+    build:
+      context: .
+      dockerfile: services/artifacts/Dockerfile
+    container_name: workbench-artifacts-service
+    restart: unless-stopped
+    depends_on:
+      - artifacts-db
+    environment:
+      ARTIFACTS_SERVICE_HOST: 0.0.0.0
+      ARTIFACTS_SERVICE_PORT: 4102
+      ARTIFACTS_DB_HOST: artifacts-db
+      ARTIFACTS_DB_PORT: 5432
+      ARTIFACTS_DB_NAME: artifacts_db
+      ARTIFACTS_DB_USER: artifacts_user
+      ARTIFACTS_DB_PASSWORD: artifacts_pass
+      JWT_SECRET: change-this-workbench-jwt-secret
+      JWT_ISSUER: workbench-core
+      INTERNAL_API_KEY: workbench-internal-artifacts
+      # Optional override (already defaulted in Dockerfile)
+      ARTIFACTS_OFFICE_CONVERTER_CMD: /usr/bin/soffice
+    ports:
+      - "4102:4102"
+    volumes:
+      - artifacts_storage:/app/services/artifacts/storage
+
   tasks-db:
     image: postgres:16-alpine
     container_name: workbench-tasks-db
@@ -68,5 +94,6 @@ volumes:
   workbench_core_pgdata:
   notes_pgdata:
   artifacts_pgdata:
+  artifacts_storage:
   tasks_pgdata:
   projects_pgdata:

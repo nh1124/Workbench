@@ -1,4 +1,4 @@
-import type { ArtifactItem, ArtifactItemKind } from "../types/models";
+import type { ArtifactItem, ArtifactItemKind, ArtifactPreviewStatus } from "../types/models";
 
 export interface ArtifactEditorDraft {
   id?: string;
@@ -10,6 +10,8 @@ export interface ArtifactEditorDraft {
   tags: string[];
   contentMarkdown: string;
   mimeType?: string;
+  previewPdfStatus?: ArtifactPreviewStatus;
+  previewPdfUpdatedAt?: string;
   sizeBytes?: number;
   version?: number;
   createdAt?: string;

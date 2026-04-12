@@ -62,6 +62,12 @@ export const IcoExpand = () => (
   </svg>
 );
 
+export const IcoComment = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+  </svg>
+);
+
 export const IcoCompress = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
     <path d="M4 14h6v6M14 4h6v6M10 20l-7-7M20 10l-7 7" />

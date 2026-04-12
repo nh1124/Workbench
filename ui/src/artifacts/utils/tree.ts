@@ -13,6 +13,8 @@ export function itemToDraft(item: ArtifactItem): ArtifactEditorDraft {
     tags: [...item.tags],
     contentMarkdown: item.contentMarkdown ?? "",
     mimeType: item.mimeType,
+    previewPdfStatus: item.previewPdfStatus,
+    previewPdfUpdatedAt: item.previewPdfUpdatedAt,
     sizeBytes: item.sizeBytes,
     version: item.version,
     createdAt: item.createdAt,

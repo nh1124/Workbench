@@ -128,11 +128,22 @@ export async function ensureArtifactsSchema(): Promise<void> {
             mime_type TEXT,
             size_bytes BIGINT,
             storage_path TEXT,
+            preview_pdf_storage_path TEXT,
+            preview_pdf_size_bytes BIGINT,
+            preview_pdf_status TEXT,
+            preview_pdf_error TEXT,
+            preview_pdf_updated_at TIMESTAMPTZ,
             version INTEGER NOT NULL DEFAULT 1,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
           );
         `);
+
+        await pool.query(`ALTER TABLE artifact_items ADD COLUMN IF NOT EXISTS preview_pdf_storage_path TEXT;`);
+        await pool.query(`ALTER TABLE artifact_items ADD COLUMN IF NOT EXISTS preview_pdf_size_bytes BIGINT;`);
+        await pool.query(`ALTER TABLE artifact_items ADD COLUMN IF NOT EXISTS preview_pdf_status TEXT;`);
+        await pool.query(`ALTER TABLE artifact_items ADD COLUMN IF NOT EXISTS preview_pdf_error TEXT;`);
+        await pool.query(`ALTER TABLE artifact_items ADD COLUMN IF NOT EXISTS preview_pdf_updated_at TIMESTAMPTZ;`);
 
         await pool.query(`
           CREATE UNIQUE INDEX IF NOT EXISTS ux_artifact_items_owner_project_path

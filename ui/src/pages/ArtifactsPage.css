@@ -689,6 +689,48 @@
   overflow-y: auto;
 }
 
+/* PDF section: flex so PdfViewer (which is itself a flex column) fills space */
+.va-pdf-section {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Expanded PDF viewer — absolute overlay mirroring editor-expanded */
+.va-form-grid.pdf-expanded {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  background: linear-gradient(180deg, rgba(5, 10, 22, 0.99) 0%, rgba(3, 7, 18, 1) 100%);
+  display: flex;
+  flex-direction: column;
+  padding: 0.75rem 1rem;
+  gap: 0;
+  overflow: hidden;
+}
+
+.va-form-grid.pdf-expanded > *:not(.va-pdf-section) {
+  display: none;
+}
+
+.va-form-grid.pdf-expanded > .va-pdf-section {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* PdfViewer fills the section; pdf-viewer-body (iframe+sidebar) takes remaining space */
+.va-form-grid.pdf-expanded .pdf-viewer {
+  flex: 1;
+  min-height: 0;
+}
+
+.va-form-grid.pdf-expanded .pdf-viewer-body {
+  flex: 1;
+  min-height: 0;
+}
+
 .va-content-head {
   display: flex;
   align-items: center;
@@ -857,7 +899,6 @@
 
 .va-pdf-frame {
   width: 100%;
-  min-height: 520px;
   border: 1px solid rgba(58, 77, 106, 0.85);
   border-radius: 12px;
   background: #0b1323;

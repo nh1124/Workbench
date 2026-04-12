@@ -13,6 +13,7 @@
 ```
 docs/
 ├── README.md                    ← このファイル（インデックス）
+├── artifacts.md                 ← Artifacts ページの設計・PDF ビューアー・ショートカット
 ├── native/
 │   ├── overview.md              ← Tauri デスクトップアプリ全体の説明・モジュール構成
 │   ├── window-management.md     ← マルチウィンドウ・マルチインスタンスの設計
@@ -24,6 +25,13 @@ docs/
 ---
 
 ## ドキュメント一覧
+
+### フロントエンド
+
+| ドキュメント | 内容 |
+|---|---|
+| [artifacts.md](artifacts.md) | Artifacts ページの設計・PDF ビューアー・ページ別コメント・ショートカット |
+| [pdf-comments-server-design.md](pdf-comments-server-design.md) | PDF コメントのサーバー移行設計（DB スキーマ・API・同期戦略・マイグレーション） |
 
 ### ネイティブデスクトップ (`native/`)
 

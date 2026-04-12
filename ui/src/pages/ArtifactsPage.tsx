@@ -3,7 +3,7 @@ import JSZip from "jszip";
 import { Link, useSearchParams } from "react-router-dom";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { TextInputDialog } from "../components/TextInputDialog";
-import { artifactsApi, projectsApi } from "../lib/api";
+import { artifactsApi, projectsApi, isTauriNativeRuntime, openFileWithDefaultApp, saveFileWithDialog } from "../lib/api";
 import { formatDateTime, normalizeProjectName } from "../lib/format";
 import type { ArtifactItem, ProjectRecord } from "../types/models";
 import type {
@@ -34,6 +34,7 @@ import {
   formatSize,
   isImage,
   isPdf,
+  isWordDocument,
   sanitizeExportFilename,
   triggerBlobDownload
 } from "../artifacts/utils/file";
@@ -67,6 +68,7 @@ import {
   IcoUpload
 } from "../artifacts/components/ArtifactsIcons";
 import { DirectoryBrowser } from "../artifacts/components/DirectoryBrowser";
+import { PdfViewer } from "../artifacts/components/PdfViewer";
 import "./ArtifactsPage.css";
 
 
@@ -102,6 +104,7 @@ export function ArtifactsPage() {
   const [createFolderState, setCreateFolderState] = useState<CreateFolderState | null>(null);
   const [insertLinkState, setInsertLinkState] = useState<InsertLinkState | null>(null);
   const [editorExpanded, setEditorExpanded] = useState(false);
+  const [pdfExpanded, setPdfExpanded] = useState(false);
   const [mobileTreeVisible, setMobileTreeVisible] = useState(false);
 
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
@@ -111,7 +114,7 @@ export function ArtifactsPage() {
   const handleCreateNoteRef = useRef<() => void>(() => {});
   const handleSaveRef = useRef<() => Promise<void>>(async () => {});
   const handleArtifactHistoryNavRef = useRef<(direction: -1 | 1) => void>(() => {});
-  const shortcutStateRef = useRef({ canSave: false, isSaving: false, markdownEditorVisible: false });
+  const shortcutStateRef = useRef({ canSave: false, isSaving: false, markdownEditorVisible: false, pdfViewerVisible: false });
   const artifactNavHistoryRef = useRef<{ ids: string[]; index: number }>({ ids: [], index: -1 });
   const suppressArtifactNavPushRef = useRef(false);
 
@@ -185,6 +188,12 @@ export function ArtifactsPage() {
     if (!draft.path.trim()) return false;
     return true;
   }, [draft.path, draft.title]);
+
+  const isWordFileSelected = useMemo(
+    () => draft.kind === "file" && isWordDocument(draft),
+    [draft.kind, draft.mimeType, draft.path]
+  );
+  const canShowWordPreviewPdf = isWordFileSelected && draft.previewPdfStatus === "ready";
 
   const hasDetailSelection = Boolean(selectedItemId || mode === "create-note");
   const detailProjectOptions = useMemo(() => {
@@ -421,19 +430,27 @@ export function ArtifactsPage() {
   }, [selectedItemId]);
 
   useEffect(() => {
-    if (!draft.id || draft.kind !== "file" || !isPdf(draft)) {
+    const canShowPdfPreview =
+      draft.id &&
+      draft.kind === "file" &&
+      (isPdf(draft) || (isWordDocument(draft) && draft.previewPdfStatus === "ready"));
+
+    if (!canShowPdfPreview || !draft.id) {
       if (pdfBlobUrl) {
         URL.revokeObjectURL(pdfBlobUrl);
       }
       setPdfBlobUrl(null);
+      setPdfExpanded(false);
       return;
     }
 
     let cancelled = false;
     let objectUrl: string | null = null;
+    const loadPromise = isPdf(draft)
+      ? artifactsApi.downloadFile(draft.id, false)
+      : artifactsApi.downloadPreviewPdf(draft.id);
 
-    void artifactsApi
-      .downloadFile(draft.id, false)
+    void loadPromise
       .then((blob) => {
         if (cancelled) return;
         objectUrl = URL.createObjectURL(blob);
@@ -451,7 +468,37 @@ export function ArtifactsPage() {
         URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [draft.id, draft.kind, draft.mimeType, draft.path]);
+  }, [draft.id, draft.kind, draft.mimeType, draft.path, draft.previewPdfStatus]);
+
+  useEffect(() => {
+    if (!draft.id || draft.kind !== "file" || !isWordDocument(draft)) {
+      return;
+    }
+    if (draft.previewPdfStatus === "ready" || draft.previewPdfStatus === "error") {
+      return;
+    }
+
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const next = await artifactsApi.getItem(draft.id!);
+        if (cancelled || next.id !== draft.id) return;
+        setDraft((prev) => (prev.id === next.id ? itemToDraft(next) : prev));
+      } catch {
+        // Notification is handled globally.
+      }
+    };
+
+    const intervalId = window.setInterval(() => {
+      void poll();
+    }, 2000);
+    void poll();
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [draft.id, draft.kind, draft.mimeType, draft.path, draft.previewPdfStatus]);
 
   useEffect(() => {
     if (!draft.id || draft.kind !== "file" || !isImage(draft)) {
@@ -585,19 +632,25 @@ export function ArtifactsPage() {
         }
         return;
       }
-      // Ctrl+Shift+竊・ expand editor
+      // Ctrl+Shift+↑: expand editor or PDF viewer
       if (e.ctrlKey && e.shiftKey && e.key === "ArrowUp") {
         if (mev) {
           e.preventDefault();
           setEditorExpanded(true);
+        } else if (shortcutStateRef.current.pdfViewerVisible) {
+          e.preventDefault();
+          setPdfExpanded(true);
         }
         return;
       }
-      // Ctrl+Shift+竊・ shrink editor
+      // Ctrl+Shift+↓: collapse editor or PDF viewer
       if (e.ctrlKey && e.shiftKey && e.key === "ArrowDown") {
         if (mev) {
           e.preventDefault();
           setEditorExpanded(false);
+        } else if (shortcutStateRef.current.pdfViewerVisible) {
+          e.preventDefault();
+          setPdfExpanded(false);
         }
         return;
       }
@@ -1567,7 +1620,8 @@ export function ArtifactsPage() {
   // Keep refs in sync for stable keyboard shortcut handler
   handleCreateNoteRef.current = handleStartCreateNote;
   handleSaveRef.current = handleSave;
-  shortcutStateRef.current = { canSave, isSaving, markdownEditorVisible };
+  const pdfViewerVisible = draft.kind === "file" && (isPdf(draft) || canShowWordPreviewPdf);
+  shortcutStateRef.current = { canSave, isSaving, markdownEditorVisible, pdfViewerVisible };
 
   const createDeleteConfirmState = (ids: string[]): DeleteConfirmState | null => {
     const normalized = [...new Set(ids.map((id) => id.trim()).filter((id) => id.length > 0))];
@@ -1663,8 +1717,25 @@ export function ArtifactsPage() {
     if (!draft.id || draft.kind !== "file") return;
 
     try {
-      const blob = await artifactsApi.downloadFile(draft.id, true);
-      triggerBlobDownload(blob, draft.title || "artifact");
+      const blob = await artifactsApi.downloadFile(draft.id, false);
+      const filename = draft.title || "artifact";
+      if (isTauriNativeRuntime()) {
+        await saveFileWithDialog(blob, filename);
+      } else {
+        triggerBlobDownload(blob, filename);
+      }
+    } catch {
+      // Global notification already shown.
+    }
+  };
+
+  const handleOpenInWord = async () => {
+    if (!draft.id || draft.kind !== "file" || !isWordDocument(draft)) return;
+
+    try {
+      const blob = await artifactsApi.downloadFile(draft.id, false);
+      const filename = leafPath(draft.path) || draft.title || "document.docx";
+      await openFileWithDefaultApp(blob, filename);
     } catch {
       // Global notification already shown.
     }
@@ -2074,12 +2145,6 @@ export function ArtifactsPage() {
                   <IcoClose />
                 </button>
 
-                {draft.kind === "file" && draft.id ? (
-                  <button type="button" className="va-action-btn" onClick={() => void handleDownload()}>
-                    <IcoDownload /> Download
-                  </button>
-                ) : null}
-
                 <label className="va-detail-project-picker" title="Item project">
                   <span>Project</span>
                   <select
@@ -2108,13 +2173,37 @@ export function ArtifactsPage() {
                   </button>
                 ) : null}
 
+                {draft.kind === "file" && draft.id ? (
+                  <button
+                    type="button"
+                    className="va-icon-btn"
+                    onClick={() => void handleDownload()}
+                    aria-label="Download file"
+                    title="Download"
+                  >
+                    <IcoDownload />
+                  </button>
+                ) : null}
+
+                {draft.kind === "file" && draft.id && isWordFileSelected ? (
+                  <button
+                    type="button"
+                    className="va-action-btn"
+                    onClick={() => void handleOpenInWord()}
+                    aria-label="Edit in Word"
+                    title="Open in default Word app"
+                  >
+                    Edit
+                  </button>
+                ) : null}
+
                 <button type="button" className="va-action-btn primary" onClick={() => void handleSave()} disabled={isSaving || !canSave}>
                   <IcoFloppy />
                 </button>
               </div>
             </header>
 
-            <section className={`va-form-grid${editorExpanded ? " editor-expanded" : ""}`}>
+            <section className={`va-form-grid${editorExpanded ? " editor-expanded" : ""}${pdfExpanded ? " pdf-expanded" : ""}`}>
               <label className="span-2">
                 <span className="va-field-label">Title *</span>
                 <input
@@ -2232,14 +2321,33 @@ export function ArtifactsPage() {
                 </div>
               ) : null}
 
-              {draft.kind === "file" && isPdf(draft) ? (
-                <div className="span-2 va-preview-section">
-                  <span className="va-field-label">Preview</span>
+              {draft.kind === "file" && (isPdf(draft) || canShowWordPreviewPdf) ? (
+                <div className="span-2 va-preview-section va-pdf-section">
                   {pdfBlobUrl ? (
-                    <iframe src={pdfBlobUrl} className="va-pdf-frame" title={draft.title} />
+                    <PdfViewer
+                      blobUrl={pdfBlobUrl}
+                      title={draft.title}
+                      artifactId={draft.id!}
+                      expanded={pdfExpanded}
+                      onToggleExpand={() => setPdfExpanded((v) => !v)}
+                    />
                   ) : (
                     <div className="va-empty">Loading PDF preview...</div>
                   )}
+                </div>
+              ) : null}
+
+              {isWordFileSelected && draft.previewPdfStatus === "pending" ? (
+                <div className="span-2 va-preview-section">
+                  <span className="va-field-label">Preview</span>
+                  <div className="va-empty">Word preview is being generated in background...</div>
+                </div>
+              ) : null}
+
+              {isWordFileSelected && draft.previewPdfStatus === "error" ? (
+                <div className="span-2 va-preview-section">
+                  <span className="va-field-label">Preview</span>
+                  <div className="va-empty">Word preview generation failed. Please re-upload or open via Edit.</div>
                 </div>
               ) : null}
 

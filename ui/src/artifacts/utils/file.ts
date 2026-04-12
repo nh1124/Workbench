@@ -51,6 +51,18 @@ export function isImage(item: ArtifactEditorDraft): boolean {
   return /\.(png|jpe?g|gif|webp|svg|bmp|ico|tiff?)$/i.test(item.path);
 }
 
+export function isWordDocument(item: ArtifactEditorDraft): boolean {
+  const mime = (item.mimeType ?? "").toLowerCase();
+  if (
+    mime.includes("application/msword") ||
+    mime.includes("application/vnd.openxmlformats-officedocument.wordprocessingml.document") ||
+    mime.includes("application/vnd.ms-word")
+  ) {
+    return true;
+  }
+  return /\.(doc|docx|docm)$/i.test(item.path);
+}
+
 export function extractYoutubeId(url: string): string | null {
   try {
     const u = new URL(url);

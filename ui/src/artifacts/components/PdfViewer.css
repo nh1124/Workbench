@@ -1,0 +1,380 @@
+/* ── PdfViewer shell ──────────────────────────────────────────────────────── */
+
+.pdf-viewer {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Toolbar above iframe+sidebar */
+.pdf-viewer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+  flex-shrink: 0;
+}
+
+.pdf-viewer-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(148, 187, 233, 0.7);
+}
+
+.pdf-viewer-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+/* Comment toggle button active state */
+.pdf-viewer-toolbar .va-icon-btn.active {
+  color: rgba(100, 180, 255, 0.95);
+  background: rgba(37, 90, 170, 0.25);
+  border-radius: 5px;
+}
+
+/* iframe + sidebar row
+   min-height: ~A4 page at typical sidebar-open width.
+   The detail-pane scrolls, so a tall value is fine. */
+.pdf-viewer-body {
+  display: flex;
+  min-height: 75vh;
+  gap: 0;
+  border: 1px solid rgba(47, 65, 93, 0.85);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+/* ── iframe ───────────────────────────────────────────────────────────────── */
+
+.pdf-viewer-body .va-pdf-frame {
+  flex: 1;
+  /* height governed by pdf-viewer-body min-height, not aspect-ratio */
+  aspect-ratio: unset;
+  min-height: 0;
+  border: none;
+  border-radius: 0;
+  border-right: 1px solid rgba(47, 65, 93, 0.6);
+}
+
+/* ── Sidebar ──────────────────────────────────────────────────────────────── */
+
+.pdfc-sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: rgba(6, 12, 28, 0.97);
+  overflow: hidden;
+}
+
+/* Header row */
+.pdfc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.55rem 0.75rem 0.45rem;
+  border-bottom: 1px solid rgba(47, 65, 93, 0.6);
+  flex-shrink: 0;
+}
+
+.pdfc-header-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: rgba(148, 187, 233, 0.8);
+}
+
+.pdfc-header-count {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: rgba(148, 187, 233, 0.45);
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 10px;
+  padding: 0.05rem 0.45rem;
+}
+
+/* Scrollable comment list */
+.pdfc-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.4rem 0;
+}
+
+.pdfc-empty {
+  font-size: 0.78rem;
+  color: rgba(148, 187, 233, 0.35);
+  font-style: italic;
+  padding: 0.75rem 0.75rem;
+}
+
+/* Page group */
+.pdfc-page-group {
+  border-bottom: 1px solid rgba(47, 65, 93, 0.35);
+}
+
+.pdfc-page-group:last-child {
+  border-bottom: none;
+}
+
+.pdfc-page-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.75rem;
+  background: rgba(10, 20, 44, 0.5);
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+
+.pdfc-page-header:hover {
+  background: rgba(20, 38, 72, 0.7);
+}
+
+.pdfc-page-chevron {
+  font-size: 0.55rem;
+  color: rgba(148, 187, 233, 0.5);
+  flex-shrink: 0;
+}
+
+.pdfc-page-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: rgba(148, 187, 233, 0.75);
+  flex: 1;
+}
+
+.pdfc-page-count {
+  font-size: 0.7rem;
+  color: rgba(148, 187, 233, 0.4);
+}
+
+/* Current page highlight */
+.pdfc-page-group.current > .pdfc-page-header {
+  background: rgba(30, 55, 105, 0.55);
+}
+
+.pdfc-page-current-badge {
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: rgba(100, 180, 255, 0.85);
+  background: rgba(37, 90, 170, 0.3);
+  border: 1px solid rgba(70, 140, 230, 0.35);
+  border-radius: 8px;
+  padding: 0.05rem 0.4rem;
+  flex-shrink: 0;
+}
+
+/* Add form: page row */
+.pdfc-add-page-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+/* Comment items inside a page group */
+.pdfc-page-comments {
+  display: flex;
+  flex-direction: column;
+}
+
+.pdfc-item {
+  padding: 0.45rem 0.75rem;
+  border-bottom: 1px solid rgba(47, 65, 93, 0.2);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  position: relative;
+}
+
+.pdfc-item:last-child {
+  border-bottom: none;
+}
+
+.pdfc-item-text {
+  font-size: 0.8rem;
+  color: #b0cef0;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  padding-right: 2.5rem; /* room for action buttons */
+}
+
+.pdfc-item-actions {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.5rem;
+  display: flex;
+  gap: 0.1rem;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.pdfc-item:hover .pdfc-item-actions {
+  opacity: 1;
+}
+
+.pdfc-item-actions button {
+  background: transparent;
+  border: none;
+  color: rgba(148, 187, 233, 0.55);
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 0.1rem 0.25rem;
+  border-radius: 4px;
+  line-height: 1;
+  transition: color 0.12s, background 0.12s;
+}
+
+.pdfc-item-actions button:hover {
+  color: #cde0fa;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+/* Inline edit inside item */
+.pdfc-item-textarea {
+  width: 100%;
+  background: rgba(8, 16, 34, 0.9);
+  border: 1px solid rgba(97, 154, 210, 0.55);
+  border-radius: 5px;
+  color: #cde0fa;
+  font-size: 0.8rem;
+  padding: 0.3rem 0.45rem;
+  resize: none;
+  font-family: inherit;
+  line-height: 1.45;
+}
+
+.pdfc-item-textarea:focus {
+  outline: none;
+  border-color: rgba(122, 184, 240, 0.9);
+}
+
+.pdfc-item-edit-actions {
+  display: flex;
+  gap: 0.35rem;
+  justify-content: flex-end;
+}
+
+.pdfc-item-edit-actions button {
+  padding: 0.18rem 0.55rem;
+  border-radius: 5px;
+  font-size: 0.75rem;
+  background: rgba(15, 30, 60, 0.9);
+  border: 1px solid rgba(47, 65, 93, 0.8);
+  color: rgba(148, 187, 233, 0.8);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.pdfc-item-edit-actions button:hover {
+  background: rgba(30, 55, 100, 0.9);
+  color: #cde0fa;
+}
+
+/* ── Add comment form ─────────────────────────────────────────────────────── */
+
+.pdfc-add {
+  border-top: 1px solid rgba(47, 65, 93, 0.7);
+  padding: 0.55rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  flex-shrink: 0;
+  background: rgba(6, 12, 28, 0.98);
+}
+
+.pdfc-add-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: rgba(148, 187, 233, 0.6);
+}
+
+.pdfc-add-page-label {
+  display: flex;
+  align-items: center;
+}
+
+.pdfc-page-input {
+  width: 3.2rem;
+  padding: 0.1rem 0.25rem;
+  background: rgba(8, 16, 34, 0.9);
+  border: 1px solid rgba(47, 65, 93, 0.8);
+  border-radius: 5px;
+  color: #cde0fa;
+  font-size: 0.8rem;
+  text-align: center;
+  font-weight: 600;
+}
+
+.pdfc-page-input.detected {
+  border-color: rgba(60, 160, 90, 0.5);
+  color: rgba(100, 210, 140, 0.9);
+}
+
+.pdfc-page-input:focus {
+  outline: none;
+  border-color: rgba(122, 184, 240, 0.7);
+  color: #cde0fa;
+}
+
+.pdfc-add-textarea {
+  width: 100%;
+  background: rgba(8, 16, 34, 0.85);
+  border: 1px solid rgba(47, 65, 93, 0.8);
+  border-radius: 7px;
+  color: #cde0fa;
+  font-size: 0.8rem;
+  padding: 0.35rem 0.5rem;
+  resize: none;
+  font-family: inherit;
+  line-height: 1.45;
+  box-sizing: border-box;
+}
+
+.pdfc-add-textarea:focus {
+  outline: none;
+  border-color: rgba(122, 184, 240, 0.7);
+}
+
+.pdfc-add-textarea::placeholder {
+  color: rgba(148, 187, 233, 0.3);
+}
+
+.pdfc-add-btn {
+  align-self: flex-end;
+  padding: 0.28rem 0.8rem;
+  border-radius: 6px;
+  background: rgba(37, 72, 130, 0.55);
+  border: 1px solid rgba(97, 154, 210, 0.5);
+  color: #b8d4f2;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.pdfc-add-btn:hover:not(:disabled) {
+  background: rgba(50, 95, 165, 0.65);
+  border-color: rgba(97, 154, 210, 0.8);
+}
+
+.pdfc-add-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}

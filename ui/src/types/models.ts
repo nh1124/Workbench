@@ -27,6 +27,7 @@ export interface Artifact {
 
 export type ArtifactItemKind = "folder" | "note" | "file";
 export type ArtifactScope = "private" | "org" | "project";
+export type ArtifactPreviewStatus = "pending" | "ready" | "error";
 
 export interface ArtifactItem {
   id: string;
@@ -42,6 +43,8 @@ export interface ArtifactItem {
   sizeBytes?: number;
   version: number;
   contentMarkdown?: string;
+  previewPdfStatus?: ArtifactPreviewStatus;
+  previewPdfUpdatedAt?: string;
   createdAt: string;
   updatedAt: string;
 }

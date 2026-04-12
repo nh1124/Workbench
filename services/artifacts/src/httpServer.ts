@@ -11,9 +11,11 @@ import {
   createArtifactFolder,
   createArtifactNote,
   deleteArtifactItem,
+  generateWordPreviewPdf,
   getArtifactItemDetail,
   listArtifactItemProjects,
   listArtifactItems,
+  readArtifactPreviewPdfData,
   readArtifactFileData,
   updateArtifactItem
 } from "./artifactItemsStore.js";
@@ -281,6 +283,38 @@ function parseTagsFromUpload(raw: unknown): string[] {
     .filter((tag) => tag.length > 0);
 }
 
+function isWordDocumentCandidate(filePath: string, mimeType?: string | null): boolean {
+  const normalizedMime = (mimeType ?? "").toLowerCase();
+  if (
+    normalizedMime.includes("application/msword") ||
+    normalizedMime.includes("application/vnd.openxmlformats-officedocument.wordprocessingml.document") ||
+    normalizedMime.includes("application/vnd.ms-word")
+  ) {
+    return true;
+  }
+  return /\.(doc|docx|docm)$/i.test(filePath);
+}
+
+const wordPreviewGenerationInFlight = new Set<string>();
+
+function scheduleWordPreviewGeneration(itemId: string, owner: string): void {
+  const key = `${owner}:${itemId}`;
+  if (wordPreviewGenerationInFlight.has(key)) {
+    return;
+  }
+  wordPreviewGenerationInFlight.add(key);
+  setTimeout(() => {
+    void generateWordPreviewPdf(itemId, owner)
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[artifacts] word preview generation failed for ${itemId}: ${message}`);
+      })
+      .finally(() => {
+        wordPreviewGenerationInFlight.delete(key);
+      });
+  }, 0);
+}
+
 app.get("/health", (_req, res) => {
   res.json({
     service: "artifacts",
@@ -405,6 +439,9 @@ app.get("/artifacts/items/:id", requireUserAuth, async (req, res) => {
   if (!item) {
     return res.status(404).json({ message: "Artifact item not found" });
   }
+  if (item.kind === "file" && isWordDocumentCandidate(item.path, item.mimeType) && item.previewPdfStatus !== "ready") {
+    scheduleWordPreviewGeneration(item.id, owner);
+  }
 
   return res.json(item);
 });
@@ -500,6 +537,9 @@ app.post("/artifacts/upload", requireUserAuth, upload.single("file"), async (req
       },
       owner
     );
+    if (created.kind === "file" && isWordDocumentCandidate(created.path, created.mimeType)) {
+      scheduleWordPreviewGeneration(created.id, owner);
+    }
 
     return res.status(201).json(created);
   } catch (error) {
@@ -562,6 +602,23 @@ app.get("/artifacts/items/:id/download", requireUserAuth, async (req, res) => {
   res.setHeader("Content-Type", fileData.mimeType || "application/octet-stream");
   res.setHeader("Content-Length", String(fileData.buffer.length));
   res.setHeader("Content-Disposition", `${disposition}; filename*=UTF-8''${encodeURIComponent(fileData.fileName)}`);
+  return res.send(fileData.buffer);
+});
+
+app.get("/artifacts/items/:id/preview-pdf", requireUserAuth, async (req, res) => {
+  const owner = req.authUser?.coreUserId;
+  if (!owner) {
+    return res.status(401).json({ message: "Missing auth context" });
+  }
+
+  const fileData = await readArtifactPreviewPdfData(String(req.params.id), owner);
+  if (!fileData) {
+    return res.status(404).json({ message: "Preview PDF is not ready" });
+  }
+
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Length", String(fileData.buffer.length));
+  res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(fileData.fileName)}`);
   return res.send(fileData.buffer);
 });
 

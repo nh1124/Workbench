@@ -93,6 +93,39 @@ export async function closeQuickNoteWindow(): Promise<void> {
   }
 }
 
+/**
+ * Open a native Save-As dialog and write the blob to the chosen path.
+ * Only available in Tauri desktop runtime. Returns true if saved, false if cancelled.
+ * Falls back to browser download when not running in Tauri.
+ */
+export async function saveFileWithDialog(blob: Blob, defaultName: string): Promise<boolean> {
+  if (!isTauriNativeRuntime()) {
+    return false;
+  }
+  const arrayBuffer = await blob.arrayBuffer();
+  const bytes = Array.from(new Uint8Array(arrayBuffer));
+  return invokeNative<boolean>("save_file_with_dialog", { bytes, defaultName });
+}
+
+/**
+ * Save a temporary file and ask the OS to open it with the default associated app.
+ * Intended for editing Office documents in their native editor from desktop runtime.
+ */
+export async function openFileWithDefaultApp(blob: Blob, defaultName: string): Promise<boolean> {
+  if (isTauriNativeRuntime()) {
+    const arrayBuffer = await blob.arrayBuffer();
+    const bytes = Array.from(new Uint8Array(arrayBuffer));
+    return invokeNative<boolean>("open_file_in_os_app", { bytes, defaultName });
+  }
+
+  const url = URL.createObjectURL(blob);
+  window.open(url, "_blank", "noopener,noreferrer");
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  return true;
+}
+
+export { isTauriNativeRuntime };
+
 async function loadSessionFromStorage(): Promise<StoredAuthSession | undefined> {
   if (isTauriNativeRuntime()) {
     const raw = await invokeNative<string | null>(NATIVE_SESSION_COMMANDS.read);
@@ -502,6 +535,19 @@ export const artifactsApi = {
     if (!response.ok) {
       const message = `Download failed: ${response.status}`;
       pushErrorNotification(message, "Artifacts Download Error");
+      throw new Error(message);
+    }
+
+    return response.blob();
+  },
+  downloadPreviewPdf: async (id: string): Promise<Blob> => {
+    const response = await fetchWithSessionAuth(
+      `${coreBaseUrl()}/api/artifacts/items/${encodeURIComponent(id)}/preview-pdf`
+    );
+
+    if (!response.ok) {
+      const message = `Preview download failed: ${response.status}`;
+      pushErrorNotification(message, "Artifacts Preview Error");
       throw new Error(message);
     }
 

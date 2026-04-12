@@ -97,12 +97,15 @@ pub fn run() {
       }
       Ok(())
     })
+    .plugin(tauri_plugin_dialog::init())
     .invoke_handler(tauri::generate_handler![
       commands::secure_session_save,
       commands::secure_session_read,
       commands::secure_session_clear,
       commands::open_quick_note_window,
       commands::close_quick_note_window,
+      commands::save_file_with_dialog,
+      commands::open_file_in_os_app,
     ])
     .run(tauri::generate_context!())
     .expect("error while running workbench native application");
