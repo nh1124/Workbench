@@ -8,6 +8,9 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 echo "Starting Workbench service stack (Core HTTP + internal services + DB)..."
 cd "${PROJECT_ROOT}"
-docker compose up -d
-npm run dev:services
+# Artifacts is docker-only in this mode.
+# Rebuild artifacts image after pull to ensure latest code is reflected.
+docker compose up -d --build artifacts-db artifacts workbench-core-db notes-db tasks-db projects-db
 
+# Run local services except artifacts (which is handled by docker above).
+npm run dev:services:no-artifacts

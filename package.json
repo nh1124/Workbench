@@ -11,6 +11,7 @@
     "dev": "concurrently -k -n CORE,NOTES,ARTIFACTS,TASKS,PROJECTS,UI -c blue,yellow,cyan,green,white,magenta \"npm:dev:http --workspace services/workbench-core\" \"npm:dev:http --workspace services/notes\" \"npm:dev:http --workspace services/artifacts\" \"npm:dev:http --workspace services/tasks\" \"npm:dev:http --workspace services/projects\" \"npm:dev --workspace ui\"",
     "dev:all": "npm run dev",
     "dev:services": "concurrently -k -n CORE,NOTES,ARTIFACTS,TASKS,PROJECTS -c blue,yellow,cyan,green,white \"npm:dev:http --workspace services/workbench-core\" \"npm:dev:http --workspace services/notes\" \"npm:dev:http --workspace services/artifacts\" \"npm:dev:http --workspace services/tasks\" \"npm:dev:http --workspace services/projects\"",
+    "dev:services:no-artifacts": "concurrently -k -n CORE,NOTES,TASKS,PROJECTS -c blue,yellow,green,white \"npm:dev:http --workspace services/workbench-core\" \"npm:dev:http --workspace services/notes\" \"npm:dev:http --workspace services/tasks\" \"npm:dev:http --workspace services/projects\"",
     "dev:web": "npm run dev --workspace ui",
     "dev:gateway:stdio": "concurrently -k -n CORE_HTTP,NOTES,ARTIFACTS,TASKS,PROJECTS,CORE_MCP -c blue,yellow,cyan,green,white,magenta \"npm:dev:http --workspace services/workbench-core\" \"npm:dev:http --workspace services/notes\" \"npm:dev:http --workspace services/artifacts\" \"npm:dev:http --workspace services/tasks\" \"npm:dev:http --workspace services/projects\" \"npm:dev:mcp --workspace services/workbench-core\"",
     "dev:mcp": "npm run dev:gateway:stdio",
