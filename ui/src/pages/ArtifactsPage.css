@@ -189,7 +189,7 @@
   border-right: 1px solid rgba(47, 65, 93, 0.8);
   background: linear-gradient(180deg, rgba(5, 12, 27, 0.95), rgba(3, 9, 22, 1));
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto auto;
   overflow: hidden;
 }
 
@@ -303,6 +303,145 @@
   align-items: center;
   color: #6f87aa;
   font-size: 0.69rem;
+}
+
+.va-outline-pane {
+  border-top: 1px solid rgba(48, 65, 89, 0.8);
+  background: rgba(5, 13, 29, 0.84);
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto auto;
+}
+
+.va-outline-head {
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  border-bottom: 1px solid rgba(48, 65, 89, 0.7);
+  background: transparent;
+  color: #c9def7;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.34rem 0.42rem;
+  font-size: 0.72rem;
+  text-align: left;
+}
+
+.va-outline-head strong {
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.va-outline-caret {
+  width: 0.66rem;
+  color: #8eaed5;
+  font-size: 0.68rem;
+  line-height: 1;
+}
+
+.va-outline-body {
+  min-height: 96px;
+  overflow: auto;
+}
+
+.va-outline-empty {
+  margin: 0;
+  color: #7692b8;
+  font-size: 0.68rem;
+  padding: 0.45rem 0.52rem;
+}
+
+.va-outline-list {
+  margin: 0;
+  padding: 0.2rem 0.2rem 0.28rem;
+  list-style: none;
+  display: grid;
+  align-content: start;
+  gap: 0.08rem;
+}
+
+.va-outline-row {
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: #a2bddf;
+  min-height: 1.35rem;
+  padding-right: 0.34rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.68rem;
+  font-weight: 400;
+  text-align: left;
+  cursor: grab;
+}
+
+.va-outline-row.dragging {
+  opacity: 0.55;
+  cursor: grabbing;
+}
+
+.va-outline-row.drop-target {
+  border-color: rgba(114, 191, 244, 0.9);
+  background: rgba(33, 67, 106, 0.5);
+}
+
+.va-outline-row:hover {
+  border-color: rgba(74, 106, 148, 0.7);
+  background: rgba(24, 41, 68, 0.55);
+}
+
+.va-outline-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
+}
+
+.va-outline-title-wrap {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  overflow: hidden;
+}
+
+.va-outline-level {
+  color: #7ea0cb;
+  font-family: "JetBrains Mono", "Consolas", monospace;
+  font-size: 0.64rem;
+  letter-spacing: 0.03em;
+  flex-shrink: 0;
+}
+
+.va-outline-row small {
+  color: #6888b3;
+  font-size: 0.58rem;
+  font-weight: 400;
+}
+
+.va-outline-resizer {
+  position: relative;
+  height: 9px;
+  cursor: ns-resize;
+  user-select: none;
+}
+
+.va-outline-resizer::before {
+  content: "";
+  position: absolute;
+  left: 0.45rem;
+  right: 0.45rem;
+  top: 4px;
+  border-top: 1px solid rgba(70, 96, 132, 0.8);
+}
+
+.va-outline-resizer:hover::before {
+  border-top-color: rgba(111, 168, 224, 0.92);
 }
 
 .va-tree-foot .ghost-button {
@@ -434,7 +573,8 @@
 .va-detail-pane,
 .va-content-section textarea,
 .va-markdown-preview,
-.va-notion-editor {
+.va-notion-editor,
+.va-outline-body {
   scrollbar-width: thin;
   scrollbar-color: rgba(124, 145, 174, 0.7) rgba(8, 16, 35, 0.78);
 }
@@ -443,7 +583,8 @@
 .va-detail-pane::-webkit-scrollbar,
 .va-content-section textarea::-webkit-scrollbar,
 .va-markdown-preview::-webkit-scrollbar,
-.va-notion-editor::-webkit-scrollbar {
+.va-notion-editor::-webkit-scrollbar,
+.va-outline-body::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
@@ -452,7 +593,8 @@
 .va-detail-pane::-webkit-scrollbar-track,
 .va-content-section textarea::-webkit-scrollbar-track,
 .va-markdown-preview::-webkit-scrollbar-track,
-.va-notion-editor::-webkit-scrollbar-track {
+.va-notion-editor::-webkit-scrollbar-track,
+.va-outline-body::-webkit-scrollbar-track {
   background: rgba(8, 16, 35, 0.78);
   border-radius: 999px;
 }
@@ -461,7 +603,8 @@
 .va-detail-pane::-webkit-scrollbar-thumb,
 .va-content-section textarea::-webkit-scrollbar-thumb,
 .va-markdown-preview::-webkit-scrollbar-thumb,
-.va-notion-editor::-webkit-scrollbar-thumb {
+.va-notion-editor::-webkit-scrollbar-thumb,
+.va-outline-body::-webkit-scrollbar-thumb {
   border-radius: 999px;
   border: 2px solid rgba(8, 16, 35, 0.78);
   background: linear-gradient(180deg, rgba(146, 167, 196, 0.9), rgba(108, 129, 158, 0.85));
@@ -471,7 +614,8 @@
 .va-detail-pane::-webkit-scrollbar-button,
 .va-content-section textarea::-webkit-scrollbar-button,
 .va-markdown-preview::-webkit-scrollbar-button,
-.va-notion-editor::-webkit-scrollbar-button {
+.va-notion-editor::-webkit-scrollbar-button,
+.va-outline-body::-webkit-scrollbar-button {
   display: none;
   width: 0;
   height: 0;
@@ -1085,6 +1229,10 @@
 
 .va-table-context-menu {
   min-width: 220px;
+}
+
+.va-outline-context-menu {
+  min-width: 190px;
 }
 
 @media (max-width: 1220px) {

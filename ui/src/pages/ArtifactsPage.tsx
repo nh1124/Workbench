@@ -54,6 +54,8 @@ import {
   normalizeNotionBlockElement,
   normalizeTableSelectionBounds,
 } from "../artifacts/utils/notionMarkdown";
+import { parseMarkdownOutline, type MarkdownOutlineItem } from "../artifacts/utils/markdownOutline";
+import { insertBelowOutlineEntry, moveOutlineSection } from "../artifacts/utils/markdownOutlineOps";
 import { useArtifactsMarkdownEditor } from "../artifacts/hooks/useArtifactsMarkdownEditor";
 import {
   IcoClose,
@@ -68,9 +70,15 @@ import {
   IcoUpload
 } from "../artifacts/components/ArtifactsIcons";
 import { DirectoryBrowser } from "../artifacts/components/DirectoryBrowser";
+import { MarkdownOutlinePanel } from "../artifacts/components/MarkdownOutlinePanel";
 import { PdfViewer } from "../artifacts/components/PdfViewer";
 import "./ArtifactsPage.css";
 
+type OutlineContextMenuState = {
+  x: number;
+  y: number;
+  entry: MarkdownOutlineItem;
+};
 
 export function ArtifactsPage() {
   const ROOT_DROP_PATH = "";
@@ -97,6 +105,7 @@ export function ArtifactsPage() {
   const [contextMenu, setContextMenu] = useState<TreeContextMenuState | null>(null);
   const [tableContextMenu, setTableContextMenu] = useState<TableContextMenuState | null>(null);
   const [editorContextMenu, setEditorContextMenu] = useState<EditorContextMenuState | null>(null);
+  const [outlineContextMenu, setOutlineContextMenu] = useState<OutlineContextMenuState | null>(null);
   const [tableSelection, setTableSelection] = useState<TableSelectionState | null>(null);
   const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
   const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
@@ -106,6 +115,8 @@ export function ArtifactsPage() {
   const [editorExpanded, setEditorExpanded] = useState(false);
   const [pdfExpanded, setPdfExpanded] = useState(false);
   const [mobileTreeVisible, setMobileTreeVisible] = useState(false);
+  const [outlineCollapsed, setOutlineCollapsed] = useState(false);
+  const [outlineBodyHeight, setOutlineBodyHeight] = useState(170);
 
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const draggingItemRef = useRef<ArtifactItem | null>(null);
@@ -160,6 +171,10 @@ export function ArtifactsPage() {
     if (draft.kind === "note") return true;
     return draft.kind === "file" && isMarkdownFilePath(draft.path);
   }, [draft.kind, draft.path, mode]);
+  const outlineEntries = useMemo(
+    () => (markdownEditorVisible ? parseMarkdownOutline(draft.contentMarkdown || "") : []),
+    [draft.contentMarkdown, markdownEditorVisible]
+  );
 
   const {
     editorRef,
@@ -251,6 +266,19 @@ export function ArtifactsPage() {
       top: Math.max(margin, Math.min(editorContextMenu.y, maxY))
     };
   }, [editorContextMenu]);
+
+  const outlineContextMenuPosition = useMemo(() => {
+    if (!outlineContextMenu) return null;
+    const menuWidth = 190;
+    const menuHeight = 160;
+    const margin = 8;
+    const maxX = window.innerWidth - menuWidth - margin;
+    const maxY = window.innerHeight - menuHeight - margin;
+    return {
+      left: Math.max(margin, Math.min(outlineContextMenu.x, maxX)),
+      top: Math.max(margin, Math.min(outlineContextMenu.y, maxY))
+    };
+  }, [outlineContextMenu]);
 
   const contextDeleteCandidateIds = useMemo(() => {
     if (!contextMenu) {
@@ -539,19 +567,21 @@ export function ArtifactsPage() {
   }, [draft.contentMarkdown, draft.id, notePreviewMode, tableSelection]);
 
   useEffect(() => {
-    if (!contextMenu && !tableContextMenu && !editorContextMenu) return;
+    if (!contextMenu && !tableContextMenu && !editorContextMenu && !outlineContextMenu) return;
 
     const handleEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") {
         setContextMenu(null);
         setTableContextMenu(null);
         setEditorContextMenu(null);
+        setOutlineContextMenu(null);
       }
     };
     const handleClose = () => {
       setContextMenu(null);
       setTableContextMenu(null);
       setEditorContextMenu(null);
+      setOutlineContextMenu(null);
     };
 
     window.addEventListener("keydown", handleEscape);
@@ -562,7 +592,7 @@ export function ArtifactsPage() {
       window.removeEventListener("resize", handleClose);
       window.removeEventListener("scroll", handleClose, true);
     };
-  }, [contextMenu, editorContextMenu, tableContextMenu]);
+  }, [contextMenu, editorContextMenu, outlineContextMenu, tableContextMenu]);
 
   useEffect(() => {
     const existingIds = new Set(items.map((item) => item.id));
@@ -1981,7 +2011,8 @@ export function ArtifactsPage() {
 
   const handleRootDragOver = (event: DragEvent<HTMLElement>) => {
     event.preventDefault();
-    event.dataTransfer.dropEffect = "copy";
+    const hasFiles = event.dataTransfer.types.includes("Files");
+    event.dataTransfer.dropEffect = hasFiles ? "copy" : "move";
     setDropTargetPath(ROOT_DROP_PATH);
   };
 
@@ -1989,12 +2020,19 @@ export function ArtifactsPage() {
     setContextMenu(null);
     setTableContextMenu(null);
     setEditorContextMenu(null);
+    setOutlineContextMenu(null);
     void action();
   };
 
   const executeTableContextAction = (action: () => void) => {
     setTableContextMenu(null);
     setEditorContextMenu(null);
+    setOutlineContextMenu(null);
+    void action();
+  };
+
+  const executeOutlineContextAction = (action: () => void) => {
+    setOutlineContextMenu(null);
     void action();
   };
 
@@ -2005,6 +2043,84 @@ export function ArtifactsPage() {
       tableMenuContext.colCount > (tableMenuContext.bounds.endCol - tableMenuContext.bounds.startCol + 1)
   );
 
+  const handleOutlineSelect = (entry: MarkdownOutlineItem) => {
+    setMobileTreeVisible(false);
+    if (notePreviewMode === "live" && notionEditorRef.current) {
+      const headings = notionEditorRef.current.querySelectorAll<HTMLElement>(".va-notion-heading");
+      const target = headings.item(entry.headingIndex);
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+        target.focus({ preventScroll: true });
+        return;
+      }
+    }
+
+    const textarea = editorRef.current;
+    if (!textarea) {
+      return;
+    }
+    const nextPos = Math.max(0, Math.min(entry.startOffset, textarea.value.length));
+    textarea.focus();
+    textarea.setSelectionRange(nextPos, nextPos);
+  };
+
+  const handleOutlineMove = (draggedId: string, targetId: string, targetLevel: number) => {
+    if (!markdownEditorVisible) {
+      return;
+    }
+
+    const nextMarkdown = moveOutlineSection({
+      markdown: draft.contentMarkdown,
+      entries: outlineEntries,
+      draggedId,
+      targetId,
+      targetLevel
+    });
+    if (nextMarkdown === draft.contentMarkdown) {
+      return;
+    }
+    setDraft((prev) => ({ ...prev, contentMarkdown: nextMarkdown }));
+  };
+
+  const handleOpenOutlineContextMenu = (event: MouseEvent<HTMLButtonElement>, entry: MarkdownOutlineItem) => {
+    setContextMenu(null);
+    setTableContextMenu(null);
+    setEditorContextMenu(null);
+    setOutlineContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      entry
+    });
+  };
+
+  const insertFromOutlineContext = (kind: "text" | "heading" | "bullet") => {
+    if (!outlineContextMenu) {
+      return;
+    }
+
+    const result = insertBelowOutlineEntry({
+      markdown: draft.contentMarkdown,
+      entries: outlineEntries,
+      entryId: outlineContextMenu.entry.id,
+      kind
+    });
+
+    if (result.markdown === draft.contentMarkdown) {
+      return;
+    }
+
+    setDraft((prev) => ({ ...prev, contentMarkdown: result.markdown }));
+    if (notePreviewMode === "edit") {
+      window.requestAnimationFrame(() => {
+        const textarea = editorRef.current;
+        if (!textarea) return;
+        const cursor = Math.max(0, Math.min(result.cursorOffset, textarea.value.length));
+        textarea.focus();
+        textarea.setSelectionRange(cursor, cursor);
+      });
+    }
+  };
+
   return (
     <section
       className="va-artifacts-page"
@@ -2012,6 +2128,7 @@ export function ArtifactsPage() {
         setContextMenu(null);
         setTableContextMenu(null);
         setEditorContextMenu(null);
+        setOutlineContextMenu(null);
       }}
     >
       <section className="va-shell panel">
@@ -2105,6 +2222,17 @@ export function ArtifactsPage() {
                 selectItem={selectItem}
               />
             )}
+            <MarkdownOutlinePanel
+              collapsed={outlineCollapsed}
+              markdownVisible={markdownEditorVisible}
+              entries={outlineEntries}
+              bodyHeight={outlineBodyHeight}
+              onToggleCollapsed={() => setOutlineCollapsed((prev) => !prev)}
+              onBodyHeightChange={setOutlineBodyHeight}
+              onSelectEntry={handleOutlineSelect}
+              onMoveEntry={handleOutlineMove}
+              onOpenContextMenu={handleOpenOutlineContextMenu}
+            />
             <footer className="va-tree-foot">
               <span>{selectedItemIds.length} selected</span>
               <button
@@ -2541,6 +2669,27 @@ export function ArtifactsPage() {
           </button>
           <button type="button" onClick={() => handleOpenInsertLinkDialog()}>
             Insert Link
+          </button>
+        </div>
+      ) : null}
+
+      {outlineContextMenu && outlineContextMenuPosition ? (
+        <div
+          className="va-context-menu va-outline-context-menu"
+          style={{ left: outlineContextMenuPosition.left, top: outlineContextMenuPosition.top }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button type="button" onClick={() => executeOutlineContextAction(() => handleOutlineSelect(outlineContextMenu.entry))}>
+            Jump To Heading
+          </button>
+          <button type="button" onClick={() => executeOutlineContextAction(() => insertFromOutlineContext("text"))}>
+            Add Text Below
+          </button>
+          <button type="button" onClick={() => executeOutlineContextAction(() => insertFromOutlineContext("heading"))}>
+            Add Heading Below
+          </button>
+          <button type="button" onClick={() => executeOutlineContextAction(() => insertFromOutlineContext("bullet"))}>
+            Add Bullet Below
           </button>
         </div>
       ) : null}
