@@ -3,7 +3,7 @@
   width: 100%;
   margin: 0;
   padding: 0;
-  background: #0b1222;
+  background: #1f1f1f;
   overflow: hidden;
 }
 
@@ -22,10 +22,85 @@
   width: 100%;
   height: 100%;
   max-height: none;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
   border: 0;
   border-radius: 0;
   box-shadow: none;
+  background: #1f1f1f;
+}
+
+.quick-note-compact-toolbar {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(130px, 0.7fr) minmax(130px, 0.8fr) auto;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.5rem 0.65rem;
+  background: #2b2b2b;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.quick-note-compact-toolbar input,
+.quick-note-compact-toolbar select {
+  height: 2rem;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: #252525;
+  color: #f5f5f5;
+  padding: 0 0.55rem;
+  font-size: 0.8rem;
+}
+
+.quick-note-compact-toolbar input::placeholder {
+  color: rgba(245, 245, 245, 0.5);
+}
+
+.quick-note-compact-toolbar .quick-note-compact-save {
+  height: 2rem;
+  padding: 0 0.8rem;
+  border-radius: 8px;
+  border: 1px solid rgba(138, 195, 255, 0.4);
+  background: #2d4b66;
+  color: #e5f1ff;
+  font-weight: 600;
+}
+
+.quick-note-compact-toolbar .quick-note-compact-save:disabled {
+  opacity: 0.6;
+}
+
+.quick-note-compact-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  padding: 0.45rem 0.65rem 0.15rem;
+  background: #1f1f1f;
+}
+
+.quick-note-error-compact {
+  margin: 0;
+  padding: 0 0.7rem;
+}
+
+.quick-note-editor-wrap {
+  min-height: 0;
+  height: 100%;
+}
+
+.quick-note-compact-editor {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: #1f1f1f;
+  color: #f5f5f5;
+  padding: 1.15rem 1rem;
+  font-size: 1.02rem;
+  line-height: 1.55;
+}
+
+.quick-note-compact-editor::placeholder {
+  color: rgba(245, 245, 245, 0.4);
 }
 
 .quick-note-head {
@@ -153,6 +228,12 @@
   place-items: center;
   font-size: 0.72rem;
   line-height: 1;
+}
+
+@media (max-width: 760px) {
+  .quick-note-compact-toolbar {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 .quick-note-foot {

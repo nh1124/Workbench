@@ -83,6 +83,7 @@ export function QuickNoteModal({ open, onClose, standalone = false }: QuickNoteM
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const contentInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const tagInputRef = useRef<HTMLInputElement | null>(null);
 
   const selectedProjectName = useMemo(() => {
     return projectOptions.find((option) => option.projectId === draft.projectId)?.projectName;
@@ -232,16 +233,89 @@ export function QuickNoteModal({ open, onClose, standalone = false }: QuickNoteM
     }
   };
 
-  const modalContent = (
-    <section
-      className={standalone ? "quick-note-modal quick-note-modal-standalone" : "quick-note-modal"}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Quick note"
-      onClick={(event) => event.stopPropagation()}
-      onKeyDown={handleModalKeyDown}
-    >
-            {!standalone ? (
+  if (standalone) {
+    return (
+      <div className="quick-note-window-shell">
+        <section
+          className="quick-note-modal quick-note-modal-standalone"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Quick note"
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={handleModalKeyDown}
+        >
+          <div className="quick-note-compact-toolbar">
+            <input
+              className="quick-note-compact-title"
+              value={draft.title}
+              onChange={(event) => setDraft((prev) => ({ ...prev, title: event.target.value }))}
+              placeholder="Title (optional)"
+            />
+            <select
+              className="quick-note-compact-project"
+              value={draft.projectId}
+              onChange={(event) => setDraft((prev) => ({ ...prev, projectId: event.target.value }))}
+            >
+              {projectOptions.map((project) => (
+                <option key={project.projectId} value={project.projectId}>
+                  {normalizeProjectName(project.projectId, project.projectName)}
+                </option>
+              ))}
+            </select>
+            <input
+              ref={tagInputRef}
+              className="quick-note-compact-tag-input"
+              value={tagInput}
+              onChange={(event) => setTagInput(event.target.value)}
+              onKeyDown={handleTagInputKeyDown}
+              onBlur={() => addTag(tagInput)}
+              placeholder="Tag + Enter"
+            />
+            <button type="button" className="quick-note-compact-save" onClick={() => void handleSave()} disabled={isSaving}>
+              {isSaving ? "Saving..." : "Save"}
+            </button>
+          </div>
+
+          {draft.tags.length > 0 ? (
+            <div className="quick-note-compact-tags">
+              {draft.tags.map((tag) => (
+                <span key={tag} className="quick-note-tag-chip">
+                  {tag}
+                  <button type="button" onClick={() => removeTag(tag)} aria-label={`Remove ${tag}`}>
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : null}
+
+          {error ? <p className="quick-note-error quick-note-error-compact">{error}</p> : null}
+
+          <div className="quick-note-editor-wrap">
+            <textarea
+              ref={contentInputRef}
+              autoFocus
+              className="quick-note-compact-editor"
+              value={draft.content}
+              onChange={(event) => setDraft((prev) => ({ ...prev, content: event.target.value }))}
+              placeholder="Start typing..."
+            />
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={close}>
+      <section
+        className="quick-note-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Quick note"
+        onClick={(event) => event.stopPropagation()}
+        onKeyDown={handleModalKeyDown}
+      >
         <header className="quick-note-head">
           <div>
             <h2>Quick Note</h2>
@@ -251,86 +325,77 @@ export function QuickNoteModal({ open, onClose, standalone = false }: QuickNoteM
             x
           </button>
         </header>
-      ) : null}
 
-      <div className="quick-note-body">
-        {error ? <p className="quick-note-error">{error}</p> : null}
+        <div className="quick-note-body">
+          {error ? <p className="quick-note-error">{error}</p> : null}
 
-        <label>
-          Title (optional)
-          <input
-            value={draft.title}
-            onChange={(event) => setDraft((prev) => ({ ...prev, title: event.target.value }))}
-            placeholder="Quick note title"
-          />
-        </label>
-
-        <label>
-          Content
-          <textarea
-            ref={contentInputRef}
-            autoFocus
-            rows={8}
-            value={draft.content}
-            onChange={(event) => setDraft((prev) => ({ ...prev, content: event.target.value }))}
-            placeholder="Capture your note..."
-          />
-        </label>
-
-        <label>
-          Link to Project
-          <select
-            value={draft.projectId}
-            onChange={(event) => setDraft((prev) => ({ ...prev, projectId: event.target.value }))}
-          >
-            {projectOptions.map((project) => (
-              <option key={project.projectId} value={project.projectId}>
-                {normalizeProjectName(project.projectId, project.projectName)}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label>
-          Tags
-          <div className="quick-note-tags-input" onClick={() => document.getElementById("quick-note-tag-input")?.focus()}>
-            {draft.tags.map((tag) => (
-              <span key={tag} className="quick-note-tag-chip">
-                {tag}
-                <button type="button" onClick={() => removeTag(tag)} aria-label={`Remove ${tag}`}>
-                  ﾃ・                </button>
-              </span>
-            ))}
+          <label>
+            Title (optional)
             <input
-              id="quick-note-tag-input"
-              value={tagInput}
-              onChange={(event) => setTagInput(event.target.value)}
-              onKeyDown={handleTagInputKeyDown}
-              onBlur={() => addTag(tagInput)}
-              placeholder={draft.tags.length === 0 ? "Add tag and press Enter..." : "Add tag"}
+              value={draft.title}
+              onChange={(event) => setDraft((prev) => ({ ...prev, title: event.target.value }))}
+              placeholder="Quick note title"
             />
-          </div>
-        </label>
-      </div>
+          </label>
 
-      <footer className="quick-note-foot">
-        <button type="button" className="ghost-button" onClick={close} disabled={isSaving}>
-          Cancel
-        </button>
-        <button type="button" onClick={() => void handleSave()} disabled={isSaving}>
-          {isSaving ? "Saving..." : "Save Note"}
-        </button>
-      </footer>
-    </section>
-  );
+          <label>
+            Content
+            <textarea
+              ref={contentInputRef}
+              autoFocus
+              rows={8}
+              value={draft.content}
+              onChange={(event) => setDraft((prev) => ({ ...prev, content: event.target.value }))}
+              placeholder="Capture your note..."
+            />
+          </label>
 
-  if (standalone) {
-    return <div className="quick-note-window-shell">{modalContent}</div>;
-  }
+          <label>
+            Link to Project
+            <select
+              value={draft.projectId}
+              onChange={(event) => setDraft((prev) => ({ ...prev, projectId: event.target.value }))}
+            >
+              {projectOptions.map((project) => (
+                <option key={project.projectId} value={project.projectId}>
+                  {normalizeProjectName(project.projectId, project.projectName)}
+                </option>
+              ))}
+            </select>
+          </label>
 
-  return (
-    <div className="modal-backdrop" role="presentation" onClick={close}>
-      {modalContent}
+          <label>
+            Tags
+            <div className="quick-note-tags-input" onClick={() => tagInputRef.current?.focus()}>
+              {draft.tags.map((tag) => (
+                <span key={tag} className="quick-note-tag-chip">
+                  {tag}
+                  <button type="button" onClick={() => removeTag(tag)} aria-label={`Remove ${tag}`}>
+                    ×
+                  </button>
+                </span>
+              ))}
+              <input
+                ref={tagInputRef}
+                value={tagInput}
+                onChange={(event) => setTagInput(event.target.value)}
+                onKeyDown={handleTagInputKeyDown}
+                onBlur={() => addTag(tagInput)}
+                placeholder={draft.tags.length === 0 ? "Add tag and press Enter..." : "Add tag"}
+              />
+            </div>
+          </label>
+        </div>
+
+        <footer className="quick-note-foot">
+          <button type="button" className="ghost-button" onClick={close} disabled={isSaving}>
+            Cancel
+          </button>
+          <button type="button" onClick={() => void handleSave()} disabled={isSaving}>
+            {isSaving ? "Saving..." : "Save Note"}
+          </button>
+        </footer>
+      </section>
     </div>
   );
 }
