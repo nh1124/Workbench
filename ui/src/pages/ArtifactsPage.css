@@ -725,6 +725,7 @@
 .va-notion-bullet {
   position: relative;
   padding-left: 1.15rem;
+  margin-left: calc((var(--va-list-level, 1) - 1) * 1rem);
 }
 
 .va-notion-bullet::before {
@@ -736,11 +737,46 @@
   font-weight: 700;
 }
 
-.va-notion-bullet.level-2 {
-  margin-left: 1rem;
+.va-notion-ordered {
+  position: relative;
+  padding-left: 1.3rem;
+  margin-left: calc((var(--va-list-level, 1) - 1) * 1rem);
 }
-.va-notion-bullet.level-3 {
-  margin-left: 2rem;
+
+.va-notion-ordered::before {
+  content: var(--va-order-marker, "1.");
+  position: absolute;
+  left: 0.05rem;
+  top: 0;
+  color: #b8cff0;
+  font-weight: 700;
+  min-width: 1rem;
+}
+
+.va-notion-code {
+  white-space: pre-wrap;
+  border: 1px solid rgba(56, 75, 103, 0.88);
+  border-radius: 10px;
+  background: rgba(7, 13, 25, 0.95);
+  padding: 0.58rem 0.64rem;
+  font-family: "JetBrains Mono", "Consolas", monospace;
+  font-size: 0.75rem;
+  line-height: 1.55;
+}
+
+.va-notion-code code {
+  white-space: inherit;
+  font: inherit;
+}
+
+.va-notion-hr {
+  padding: 0.2rem 0;
+}
+
+.va-notion-hr hr {
+  border: 0;
+  border-top: 1px solid rgba(96, 122, 160, 0.68);
+  margin: 0;
 }
 
 .va-notion-heading {

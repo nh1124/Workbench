@@ -1,16 +1,9 @@
 import type { ParsedMarkdownTable, TableSelectionBounds, TableSelectionState } from "../types";
 import { extractYoutubeId } from "./file";
 
-/** Convert leading `-- ` / `--- ` bullet syntax to standard indented Markdown list syntax. */
+/** Legacy hook kept for compatibility; no preprocessing is applied now. */
 export function preprocessMarkdownBullets(md: string): string {
-  return md
-    .split("\n")
-    .map((line) => {
-      if (/^--- /.test(line)) return "    - " + line.slice(4);
-      if (/^-- /.test(line)) return "  - " + line.slice(3);
-      return line;
-    })
-    .join("\n");
+  return md;
 }
 
 function escapeHtml(value: string): string {
@@ -99,6 +92,87 @@ function parseMarkdownTableRow(line: string): string[] | null {
   const withoutEdges = trimmed.replace(/^\|/, "").replace(/\|$/, "");
   const cells = withoutEdges.split(/(?<!\\)\|/).map((cell) => cell.trim().replace(/\\\|/g, "|"));
   return cells.length > 0 ? cells : null;
+}
+
+function countListIndentWidth(indent: string): number {
+  return indent.replace(/\t/g, "  ").length;
+}
+
+function listIndentToLevel(indent: string): number {
+  return Math.max(1, Math.floor(countListIndentWidth(indent) / 2) + 1);
+}
+
+function levelToListIndent(level: number): string {
+  return "  ".repeat(Math.max(1, level) - 1);
+}
+
+function parseUnorderedListLine(line: string): { level: number; content: string } | null {
+  const match = line.match(/^(\s*)-\s+(.*)$/);
+  if (!match) {
+    return null;
+  }
+  return {
+    level: listIndentToLevel(match[1] ?? ""),
+    content: match[2] ?? ""
+  };
+}
+
+function parseOrderedListLine(line: string): { level: number; marker: number; content: string } | null {
+  const match = line.match(/^(\s*)(\d+)\.\s+(.*)$/);
+  if (!match) {
+    return null;
+  }
+  const markerRaw = Number(match[2] ?? "1");
+  return {
+    level: listIndentToLevel(match[1] ?? ""),
+    marker: Number.isFinite(markerRaw) ? Math.max(1, Math.floor(markerRaw)) : 1,
+    content: match[3] ?? ""
+  };
+}
+
+function parseHeadingLine(line: string): { level: number; content: string } | null {
+  const match = line.match(/^(#{1,6})\s+(.*)$/);
+  if (!match) {
+    return null;
+  }
+  return {
+    level: match[1]?.length ?? 1,
+    content: match[2] ?? ""
+  };
+}
+
+function isHorizontalRuleLine(line: string): boolean {
+  const trimmed = line.trim();
+  return /^(?:-{3,}|\*{3,}|_{3,})$/.test(trimmed);
+}
+
+function parseFencedCodeBlock(
+  lines: string[],
+  startIndex: number
+): { language: string; code: string; nextIndex: number } | null {
+  const opening = lines[startIndex]?.match(/^\s*```([^\s`]*)\s*$/);
+  if (!opening) {
+    return null;
+  }
+  const language = opening[1] ?? "";
+  const codeLines: string[] = [];
+  let cursor = startIndex + 1;
+  while (cursor < lines.length) {
+    if (/^\s*```\s*$/.test(lines[cursor] ?? "")) {
+      return {
+        language,
+        code: codeLines.join("\n"),
+        nextIndex: cursor + 1
+      };
+    }
+    codeLines.push(lines[cursor] ?? "");
+    cursor += 1;
+  }
+  return {
+    language,
+    code: codeLines.join("\n"),
+    nextIndex: lines.length
+  };
 }
 
 function isMarkdownTableSeparatorRow(line: string): boolean {
@@ -300,6 +374,17 @@ export function markdownToNotionHtml(markdown: string): string {
   let tableIndex = 0;
 
   for (let i = 0; i < lines.length; i += 1) {
+    const fencedCode = parseFencedCodeBlock(lines, i);
+    if (fencedCode) {
+      const codeHtml = fencedCode.code ? escapeHtml(fencedCode.code) : "<br>";
+      const languageAttr = escapeHtml(fencedCode.language);
+      blocks.push(
+        `<pre class="va-notion-block va-notion-code" data-md-kind="code" data-md-lang="${languageAttr}"><code>${codeHtml}</code></pre>`
+      );
+      i = fencedCode.nextIndex - 1;
+      continue;
+    }
+
     const table = tryParseMarkdownTable(lines, i);
     if (table) {
       const tableId = `table-${tableIndex + 1}`;
@@ -326,26 +411,44 @@ export function markdownToNotionHtml(markdown: string): string {
     }
 
     const line = lines[i];
+    if (isHorizontalRuleLine(line)) {
+      blocks.push(`<div class="va-notion-block va-notion-hr" data-md-kind="hr"><hr></div>`);
+      continue;
+    }
+
     const youtubeSource = parseYoutubeSourceFromLine(line);
     if (youtubeSource) {
       blocks.push(youtubeEmbedBlockToHtml(youtubeSource));
       continue;
     }
 
-    const headingMatch = line.match(/^(#{1,3})\s?(.*)$/);
-    if (headingMatch) {
-      const level = headingMatch[1].length;
-      const content = headingMatch[2] ? markdownInlineToHtml(headingMatch[2]) : "<br>";
+    const heading = parseHeadingLine(line);
+    if (heading) {
+      const level = heading.level;
+      const content = heading.content ? markdownInlineToHtml(heading.content) : "<br>";
       blocks.push(`<p class="va-notion-block va-notion-heading level-${level}" data-md-kind="heading" data-md-level="${level}">${content}</p>`);
       continue;
     }
-    const bulletMatch = line.match(/^(-{1,3})\s?(.*)$/);
-    if (bulletMatch) {
-      const level = bulletMatch[1].length;
-      const content = bulletMatch[2] ? markdownInlineToHtml(bulletMatch[2]) : "<br>";
+
+    const unordered = parseUnorderedListLine(line);
+    if (unordered) {
+      const level = unordered.level;
+      const content = unordered.content ? markdownInlineToHtml(unordered.content) : "<br>";
       blocks.push(`<p class="va-notion-block va-notion-bullet level-${level}" data-md-kind="bullet" data-md-level="${level}">${content}</p>`);
       continue;
     }
+
+    const ordered = parseOrderedListLine(line);
+    if (ordered) {
+      const level = ordered.level;
+      const marker = ordered.marker;
+      const content = ordered.content ? markdownInlineToHtml(ordered.content) : "<br>";
+      blocks.push(
+        `<p class="va-notion-block va-notion-ordered level-${level}" data-md-kind="ordered" data-md-level="${level}" data-md-marker="${marker}">${content}</p>`
+      );
+      continue;
+    }
+
     const content = line ? markdownInlineToHtml(line) : "<br>";
     blocks.push(`<p class="va-notion-block" data-md-kind="paragraph">${content}</p>`);
   }
@@ -407,8 +510,14 @@ export function notionEditorToMarkdown(editor: HTMLElement): string {
 
     const kind = block.dataset.mdKind === "table"
       ? "table"
+      : block.dataset.mdKind === "code"
+      ? "code"
+      : block.dataset.mdKind === "hr"
+      ? "hr"
       : block.dataset.mdKind === "bullet"
       ? "bullet"
+      : block.dataset.mdKind === "ordered"
+      ? "ordered"
       : block.dataset.mdKind === "heading"
         ? "heading"
         : "paragraph";
@@ -416,12 +525,30 @@ export function notionEditorToMarkdown(editor: HTMLElement): string {
       parts.push(tableBlockToMarkdown(block));
       continue;
     }
+    if (kind === "code") {
+      const language = (block.dataset.mdLang ?? "").trim();
+      const codeElement = block.querySelector("code");
+      const codeText = (codeElement?.textContent ?? block.textContent ?? "").replace(/\u00a0/g, " ");
+      parts.push(`\`\`\`${language}\n${codeText}\n\`\`\``);
+      continue;
+    }
+    if (kind === "hr") {
+      parts.push("---");
+      continue;
+    }
+
     const levelRaw = Number(block.dataset.mdLevel || "1");
-    const level = Number.isFinite(levelRaw) ? Math.max(1, Math.min(3, Math.floor(levelRaw))) : 1;
+    const level = Number.isFinite(levelRaw) ? Math.max(1, Math.min(6, Math.floor(levelRaw))) : 1;
     const inline = Array.from(block.childNodes).map((node) => inlineNodeToMarkdown(node)).join("");
     const content = inline.replace(/\n+$/g, "");
     if (kind === "bullet") {
-      parts.push(`${"-".repeat(level)} ${content}`.trimEnd());
+      const indent = levelToListIndent(level);
+      parts.push(`${indent}- ${content}`.trimEnd());
+    } else if (kind === "ordered") {
+      const indent = levelToListIndent(level);
+      const markerRaw = Number(block.dataset.mdMarker || "1");
+      const marker = Number.isFinite(markerRaw) ? Math.max(1, Math.floor(markerRaw)) : 1;
+      parts.push(`${indent}${marker}. ${content}`.trimEnd());
     } else if (kind === "heading") {
       parts.push(`${"#".repeat(level)} ${content}`.trimEnd());
     } else {
@@ -434,13 +561,19 @@ export function notionEditorToMarkdown(editor: HTMLElement): string {
 export function normalizeNotionBlockElement(block: HTMLElement): void {
   const kind = block.dataset.mdKind === "table" || block.classList.contains("va-notion-table-wrap")
     ? "table"
+    : block.dataset.mdKind === "code" || block.classList.contains("va-notion-code")
+    ? "code"
+    : block.dataset.mdKind === "hr" || block.classList.contains("va-notion-hr")
+    ? "hr"
     : block.dataset.mdKind === "bullet"
     ? "bullet"
+    : block.dataset.mdKind === "ordered"
+    ? "ordered"
     : block.dataset.mdKind === "heading"
       ? "heading"
       : "paragraph";
   const levelRaw = Number(block.dataset.mdLevel || "1");
-  const level = Number.isFinite(levelRaw) ? Math.max(1, Math.min(3, Math.floor(levelRaw))) : 1;
+  const level = Number.isFinite(levelRaw) ? Math.max(1, Math.min(6, Math.floor(levelRaw))) : 1;
   block.dataset.mdKind = kind;
   if (kind === "table") {
     delete block.dataset.mdLevel;
@@ -449,6 +582,24 @@ export function normalizeNotionBlockElement(block: HTMLElement): void {
     }
     block.className = "va-notion-block va-notion-table-wrap";
     ensureNotionTableBlockStructure(block);
+    return;
+  }
+  if (kind === "code") {
+    delete block.dataset.mdLevel;
+    block.className = "va-notion-block va-notion-code";
+    let code = block.querySelector("code");
+    if (!code) {
+      code = document.createElement("code");
+      code.textContent = block.textContent ?? "";
+      block.innerHTML = "";
+      block.appendChild(code);
+    }
+    return;
+  }
+  if (kind === "hr") {
+    delete block.dataset.mdLevel;
+    block.className = "va-notion-block va-notion-hr";
+    block.innerHTML = "<hr>";
     return;
   }
   block.className = "va-notion-block";
@@ -460,19 +611,36 @@ export function normalizeNotionBlockElement(block: HTMLElement): void {
   if (kind === "bullet") {
     block.dataset.mdLevel = String(level);
     block.classList.add("va-notion-bullet", `level-${level}`);
+    block.style.setProperty("--va-list-level", String(level));
+  } else if (kind === "ordered") {
+    const markerRaw = Number(block.dataset.mdMarker || "1");
+    const marker = Number.isFinite(markerRaw) ? Math.max(1, Math.floor(markerRaw)) : 1;
+    block.dataset.mdLevel = String(level);
+    block.dataset.mdMarker = String(marker);
+    block.classList.add("va-notion-ordered", `level-${level}`);
+    block.style.setProperty("--va-list-level", String(level));
+    block.style.setProperty("--va-order-marker", `"${marker}."`);
   } else if (kind === "heading") {
     block.dataset.mdLevel = String(level);
     block.classList.add("va-notion-heading", `level-${level}`);
+    block.style.removeProperty("--va-list-level");
+    block.style.removeProperty("--va-order-marker");
   } else {
     delete block.dataset.mdLevel;
+    delete block.dataset.mdMarker;
+    block.style.removeProperty("--va-list-level");
+    block.style.removeProperty("--va-order-marker");
   }
 }
 
-export function createNotionBlock(kind: "paragraph" | "bullet" | "heading", level = 1): HTMLParagraphElement {
+export function createNotionBlock(kind: "paragraph" | "bullet" | "ordered" | "heading", level = 1, marker = 1): HTMLParagraphElement {
   const block = document.createElement("p");
   block.dataset.mdKind = kind;
-  if (kind === "bullet" || kind === "heading") {
-    block.dataset.mdLevel = String(Math.max(1, Math.min(3, Math.floor(level))));
+  if (kind === "bullet" || kind === "ordered" || kind === "heading") {
+    block.dataset.mdLevel = String(Math.max(1, Math.min(6, Math.floor(level))));
+  }
+  if (kind === "ordered") {
+    block.dataset.mdMarker = String(Math.max(1, Math.floor(marker)));
   }
   block.innerHTML = "<br>";
   normalizeNotionBlockElement(block);

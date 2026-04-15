@@ -395,9 +395,10 @@ export function useArtifactsMarkdownEditor({
       event.preventDefault();
       document.execCommand("removeFormat");
       for (const block of selectedBlocks) {
-        if (block.dataset.mdKind === "bullet" || block.dataset.mdKind === "heading") {
+        if (block.dataset.mdKind === "bullet" || block.dataset.mdKind === "ordered" || block.dataset.mdKind === "heading") {
           block.dataset.mdKind = "paragraph";
           delete block.dataset.mdLevel;
+          delete block.dataset.mdMarker;
           normalizeNotionBlockElement(block);
         }
       }
@@ -415,17 +416,18 @@ export function useArtifactsMarkdownEditor({
         if (block.dataset.mdKind === "table") {
           continue;
         }
-        if (block.dataset.mdKind === "bullet") {
+        if (block.dataset.mdKind === "bullet" || block.dataset.mdKind === "ordered") {
           const currentLevel = Number(block.dataset.mdLevel || "1");
           if (event.shiftKey) {
             if (currentLevel <= 1) {
               block.dataset.mdKind = "paragraph";
               delete block.dataset.mdLevel;
+              delete block.dataset.mdMarker;
             } else {
               block.dataset.mdLevel = String(currentLevel - 1);
             }
           } else {
-            block.dataset.mdLevel = String(Math.min(3, currentLevel + 1));
+            block.dataset.mdLevel = String(Math.min(6, currentLevel + 1));
           }
           normalizeNotionBlockElement(block);
           continue;
@@ -438,7 +440,7 @@ export function useArtifactsMarkdownEditor({
       return;
     }
 
-    if (!withCtrl && !event.altKey && event.key === "Tab" && range.collapsed && currentBlock.dataset.mdKind === "bullet") {
+    if (!withCtrl && !event.altKey && event.key === "Tab" && range.collapsed && (currentBlock.dataset.mdKind === "bullet" || currentBlock.dataset.mdKind === "ordered")) {
       const beforeRange = document.createRange();
       beforeRange.setStart(currentBlock, 0);
       beforeRange.setEnd(range.startContainer, range.startOffset);
@@ -453,18 +455,19 @@ export function useArtifactsMarkdownEditor({
         if (currentLevel <= 1) {
           currentBlock.dataset.mdKind = "paragraph";
           delete currentBlock.dataset.mdLevel;
+          delete currentBlock.dataset.mdMarker;
         } else {
           currentBlock.dataset.mdLevel = String(currentLevel - 1);
         }
       } else {
-        currentBlock.dataset.mdLevel = String(Math.min(3, currentLevel + 1));
+        currentBlock.dataset.mdLevel = String(Math.min(6, currentLevel + 1));
       }
       normalizeNotionBlockElement(currentBlock);
       syncDraftFromNotionEditor();
       return;
     }
 
-    if (!withCtrl && !event.altKey && event.key === "Backspace" && range.collapsed && currentBlock.dataset.mdKind === "bullet") {
+    if (!withCtrl && !event.altKey && event.key === "Backspace" && range.collapsed && (currentBlock.dataset.mdKind === "bullet" || currentBlock.dataset.mdKind === "ordered")) {
       const beforeRange = document.createRange();
       beforeRange.setStart(currentBlock, 0);
       beforeRange.setEnd(range.startContainer, range.startOffset);
@@ -473,6 +476,7 @@ export function useArtifactsMarkdownEditor({
         event.preventDefault();
         currentBlock.dataset.mdKind = "paragraph";
         delete currentBlock.dataset.mdLevel;
+        delete currentBlock.dataset.mdMarker;
         normalizeNotionBlockElement(currentBlock);
         placeCaretAtBlockStart(currentBlock);
         syncDraftFromNotionEditor();
@@ -481,10 +485,10 @@ export function useArtifactsMarkdownEditor({
     }
 
     if (withCtrl && (event.key === ">" || (event.shiftKey && event.key === "."))) {
-      if (currentBlock.dataset.mdKind === "bullet" || currentBlock.dataset.mdKind === "heading") {
+      if (currentBlock.dataset.mdKind === "bullet" || currentBlock.dataset.mdKind === "ordered" || currentBlock.dataset.mdKind === "heading") {
         event.preventDefault();
         const currentLevel = Number(currentBlock.dataset.mdLevel || "1");
-        currentBlock.dataset.mdLevel = String(Math.min(3, currentLevel + 1));
+        currentBlock.dataset.mdLevel = String(Math.min(6, currentLevel + 1));
         normalizeNotionBlockElement(currentBlock);
         syncDraftFromNotionEditor();
       }
@@ -492,12 +496,13 @@ export function useArtifactsMarkdownEditor({
     }
 
     if (withCtrl && (event.key === "<" || (event.shiftKey && event.key === ","))) {
-      if (currentBlock.dataset.mdKind === "bullet" || currentBlock.dataset.mdKind === "heading") {
+      if (currentBlock.dataset.mdKind === "bullet" || currentBlock.dataset.mdKind === "ordered" || currentBlock.dataset.mdKind === "heading") {
         event.preventDefault();
         const currentLevel = Number(currentBlock.dataset.mdLevel || "1");
         if (currentLevel <= 1) {
           currentBlock.dataset.mdKind = "paragraph";
           delete currentBlock.dataset.mdLevel;
+          delete currentBlock.dataset.mdMarker;
         } else {
           currentBlock.dataset.mdLevel = String(currentLevel - 1);
         }
@@ -513,20 +518,48 @@ export function useArtifactsMarkdownEditor({
       beforeRange.setEnd(range.startContainer, range.startOffset);
       const prefix = beforeRange.toString().trim();
       const wholeText = (currentBlock.textContent ?? "").trim();
-      if (/^-{1,3}$/.test(prefix) && prefix === wholeText) {
+      if (/^---$/.test(prefix) && prefix === wholeText) {
+        event.preventDefault();
+        currentBlock.dataset.mdKind = "hr";
+        currentBlock.innerHTML = "<hr>";
+        normalizeNotionBlockElement(currentBlock);
+        const nextBlock = createNotionBlock("paragraph");
+        if (currentBlock.nextSibling) {
+          editor.insertBefore(nextBlock, currentBlock.nextSibling);
+        } else {
+          editor.appendChild(nextBlock);
+        }
+        placeCaretAtBlockStart(nextBlock);
+        syncDraftFromNotionEditor();
+        return;
+      }
+
+      if (/^-$/.test(prefix) && prefix === wholeText) {
         event.preventDefault();
         currentBlock.dataset.mdKind = "bullet";
-        currentBlock.dataset.mdLevel = String(Math.min(3, prefix.length));
+        currentBlock.dataset.mdLevel = "1";
         currentBlock.innerHTML = "<br>";
         normalizeNotionBlockElement(currentBlock);
         placeCaretAtBlockStart(currentBlock);
         syncDraftFromNotionEditor();
         return;
       }
-      if (/^#{1,3}$/.test(prefix) && prefix === wholeText) {
+      if (/^\d+\.$/.test(prefix) && prefix === wholeText) {
+        event.preventDefault();
+        const marker = Number(prefix.slice(0, -1));
+        currentBlock.dataset.mdKind = "ordered";
+        currentBlock.dataset.mdLevel = "1";
+        currentBlock.dataset.mdMarker = Number.isFinite(marker) ? String(Math.max(1, Math.floor(marker))) : "1";
+        currentBlock.innerHTML = "<br>";
+        normalizeNotionBlockElement(currentBlock);
+        placeCaretAtBlockStart(currentBlock);
+        syncDraftFromNotionEditor();
+        return;
+      }
+      if (/^#{1,6}$/.test(prefix) && prefix === wholeText) {
         event.preventDefault();
         currentBlock.dataset.mdKind = "heading";
-        currentBlock.dataset.mdLevel = String(Math.min(3, prefix.length));
+        currentBlock.dataset.mdLevel = String(Math.min(6, prefix.length));
         currentBlock.innerHTML = "<br>";
         normalizeNotionBlockElement(currentBlock);
         placeCaretAtBlockStart(currentBlock);
@@ -574,18 +607,27 @@ export function useArtifactsMarkdownEditor({
     }
 
     if (event.key === "Enter" && range.collapsed) {
+      if (currentBlock.dataset.mdKind === "code") {
+        return;
+      }
       event.preventDefault();
       const kind = currentBlock.dataset.mdKind === "bullet"
         ? "bullet"
+        : currentBlock.dataset.mdKind === "ordered"
+          ? "ordered"
         : currentBlock.dataset.mdKind === "heading"
           ? "heading"
+          : currentBlock.dataset.mdKind === "hr"
+            ? "hr"
           : "paragraph";
       const level = Number(currentBlock.dataset.mdLevel || "1");
+      const marker = Number(currentBlock.dataset.mdMarker || "1");
       const blockText = (currentBlock.textContent ?? "").trim();
 
-      if (kind === "bullet" && blockText.length === 0) {
+      if ((kind === "bullet" || kind === "ordered") && blockText.length === 0) {
         currentBlock.dataset.mdKind = "paragraph";
         delete currentBlock.dataset.mdLevel;
+        delete currentBlock.dataset.mdMarker;
         normalizeNotionBlockElement(currentBlock);
         currentBlock.innerHTML = "<br>";
         placeCaretAtBlockStart(currentBlock);
@@ -593,7 +635,19 @@ export function useArtifactsMarkdownEditor({
         return;
       }
 
-      const nextKind = kind === "bullet" ? "bullet" : "paragraph";
+      if (kind === "hr") {
+        const nextBlock = createNotionBlock("paragraph");
+        if (currentBlock.nextSibling) {
+          editor.insertBefore(nextBlock, currentBlock.nextSibling);
+        } else {
+          editor.appendChild(nextBlock);
+        }
+        placeCaretAtBlockStart(nextBlock);
+        syncDraftFromNotionEditor();
+        return;
+      }
+
+      const nextKind = (kind === "bullet" || kind === "ordered") ? kind : "paragraph";
       const trailingRange = range.cloneRange();
       trailingRange.setEnd(currentBlock, currentBlock.childNodes.length);
       const trailingContent = trailingRange.extractContents();
@@ -602,7 +656,8 @@ export function useArtifactsMarkdownEditor({
         currentBlock.innerHTML = "<br>";
       }
 
-      const nextBlock = createNotionBlock(nextKind, level);
+      const nextMarker = kind === "ordered" ? (Number.isFinite(marker) ? marker + 1 : 2) : 1;
+      const nextBlock = createNotionBlock(nextKind, level, nextMarker);
       nextBlock.innerHTML = "";
       if (trailingContent.childNodes.length > 0) {
         nextBlock.appendChild(trailingContent);
@@ -765,4 +820,3 @@ export function useArtifactsMarkdownEditor({
     handleNotionEditorKeyDown
   };
 }
-
