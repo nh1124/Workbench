@@ -2283,7 +2283,7 @@ export function ArtifactsPage() {
             onContextMenu={(event) =>
               openContextMenu(event, {
                 type: "background",
-                folderPath: ""
+                folderPath: currentFolderPath
               })
             }
             onDragEnter={handleRootDragOver}
