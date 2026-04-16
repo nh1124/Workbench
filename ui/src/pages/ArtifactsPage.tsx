@@ -80,6 +80,12 @@ type OutlineContextMenuState = {
   entry: MarkdownOutlineItem;
 };
 
+type RenameFolderState = {
+  itemId: string;
+  currentPath: string;
+  currentName: string;
+};
+
 export function ArtifactsPage() {
   const ROOT_DROP_PATH = "";
   const [searchParams] = useSearchParams();
@@ -111,6 +117,7 @@ export function ArtifactsPage() {
   const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirmState | null>(null);
   const [createFolderState, setCreateFolderState] = useState<CreateFolderState | null>(null);
+  const [renameFolderState, setRenameFolderState] = useState<RenameFolderState | null>(null);
   const [insertLinkState, setInsertLinkState] = useState<InsertLinkState | null>(null);
   const [editorExpanded, setEditorExpanded] = useState(false);
   const [pdfExpanded, setPdfExpanded] = useState(false);
@@ -318,6 +325,22 @@ export function ArtifactsPage() {
     }
     return items.filter((item) => item.kind !== "folder" && normalizePath(item.path).startsWith(`${folderPath}/`));
   }, [contextMenu, items, itemsById, selectedItemIds]);
+
+  const contextRenameFolderCandidate = useMemo(() => {
+    if (!contextMenu) {
+      return null as ArtifactItem | null;
+    }
+    if (contextMenu.target.type === "item") {
+      return contextMenu.target.item.kind === "folder" ? contextMenu.target.item : null;
+    }
+    if (contextMenu.target.type === "folder") {
+      const folderPath = normalizePath(contextMenu.target.folderPath);
+      return (
+        items.find((item) => item.kind === "folder" && normalizePath(item.path) === folderPath) ?? null
+      );
+    }
+    return null;
+  }, [contextMenu, items]);
 
   const resolveProjectFromFilter = (): ProjectOption => {
     if (projectFilter.trim()) {
@@ -1759,6 +1782,71 @@ export function ArtifactsPage() {
     }
   };
 
+  const startRenameFolder = (folderItem: ArtifactItem) => {
+    setRenameFolderState({
+      itemId: folderItem.id,
+      currentPath: normalizePath(folderItem.path),
+      currentName: leafPath(folderItem.path) || folderItem.title || "folder"
+    });
+  };
+
+  const handleRenameFolderConfirm = async (nextNameRaw: string) => {
+    if (!renameFolderState) {
+      return;
+    }
+
+    const nextName = nextNameRaw.trim();
+    if (!nextName) {
+      return;
+    }
+
+    const currentPath = normalizePath(renameFolderState.currentPath);
+    const nextPath = normalizePath(joinPath(parentPath(currentPath), nextName));
+    if (!nextPath || nextPath === currentPath) {
+      setRenameFolderState(null);
+      return;
+    }
+
+    setIsSaving(true);
+    setError(null);
+    try {
+      await artifactsApi.updateItem(renameFolderState.itemId, {
+        path: nextPath,
+        title: nextName
+      });
+
+      const oldPrefix = currentPath ? `${currentPath}/` : "";
+      setSelectedFolderPath((prev) => {
+        if (prev === null) return prev;
+        const normalizedPrev = normalizePath(prev);
+        if (normalizedPrev === currentPath) {
+          return nextPath;
+        }
+        if (oldPrefix && normalizedPrev.startsWith(oldPrefix)) {
+          const suffix = normalizedPrev.slice(oldPrefix.length);
+          return normalizePath(joinPath(nextPath, suffix));
+        }
+        return prev;
+      });
+
+      setRenameFolderState(null);
+      await loadTree();
+      if (draft.id) {
+        try {
+          const refreshed = await artifactsApi.getItem(draft.id);
+          setDraft(itemToDraft(refreshed));
+        } catch {
+          // ignore: global error notification already handled
+        }
+      }
+    } catch (renameError) {
+      const message = renameError instanceof Error ? renameError.message : "Unable to rename folder.";
+      setError(message);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const handleOpenInWord = async () => {
     if (!draft.id || draft.kind !== "file" || !isWordDocument(draft)) return;
 
@@ -2607,6 +2695,20 @@ export function ArtifactsPage() {
             type="button"
             onClick={() =>
               executeContextAction(() => {
+                if (!contextRenameFolderCandidate) {
+                  return;
+                }
+                startRenameFolder(contextRenameFolderCandidate);
+              })
+            }
+            disabled={!contextRenameFolderCandidate}
+          >
+            Rename Folder
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              executeContextAction(() => {
                 const nextConfirm = createDeleteConfirmState(contextDeleteCandidateIds);
                 if (!nextConfirm) return;
                 setDeleteConfirm(nextConfirm);
@@ -2725,6 +2827,21 @@ export function ArtifactsPage() {
         onCancel={() => setCreateFolderState(null)}
         onConfirm={(value) => {
           void handleCreateFolderConfirm(value);
+        }}
+      />
+
+      <TextInputDialog
+        open={Boolean(renameFolderState)}
+        title="Rename Folder"
+        message={renameFolderState ? `Current: "${renameFolderState.currentPath}"` : undefined}
+        label="Folder name"
+        placeholder={renameFolderState?.currentName || "Folder name"}
+        initialValue={renameFolderState?.currentName || ""}
+        confirmLabel="Rename"
+        busy={isSaving}
+        onCancel={() => setRenameFolderState(null)}
+        onConfirm={(value) => {
+          void handleRenameFolderConfirm(value);
         }}
       />
 

@@ -6,6 +6,7 @@ interface TextInputDialogProps {
   title?: string;
   message?: ReactNode;
   label: string;
+  initialValue?: string;
   placeholder?: string;
   confirmLabel?: string;
   cancelLabel?: string;
@@ -19,6 +20,7 @@ export function TextInputDialog({
   title = "Input",
   message,
   label,
+  initialValue = "",
   placeholder,
   confirmLabel = "Confirm",
   cancelLabel = "Cancel",
@@ -34,6 +36,7 @@ export function TextInputDialog({
       setValue("");
       return;
     }
+    setValue(initialValue);
 
     const timer = window.setTimeout(() => {
       inputRef.current?.focus();
@@ -51,7 +54,7 @@ export function TextInputDialog({
       window.clearTimeout(timer);
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [onCancel, open]);
+  }, [initialValue, onCancel, open]);
 
   if (!open) {
     return null;
