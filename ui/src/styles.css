@@ -656,6 +656,47 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
   display: none;
 }
 
+.app-shell.compact-sidebar-mode {
+  grid-template-columns: 1fr;
+}
+
+.app-shell.compact-sidebar-mode .sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: 200;
+  width: 196px;
+  transform: translateX(-100%);
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: none;
+}
+
+.app-shell.compact-sidebar-mode .sidebar.mobile-sidebar-open {
+  transform: translateX(0);
+  box-shadow: 8px 0 32px rgba(0,0,0,0.55);
+}
+
+.app-shell.compact-sidebar-mode .mobile-sidebar-backdrop {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 199;
+  background: rgba(2, 6, 23, 0.65);
+  backdrop-filter: blur(2px);
+  pointer-events: all;
+  cursor: default;
+}
+
+.app-shell.compact-sidebar-mode .workspace-main {
+  position: relative;
+  z-index: 1;
+}
+
+.app-shell.compact-sidebar-mode .mobile-hamburger {
+  display: inline-flex;
+}
+
 @media (max-width: 768px) {
   /* Show desktop sidebar grid as normal column on mobile */
   .app-shell {

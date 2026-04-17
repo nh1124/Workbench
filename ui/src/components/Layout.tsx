@@ -6,6 +6,8 @@ import { useNotifications } from "../lib/notificationService";
 import { QuickNoteModal } from "./QuickNoteModal";
 import { ShortcutsModal } from "./ShortcutsModal";
 
+const COMPACT_SIDEBAR_BREAKPOINT = 1100;
+
 const navIconMap: Record<string, ReactNode> = {
   Home: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
@@ -66,6 +68,9 @@ export function Layout() {
   const [isQuickNoteOpen, setIsQuickNoteOpen] = useState(false);
   const [isNotificationOpen, setIsNotificationOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isCompactSidebarMode, setIsCompactSidebarMode] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth <= COMPACT_SIDEBAR_BREAKPOINT : false
+  );
   const {
     items: notifications,
     unreadCount,
@@ -80,6 +85,24 @@ export function Layout() {
     setIsNotificationOpen(false);
     setIsMobileMenuOpen(false);
   }, [location.pathname]);
+
+  useEffect(() => {
+    const onResize = () => {
+      setIsCompactSidebarMode(window.innerWidth <= COMPACT_SIDEBAR_BREAKPOINT);
+    };
+
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  useEffect(() => {
+    if (isCompactSidebarMode) {
+      setIsSidebarCollapsed(false);
+      return;
+    }
+    setIsMobileMenuOpen(false);
+  }, [isCompactSidebarMode]);
 
   useEffect(() => {
     const onMouseDown = (event: MouseEvent) => {
@@ -144,22 +167,35 @@ export function Layout() {
     <div className={[
       "app-shell",
       isSidebarCollapsed ? "sidebar-collapsed" : "",
+      isCompactSidebarMode ? "compact-sidebar-mode" : "",
       isMobileMenuOpen ? "mobile-menu-open" : ""
     ].filter(Boolean).join(" ")}>
-      {isMobileMenuOpen && (
+      {isCompactSidebarMode && isMobileMenuOpen && (
         <div
           className="mobile-sidebar-backdrop"
           aria-hidden="true"
           onClick={() => setIsMobileMenuOpen(false)}
         />
       )}
-      <aside className={isMobileMenuOpen ? "sidebar mobile-sidebar-open" : "sidebar"}>
+      <aside className={isCompactSidebarMode && isMobileMenuOpen ? "sidebar mobile-sidebar-open" : "sidebar"}>
         <div className="sidebar-top">
           <button
             type="button"
             className="sidebar-toggle"
-            aria-label={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-            onClick={() => setIsSidebarCollapsed((prev) => !prev)}
+            aria-label={
+              isCompactSidebarMode
+                ? "Close navigation menu"
+                : isSidebarCollapsed
+                  ? "Expand sidebar"
+                  : "Collapse sidebar"
+            }
+            onClick={() => {
+              if (isCompactSidebarMode) {
+                setIsMobileMenuOpen(false);
+                return;
+              }
+              setIsSidebarCollapsed((prev) => !prev);
+            }}
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
               <path d="M4 7h16M4 12h16M4 17h16" />
@@ -257,7 +293,7 @@ export function Layout() {
             <button
               type="button"
               className="mobile-hamburger"
-              aria-label="Open navigation menu"
+              aria-label={isMobileMenuOpen ? "Close navigation menu" : "Open navigation menu"}
               onClick={() => setIsMobileMenuOpen((prev) => !prev)}
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
