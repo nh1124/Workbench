@@ -1885,6 +1885,32 @@ app.get("/api/artifacts/tree", async (req, res) => {
   }
 });
 
+app.get("/api/artifacts/tree/list", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const projectId = typeof req.query.projectId === "string" ? req.query.projectId : undefined;
+  const pathPrefix = typeof req.query.pathPrefix === "string" ? req.query.pathPrefix : undefined;
+  const kinds = typeof req.query.kinds === "string" ? req.query.kinds.split(",").map((kind) => kind.trim()) : undefined;
+  const includeContent = typeof req.query.includeContent === "string" ? ["1", "true", "yes"].includes(req.query.includeContent.toLowerCase()) : undefined;
+  const updatedSince = typeof req.query.updatedSince === "string" ? req.query.updatedSince : undefined;
+  const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
+
+  try {
+    const result = await artifactsClient.treeList(authContext.accessToken, {
+      projectId,
+      pathPrefix,
+      kinds,
+      includeContent,
+      updatedSince,
+      limit: Number.isFinite(limit) ? limit : undefined
+    });
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
 app.get("/api/artifacts/items/:id", async (req, res) => {
   const authContext = await requireAuthenticatedContext(req, res);
   if (!authContext) return;
@@ -1949,6 +1975,30 @@ app.post("/api/artifacts/upload", async (req, res) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Upload proxy failed";
     return res.status(502).json({ message });
+  }
+});
+
+app.patch("/api/artifacts/items/:id/content-patch", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  try {
+    const result = await artifactsClient.patchNoteContent(authContext.accessToken, String(req.params.id), req.body);
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.patch("/api/artifacts/items/:id/section", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  try {
+    const result = await artifactsClient.updateNoteSection(authContext.accessToken, String(req.params.id), req.body);
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
   }
 });
 

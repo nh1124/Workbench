@@ -14,6 +14,7 @@
 docs/
 ├── README.md                    ← このファイル（インデックス）
 ├── artifacts.md                 ← Artifacts ページの設計・PDF ビューアー・ショートカット
+├── artifacts-local-sync-design.md ← Artifacts のローカル運用・同期設計
 ├── native/
 │   ├── overview.md              ← Tauri デスクトップアプリ全体の説明・モジュール構成
 │   ├── window-management.md     ← マルチウィンドウ・マルチインスタンスの設計
@@ -31,6 +32,7 @@ docs/
 | ドキュメント | 内容 |
 |---|---|
 | [artifacts.md](artifacts.md) | Artifacts ページの設計・PDF ビューアー・ページ別コメント・ショートカット |
+| [artifacts-local-sync-design.md](artifacts-local-sync-design.md) | Artifacts の Local-First 化（ローカル管理・同期・競合解決・段階実装計画） |
 | [pdf-comments-server-design.md](pdf-comments-server-design.md) | PDF コメントのサーバー移行設計（DB スキーマ・API・同期戦略・マイグレーション） |
 
 ### ネイティブデスクトップ (`native/`)

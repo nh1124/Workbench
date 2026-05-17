@@ -15,8 +15,11 @@ import {
   getArtifactItemDetail,
   listArtifactItemProjects,
   listArtifactItems,
+  listArtifactItemsFiltered,
+  patchArtifactNoteContent,
   readArtifactPreviewPdfData,
   readArtifactFileData,
+  updateArtifactNoteSection,
   updateArtifactItem
 } from "./artifactItemsStore.js";
 import { ensureArtifactsSchema, upsertServiceAccount } from "./db.js";
@@ -249,6 +252,39 @@ const itemUpdateSchema = z.object({
   projectName: z.string().optional()
 });
 
+const notePatchOperationSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("insert"),
+    index: z.number().int().nonnegative(),
+    text: z.string()
+  }),
+  z.object({
+    type: z.literal("delete"),
+    start: z.number().int().nonnegative(),
+    end: z.number().int().nonnegative()
+  }),
+  z.object({
+    type: z.literal("replace"),
+    start: z.number().int().nonnegative(),
+    end: z.number().int().nonnegative(),
+    text: z.string()
+  })
+]);
+
+const notePatchSchema = z.object({
+  expectedVersion: z.number().int().positive().optional(),
+  operations: z.array(notePatchOperationSchema).min(1).max(100)
+});
+
+const noteSectionUpdateSchema = z.object({
+  heading: z.string().min(1),
+  level: z.number().int().min(1).max(6).optional(),
+  expectedVersion: z.number().int().positive().optional(),
+  mode: z.enum(["replaceBody", "appendBody", "prependBody"]).optional(),
+  contentMarkdown: z.string(),
+  createIfMissing: z.boolean().optional()
+});
+
 const internalAccountSchema = z.object({
   coreUserId: z.string().min(1),
   username: z.string().min(1)
@@ -281,6 +317,29 @@ function parseTagsFromUpload(raw: unknown): string[] {
     .split(",")
     .map((tag) => tag.trim())
     .filter((tag) => tag.length > 0);
+}
+
+function parseBooleanQuery(value: unknown): boolean | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no"].includes(normalized)) {
+    return false;
+  }
+  return undefined;
+}
+
+function parseKindsQuery(value: unknown): Array<"folder" | "note" | "file"> | undefined {
+  const rawValues = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
+  const kinds = rawValues
+    .flatMap((raw) => String(raw).split(","))
+    .map((kind) => kind.trim())
+    .filter((kind): kind is "folder" | "note" | "file" => kind === "folder" || kind === "note" || kind === "file");
+  return kinds.length > 0 ? [...new Set(kinds)] : undefined;
 }
 
 function isWordDocumentCandidate(filePath: string, mimeType?: string | null): boolean {
@@ -429,6 +488,38 @@ app.get("/artifacts/tree", requireUserAuth, async (req, res) => {
   return res.json(items);
 });
 
+app.get("/artifacts/tree/list", requireUserAuth, async (req, res) => {
+  const owner = req.authUser?.coreUserId;
+  if (!owner) {
+    return res.status(401).json({ message: "Missing auth context" });
+  }
+
+  const projectId = typeof req.query.projectId === "string" ? req.query.projectId : undefined;
+  const pathPrefix = typeof req.query.pathPrefix === "string" ? req.query.pathPrefix : undefined;
+  const updatedSince = typeof req.query.updatedSince === "string" ? req.query.updatedSince : undefined;
+  const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
+  const includeContent = parseBooleanQuery(req.query.includeContent);
+  const kinds = parseKindsQuery(req.query.kinds);
+
+  try {
+    const items = await listArtifactItemsFiltered(
+      {
+        projectId,
+        pathPrefix,
+        kinds,
+        includeContent,
+        updatedSince,
+        limit: Number.isFinite(limit) ? limit : undefined
+      },
+      owner
+    );
+    return res.json(items);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Artifact tree list failed";
+    return res.status(400).json({ message });
+  }
+});
+
 app.get("/artifacts/items/:id", requireUserAuth, async (req, res) => {
   const owner = req.authUser?.coreUserId;
   if (!owner) {
@@ -544,6 +635,52 @@ app.post("/artifacts/upload", requireUserAuth, upload.single("file"), async (req
     return res.status(201).json(created);
   } catch (error) {
     const message = error instanceof Error ? error.message : "File upload failed";
+    return res.status(400).json({ message });
+  }
+});
+
+app.patch("/artifacts/items/:id/content-patch", requireUserAuth, async (req, res) => {
+  const owner = req.authUser?.coreUserId;
+  if (!owner) {
+    return res.status(401).json({ message: "Missing auth context" });
+  }
+
+  const parsed = notePatchSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ message: parsed.error.flatten() });
+  }
+
+  try {
+    const updated = await patchArtifactNoteContent(String(req.params.id), parsed.data, owner);
+    if (!updated) {
+      return res.status(404).json({ message: "Artifact note not found" });
+    }
+    return res.json(updated);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Patch failed";
+    return res.status(400).json({ message });
+  }
+});
+
+app.patch("/artifacts/items/:id/section", requireUserAuth, async (req, res) => {
+  const owner = req.authUser?.coreUserId;
+  if (!owner) {
+    return res.status(401).json({ message: "Missing auth context" });
+  }
+
+  const parsed = noteSectionUpdateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ message: parsed.error.flatten() });
+  }
+
+  try {
+    const updated = await updateArtifactNoteSection(String(req.params.id), parsed.data, owner);
+    if (!updated) {
+      return res.status(404).json({ message: "Artifact note not found" });
+    }
+    return res.json(updated);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Section update failed";
     return res.status(400).json({ message });
   }
 });

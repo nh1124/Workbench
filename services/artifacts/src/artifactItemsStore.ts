@@ -13,6 +13,10 @@ import type {
   ArtifactPreviewStatus,
   ArtifactItemKind,
   ArtifactProjectSummary,
+  ArtifactItemListOptions,
+  ArtifactNotePatchInput,
+  ArtifactNotePatchOperation,
+  ArtifactNoteSectionUpdateInput,
   ArtifactItemUpdate,
   ArtifactNoteInput,
   ArtifactFolderInput,
@@ -489,7 +493,51 @@ async function ensureUniquePath(
   throw new Error("Unable to allocate unique path");
 }
 
-async function readItemRowById(client: PoolClient, id: string, ownerUsername: string): Promise<ArtifactItemRow | undefined> {
+async function ensureUniqueTreePath(
+  client: PoolClient,
+  ownerUsername: string,
+  projectId: string,
+  targetPath: string,
+  excludeIds: string[]
+): Promise<string> {
+  const normalized = normalizeItemPath(targetPath);
+  if (!normalized) {
+    throw new Error("Path is required");
+  }
+
+  const uniqueExcludeIds = [...new Set(excludeIds.map((id) => id.trim()).filter((id) => id.length > 0))];
+  let candidate = normalized;
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    const likePrefix = `${escapeLikePattern(candidate)}/%`;
+    const result = await client.query<{ id: string }>(
+      `
+        SELECT id
+        FROM artifact_items
+        WHERE owner_username = $1
+          AND project_id = $2
+          AND (path = $3 OR path LIKE $4 ESCAPE '\\')
+          AND NOT (id = ANY($5::text[]))
+        LIMIT 1
+      `,
+      [ownerUsername, projectId, candidate, likePrefix, uniqueExcludeIds]
+    );
+
+    if (result.rows.length === 0) {
+      return candidate;
+    }
+
+    candidate = withNumericSuffix(normalized, attempt + 1);
+  }
+
+  throw new Error("Unable to allocate unique folder path");
+}
+
+async function readItemRowById(
+  client: PoolClient,
+  id: string,
+  ownerUsername: string,
+  forUpdate = false
+): Promise<ArtifactItemRow | undefined> {
   const result = await client.query<ArtifactItemRow>(
     `
       SELECT
@@ -518,6 +566,7 @@ async function readItemRowById(client: PoolClient, id: string, ownerUsername: st
       FROM artifact_items
       WHERE id = $1 AND owner_username = $2
       LIMIT 1
+      ${forUpdate ? "FOR UPDATE" : ""}
     `,
     [id, ownerUsername]
   );
@@ -633,11 +682,25 @@ function joinPath(parent: string | undefined, leaf: string): string {
 }
 
 export async function listArtifactItems(projectId: string | undefined, ownerUsername: string): Promise<ArtifactItem[]> {
+  return listArtifactItemsFiltered({ projectId }, ownerUsername);
+}
+
+export async function listArtifactItemsFiltered(
+  options: ArtifactItemListOptions,
+  ownerUsername: string
+): Promise<ArtifactItem[]> {
   await ensureArtifactsSchema();
   const pool = getArtifactsPool();
   const owner = normalizeOwner(ownerUsername);
-  const normalizedRequestedProjectId = projectId?.trim();
-  const values: Array<string> = [owner];
+  const normalizedRequestedProjectId = options.projectId?.trim();
+  const normalizedPathPrefix = normalizeItemPath(options.pathPrefix ?? "");
+  const kinds = options.kinds?.filter((kind) => kind === "folder" || kind === "note" || kind === "file") ?? [];
+  const updatedSince = options.updatedSince?.trim();
+  const requestedLimit = options.limit;
+  const limit = typeof requestedLimit === "number" && Number.isFinite(requestedLimit)
+    ? Math.max(1, Math.min(Math.trunc(requestedLimit), 500))
+    : undefined;
+  const values: Array<string | string[] | number> = [owner];
   let sql = `
     SELECT
       id,
@@ -668,13 +731,36 @@ export async function listArtifactItems(projectId: string | undefined, ownerUser
 
   if (normalizedRequestedProjectId) {
     values.push(isFallbackDefaultProjectId(normalizedRequestedProjectId) ? FALLBACK_DEFAULT_PROJECT_ID : normalizedRequestedProjectId);
-    sql += ` AND project_id = $2`;
+    sql += ` AND project_id = $${values.length}`;
+  }
+
+  if (normalizedPathPrefix) {
+    values.push(normalizedPathPrefix, `${escapeLikePattern(normalizedPathPrefix)}/%`);
+    sql += ` AND (path = $${values.length - 1} OR path LIKE $${values.length} ESCAPE '\\')`;
+  }
+
+  if (kinds.length > 0) {
+    values.push(kinds);
+    sql += ` AND kind = ANY($${values.length}::text[])`;
+  }
+
+  if (updatedSince) {
+    const updatedSinceDate = new Date(updatedSince);
+    if (Number.isNaN(updatedSinceDate.getTime())) {
+      throw new Error("updatedSince must be a valid ISO date-time string");
+    }
+    values.push(updatedSinceDate.toISOString());
+    sql += ` AND updated_at > $${values.length}::timestamptz`;
   }
 
   sql += " ORDER BY path ASC, updated_at DESC";
+  if (limit) {
+    values.push(limit);
+    sql += ` LIMIT $${values.length}`;
+  }
 
   const result = await pool.query<ArtifactItemRow>(sql, values);
-  return result.rows.map((row) => toArtifactItem(row, false));
+  return result.rows.map((row) => toArtifactItem(row, Boolean(options.includeContent) && row.kind === "note"));
 }
 
 export async function listArtifactItemProjects(ownerUsername: string): Promise<ArtifactProjectSummary[]> {
@@ -739,6 +825,202 @@ export async function getArtifactItemDetail(id: string, ownerUsername: string): 
   } finally {
     client.release();
   }
+}
+
+function assertExpectedVersion(row: ArtifactItemRow, expectedVersion: number | undefined): void {
+  if (expectedVersion === undefined) {
+    return;
+  }
+  if (!Number.isInteger(expectedVersion) || expectedVersion <= 0) {
+    throw new Error("expectedVersion must be a positive integer");
+  }
+  if (row.version !== expectedVersion) {
+    throw new Error(`Version conflict: expected ${expectedVersion}, current ${row.version}`);
+  }
+}
+
+function applyNotePatchOperation(content: string, operation: ArtifactNotePatchOperation): string {
+  if (operation.type === "insert") {
+    if (!Number.isInteger(operation.index) || operation.index < 0 || operation.index > content.length) {
+      throw new Error("Insert index is out of range");
+    }
+    return `${content.slice(0, operation.index)}${operation.text}${content.slice(operation.index)}`;
+  }
+
+  if (!Number.isInteger(operation.start) || !Number.isInteger(operation.end)) {
+    throw new Error("Patch start/end must be integers");
+  }
+  if (operation.start < 0 || operation.end < operation.start || operation.end > content.length) {
+    throw new Error("Patch range is out of range");
+  }
+
+  if (operation.type === "delete") {
+    return `${content.slice(0, operation.start)}${content.slice(operation.end)}`;
+  }
+
+  return `${content.slice(0, operation.start)}${operation.text}${content.slice(operation.end)}`;
+}
+
+function applyNotePatchOperations(content: string, operations: ArtifactNotePatchOperation[]): string {
+  if (operations.length === 0) {
+    throw new Error("At least one patch operation is required");
+  }
+  if (operations.length > 100) {
+    throw new Error("Too many patch operations");
+  }
+
+  return operations.reduce((nextContent, operation) => applyNotePatchOperation(nextContent, operation), content);
+}
+
+function ensureTrailingNewline(value: string): string {
+  return value.endsWith("\n") ? value : `${value}\n`;
+}
+
+function findMarkdownSection(
+  content: string,
+  heading: string,
+  level?: number
+): { headingStart: number; bodyStart: number; sectionEnd: number; headingLine: string; level: number } | undefined {
+  const normalizedHeading = heading.trim().replace(/\s+/g, " ").toLowerCase();
+  if (!normalizedHeading) {
+    throw new Error("heading is required");
+  }
+
+  const headingPattern = /^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$/gm;
+  let match: RegExpExecArray | null;
+  while ((match = headingPattern.exec(content)) !== null) {
+    const headingLevel = match[1].length;
+    if (level !== undefined && headingLevel !== level) {
+      continue;
+    }
+
+    const text = match[2].trim().replace(/\s+/g, " ").toLowerCase();
+    if (text !== normalizedHeading) {
+      continue;
+    }
+
+    const headingStart = match.index;
+    const lineEnd = content.indexOf("\n", headingStart);
+    const bodyStart = lineEnd === -1 ? content.length : lineEnd + 1;
+    const restPattern = /^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$/gm;
+    restPattern.lastIndex = bodyStart;
+
+    let sectionEnd = content.length;
+    let nextMatch: RegExpExecArray | null;
+    while ((nextMatch = restPattern.exec(content)) !== null) {
+      if (nextMatch[1].length <= headingLevel) {
+        sectionEnd = nextMatch.index;
+        break;
+      }
+    }
+
+    return {
+      headingStart,
+      bodyStart,
+      sectionEnd,
+      headingLine: content.slice(headingStart, bodyStart),
+      level: headingLevel
+    };
+  }
+
+  return undefined;
+}
+
+function applyNoteSectionUpdate(content: string, input: ArtifactNoteSectionUpdateInput): string {
+  const section = findMarkdownSection(content, input.heading, input.level);
+  const mode = input.mode ?? "replaceBody";
+  const nextBody = ensureTrailingNewline(input.contentMarkdown);
+
+  if (!section) {
+    if (!input.createIfMissing) {
+      throw new Error("Heading not found");
+    }
+    const level = input.level && input.level >= 1 && input.level <= 6 ? input.level : 2;
+    const separator = content.trim().length === 0 ? "" : "\n\n";
+    return `${content}${separator}${"#".repeat(level)} ${input.heading.trim()}\n${nextBody}`;
+  }
+
+  const currentBody = content.slice(section.bodyStart, section.sectionEnd);
+  let replacementBody = nextBody;
+  if (mode === "appendBody") {
+    const separator = currentBody.endsWith("\n") || currentBody.length === 0 ? "" : "\n";
+    replacementBody = `${currentBody}${separator}${nextBody}`;
+  } else if (mode === "prependBody") {
+    const separator = nextBody.endsWith("\n") || currentBody.length === 0 ? "" : "\n";
+    replacementBody = `${nextBody}${separator}${currentBody}`;
+  }
+
+  return `${content.slice(0, section.bodyStart)}${replacementBody}${content.slice(section.sectionEnd)}`;
+}
+
+async function updateArtifactNoteContent(
+  id: string,
+  ownerUsername: string,
+  input: { expectedVersion?: number; transform: (content: string) => string }
+): Promise<ArtifactItem | undefined> {
+  await ensureArtifactsSchema();
+  const pool = getArtifactsPool();
+  const owner = normalizeOwner(ownerUsername);
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const existing = await readItemRowById(client, id, owner, true);
+    if (!existing) {
+      await client.query("ROLLBACK");
+      return undefined;
+    }
+    if (existing.kind !== "note") {
+      throw new Error("Only note items support markdown content updates");
+    }
+
+    assertExpectedVersion(existing, input.expectedVersion);
+    const nextContent = input.transform(existing.content_markdown ?? "");
+
+    await client.query(
+      `
+        UPDATE artifact_items
+        SET
+          content_markdown = $3,
+          version = version + 1,
+          updated_at = NOW()
+        WHERE id = $1 AND owner_username = $2
+      `,
+      [id, owner, nextContent]
+    );
+    await touchUpdatedAt(client, owner, existing.project_id, existing.parent_path);
+
+    const updated = await readItemRowById(client, id, owner);
+    await client.query("COMMIT");
+    return updated ? toArtifactItem(updated, true) : undefined;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function patchArtifactNoteContent(
+  id: string,
+  input: ArtifactNotePatchInput,
+  ownerUsername: string
+): Promise<ArtifactItem | undefined> {
+  return updateArtifactNoteContent(id, ownerUsername, {
+    expectedVersion: input.expectedVersion,
+    transform: (content) => applyNotePatchOperations(content, input.operations)
+  });
+}
+
+export async function updateArtifactNoteSection(
+  id: string,
+  input: ArtifactNoteSectionUpdateInput,
+  ownerUsername: string
+): Promise<ArtifactItem | undefined> {
+  return updateArtifactNoteContent(id, ownerUsername, {
+    expectedVersion: input.expectedVersion,
+    transform: (content) => applyNoteSectionUpdate(content, input)
+  });
 }
 
 export async function createArtifactFolder(input: ArtifactFolderInput, ownerUsername: string): Promise<ArtifactItem> {
@@ -1065,8 +1347,8 @@ export async function updateArtifactItem(
     const nextScope = updates.scope ? normalizeScope(updates.scope) : normalizeScope(existing.scope);
     const nextTags = updates.tags ? normalizeTags(updates.tags) : parseTags(existing.tags_json);
     const nextProjectId = updates.projectId?.trim() || existing.project_id;
-    const nextProjectName = updates.projectName?.trim() || existing.project_name;
     const projectChanged = nextProjectId !== existing.project_id;
+    const nextProjectName = updates.projectName?.trim() || (projectChanged ? undefined : existing.project_name);
     const requestedPath = updates.path?.trim();
     const requestedTitle = updates.title?.trim();
 
@@ -1088,14 +1370,34 @@ export async function updateArtifactItem(
       throw new Error("Path is required");
     }
 
-    if (existing.kind === "folder" && projectChanged) {
-      throw new Error("Changing project for folders is not supported yet.");
+    let folderDescendants: Array<{ id: string; path: string }> = [];
+    if (existing.kind === "folder") {
+      const likePrefix = `${escapeLikePattern(existing.path)}/%`;
+      const descendants = await client.query<{ id: string; path: string }>(
+        `
+          SELECT id, path
+          FROM artifact_items
+          WHERE owner_username = $1
+            AND project_id = $2
+            AND path LIKE $3 ESCAPE '\\'
+          ORDER BY path ASC
+        `,
+        [owner, existing.project_id, likePrefix]
+      );
+      folderDescendants = descendants.rows;
+      nextPath = await ensureUniqueTreePath(
+        client,
+        owner,
+        nextProjectId,
+        nextPath,
+        [id, ...folderDescendants.map((descendant) => descendant.id)]
+      );
+    } else {
+      nextPath = await ensureUniquePath(client, owner, nextProjectId, nextPath, id);
     }
-
-    nextPath = await ensureUniquePath(client, owner, nextProjectId, nextPath, id);
     const nextParentPath = parentPathFromPath(nextPath);
 
-    if (existing.kind === "folder" && existing.path !== nextPath) {
+    if (existing.kind === "folder" && (existing.path !== nextPath || projectChanged)) {
       await upsertFolderByPath(client, owner, nextProjectId, nextProjectName ?? undefined, nextParentPath, nextScope);
 
       await client.query(
@@ -1126,20 +1428,7 @@ export async function updateArtifactItem(
         ]
       );
 
-      const likePrefix = `${escapeLikePattern(existing.path)}/%`;
-      const descendants = await client.query<{ id: string; path: string }>(
-        `
-          SELECT id, path
-          FROM artifact_items
-          WHERE owner_username = $1
-            AND project_id = $2
-            AND path LIKE $3 ESCAPE '\\'
-          ORDER BY path ASC
-        `,
-        [owner, nextProjectId, likePrefix]
-      );
-
-      for (const descendant of descendants.rows) {
+      for (const descendant of folderDescendants) {
         const suffix = descendant.path.slice(existing.path.length + 1);
         const descendantPath = `${nextPath}/${suffix}`;
         await client.query(
@@ -1148,10 +1437,12 @@ export async function updateArtifactItem(
             SET
               path = $3,
               parent_path = $4,
+              project_id = $5,
+              project_name = $6,
               updated_at = NOW()
             WHERE id = $1 AND owner_username = $2
           `,
-          [descendant.id, owner, descendantPath, parentPathFromPath(descendantPath)]
+          [descendant.id, owner, descendantPath, parentPathFromPath(descendantPath), nextProjectId, nextProjectName ?? null]
         );
       }
     } else {

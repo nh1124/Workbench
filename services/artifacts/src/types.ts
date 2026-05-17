@@ -90,6 +90,36 @@ export interface ArtifactItemUpdate {
   projectName?: string;
 }
 
+export interface ArtifactItemListOptions {
+  projectId?: string;
+  pathPrefix?: string;
+  kinds?: ArtifactItemKind[];
+  includeContent?: boolean;
+  updatedSince?: string;
+  limit?: number;
+}
+
+export type ArtifactNotePatchOperation =
+  | { type: "insert"; index: number; text: string }
+  | { type: "delete"; start: number; end: number }
+  | { type: "replace"; start: number; end: number; text: string };
+
+export interface ArtifactNotePatchInput {
+  expectedVersion?: number;
+  operations: ArtifactNotePatchOperation[];
+}
+
+export type ArtifactNoteSectionUpdateMode = "replaceBody" | "appendBody" | "prependBody";
+
+export interface ArtifactNoteSectionUpdateInput {
+  heading: string;
+  level?: number;
+  expectedVersion?: number;
+  mode?: ArtifactNoteSectionUpdateMode;
+  contentMarkdown: string;
+  createIfMissing?: boolean;
+}
+
 export interface ArtifactFileData {
   item: ArtifactItem;
   buffer: Buffer;

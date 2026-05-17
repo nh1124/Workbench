@@ -86,12 +86,20 @@ type RenameFolderState = {
   currentName: string;
 };
 
+type MoveFolderProjectState = {
+  itemId: string;
+  currentPath: string;
+  currentProjectId: string;
+  targetProjectId: string;
+};
+
 export function ArtifactsPage() {
   const ROOT_DROP_PATH = "";
   const [searchParams] = useSearchParams();
   const requestedItemId = searchParams.get("item");
   const [projectOptions, setProjectOptions] = useState<ProjectOption[]>([]);
   const [defaultProject, setDefaultProject] = useState<ProjectOption | null>(null);
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
   const [projectFilter, setProjectFilter] = useState("");
   const [items, setItems] = useState<ArtifactItem[]>([]);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
@@ -118,6 +126,7 @@ export function ArtifactsPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirmState | null>(null);
   const [createFolderState, setCreateFolderState] = useState<CreateFolderState | null>(null);
   const [renameFolderState, setRenameFolderState] = useState<RenameFolderState | null>(null);
+  const [moveFolderProjectState, setMoveFolderProjectState] = useState<MoveFolderProjectState | null>(null);
   const [insertLinkState, setInsertLinkState] = useState<InsertLinkState | null>(null);
   const [editorExpanded, setEditorExpanded] = useState(false);
   const [pdfExpanded, setPdfExpanded] = useState(false);
@@ -142,6 +151,10 @@ export function ArtifactsPage() {
     [treeRoot, collapsedFolders]
   );
   const selectedItemIdSet = useMemo(() => new Set(selectedItemIds), [selectedItemIds]);
+  const visibleProjectIdSet = useMemo(
+    () => new Set(projectOptions.map((project) => project.projectId)),
+    [projectOptions]
+  );
 
   const currentFolderPath = useMemo(() => {
     if (selectedFolderPath !== null) return selectedFolderPath;
@@ -238,7 +251,7 @@ export function ArtifactsPage() {
   const contextMenuPosition = useMemo(() => {
     if (!contextMenu) return null;
     const menuWidth = 180;
-    const menuHeight = 232;
+    const menuHeight = 280;
     const margin = 8;
     const maxX = window.innerWidth - menuWidth - margin;
     const maxY = window.innerHeight - menuHeight - margin;
@@ -342,6 +355,20 @@ export function ArtifactsPage() {
     return null;
   }, [contextMenu, items]);
 
+  const contextMoveFolderProjectOptions = useMemo(() => {
+    if (!contextRenameFolderCandidate) {
+      return [] as ProjectOption[];
+    }
+    return projectOptions.filter((project) => project.projectId !== contextRenameFolderCandidate.projectId);
+  }, [contextRenameFolderCandidate, projectOptions]);
+
+  const moveFolderProjectOptions = useMemo(() => {
+    if (!moveFolderProjectState) {
+      return [] as ProjectOption[];
+    }
+    return projectOptions.filter((project) => project.projectId !== moveFolderProjectState.currentProjectId);
+  }, [moveFolderProjectState, projectOptions]);
+
   const resolveProjectFromFilter = (): ProjectOption => {
     if (projectFilter.trim()) {
       const found = projectOptions.find((project) => project.projectId === projectFilter.trim());
@@ -366,8 +393,9 @@ export function ArtifactsPage() {
   };
 
   const loadProjects = async () => {
+    setProjectsLoaded(false);
     const defaultSelection = await projectsApi.getDefault().catch(() => null);
-    const resolvedDefault: ProjectOption | null = defaultSelection
+    const resolvedDefault: ProjectOption | null = defaultSelection && defaultSelection.project.status !== "archived"
       ? { projectId: defaultSelection.project.id, projectName: defaultSelection.project.name }
       : null;
     setDefaultProject(resolvedDefault);
@@ -385,7 +413,12 @@ export function ArtifactsPage() {
         cursor = result.nextCursor;
       }
 
-      setProjectOptions(uniqueProjectOptions(all, resolvedDefault));
+      const visibleProjects = all.filter((project) => project.status !== "archived");
+      const nextOptions = uniqueProjectOptions(visibleProjects, resolvedDefault);
+      setProjectOptions(nextOptions);
+      setProjectFilter((prev) =>
+        prev && !nextOptions.some((project) => project.projectId === prev) ? "" : prev
+      );
     } catch {
       // Fallback only when Projects service is unavailable.
       try {
@@ -400,20 +433,33 @@ export function ArtifactsPage() {
         for (const option of fallbackOptions) {
           merged.set(option.projectId, option);
         }
-        setProjectOptions([...merged.values()]);
+        const nextOptions = [...merged.values()];
+        setProjectOptions(nextOptions);
+        setProjectFilter((prev) =>
+          prev && !nextOptions.some((project) => project.projectId === prev) ? "" : prev
+        );
       } catch {
         // Notification is handled globally.
       }
+    } finally {
+      setProjectsLoaded(true);
     }
   };
 
   const loadTree = async () => {
+    if (!projectsLoaded) {
+      return;
+    }
     setIsLoading(true);
     try {
       const treeItems = await artifactsApi.tree(projectFilter || undefined);
-      setItems(treeItems);
+      const visibleItems =
+        !projectFilter && visibleProjectIdSet.size > 0
+          ? treeItems.filter((item) => visibleProjectIdSet.has(item.projectId))
+          : treeItems;
+      setItems(visibleItems);
 
-      if (selectedItemId && !treeItems.some((item) => item.id === selectedItemId)) {
+      if (selectedItemId && !visibleItems.some((item) => item.id === selectedItemId)) {
         setSelectedItemId(null);
         setSelectedItemIds([]);
         setSelectionAnchorId(null);
@@ -439,7 +485,7 @@ export function ArtifactsPage() {
 
   useEffect(() => {
     void loadTree();
-  }, [projectFilter]);
+  }, [projectFilter, projectsLoaded, visibleProjectIdSet]);
 
   useEffect(() => {
     if (!requestedItemId) {
@@ -1790,6 +1836,64 @@ export function ArtifactsPage() {
     });
   };
 
+  const startMoveFolderToProject = (folderItem: ArtifactItem) => {
+    const targetProject = projectOptions.find((project) => project.projectId !== folderItem.projectId);
+    if (!targetProject) {
+      setError("No available project to move this folder to.");
+      return;
+    }
+    setMoveFolderProjectState({
+      itemId: folderItem.id,
+      currentPath: normalizePath(folderItem.path),
+      currentProjectId: folderItem.projectId,
+      targetProjectId: targetProject.projectId
+    });
+  };
+
+  const handleMoveFolderProjectConfirm = async () => {
+    if (!moveFolderProjectState) {
+      return;
+    }
+
+    const targetProject = projectOptions.find(
+      (project) => project.projectId === moveFolderProjectState.targetProjectId
+    );
+    if (!targetProject) {
+      setError("Move target project is not available.");
+      return;
+    }
+
+    setIsSaving(true);
+    setError(null);
+    try {
+      const updated = await artifactsApi.updateItem(moveFolderProjectState.itemId, {
+        projectId: targetProject.projectId,
+        projectName: targetProject.projectName
+      });
+
+      setMoveFolderProjectState(null);
+      setSelectedFolderPath(updated.path);
+      if (projectFilter && projectFilter !== targetProject.projectId) {
+        setProjectFilter(targetProject.projectId);
+      } else {
+        await loadTree();
+      }
+      if (draft.id) {
+        try {
+          const refreshed = await artifactsApi.getItem(draft.id);
+          setDraft(itemToDraft(refreshed));
+        } catch {
+          // ignore: global error notification already handled
+        }
+      }
+    } catch (moveError) {
+      const message = moveError instanceof Error ? moveError.message : "Unable to move folder.";
+      setError(message);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const handleRenameFolderConfirm = async (nextNameRaw: string) => {
     if (!renameFolderState) {
       return;
@@ -2709,6 +2813,20 @@ export function ArtifactsPage() {
             type="button"
             onClick={() =>
               executeContextAction(() => {
+                if (!contextRenameFolderCandidate) {
+                  return;
+                }
+                startMoveFolderToProject(contextRenameFolderCandidate);
+              })
+            }
+            disabled={!contextRenameFolderCandidate || contextMoveFolderProjectOptions.length === 0}
+          >
+            Move Folder to Project
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              executeContextAction(() => {
                 const nextConfirm = createDeleteConfirmState(contextDeleteCandidateIds);
                 if (!nextConfirm) return;
                 setDeleteConfirm(nextConfirm);
@@ -2844,6 +2962,59 @@ export function ArtifactsPage() {
           void handleRenameFolderConfirm(value);
         }}
       />
+
+      {moveFolderProjectState ? (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onClick={isSaving ? undefined : () => setMoveFolderProjectState(null)}
+        >
+          <section
+            className="va-project-move-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Move folder to project"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="va-project-move-dialog-head">
+              <h3>Move Folder to Project</h3>
+            </header>
+            <div className="va-project-move-dialog-body">
+              <p>Move "{moveFolderProjectState.currentPath}" and its contents.</p>
+              <label>
+                <span>Project</span>
+                <select
+                  value={moveFolderProjectState.targetProjectId}
+                  onChange={(event) =>
+                    setMoveFolderProjectState((prev) =>
+                      prev ? { ...prev, targetProjectId: event.target.value } : prev
+                    )
+                  }
+                  disabled={isSaving || moveFolderProjectOptions.length === 0}
+                >
+                  {moveFolderProjectOptions.map((project) => (
+                    <option key={project.projectId} value={project.projectId}>
+                      {normalizeProjectName(project.projectId, project.projectName)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <footer className="va-project-move-dialog-actions">
+              <button type="button" className="ghost-button" onClick={() => setMoveFolderProjectState(null)} disabled={isSaving}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleMoveFolderProjectConfirm()}
+                disabled={isSaving || moveFolderProjectOptions.length === 0}
+              >
+                Move
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
 
       <TextInputDialog
         open={Boolean(insertLinkState)}

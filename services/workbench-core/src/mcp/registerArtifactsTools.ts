@@ -7,6 +7,47 @@ type ToolContext = {
   accessToken: string;
 };
 
+const artifactItemKindSchema = z.enum(["folder", "note", "file"]);
+const artifactScopeSchema = z.enum(["private", "org", "project"]);
+const artifactNotePatchOperationSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("insert"),
+    index: z.number().int().nonnegative(),
+    text: z.string()
+  }),
+  z.object({
+    type: z.literal("delete"),
+    start: z.number().int().nonnegative(),
+    end: z.number().int().nonnegative()
+  }),
+  z.object({
+    type: z.literal("replace"),
+    start: z.number().int().nonnegative(),
+    end: z.number().int().nonnegative(),
+    text: z.string()
+  })
+]);
+
+function compactArtifactItemResult(value: unknown, includeContent = false): unknown {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  const item = value as Record<string, unknown>;
+  if (includeContent) {
+    return item;
+  }
+
+  const { contentMarkdown, ...rest } = item;
+  if (typeof contentMarkdown === "string") {
+    return {
+      ...rest,
+      contentLength: contentMarkdown.length
+    };
+  }
+  return rest;
+}
+
 export function registerArtifactsTools(server: McpServer, ctx: ToolContext): void;
 export function registerArtifactsTools(server: McpServer): void;
 export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): void {
@@ -116,6 +157,26 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
   );
 
   server.registerTool(
+    "artifacts.tree.list",
+    {
+      title: "List Artifact Tree Items",
+      description: "List artifact tree items with server-side filters. Prefer this over artifacts.tree for MCP efficiency.",
+      inputSchema: {
+        projectId: z.string().optional(),
+        pathPrefix: z.string().optional(),
+        kinds: z.array(artifactItemKindSchema).optional(),
+        includeContent: z.boolean().optional(),
+        updatedSince: z.string().optional(),
+        limit: z.number().int().positive().max(500).optional()
+      }
+    },
+    async (options) => {
+      const result = await runWithAuth(ctx.accessToken, () => artifactsClient.treeList(ctx.accessToken, options));
+      return asMcpText(result);
+    }
+  );
+
+  server.registerTool(
     "artifacts.item.get",
     {
       title: "Get Artifact Item",
@@ -140,7 +201,7 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
         projectName: z.string().optional(),
         path: z.string().min(1),
         title: z.string().optional(),
-        scope: z.enum(["private", "org", "project"]).optional()
+        scope: artifactScopeSchema.optional()
       }
     },
     async (payload) => {
@@ -159,7 +220,7 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
         projectName: z.string().optional(),
         path: z.string().optional(),
         title: z.string().min(1),
-        scope: z.enum(["private", "org", "project"]).optional(),
+        scope: artifactScopeSchema.optional(),
         tags: z.array(z.string()).optional(),
         contentMarkdown: z.string().optional()
       }
@@ -179,7 +240,8 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
         id: z.string().min(1),
         title: z.string().optional(),
         path: z.string().optional(),
-        scope: z.enum(["private", "org", "project"]).optional(),
+        projectId: z.string().optional(),
+        scope: artifactScopeSchema.optional(),
         tags: z.array(z.string()).optional(),
         contentMarkdown: z.string().optional(),
         projectName: z.string().optional()
@@ -188,6 +250,113 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
     async ({ id, ...payload }) => {
       const result = await runWithAuth(ctx.accessToken, () => artifactsClient.updateItem(ctx.accessToken, id, payload));
       return asMcpText(result);
+    }
+  );
+
+  server.registerTool(
+    "artifacts.item.metadata.update",
+    {
+      title: "Update Artifact Item Metadata",
+      description: "Update artifact item metadata only. Use this instead of artifacts.item.update when content does not change.",
+      inputSchema: {
+        id: z.string().min(1),
+        title: z.string().optional(),
+        path: z.string().optional(),
+        projectId: z.string().optional(),
+        projectName: z.string().optional(),
+        scope: artifactScopeSchema.optional(),
+        tags: z.array(z.string()).optional(),
+        returnContent: z.boolean().optional()
+      }
+    },
+    async ({ id, returnContent, ...payload }) => {
+      const result = await runWithAuth(ctx.accessToken, () => artifactsClient.updateItem(ctx.accessToken, id, payload));
+      return asMcpText(compactArtifactItemResult(result, returnContent));
+    }
+  );
+
+  server.registerTool(
+    "artifacts.item.move",
+    {
+      title: "Move Artifact Item",
+      description: "Move an artifact item to a path and/or project without sending content.",
+      inputSchema: {
+        id: z.string().min(1),
+        path: z.string().optional(),
+        projectId: z.string().optional(),
+        projectName: z.string().optional(),
+        returnContent: z.boolean().optional()
+      }
+    },
+    async ({ id, returnContent, ...payload }) => {
+      if (!payload.path && !payload.projectId) {
+        throw new Error("path or projectId is required");
+      }
+      const result = await runWithAuth(ctx.accessToken, () => artifactsClient.updateItem(ctx.accessToken, id, payload));
+      return asMcpText(compactArtifactItemResult(result, returnContent));
+    }
+  );
+
+  server.registerTool(
+    "artifacts.folder.moveProject",
+    {
+      title: "Move Artifact Folder To Project",
+      description: "Move a folder and all descendant artifact items to another project without sending content.",
+      inputSchema: {
+        id: z.string().min(1),
+        projectId: z.string().min(1),
+        projectName: z.string().optional()
+      }
+    },
+    async ({ id, projectId, projectName }) => {
+      const result = await runWithAuth(ctx.accessToken, () =>
+        artifactsClient.updateItem(ctx.accessToken, id, { projectId, projectName })
+      );
+      return asMcpText(compactArtifactItemResult(result));
+    }
+  );
+
+  server.registerTool(
+    "artifacts.note.patch",
+    {
+      title: "Patch Artifact Note",
+      description: "Apply offset-based markdown edits to a note. Use expectedVersion to avoid overwriting concurrent edits.",
+      inputSchema: {
+        id: z.string().min(1),
+        expectedVersion: z.number().int().positive().optional(),
+        operations: z.array(artifactNotePatchOperationSchema).min(1).max(100),
+        returnContent: z.boolean().optional()
+      }
+    },
+    async ({ id, returnContent, ...payload }) => {
+      const result = await runWithAuth(ctx.accessToken, () =>
+        artifactsClient.patchNoteContent(ctx.accessToken, id, payload)
+      );
+      return asMcpText(compactArtifactItemResult(result, returnContent));
+    }
+  );
+
+  server.registerTool(
+    "artifacts.note.section.update",
+    {
+      title: "Update Artifact Note Section",
+      description: "Replace, append, or prepend a markdown heading section without sending the full note content.",
+      inputSchema: {
+        id: z.string().min(1),
+        heading: z.string().min(1),
+        level: z.number().int().min(1).max(6).optional(),
+        expectedVersion: z.number().int().positive().optional(),
+        mode: z.enum(["replaceBody", "appendBody", "prependBody"]).optional(),
+        contentMarkdown: z.string(),
+        createIfMissing: z.boolean().optional(),
+        returnContent: z.boolean().optional()
+      }
+    },
+    async ({ id, returnContent, ...payload }) => {
+      const result = await runWithAuth(ctx.accessToken, () =>
+        artifactsClient.updateNoteSection(ctx.accessToken, id, payload)
+      );
+      return asMcpText(compactArtifactItemResult(result, returnContent));
     }
   );
 

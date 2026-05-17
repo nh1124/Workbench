@@ -118,7 +118,7 @@ function decodeContentDispositionFilename(contentDisposition: string | null): st
   return undefined;
 }
 
-function buildQuery(params: Record<string, string | number | undefined>): string {
+function buildQuery(params: Record<string, string | number | boolean | undefined>): string {
   const sp = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined) {
@@ -171,6 +171,29 @@ export const artifactsClient = {
   projects: (token: string) => serviceRequest<unknown[]>(artifactsService, "/projects", token),
   tree: (token: string, projectId?: string) =>
     serviceRequest<unknown[]>(artifactsService, `/artifacts/tree${buildQuery({ projectId })}`, token),
+  treeList: (
+    token: string,
+    options: {
+      projectId?: string;
+      pathPrefix?: string;
+      kinds?: string[];
+      includeContent?: boolean;
+      updatedSince?: string;
+      limit?: number;
+    }
+  ) =>
+    serviceRequest<unknown[]>(
+      artifactsService,
+      `/artifacts/tree/list${buildQuery({
+        projectId: options.projectId,
+        pathPrefix: options.pathPrefix,
+        kinds: options.kinds?.join(","),
+        includeContent: options.includeContent,
+        updatedSince: options.updatedSince,
+        limit: options.limit
+      })}`,
+      token
+    ),
   getItem: (token: string, id: string) =>
     serviceRequest<unknown>(artifactsService, `/artifacts/items/${encodeURIComponent(id)}`, token),
   createFolder: (token: string, payload: unknown) =>
@@ -187,6 +210,18 @@ export const artifactsClient = {
     }),
   updateItem: (token: string, id: string, payload: unknown) =>
     serviceRequest<unknown>(artifactsService, `/artifacts/items/${encodeURIComponent(id)}`, token, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  patchNoteContent: (token: string, id: string, payload: unknown) =>
+    serviceRequest<unknown>(artifactsService, `/artifacts/items/${encodeURIComponent(id)}/content-patch`, token, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  updateNoteSection: (token: string, id: string, payload: unknown) =>
+    serviceRequest<unknown>(artifactsService, `/artifacts/items/${encodeURIComponent(id)}/section`, token, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
