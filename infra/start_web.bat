@@ -8,7 +8,7 @@ set "PROJECT_ROOT=%SCRIPT_DIR%\.."
 call "%SCRIPT_DIR%\initialize_system.bat"
 if errorlevel 1 exit /b 1
 
-for %%P in (5173) do (
+for %%P in (5174) do (
   for /f "tokens=5" %%A in ('netstat -ano ^| findstr ":%%P " ^| findstr "LISTENING"') do (
     echo [ERROR] Port %%P is already in use by PID %%A. Please stop the process and retry.
     exit /b 1

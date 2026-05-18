@@ -676,6 +676,15 @@ export const tasksApi = {
       `${coreBaseUrl()}/api/tasks/schedule-items/${scheduleId}`,
       { method: "PUT", body: JSON.stringify(patch) }
     ),
+  removeScheduleItem: (scheduleId: number): Promise<void> =>
+    fetchJson<void>(
+      `${coreBaseUrl()}/api/tasks/schedule-items/${scheduleId}`,
+      { method: "DELETE" }
+    ),
+  scheduleItemsForTask: (taskId: string): Promise<ScheduleItem[]> =>
+    fetchJson<ScheduleItem[]>(
+      `${coreBaseUrl()}/api/tasks/${encodeURIComponent(taskId)}/schedule-items`
+    ),
   completeOccurrence: (id: string, targetDate: string, status: TaskStatus): Promise<{ taskId: string; targetDate: string; status: TaskStatus }> =>
     fetchJson<{ taskId: string; targetDate: string; status: TaskStatus }>(
       `${coreBaseUrl()}/api/tasks/${encodeURIComponent(id)}/occurrences/complete`,

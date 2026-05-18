@@ -290,10 +290,12 @@ export function registerTasksTools(server: McpServer, ctx?: ToolContext): void {
       description:
         "Get the LBS weekly dashboard: current cognitive load, warning level (SAFE/WARNING/DANGER/CRITICAL), " +
         "next-day predictions, and KPI summary.",
-      inputSchema: {}
+      inputSchema: {
+        startDate: z.string().optional().describe("Week start date (YYYY-MM-DD). Defaults to current week.")
+      }
     },
-    async () => {
-      const result = await runWithAuth(ctx.accessToken, () => lbsClient.dashboard(ctx.accessToken));
+    async ({ startDate }) => {
+      const result = await runWithAuth(ctx.accessToken, () => lbsClient.dashboard(ctx.accessToken, startDate));
       return asMcpText(result);
     }
   );
@@ -328,11 +330,13 @@ export function registerTasksTools(server: McpServer, ctx?: ToolContext): void {
       description: "Get calendar heatmap data showing daily cognitive load distribution. " +
         "Useful for identifying overloaded or light days at a glance.",
       inputSchema: {
+        startDate: z.string().min(1).describe("Start of range (YYYY-MM-DD)"),
+        endDate: z.string().min(1).describe("End of range (YYYY-MM-DD)"),
         statuses: z.array(z.string()).optional().describe("Task statuses to include")
       }
     },
-    async ({ statuses }) => {
-      const result = await runWithAuth(ctx.accessToken, () => lbsClient.heatmap(ctx.accessToken, statuses));
+    async ({ startDate, endDate, statuses }) => {
+      const result = await runWithAuth(ctx.accessToken, () => lbsClient.heatmap(ctx.accessToken, startDate, endDate, statuses));
       return asMcpText(result);
     }
   );
@@ -343,11 +347,13 @@ export function registerTasksTools(server: McpServer, ctx?: ToolContext): void {
       title: "LBS Weekly Trends",
       description: "Get multi-week load trend predictions from LBS.",
       inputSchema: {
+        weeks: z.number().int().positive().optional().describe("Number of weeks to include. Defaults to 12."),
+        startDate: z.string().optional().describe("Start date (YYYY-MM-DD). Defaults to LBS server behavior."),
         statuses: z.array(z.string()).optional().describe("Task statuses to include")
       }
     },
-    async ({ statuses }) => {
-      const result = await runWithAuth(ctx.accessToken, () => lbsClient.trends(ctx.accessToken, statuses));
+    async ({ weeks, startDate, statuses }) => {
+      const result = await runWithAuth(ctx.accessToken, () => lbsClient.trends(ctx.accessToken, weeks, startDate, statuses));
       return asMcpText(result);
     }
   );
@@ -358,12 +364,14 @@ export function registerTasksTools(server: McpServer, ctx?: ToolContext): void {
       title: "LBS Context Distribution",
       description: "Get cognitive load breakdown grouped by task context/project.",
       inputSchema: {
+        startDate: z.string().min(1).describe("Start of range (YYYY-MM-DD)"),
+        endDate: z.string().min(1).describe("End of range (YYYY-MM-DD)"),
         statuses: z.array(z.string()).optional().describe("Task statuses to include")
       }
     },
-    async ({ statuses }) => {
+    async ({ startDate, endDate, statuses }) => {
       const result = await runWithAuth(ctx.accessToken, () =>
-        lbsClient.contextDistribution(ctx.accessToken, statuses)
+        lbsClient.contextDistribution(ctx.accessToken, startDate, endDate, statuses)
       );
       return asMcpText(result);
     }
@@ -401,13 +409,13 @@ export function registerTasksTools(server: McpServer, ctx?: ToolContext): void {
       title: "LBS Record Task Execution",
       description:
         "Record or update the execution status for a specific task on a given date. " +
-        "status must be one of: done, skipped, in_progress, todo. " +
+        "status must be one of: done, skipped, todo. " +
         "progress is 0-100. actual_time is minutes spent (optional).",
       inputSchema: {
         taskId: z.string().min(1).describe("Task ID"),
         targetDate: z.string().min(1).describe("Execution date (YYYY-MM-DD)"),
         status: z
-          .enum(["done", "skipped", "in_progress", "todo"])
+          .enum(["done", "skipped", "todo"])
           .describe("Execution status"),
         progress: z.number().int().min(0).max(100).optional().describe("Progress 0-100"),
         actualTime: z.number().int().positive().optional().describe("Actual time spent in minutes")
@@ -548,6 +556,81 @@ export function registerTasksTools(server: McpServer, ctx?: ToolContext): void {
   );
 
   // ── Attachments ───────────────────────────────────────────────────────────
+
+  server.registerTool(
+    "tasks.lbs.conditions.list",
+    {
+      title: "LBS List Conditions",
+      description: "List daily condition records, including cognitive and physical fatigue, for a date range.",
+      inputSchema: {
+        startDate: z.string().min(1).describe("Start of range (YYYY-MM-DD)"),
+        endDate: z.string().min(1).describe("End of range (YYYY-MM-DD)")
+      }
+    },
+    async ({ startDate, endDate }) => {
+      const result = await runWithAuth(ctx.accessToken, () =>
+        lbsClient.listConditions(ctx.accessToken, startDate, endDate)
+      );
+      return asMcpText(result);
+    }
+  );
+
+  server.registerTool(
+    "tasks.lbs.conditions.get",
+    {
+      title: "LBS Get Condition",
+      description: "Get the daily condition record for a date. LBS returns a default zero-fatigue condition if none exists.",
+      inputSchema: {
+        date: z.string().min(1).describe("Target date (YYYY-MM-DD)")
+      }
+    },
+    async ({ date }) => {
+      const result = await runWithAuth(ctx.accessToken, () => lbsClient.getCondition(ctx.accessToken, date));
+      return asMcpText(result);
+    }
+  );
+
+  server.registerTool(
+    "tasks.lbs.conditions.upsert",
+    {
+      title: "LBS Upsert Condition",
+      description:
+        "Create or update the daily condition for a date. " +
+        "cognitiveFatigue and physicalFatigue use a 0-5 scale.",
+      inputSchema: {
+        date: z.string().min(1).describe("Target date (YYYY-MM-DD)"),
+        cognitiveFatigue: z.number().int().min(0).max(5),
+        physicalFatigue: z.number().int().min(0).max(5).optional(),
+        note: z.string().optional()
+      }
+    },
+    async ({ date, cognitiveFatigue, physicalFatigue, note }) => {
+      const result = await runWithAuth(ctx.accessToken, () =>
+        lbsClient.upsertCondition(ctx.accessToken, {
+          date,
+          cognitive_fatigue: cognitiveFatigue,
+          physical_fatigue: physicalFatigue,
+          note
+        })
+      );
+      return asMcpText(result);
+    }
+  );
+
+  server.registerTool(
+    "tasks.lbs.conditions.delete",
+    {
+      title: "LBS Delete Condition",
+      description: "Delete/reset the daily condition for a date.",
+      inputSchema: {
+        date: z.string().min(1).describe("Target date (YYYY-MM-DD)")
+      }
+    },
+    async ({ date }) => {
+      await runWithAuth(ctx.accessToken, () => lbsClient.deleteCondition(ctx.accessToken, date));
+      return asMcpText({ status: "ok" });
+    }
+  );
 
   server.registerTool(
     "tasks.attachments.list",
@@ -829,6 +912,38 @@ export function registerTasksTools(server: McpServer, ctx?: ToolContext): void {
   );
 
   // ── LBS: Expansion ────────────────────────────────────────────────────────
+
+  server.registerTool(
+    "tasks.schedule.items.list",
+    {
+      title: "List Task Schedule Items",
+      description: "List explicit schedule items for a task across all dates.",
+      inputSchema: {
+        taskId: z.string().min(1).describe("Task ID")
+      }
+    },
+    async ({ taskId }) => {
+      const result = await runWithAuth(ctx.accessToken, () =>
+        tasksClient.listScheduleItemsForTask(ctx.accessToken, taskId)
+      );
+      return asMcpText(result);
+    }
+  );
+
+  server.registerTool(
+    "tasks.schedule.delete",
+    {
+      title: "Delete Schedule Item",
+      description: "Delete one explicit schedule item by its numeric ID.",
+      inputSchema: {
+        scheduleId: z.number().int().positive().describe("Schedule item ID")
+      }
+    },
+    async ({ scheduleId }) => {
+      await runWithAuth(ctx.accessToken, () => tasksClient.deleteScheduleItem(ctx.accessToken, scheduleId));
+      return asMcpText({ status: "ok" });
+    }
+  );
 
   server.registerTool(
     "tasks.lbs.expand",

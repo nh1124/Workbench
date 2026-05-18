@@ -1,0 +1,12 @@
+{
+  "name": "lbs",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev:http": "python -m uvicorn src.main:app --reload --host 127.0.0.1 --port 8100",
+    "build": "python -m compileall -q src",
+    "start": "python -m uvicorn src.main:app --host 127.0.0.1 --port 8100",
+    "test": "python -m compileall -q src"
+  }
+}

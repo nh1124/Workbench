@@ -43,6 +43,8 @@ import {
 } from "./taskExceptionStore.js";
 import {
   addTaskToToday,
+  deleteTaskScheduleItem,
+  listTaskScheduleItems,
   listTaskScheduleCalendar,
   listTaskToday,
   removeTaskFromToday,
@@ -377,6 +379,20 @@ app.put("/tasks/schedule-items/:id", requireUserAuth, async (req, res) => {
   }
 });
 
+app.delete("/tasks/schedule-items/:id", requireUserAuth, async (req, res) => {
+  const owner = req.authUser?.coreUserId;
+  const scheduleId = parseInt(String(req.params.id), 10);
+  try {
+    if (!owner) return res.status(401).json({ message: "Missing auth context" });
+    if (isNaN(scheduleId)) return res.status(400).json({ message: "id must be a number" });
+    const deleted = await deleteTaskScheduleItem(owner, scheduleId);
+    if (!deleted) return res.status(404).json({ message: "Schedule item not found" });
+    return res.status(204).send();
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
 app.put("/tasks/:id/pin", requireUserAuth, async (req, res) => {
   try {
     const parsed = taskPinSchema.safeParse(req.body);
@@ -492,6 +508,19 @@ app.get("/tasks/:id/history", requireUserAuth, async (req, res) => {
     }
     const history = await getTaskHistory(String(req.params.id), lbsAccessToken);
     return res.json(history);
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+app.get("/tasks/:id/schedule-items", requireUserAuth, async (req, res) => {
+  try {
+    const owner = req.authUser?.coreUserId;
+    if (!owner) {
+      return res.status(401).json({ message: "Missing auth context" });
+    }
+    const items = await listTaskScheduleItems(owner, String(req.params.id));
+    return res.json(items);
   } catch (error) {
     return handleError(res, error);
   }

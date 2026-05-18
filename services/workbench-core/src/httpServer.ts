@@ -2333,6 +2333,18 @@ app.get("/api/tasks/:id/history", async (req, res) => {
   }
 });
 
+app.get("/api/tasks/:id/schedule-items", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  try {
+    const result = await tasksClient.listScheduleItemsForTask(authContext.accessToken, String(req.params.id));
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
 app.get("/api/tasks/:id", async (req, res) => {
   const authContext = await requireAuthenticatedContext(req, res);
   if (!authContext) return;
@@ -2612,6 +2624,19 @@ app.put("/api/tasks/schedule-items/:id", async (req, res) => {
     const result = await tasksClient.updateScheduleItem(authContext.accessToken, scheduleId, patch);
     if (!result) return res.status(404).json({ message: "Schedule item not found" });
     return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.delete("/api/tasks/schedule-items/:id", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  const scheduleId = parseInt(req.params.id, 10);
+  if (isNaN(scheduleId)) return res.status(400).json({ message: "id must be a number" });
+  try {
+    await tasksClient.deleteScheduleItem(authContext.accessToken, scheduleId);
+    return res.status(204).send();
   } catch (error) {
     return respondInternalError(res, error);
   }

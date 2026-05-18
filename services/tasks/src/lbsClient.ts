@@ -66,6 +66,10 @@ function normalizeBaseUrl(url: string): string {
   return url.replace(/\/+$/, "");
 }
 
+function isFormDataBody(value: unknown): value is FormData {
+  return typeof FormData !== "undefined" && value instanceof FormData;
+}
+
 export class LbsClient {
   private readonly baseUrl: string;
   private readonly authBaseUrl: string;
@@ -109,6 +113,7 @@ export class LbsClient {
     const query = toQueryString(options.query);
     const endpoint = path.replace(/^\/+/, "");
     const url = `${this.baseUrl}/${endpoint}${query}`;
+    const isFormData = isFormDataBody(options.body);
     const headers: Record<string, string> = {
       Accept: options.expectText ? "text/plain" : "application/json",
       "X-Timezone": this.timezone,
@@ -116,22 +121,27 @@ export class LbsClient {
       ...(options.headers || {})
     };
 
-    if (!options.expectText) {
+    if (!options.expectText && !isFormData) {
       headers["Content-Type"] = options.contentType || "application/json";
     } else if (options.contentType) {
       headers["Content-Type"] = options.contentType;
     }
+
+    const rawBody = options.body;
+    const requestBody: BodyInit | undefined = rawBody === undefined || rawBody === null
+      ? undefined
+      : isFormDataBody(rawBody)
+        ? rawBody
+      : (options.contentType && options.contentType !== "application/json")
+        ? String(rawBody)
+        : JSON.stringify(rawBody);
 
     let response: Response;
     try {
       response = await fetch(url, {
         method,
         headers,
-        body: options.body === undefined
-          ? undefined
-          : (options.contentType && options.contentType !== "application/json")
-            ? String(options.body)
-            : JSON.stringify(options.body)
+        body: requestBody
       });
     } catch (error) {
       const detail = error instanceof Error ? error.message : "unknown network error";
@@ -298,9 +308,10 @@ export class LbsClient {
   }
 
   async uploadTasksCsv(csvContent: string): Promise<Record<string, unknown>> {
+    const formData = new FormData();
+    formData.append("file", new Blob([csvContent], { type: "text/csv" }), "tasks.csv");
     return this.request("POST", "tasks/upload-csv", {
-      body: csvContent,
-      contentType: "text/csv"
+      body: formData
     });
   }
 

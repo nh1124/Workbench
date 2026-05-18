@@ -11,7 +11,12 @@ import { projectsApi, tasksApi } from "../../lib/api";
 import { buildInboxRows } from "../../lib/inboxBuilder";
 import { pushErrorNotification } from "../../lib/notificationService";
 import { addDays, startOfDay, toDateKey } from "../../lib/taskDateUtils";
-import { isAuthErrorMessage, mergeProjectOptions, type ProjectOption } from "../../lib/taskDisplayUtils";
+import {
+  filterProjectOptionsByAllowedIds,
+  isAuthErrorMessage,
+  mergeProjectOptions,
+  type ProjectOption
+} from "../../lib/taskDisplayUtils";
 import type { Task, TaskScheduleDay, TaskStatus, TodayTask } from "../../types/models";
 import {
   OCCURRENCE_PAGE_DAYS,
@@ -97,7 +102,9 @@ export function useTaskDataLoader(
       ] = await Promise.all([
         tasksApi.list(contextFilter || undefined),
         tasksApi.projects(),
-        projectsApi.list(undefined, "active", 200).catch(() => ({ items: [] })),
+        projectsApi.list(undefined, "active", 200)
+          .then((result) => ({ ok: true as const, result }))
+          .catch(() => ({ ok: false as const, result: { items: [] } })),
         tasksApi.schedule(todayKey, todayKey, contextFilter || undefined).catch(() => [] as TaskScheduleDay[]),
         tasksApi.schedule(countFrom, countTo, contextFilter || undefined).catch(() => [] as TaskScheduleDay[]),
         tasksApi.todayList(todayKey).catch(() => [] as TodayTask[])
@@ -166,9 +173,14 @@ export function useTaskDataLoader(
         return { ...task, status };
       });
 
-      const serviceProjects = projectsResult.items.map((project) => ({
+      const serviceProjects = projectsResult.result.items.map((project) => ({
         projectId: project.id,
         projectName: project.name
+      }));
+      const activeProjectIds = new Set(serviceProjects.map((project) => project.projectId));
+      const taskProjectOptions = taskProjects.map((p) => ({
+        projectId: p.projectId,
+        projectName: p.projectName
       }));
 
       setTasks(mergedTasks);
@@ -176,10 +188,12 @@ export function useTaskDataLoader(
       // myDayFlaggedIds: task IDs in Today DB (the authoritative source for Today filter)
       setMyDayFlaggedIds(new Set(myDayTasks.map((t: TodayTask) => t.id)));
       setProjectOptions(
-        mergeProjectOptions(
-          taskProjects.map((p) => ({ projectId: p.projectId, projectName: p.projectName })),
-          serviceProjects
-        )
+        projectsResult.ok
+          ? mergeProjectOptions(
+              filterProjectOptionsByAllowedIds(taskProjectOptions, activeProjectIds),
+              serviceProjects
+            )
+          : mergeProjectOptions(taskProjectOptions)
       );
 
       const currentSelectedTaskId = selectedTaskIdRef.current;

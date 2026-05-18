@@ -134,3 +134,10 @@ export function mergeProjectOptions(
     (a.projectName || a.projectId).localeCompare(b.projectName || b.projectId)
   );
 }
+
+export function filterProjectOptionsByAllowedIds(
+  options: ProjectOption[],
+  allowedIds: Set<string>
+): ProjectOption[] {
+  return options.filter((option) => allowedIds.has(option.projectId));
+}

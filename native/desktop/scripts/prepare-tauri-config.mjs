@@ -7,7 +7,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const desktopRoot = path.resolve(__dirname, "..");
 
-loadEnv({ path: path.resolve(desktopRoot, ".env") });
+loadEnv({ path: path.resolve(desktopRoot, ".env"), override: true });
 
 function required(name) {
   const value = process.env[name];

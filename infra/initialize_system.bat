@@ -23,6 +23,8 @@ call :ensure_env "%PROJECT_ROOT%\services\tasks\.env" "%PROJECT_ROOT%\services\t
 if errorlevel 1 exit /b 1
 call :ensure_env "%PROJECT_ROOT%\services\projects\.env" "%PROJECT_ROOT%\services\projects\.env.example"
 if errorlevel 1 exit /b 1
+call :ensure_env "%PROJECT_ROOT%\services\lbs\.env" "%PROJECT_ROOT%\services\lbs\.env.example"
+if errorlevel 1 exit /b 1
 call :ensure_env "%PROJECT_ROOT%\services\workbench-core\.env" "%PROJECT_ROOT%\services\workbench-core\.env.example"
 if errorlevel 1 exit /b 1
 call :ensure_env "%PROJECT_ROOT%\ui\.env" "%PROJECT_ROOT%\ui\.env.example"

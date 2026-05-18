@@ -261,10 +261,10 @@ export function useTaskMutations(
       setScheduleDraft(null);
       setScheduleItemId(null);
       try {
-        const days = await tasksApi.scheduleCalendar(occurrenceDate, occurrenceDate);
-        const matchingItem = days.flatMap((d) => d.items).find((i) => i.taskId === taskId);
+        const items = await tasksApi.scheduleItemsForTask(taskId);
+        const matchingItem = items.find((item) => item.occurrenceDate === occurrenceDate);
         if (matchingItem) {
-          setScheduleItemId(matchingItem.scheduleId);
+          setScheduleItemId(matchingItem.id);
           setScheduleDraft({
             scheduledDate: matchingItem.scheduledDate,
             startTime: matchingItem.startTime ?? "",
@@ -583,9 +583,10 @@ export function useTaskMutations(
     closeMenu: () => void
   ) => {
     if (selectedRows.length === 0) return;
-    const uniqueTaskIds = Array.from(new Set(selectedRows.map((r) => r.taskId)));
     try {
-      await Promise.all(uniqueTaskIds.map((id) => tasksApi.update(id, { status: "skipped" })));
+      await Promise.all(
+        selectedRows.map((row) => tasksApi.completeOccurrence(row.taskId, row.date, "skipped"))
+      );
       closeMenu();
       await refreshAfterOccurrenceMutation();
     } catch {
@@ -857,7 +858,7 @@ export function useTaskMutations(
     if (!selectedTaskId || !selectedOccurrenceDate || !scheduleDraft) return;
     try {
       if (scheduleItemId != null) {
-        await tasksApi.removeFromToday(selectedTaskId, scheduleDraft.scheduledDate);
+        await tasksApi.removeScheduleItem(scheduleItemId);
       }
       setScheduleItemId(null);
       setScheduleDraft((prev) =>

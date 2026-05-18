@@ -8,7 +8,7 @@ set "PROJECT_ROOT=%SCRIPT_DIR%\.."
 call "%SCRIPT_DIR%\initialize_system.bat"
 if errorlevel 1 exit /b 1
 
-for %%P in (4100 4101 4102 4103 4104) do (
+for %%P in (4100 4101 4102 4103 4104 8100) do (
   for /f "tokens=5" %%A in ('netstat -ano ^| findstr ":%%P " ^| findstr "LISTENING"') do (
     echo [ERROR] Port %%P is already in use by PID %%A. Please stop the process and retry.
     exit /b 1
@@ -31,7 +31,7 @@ endlocal & exit /b %APP_EXIT%
 
 :cleanup_ports
 echo Cleaning up service processes...
-for %%P in (4100 4101 4102 4103 4104) do (
+for %%P in (4100 4101 4102 4103 4104 8100) do (
   for /f "tokens=5" %%A in ('netstat -ano ^| findstr ":%%P " ^| findstr "LISTENING"') do (
     if not "%%A"=="0" if not "%%A"=="4" (
       echo [INFO] Stopping PID %%A on port %%P
@@ -40,4 +40,3 @@ for %%P in (4100 4101 4102 4103 4104) do (
   )
 )
 exit /b 0
-

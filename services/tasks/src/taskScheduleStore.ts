@@ -3,7 +3,9 @@ import {
   type ScheduleItemRow,
   addScheduleItem,
   listItemsByDateRange,
+  listItemsByTask,
   listItemsByScheduledDate,
+  removeScheduleItem,
   removeItemsByTaskAndScheduledDate,
   updateItem as updateScheduleItemInStore
 } from "./scheduleItemsStore.js";
@@ -138,6 +140,20 @@ export async function updateTaskScheduleItem(
     `[tasks-service] updateTaskScheduleItem owner=${ownerUsername} scheduleId=${scheduleId}`
   );
   return updateScheduleItemInStore(ownerUsername, scheduleId, patch);
+}
+
+export async function listTaskScheduleItems(
+  ownerUsername: string,
+  taskId: string
+): Promise<ScheduleItemRow[]> {
+  return listItemsByTask(ownerUsername, taskId);
+}
+
+export async function deleteTaskScheduleItem(
+  ownerUsername: string,
+  scheduleId: number
+): Promise<boolean> {
+  return removeScheduleItem(ownerUsername, scheduleId);
 }
 
 /**

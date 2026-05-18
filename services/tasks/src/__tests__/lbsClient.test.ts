@@ -95,4 +95,28 @@ describe("LbsClient", () => {
       /LBS_UNREACHABLE/
     );
   });
+
+  it("uploads CSV using multipart form data for LBS compatibility", async () => {
+    const calls = installFetchMock(async () =>
+      new Response(JSON.stringify({ imported: 1 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+    const client = new LbsClient(
+      {
+        baseUrl: "https://lbs.example.com",
+        timezone: "Asia/Tokyo"
+      },
+      "user-token"
+    );
+
+    await client.uploadTasksCsv("task_name,context\nA,inbox\n");
+
+    assert.equal(calls.length, 1);
+    assert.equal(String(calls[0].input), "https://lbs.example.com/tasks/upload-csv");
+    const headers = (calls[0].init?.headers ?? {}) as Record<string, string>;
+    assert.equal(headers["Content-Type"], undefined);
+    assert.ok(calls[0].init?.body instanceof FormData);
+  });
 });

@@ -6,7 +6,7 @@ Workbench is split into a Core gateway plus internal domain services.
 
 - External consumers (UI, agent runtimes, future clients) call **Workbench Core only**.
 - **Workbench Core** is the single public MCP/tool provider and external HTTP facade.
-- `notes`, `artifacts`, `tasks` (and optional `projects`) are internal business services.
+- `notes`, `artifacts`, `tasks`, `projects`, and `lbs` are internal business services.
 - Each service keeps its own database and service-local account table.
 - Core delegates to services through internal HTTP clients.
 
@@ -40,8 +40,10 @@ Flow:
   - Internal artifacts HTTP API
 - `services/tasks`
   - Internal tasks HTTP API
-- `services/projects` (optional internal service)
+- `services/projects`
   - Internal projects HTTP API
+- `services/lbs`
+  - Local FastAPI LBS backend consumed by Tasks and Core MCP tools
 
 ## Core External Endpoints
 
@@ -96,6 +98,7 @@ Common internal contract:
 - `ARTIFACTS_SERVICE_URL`
 - `TASKS_SERVICE_URL`
 - `PROJECTS_SERVICE_URL` (optional)
+- `LBS_SERVICE_URL`
 - `INTERNAL_API_KEY_NOTES`
 - `INTERNAL_API_KEY_ARTIFACTS`
 - `INTERNAL_API_KEY_TASKS`
@@ -108,6 +111,7 @@ Common internal contract:
 - `INTERNAL_API_KEY`
 - service-specific DB variables
   - Tasks service additionally uses:
+    - `TASKS_LBS_BASE_URL`
     - `TASKS_LBS_AUTH_BASE_URL`
     - `TASKS_LBS_AUTH_LOGIN_PATH`
     - `TASKS_LBS_AUTH_USER_CREATE_PATH`
@@ -151,3 +155,5 @@ Infra shortcuts:
 - Artifacts DB: `5544`
 - Tasks DB: `5545`
 - Projects DB: `5546`
+
+LBS defaults to local sqlite for development when `services/lbs/.env` does not set `DATABASE_URL`.

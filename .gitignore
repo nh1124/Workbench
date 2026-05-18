@@ -5,6 +5,7 @@ node_modules/
 *.log
 ui/dist/
 services/*/dist/
+services/*/docs/
 native/desktop/src-tauri/target/
 native/desktop/node_modules/
 native/desktop/src-tauri/tauri.conf.json

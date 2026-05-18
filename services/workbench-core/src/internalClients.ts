@@ -529,7 +529,12 @@ export const tasksClient = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch)
       }
-    )
+    ),
+  deleteScheduleItem: (token: string, scheduleId: number) =>
+    serviceRequest<void>(tasksService, `/tasks/schedule-items/${scheduleId}`, token, { method: "DELETE" }),
+
+  listScheduleItemsForTask: (token: string, taskId: string) =>
+    serviceRequest<unknown[]>(tasksService, `/tasks/${encodeURIComponent(taskId)}/schedule-items`, token)
 };
 
 function requireLbs(): ServiceConfig {
@@ -539,27 +544,33 @@ function requireLbs(): ServiceConfig {
 
 export const lbsClient = {
   // ── Analytics / Condition ──────────────────────────────────────────────────
-  dashboard: (token: string) =>
-    serviceRequest<unknown>(requireLbs(), "/dashboard", token),
+  dashboard: (token: string, startDate?: string) =>
+    serviceRequest<unknown>(requireLbs(), `/dashboard${buildQuery({ start_date: startDate })}`, token),
 
   calculate: (token: string, date: string, statuses?: string[]) => {
     const qs = statuses?.length ? `?${statuses.map(s => `status=${encodeURIComponent(s)}`).join("&")}` : "";
     return serviceRequest<unknown>(requireLbs(), `/calculate/${encodeURIComponent(date)}${qs}`, token);
   },
 
-  heatmap: (token: string, statuses?: string[]) => {
-    const qs = statuses?.length ? `?${statuses.map(s => `status=${encodeURIComponent(s)}`).join("&")}` : "";
-    return serviceRequest<unknown>(requireLbs(), `/heatmap${qs}`, token);
+  heatmap: (token: string, startDate: string, endDate: string, statuses?: string[]) => {
+    const params = new URLSearchParams({ start: startDate, end: endDate });
+    for (const status of statuses ?? []) params.append("status", status);
+    return serviceRequest<unknown>(requireLbs(), `/heatmap?${params.toString()}`, token);
   },
 
-  trends: (token: string, statuses?: string[]) => {
-    const qs = statuses?.length ? `?${statuses.map(s => `status=${encodeURIComponent(s)}`).join("&")}` : "";
-    return serviceRequest<unknown>(requireLbs(), `/trends${qs}`, token);
+  trends: (token: string, weeks?: number, startDate?: string, statuses?: string[]) => {
+    const params = new URLSearchParams();
+    if (weeks !== undefined) params.set("weeks", String(weeks));
+    if (startDate) params.set("start_date", startDate);
+    for (const status of statuses ?? []) params.append("status", status);
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    return serviceRequest<unknown>(requireLbs(), `/trends${suffix}`, token);
   },
 
-  contextDistribution: (token: string, statuses?: string[]) => {
-    const qs = statuses?.length ? `?${statuses.map(s => `status=${encodeURIComponent(s)}`).join("&")}` : "";
-    return serviceRequest<unknown>(requireLbs(), `/context-distribution${qs}`, token);
+  contextDistribution: (token: string, startDate: string, endDate: string, statuses?: string[]) => {
+    const params = new URLSearchParams({ start: startDate, end: endDate });
+    for (const status of statuses ?? []) params.append("status", status);
+    return serviceRequest<unknown>(requireLbs(), `/context-distribution?${params.toString()}`, token);
   },
 
   // ── Schedule ───────────────────────────────────────────────────────────────
@@ -597,6 +608,30 @@ export const lbsClient = {
 
   deleteException: (token: string, id: string | number) =>
     serviceRequest<void>(requireLbs(), `/exceptions/${encodeURIComponent(String(id))}`, token, { method: "DELETE" }),
+
+  // ── Conditions ───────────────────────────────────────────────────────────
+  listConditions: (token: string, startDate: string, endDate: string) =>
+    serviceRequest<unknown[]>(
+      requireLbs(),
+      `/conditions${buildQuery({ start_date: startDate, end_date: endDate })}`,
+      token
+    ),
+
+  getCondition: (token: string, targetDate: string) =>
+    serviceRequest<unknown>(requireLbs(), `/conditions/${encodeURIComponent(targetDate)}`, token),
+
+  upsertCondition: (
+    token: string,
+    payload: { date: string; cognitive_fatigue: number; physical_fatigue?: number; note?: string }
+  ) =>
+    serviceRequest<unknown>(requireLbs(), "/conditions", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+
+  deleteCondition: (token: string, targetDate: string) =>
+    serviceRequest<void>(requireLbs(), `/conditions/${encodeURIComponent(targetDate)}`, token, { method: "DELETE" }),
 
   // ── Expansion ──────────────────────────────────────────────────────────────
   expand: (token: string, payload: { start_date: string; end_date: string }) =>
