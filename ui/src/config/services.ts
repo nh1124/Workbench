@@ -81,9 +81,9 @@ function persistWorkbenchCoreUrl(value: string): void {
 
 export function getWorkbenchCoreUrl(): string {
   if (workbenchCoreUrlCache !== undefined) return workbenchCoreUrlCache;
-  workbenchCoreUrlCache = readStoredWorkbenchCoreUrl()
-    ?? (isServedByWorkbenchCore() ? currentOriginWorkbenchCoreUrl() : undefined)
-    ?? envWorkbenchCoreUrl;
+  workbenchCoreUrlCache = isServedByWorkbenchCore()
+    ? currentOriginWorkbenchCoreUrl() || readStoredWorkbenchCoreUrl() || envWorkbenchCoreUrl
+    : readStoredWorkbenchCoreUrl() ?? envWorkbenchCoreUrl;
   return workbenchCoreUrlCache;
 }
 
@@ -95,9 +95,9 @@ export function setWorkbenchCoreUrl(raw: string): string {
 }
 
 export function getWorkbenchCoreUrlInitialValue(): string {
-  return readStoredWorkbenchCoreUrlRaw()
-    ?? (isServedByWorkbenchCore() ? currentOriginWorkbenchCoreUrl() : undefined)
-    ?? envWorkbenchCoreUrlFallback;
+  return isServedByWorkbenchCore()
+    ? currentOriginWorkbenchCoreUrl() || readStoredWorkbenchCoreUrlRaw() || envWorkbenchCoreUrlFallback
+    : readStoredWorkbenchCoreUrlRaw() ?? envWorkbenchCoreUrlFallback;
 }
 
 export const navItems = [
