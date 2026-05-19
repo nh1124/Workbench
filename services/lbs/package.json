@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "setup": "node scripts/lbs-python.mjs -c \"import uvicorn\"",
-    "dev:http": "node scripts/lbs-python.mjs -m uvicorn src.main:app --reload --host 127.0.0.1 --port 8100",
+    "dev:http": "node scripts/lbs-python.mjs -m src.main",
     "build": "node scripts/lbs-python.mjs -m compileall -q src",
     "start": "node scripts/lbs-python.mjs -m src.main",
     "test": "node scripts/lbs-python.mjs -m compileall -q src"

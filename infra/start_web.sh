@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 "${SCRIPT_DIR}/initialize_system.sh"
+node "${SCRIPT_DIR}/scripts/workbench-env.mjs" check
 
 echo "Starting Workbench frontend (web UI only)..."
 echo "[INFO] Backend APIs are NOT started by this script."

@@ -24,7 +24,7 @@ COPY --from=frontend-builder /app/ui/dist ./ui/dist
 RUN mkdir -p data
 
 # Expose the API port (unified)
-EXPOSE 8000
+EXPOSE 8100
 
 # Run the application
 CMD ["python", "-m", "src.main"]

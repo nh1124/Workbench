@@ -14,6 +14,11 @@ if errorlevel 1 (
   exit /b 1
 )
 
+if exist "%~dp0..\..\infra\scripts\workbench-env.mjs" (
+  node "%~dp0..\..\infra\scripts\workbench-env.mjs" sync
+  if errorlevel 1 exit /b 1
+)
+
 echo [LBS] Starting LBS service...
 node scripts\lbs-python.mjs -m src.main
 exit /b %ERRORLEVEL%

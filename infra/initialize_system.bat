@@ -15,6 +15,8 @@ if not exist "%PROJECT_ROOT%\node_modules" (
   )
 )
 
+call :ensure_env "%PROJECT_ROOT%\infra\workbench.env" "%PROJECT_ROOT%\infra\workbench.env.example"
+if errorlevel 1 exit /b 1
 call :ensure_env "%PROJECT_ROOT%\services\notes\.env" "%PROJECT_ROOT%\services\notes\.env.example"
 if errorlevel 1 exit /b 1
 call :ensure_env "%PROJECT_ROOT%\services\artifacts\.env" "%PROJECT_ROOT%\services\artifacts\.env.example"
@@ -30,6 +32,9 @@ if errorlevel 1 exit /b 1
 call :ensure_env "%PROJECT_ROOT%\ui\.env" "%PROJECT_ROOT%\ui\.env.example"
 if errorlevel 1 exit /b 1
 call :ensure_env "%PROJECT_ROOT%\native\desktop\.env" "%PROJECT_ROOT%\native\desktop\.env.example"
+if errorlevel 1 exit /b 1
+
+node "%SCRIPT_DIR%\scripts\workbench-env.mjs" sync
 if errorlevel 1 exit /b 1
 
 echo Environment files are ready.

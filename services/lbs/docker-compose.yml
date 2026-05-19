@@ -17,14 +17,12 @@ services:
   backend:
     build: .
     ports:
-      - "${LBS_HOST_PORT:-8001}:${BACKEND_PORT:-8000}"
+      - "${LBS_HOST_PORT:-8100}:${BACKEND_PORT:-8100}"
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - LBS_ENV=${LBS_ENV:-dev}
       - LBS_BIND_HOST=0.0.0.0 # App inside container ALWAYS binds to all, Docker maps it
-      - BACKEND_PORT=${BACKEND_PORT:-8000}
-
-      #  - BACKEND_PORT=${BACKEND_PORT:-8100} # Use fixed 8000 inside container
+      - BACKEND_PORT=${BACKEND_PORT:-8100}
 
       - LBS_REQUIRE_API_KEY=${LBS_REQUIRE_API_KEY:-false}
       - LBS_DEFAULT_USER_ID=${LBS_DEFAULT_USER_ID}

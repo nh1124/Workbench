@@ -28,6 +28,7 @@ ensure_env() {
   echo "[CREATED] ${target}"
 }
 
+ensure_env "${PROJECT_ROOT}/infra/workbench.env" "${PROJECT_ROOT}/infra/workbench.env.example"
 ensure_env "${PROJECT_ROOT}/services/notes/.env" "${PROJECT_ROOT}/services/notes/.env.example"
 ensure_env "${PROJECT_ROOT}/services/artifacts/.env" "${PROJECT_ROOT}/services/artifacts/.env.example"
 ensure_env "${PROJECT_ROOT}/services/tasks/.env" "${PROJECT_ROOT}/services/tasks/.env.example"
@@ -36,5 +37,7 @@ ensure_env "${PROJECT_ROOT}/services/lbs/.env" "${PROJECT_ROOT}/services/lbs/.en
 ensure_env "${PROJECT_ROOT}/services/workbench-core/.env" "${PROJECT_ROOT}/services/workbench-core/.env.example"
 ensure_env "${PROJECT_ROOT}/ui/.env" "${PROJECT_ROOT}/ui/.env.example"
 ensure_env "${PROJECT_ROOT}/native/desktop/.env" "${PROJECT_ROOT}/native/desktop/.env.example"
+
+node "${SCRIPT_DIR}/scripts/workbench-env.mjs" sync
 
 echo "Environment files are ready."

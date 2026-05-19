@@ -14,5 +14,10 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
+WORKBENCH_ENV_SCRIPT="${SCRIPT_DIR}/../../infra/scripts/workbench-env.mjs"
+if [[ -f "${WORKBENCH_ENV_SCRIPT}" ]]; then
+  node "${WORKBENCH_ENV_SCRIPT}" sync
+fi
+
 echo "[LBS] Starting LBS service..."
 exec node scripts/lbs-python.mjs -m src.main

@@ -83,6 +83,19 @@ Common internal contract:
 
 ## Environment Variables
 
+Workbench keeps port and local URL settings in one canonical file:
+
+- `infra/workbench.env`
+
+`infra/initialize_system.*` creates this file from `infra/workbench.env.example` and synchronizes derived values into service `.env` files. Edit `infra/workbench.env` when changing local ports, hosts, `LBS_API_PREFIX`, or the UI dev port, then run:
+
+```bash
+node infra/scripts/workbench-env.mjs sync
+node infra/scripts/workbench-env.mjs check
+```
+
+Service `.env` files should keep secrets and DB credentials. Values such as `LBS_SERVICE_URL`, `TASKS_LBS_BASE_URL`, service ports, and `VITE_WORKBENCH_CORE_URL` are generated from `infra/workbench.env`.
+
 ### Core
 
 - `CORE_SERVICE_HOST` (for remote deployment, use `0.0.0.0`)
@@ -145,6 +158,12 @@ Infra shortcuts:
 - `infra/reset_and_bootstrap.*`: reset DB volumes + bootstrap initial account
 - `infra/start_web.*`
 - `infra/start_native.*`
+
+Config helpers:
+
+- `node infra/scripts/workbench-env.mjs sync`: synchronize runtime `.env` files from `infra/workbench.env`
+- `node infra/scripts/workbench-env.mjs check`: fail if runtime `.env` files drift from `infra/workbench.env`
+- `node infra/scripts/workbench-env.mjs ports [--ui|--only-ui]`: print configured ports for launch scripts
 
 ## Databases
 

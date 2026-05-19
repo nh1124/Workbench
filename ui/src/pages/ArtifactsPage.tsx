@@ -151,11 +151,6 @@ export function ArtifactsPage() {
     [treeRoot, collapsedFolders]
   );
   const selectedItemIdSet = useMemo(() => new Set(selectedItemIds), [selectedItemIds]);
-  const visibleProjectIdSet = useMemo(
-    () => new Set(projectOptions.map((project) => project.projectId)),
-    [projectOptions]
-  );
-
   const currentFolderPath = useMemo(() => {
     if (selectedFolderPath !== null) return selectedFolderPath;
     if (mode === "create-note") return parentPath(draft.path);
@@ -453,10 +448,7 @@ export function ArtifactsPage() {
     setIsLoading(true);
     try {
       const treeItems = await artifactsApi.tree(projectFilter || undefined);
-      const visibleItems =
-        !projectFilter && visibleProjectIdSet.size > 0
-          ? treeItems.filter((item) => visibleProjectIdSet.has(item.projectId))
-          : treeItems;
+      const visibleItems = treeItems;
       setItems(visibleItems);
 
       if (selectedItemId && !visibleItems.some((item) => item.id === selectedItemId)) {
@@ -485,7 +477,7 @@ export function ArtifactsPage() {
 
   useEffect(() => {
     void loadTree();
-  }, [projectFilter, projectsLoaded, visibleProjectIdSet]);
+  }, [projectFilter, projectsLoaded]);
 
   useEffect(() => {
     if (!requestedItemId) {

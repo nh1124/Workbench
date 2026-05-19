@@ -8,7 +8,12 @@ set "PROJECT_ROOT=%SCRIPT_DIR%\.."
 call "%SCRIPT_DIR%\initialize_system.bat"
 if errorlevel 1 exit /b 1
 
-for %%P in (4100 4101 4102 4103 4104 5174) do (
+node "%SCRIPT_DIR%\scripts\workbench-env.mjs" check
+if errorlevel 1 exit /b 1
+
+for /f "usebackq delims=" %%P in (`node "%SCRIPT_DIR%\scripts\workbench-env.mjs" ports --ui`) do set "WORKBENCH_PORTS=%%P"
+
+for %%P in (%WORKBENCH_PORTS%) do (
   for /f "tokens=5" %%A in ('netstat -ano ^| findstr ":%%P " ^| findstr "LISTENING"') do (
     echo [ERROR] Port %%P is already in use by PID %%A. Please stop the process and retry.
     exit /b 1
