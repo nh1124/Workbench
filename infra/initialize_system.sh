@@ -4,11 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-if [[ ! -d "${PROJECT_ROOT}/node_modules" ]]; then
-  echo "Installing root dependencies..."
-  cd "${PROJECT_ROOT}"
-  npm install
-fi
+node "${SCRIPT_DIR}/scripts/ensure-npm-install.mjs"
 
 ensure_env() {
   local target="$1"

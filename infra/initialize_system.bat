@@ -5,15 +5,8 @@ set "SCRIPT_DIR=%~dp0"
 set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
 set "PROJECT_ROOT=%SCRIPT_DIR%\.."
 
-if not exist "%PROJECT_ROOT%\node_modules" (
-  echo Installing root dependencies...
-  cd /d "%PROJECT_ROOT%"
-  npm install
-  if errorlevel 1 (
-    echo [ERROR] npm install failed.
-    exit /b 1
-  )
-)
+node "%SCRIPT_DIR%\scripts\ensure-npm-install.mjs"
+if errorlevel 1 exit /b 1
 
 call :ensure_env "%PROJECT_ROOT%\infra\workbench.env" "%PROJECT_ROOT%\infra\workbench.env.example"
 if errorlevel 1 exit /b 1
