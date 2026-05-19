@@ -4,6 +4,7 @@ import express from "express";
 import jwt from "jsonwebtoken";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { lookup as dnsLookup } from "node:dns/promises";
@@ -2765,6 +2766,56 @@ app.get("/mcp", (_req, res) => {
     message: "This MCP server runs in stateless mode. Use POST /mcp for all requests."
   });
 });
+
+const uiDistPath = path.resolve(__dirname, "../../../ui/dist");
+const uiIndexHtmlPath = path.join(uiDistPath, "index.html");
+
+function isReservedHttpPath(pathname: string): boolean {
+  const reservedPrefixes = [
+    "/.well-known",
+    "/accounts",
+    "/api",
+    "/auth",
+    "/authorize",
+    "/integrations",
+    "/mcp",
+    "/oauth",
+    "/health"
+  ];
+  return reservedPrefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
+}
+
+function shouldServeWorkbenchUi(req: express.Request): boolean {
+  if (req.method !== "GET" && req.method !== "HEAD") return false;
+
+  let pathname = req.path;
+  try {
+    pathname = new URL(req.originalUrl, "http://workbench.local").pathname;
+  } catch {
+    // Keep Express' parsed path.
+  }
+
+  if (isReservedHttpPath(pathname)) return false;
+  const accept = req.header("accept") ?? "";
+  return accept.includes("text/html") || accept.includes("*/*");
+}
+
+if (existsSync(uiIndexHtmlPath)) {
+  app.use(
+    express.static(uiDistPath, {
+      index: false,
+      maxAge: "1h"
+    })
+  );
+
+  app.get("*", (req, res, next) => {
+    if (!shouldServeWorkbenchUi(req)) {
+      next();
+      return;
+    }
+    res.sendFile(uiIndexHtmlPath);
+  });
+}
 
 // ---------------------------------------------------------------------------
 

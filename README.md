@@ -165,6 +165,39 @@ Config helpers:
 - `node infra/scripts/workbench-env.mjs check`: fail if runtime `.env` files drift from `infra/workbench.env`
 - `node infra/scripts/workbench-env.mjs ports [--ui|--only-ui]`: print configured ports for launch scripts
 
+## Public Web Serving
+
+For a public web entrypoint, build the UI and expose Workbench Core only. Core serves `ui/dist` when it exists, while API, OAuth, and MCP routes remain on the same origin.
+
+1. Confirm canonical local settings:
+
+   ```bash
+   cat infra/workbench.env
+   node infra/scripts/workbench-env.mjs check
+   ```
+
+2. Build the web UI:
+
+   ```bash
+   npm run build --workspace ui
+   ```
+
+3. Start backend services:
+
+   ```bash
+   bash infra/start_services.sh
+   ```
+
+4. Publish only the Core port from `infra/workbench.env`:
+
+   ```text
+   http://127.0.0.1:4100
+   ```
+
+5. Open the tunnel URL in a browser. The built UI uses the current browser origin as its Core URL when served by Core, so a separate `5174` tunnel is not needed.
+
+For stable remote OAuth or MCP clients, set `CORE_EXTERNAL_BASE_URL` in `services/workbench-core/.env` to the public HTTPS tunnel origin and restart Core. For browser-only use behind a tunnel that forwards `x-forwarded-proto` and `x-forwarded-host`, Core can derive the issuer from request headers.
+
 ## Databases
 
 `docker-compose.yml` starts:

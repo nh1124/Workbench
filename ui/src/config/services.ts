@@ -39,6 +39,22 @@ const envWorkbenchCoreUrl = (() => {
 
 let workbenchCoreUrlCache: string | undefined;
 
+function isServedByWorkbenchCore(): boolean {
+  if (typeof window === "undefined") return false;
+  const { protocol, port } = window.location;
+  if (protocol !== "http:" && protocol !== "https:") return false;
+  return !import.meta.env.DEV || port === "";
+}
+
+function currentOriginWorkbenchCoreUrl(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return normalizeWorkbenchCoreUrl(window.location.origin);
+  } catch {
+    return "";
+  }
+}
+
 function readStoredWorkbenchCoreUrlRaw(): string | undefined {
   if (typeof window === "undefined") return undefined;
   const raw = window.localStorage.getItem(CORE_URL_STORAGE_KEY);
@@ -65,7 +81,9 @@ function persistWorkbenchCoreUrl(value: string): void {
 
 export function getWorkbenchCoreUrl(): string {
   if (workbenchCoreUrlCache !== undefined) return workbenchCoreUrlCache;
-  workbenchCoreUrlCache = readStoredWorkbenchCoreUrl() ?? envWorkbenchCoreUrl;
+  workbenchCoreUrlCache = readStoredWorkbenchCoreUrl()
+    ?? (isServedByWorkbenchCore() ? currentOriginWorkbenchCoreUrl() : undefined)
+    ?? envWorkbenchCoreUrl;
   return workbenchCoreUrlCache;
 }
 
@@ -77,7 +95,9 @@ export function setWorkbenchCoreUrl(raw: string): string {
 }
 
 export function getWorkbenchCoreUrlInitialValue(): string {
-  return readStoredWorkbenchCoreUrlRaw() ?? envWorkbenchCoreUrlFallback;
+  return readStoredWorkbenchCoreUrlRaw()
+    ?? (isServedByWorkbenchCore() ? currentOriginWorkbenchCoreUrl() : undefined)
+    ?? envWorkbenchCoreUrlFallback;
 }
 
 export const navItems = [
