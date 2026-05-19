@@ -4,9 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev:http": "python -m uvicorn src.main:app --reload --host 127.0.0.1 --port 8100",
-    "build": "python -m compileall -q src",
-    "start": "python -m uvicorn src.main:app --host 127.0.0.1 --port 8100",
-    "test": "python -m compileall -q src"
+    "setup": "node scripts/lbs-python.mjs -c \"import uvicorn\"",
+    "dev:http": "node scripts/lbs-python.mjs -m uvicorn src.main:app --reload --host 127.0.0.1 --port 8100",
+    "build": "node scripts/lbs-python.mjs -m compileall -q src",
+    "start": "node scripts/lbs-python.mjs -m src.main",
+    "test": "node scripts/lbs-python.mjs -m compileall -q src"
   }
 }

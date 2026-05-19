@@ -23,6 +23,7 @@ wheels/
 .pytest_cache/
 .tox/
 .venv
+.venv*/
 venv/
 ENV/
 

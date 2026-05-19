@@ -142,7 +142,17 @@ curl -X POST -H "X-API-KEY: your-key" -H "Content-Type: application/json" \
 
 ## Development
 
-To run the backend locally (without Docker):
+When LBS is run from the Workbench npm workspace, the Python virtual environment is prepared automatically under `.venv`:
+```bash
+npm run dev:http --workspace services/lbs
+```
+
+To start only LBS as a standalone service:
+```bash
+bash ./start_service.sh
+```
+
+To run the backend manually without the Workbench launcher:
 1.  Create a virtual environment: `python -m venv venv`
 2.  Activate it: `source venv/bin/activate` (or `venv\Scripts\activate` on Windows)
 3.  Install dependencies: `pip install -r requirements.txt`

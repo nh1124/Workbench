@@ -15,3 +15,4 @@ native/desktop/src-tauri/tauri.conf.json
 !**/.env.example
 .mcp.json
 .claude/
+services/lbs/.venv*/
