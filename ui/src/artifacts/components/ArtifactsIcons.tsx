@@ -48,6 +48,21 @@ export const IcoClose = () => (
   </svg>
 );
 
+export const IcoChevronLeft = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+    <path d="M15 18l-6-6 6-6" />
+  </svg>
+);
+
+export const IcoPanelLeft = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+    <rect x="4" y="5" width="16" height="14" rx="2" />
+    <path d="M9 5v14" />
+    <path d="M12 9h5" />
+    <path d="M12 12h4" />
+  </svg>
+);
+
 export const IcoFloppy = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
     <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
@@ -71,5 +86,25 @@ export const IcoComment = () => (
 export const IcoCompress = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
     <path d="M4 14h6v6M14 4h6v6M10 20l-7-7M20 10l-7 7" />
+  </svg>
+);
+
+export const IcoListView = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+    <path d="M8 6h13" />
+    <path d="M8 12h13" />
+    <path d="M8 18h13" />
+    <path d="M3 6h1" />
+    <path d="M3 12h1" />
+    <path d="M3 18h1" />
+  </svg>
+);
+
+export const IcoTileView = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+    <rect x="4" y="4" width="6" height="6" rx="1" />
+    <rect x="14" y="4" width="6" height="6" rx="1" />
+    <rect x="4" y="14" width="6" height="6" rx="1" />
+    <rect x="14" y="14" width="6" height="6" rx="1" />
   </svg>
 );

@@ -59,6 +59,7 @@ import { insertBelowOutlineEntry, moveOutlineSection } from "../artifacts/utils/
 import { useArtifactsMarkdownEditor } from "../artifacts/hooks/useArtifactsMarkdownEditor";
 import {
   IcoClose,
+  IcoChevronLeft,
   IcoCompress,
   IcoDownload,
   IcoExpand,
@@ -66,10 +67,14 @@ import {
   IcoFloppy,
   IcoFolder,
   IcoHome,
+  IcoListView,
+  IcoPanelLeft,
+  IcoTileView,
   IcoTrash,
   IcoUpload
 } from "../artifacts/components/ArtifactsIcons";
 import { DirectoryBrowser } from "../artifacts/components/DirectoryBrowser";
+import type { DirectoryViewMode } from "../artifacts/components/DirectoryBrowser";
 import { MarkdownOutlinePanel } from "../artifacts/components/MarkdownOutlinePanel";
 import { PdfViewer } from "../artifacts/components/PdfViewer";
 import "./ArtifactsPage.css";
@@ -106,6 +111,7 @@ export function ArtifactsPage() {
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
   const [selectionAnchorId, setSelectionAnchorId] = useState<string | null>(null);
   const [selectedFolderPath, setSelectedFolderPath] = useState<string | null>(null);
+  const [directoryViewMode, setDirectoryViewMode] = useState<DirectoryViewMode>("tile");
   const [collapsedFolders, setCollapsedFolders] = useState<Record<string, true>>({});
   const [draft, setDraft] = useState<ArtifactEditorDraft>(defaultDraft);
   const [mode, setMode] = useState<"view" | "create-note">("view");
@@ -130,6 +136,7 @@ export function ArtifactsPage() {
   const [insertLinkState, setInsertLinkState] = useState<InsertLinkState | null>(null);
   const [editorExpanded, setEditorExpanded] = useState(false);
   const [pdfExpanded, setPdfExpanded] = useState(false);
+  const [editSidebarCollapsed, setEditSidebarCollapsed] = useState(false);
   const [mobileTreeVisible, setMobileTreeVisible] = useState(false);
   const [outlineCollapsed, setOutlineCollapsed] = useState(false);
   const [outlineBodyHeight, setOutlineBodyHeight] = useState(170);
@@ -226,6 +233,14 @@ export function ArtifactsPage() {
   const canShowWordPreviewPdf = isWordFileSelected && draft.previewPdfStatus === "ready";
 
   const hasDetailSelection = Boolean(selectedItemId || mode === "create-note");
+
+  useEffect(() => {
+    document.body.classList.toggle("workbench-artifacts-edit-mode", hasDetailSelection);
+    return () => {
+      document.body.classList.remove("workbench-artifacts-edit-mode");
+    };
+  }, [hasDetailSelection]);
+
   const detailProjectOptions = useMemo(() => {
     const map = new Map<string, ProjectOption>();
     for (const option of projectOptions) {
@@ -1432,6 +1447,16 @@ export function ArtifactsPage() {
     }));
   };
 
+  const returnToDirectoryView = () => {
+    setMobileTreeVisible(true);
+    setSelectedItemId(null);
+    setSelectedItemIds([]);
+    setSelectionAnchorId(null);
+    setMode("view");
+    setEditorExpanded(false);
+    setPdfExpanded(false);
+  };
+
   const handleStartCreateNote = () => {
     const targetProject = resolveProjectFromFilter();
 
@@ -2315,63 +2340,84 @@ export function ArtifactsPage() {
         setOutlineContextMenu(null);
       }}
     >
-      <section className="va-shell panel">
-        <header className="va-toolbar">
-          <div className="va-toolbar-left">
-            {hasDetailSelection ? (
+      <section
+        className={[
+          "va-shell",
+          "panel",
+          hasDetailSelection ? "edit-mode" : "directory-mode",
+          editSidebarCollapsed ? "edit-sidebar-collapsed" : ""
+        ]
+          .filter(Boolean)
+          .join(" ")}
+      >
+        {!hasDetailSelection ? (
+          <header className="va-toolbar">
+            <div className="va-toolbar-left">
               <button
                 type="button"
-                className="va-mobile-pane-toggle"
-                onClick={() => setMobileTreeVisible((prev) => !prev)}
-                aria-label={mobileTreeVisible ? "Show editor pane" : "Show tree pane"}
-                title={mobileTreeVisible ? "Show Editor" : "Show Tree"}
+                className="va-home-icon-btn"
+                onClick={() => setSelectedFolderPath("")}
+                aria-label="Home"
+                title="Root Directory"
               >
-                {mobileTreeVisible ? <IcoFile /> : <IcoFolder />}
+                <span className="va-home-icon" aria-hidden="true"><IcoHome /></span>
               </button>
-            ) : null}
-            <button
-              type="button"
-              className="va-home-icon-btn"
-              onClick={() => setSelectedFolderPath("")}
-              aria-label="Home"
-              title="Root Directory"
-            >
-              <span className="va-home-icon" aria-hidden="true"><IcoHome /></span>
-            </button>
-            <strong>{currentFolderPath || "root"}</strong>
-          </div>
+              <strong>{currentFolderPath || "root"}</strong>
+            </div>
 
-          <div className="va-toolbar-right">
-            <label className="va-project-select-wrap">
-              <span>Project</span>
-              <select value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}>
-                <option value="">All</option>
-                {projectOptions.map((project) => (
-                  <option key={project.projectId} value={project.projectId}>
-                    {normalizeProjectName(project.projectId, project.projectName)}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="va-toolbar-right">
+              <label className="va-project-select-wrap">
+                <span>Project</span>
+                <select value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}>
+                  <option value="">All</option>
+                  {projectOptions.map((project) => (
+                    <option key={project.projectId} value={project.projectId}>
+                      {normalizeProjectName(project.projectId, project.projectName)}
+                    </option>
+                  ))}
+                </select>
+              </label>
 
-            <button type="button" className="va-action-btn" onClick={handleUploadClick} disabled={isSaving}>
-              <IcoUpload /> Upload
-            </button>
-            <button type="button" className="va-action-btn" onClick={() => void handleCreateFolder()} disabled={isSaving}>
-              <IcoFolder /> New Folder
-            </button>
-            <button type="button" className="va-action-btn primary" onClick={handleStartCreateNote} disabled={isSaving}>
-              + New Note
-            </button>
-          </div>
-        </header>
+              <button type="button" className="va-action-btn" onClick={handleUploadClick} disabled={isSaving}>
+                <IcoUpload /> Upload
+              </button>
+              <button type="button" className="va-action-btn" onClick={() => void handleCreateFolder()} disabled={isSaving}>
+                <IcoFolder /> New Folder
+              </button>
+              <button type="button" className="va-action-btn primary" onClick={handleStartCreateNote} disabled={isSaving}>
+                + New Note
+              </button>
+              <div className="va-view-toggle" aria-label="Directory view mode">
+                <button
+                  type="button"
+                  className={directoryViewMode === "list" ? "active" : undefined}
+                  onClick={() => setDirectoryViewMode("list")}
+                  aria-label="List view"
+                  title="List view"
+                >
+                  <IcoListView />
+                </button>
+                <button
+                  type="button"
+                  className={directoryViewMode === "tile" ? "active" : undefined}
+                  onClick={() => setDirectoryViewMode("tile")}
+                  aria-label="Tile view"
+                  title="Tile view"
+                >
+                  <IcoTileView />
+                </button>
+              </div>
+            </div>
+          </header>
+        ) : null}
 
-        {error ? <p className="va-inline-error">{error}</p> : null}
+        <div className="va-shell-content">
+          {error ? <p className="va-inline-error">{error}</p> : null}
 
-        <div className={`va-main-grid ${hasDetailSelection && !mobileTreeVisible ? "viewer-active" : "browser-active"}`}>
-          <aside
+          {!hasDetailSelection ? (
+            <main
             className={[
-              "va-tree-pane",
+              "va-directory-pane",
               dropTargetPath === ROOT_DROP_PATH ? "drop-target-root" : ""
             ]
               .filter(Boolean)
@@ -2392,6 +2438,7 @@ export function ArtifactsPage() {
               <DirectoryBrowser
                 currentFolderNode={currentFolderNode}
                 currentFolderPath={currentFolderPath}
+                viewMode={directoryViewMode}
                 selectedFolderPath={selectedFolderPath}
                 selectedItemIdSet={selectedItemIdSet}
                 dropTargetPath={dropTargetPath}
@@ -2406,17 +2453,6 @@ export function ArtifactsPage() {
                 selectItem={selectItem}
               />
             )}
-            <MarkdownOutlinePanel
-              collapsed={outlineCollapsed}
-              markdownVisible={markdownEditorVisible}
-              entries={outlineEntries}
-              bodyHeight={outlineBodyHeight}
-              onToggleCollapsed={() => setOutlineCollapsed((prev) => !prev)}
-              onBodyHeightChange={setOutlineBodyHeight}
-              onSelectEntry={handleOutlineSelect}
-              onMoveEntry={handleOutlineMove}
-              onOpenContextMenu={handleOpenOutlineContextMenu}
-            />
             <footer className="va-tree-foot">
               <span>{selectedItemIds.length} selected</span>
               <button
@@ -2431,48 +2467,92 @@ export function ArtifactsPage() {
                 Clear
               </button>
             </footer>
-          </aside>
-
-          <main className="va-detail-pane">
-            <header className="va-detail-head">
-              <div className="va-detail-title-block">
-                <span className="va-detail-path" title={draft.path || "No item selected"}>
-                  {draft.path || "No item selected"}
-                </span>
-                {draft.version ? <small>v{draft.version}</small> : null}
-              </div>
-
-              <div className="va-detail-actions">
+            </main>
+          ) : (
+            <div className="va-edit-layout">
+            {!editSidebarCollapsed ? (
+              <aside className="va-edit-sidebar">
                 <button
                   type="button"
-                  className="va-icon-btn va-close-viewer-btn"
-                  onClick={() => {
-                    setMobileTreeVisible(true);
-                    setSelectedItemId(null);
-                    setSelectedItemIds([]);
-                    setSelectionAnchorId(null);
-                    setMode("view");
-                  }}
-                  aria-label="Close viewer"
-                  title="Close"
+                  className="va-edit-sidebar-close"
+                  onClick={() => setEditSidebarCollapsed(true)}
+                  aria-label="Collapse sidebar"
+                  title="Collapse Sidebar"
                 >
-                  <IcoClose />
+                  <IcoChevronLeft />
                 </button>
+                <MarkdownOutlinePanel
+                  collapsed={outlineCollapsed}
+                  markdownVisible={markdownEditorVisible}
+                  entries={outlineEntries}
+                  bodyHeight={outlineBodyHeight}
+                  onToggleCollapsed={() => setOutlineCollapsed((prev) => !prev)}
+                  onBodyHeightChange={setOutlineBodyHeight}
+                  onSelectEntry={handleOutlineSelect}
+                  onMoveEntry={handleOutlineMove}
+                  onOpenContextMenu={handleOpenOutlineContextMenu}
+                />
+              </aside>
+            ) : null}
 
-                <label className="va-detail-project-picker" title="Item project">
-                  <span>Project</span>
-                  <select
-                    value={draft.projectId || resolveProjectFromFilter().projectId}
-                    onChange={(event) => handleDraftProjectChange(event.target.value)}
-                    disabled={isSaving || detailProjectOptions.length === 0}
-                  >
-                    {detailProjectOptions.map((project) => (
-                      <option key={project.projectId} value={project.projectId}>
-                        {normalizeProjectName(project.projectId, project.projectName)}
-                      </option>
+            <main className="va-detail-pane">
+              <header className="va-edit-head">
+                <div className="va-edit-title-row">
+                  <input
+                    className="va-edit-title-input"
+                    value={draft.title}
+                    onChange={(event) => setDraft((prev) => ({ ...prev, title: event.target.value }))}
+                    placeholder="Untitled"
+                    aria-label="Artifact title"
+                  />
+                  {draft.version ? <small>v{draft.version}</small> : null}
+                  <span className="va-detail-path" title={draft.path || "No item selected"}>
+                    {draft.path || "No item selected"}
+                  </span>
+                </div>
+
+                <div className="va-detail-actions">
+                  {editSidebarCollapsed ? (
+                    <button
+                      type="button"
+                      className="va-icon-btn va-outline-open-btn"
+                      onClick={() => setEditSidebarCollapsed(false)}
+                      aria-label="Open outline"
+                      title="Open Outline"
+                    >
+                      <IcoPanelLeft />
+                    </button>
+                  ) : null}
+
+                  <div className="va-edit-tags-wrap" onClick={() => document.getElementById("va-artifact-tag-input")?.focus()}>
+                    {draft.tags.map((tag) => (
+                      <span key={tag} className="va-tag-chip">
+                        {tag}
+                        <button
+                          type="button"
+                          onClick={() => setDraft((prev) => ({ ...prev, tags: prev.tags.filter((value) => value !== tag) }))}
+                          aria-label={`Remove ${tag}`}
+                        >
+                          <IcoClose />
+                        </button>
+                      </span>
                     ))}
-                  </select>
-                </label>
+                    <input
+                      id="va-artifact-tag-input"
+                      value={tagInput}
+                      onChange={(event) => setTagInput(event.target.value)}
+                      onKeyDown={handleTagInputKeyDown}
+                      onBlur={() => {
+                        const normalized = tagInput.trim();
+                        if (!normalized) return;
+                        if (!draft.tags.some((tag) => tag.toLowerCase() === normalized.toLowerCase())) {
+                          setDraft((prev) => ({ ...prev, tags: [...prev.tags, normalized] }));
+                        }
+                        setTagInput("");
+                      }}
+                      placeholder="Add tag"
+                    />
+                  </div>
 
                 {draft.id ? (
                   <button
@@ -2514,28 +2594,19 @@ export function ArtifactsPage() {
                 <button type="button" className="va-action-btn primary" onClick={() => void handleSave()} disabled={isSaving || !canSave}>
                   <IcoFloppy />
                 </button>
+                <button
+                  type="button"
+                  className="va-icon-btn va-home-action-btn"
+                  onClick={returnToDirectoryView}
+                  aria-label="Back to directory"
+                  title="Back to Directory"
+                >
+                  <IcoHome />
+                </button>
               </div>
             </header>
 
             <section className={`va-form-grid${editorExpanded ? " editor-expanded" : ""}${pdfExpanded ? " pdf-expanded" : ""}`}>
-              <label className="span-2">
-                <span className="va-field-label">Title *</span>
-                <input
-                  value={draft.title}
-                  onChange={(event) => setDraft((prev) => ({ ...prev, title: event.target.value }))}
-                  placeholder="Title"
-                />
-              </label>
-
-              <label className="span-2">
-                <span className="va-field-label">Path *</span>
-                <input
-                  value={draft.path}
-                  onChange={(event) => setDraft((prev) => ({ ...prev, path: event.target.value }))}
-                  placeholder="asset/notes/idea.md"
-                />
-              </label>
-
               {draft.kind === "file" ? (
                 <div className="span-2 va-meta-strip">
                   <div>
@@ -2562,9 +2633,6 @@ export function ArtifactsPage() {
               {markdownEditorVisible ? (
                 <div className="span-2 va-content-section">
                   <div className="va-content-head">
-                    <span className="va-field-label">
-                      {editorExpanded ? (draft.title.trim() || leafPath(draft.path) || "Untitled") : "Content (Markdown)"}
-                    </span>
                     <div className="va-content-head-right">
                       <div className="va-content-mode">
                         <button
@@ -2671,39 +2739,6 @@ export function ArtifactsPage() {
                 </div>
               ) : null}
 
-              <div className="span-2">
-                <span className="va-field-label">Tags</span>
-                <div className="va-tags-wrap" onClick={() => document.getElementById("va-artifact-tag-input")?.focus()}>
-                  {draft.tags.map((tag) => (
-                    <span key={tag} className="va-tag-chip">
-                      {tag}
-                      <button
-                        type="button"
-                        onClick={() => setDraft((prev) => ({ ...prev, tags: prev.tags.filter((value) => value !== tag) }))}
-                        aria-label={`Remove ${tag}`}
-                      >
-                        x
-                      </button>
-                    </span>
-                  ))}
-                  <input
-                    id="va-artifact-tag-input"
-                    value={tagInput}
-                    onChange={(event) => setTagInput(event.target.value)}
-                    onKeyDown={handleTagInputKeyDown}
-                    onBlur={() => {
-                      const normalized = tagInput.trim();
-                      if (!normalized) return;
-                      if (!draft.tags.some((tag) => tag.toLowerCase() === normalized.toLowerCase())) {
-                        setDraft((prev) => ({ ...prev, tags: [...prev.tags, normalized] }));
-                      }
-                      setTagInput("");
-                    }}
-                    placeholder="Add tag, press Enter"
-                  />
-                </div>
-              </div>
-
               {(draft.createdAt || selectedItemSummary) ? (
                 <div className="span-2 va-detail-meta">
                   {draft.createdAt ? <small>Created {formatDateTime(draft.createdAt)}</small> : null}
@@ -2715,6 +2750,8 @@ export function ArtifactsPage() {
               ) : null}
             </section>
           </main>
+            </div>
+          )}
         </div>
       </section>
 

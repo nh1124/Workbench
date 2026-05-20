@@ -1,13 +1,18 @@
 import type { DragEvent, MouseEvent } from "react";
 import type { ArtifactItem } from "../../types/models";
+import { formatDateTime, normalizeProjectName } from "../../lib/format";
 import type { TreeContextTarget, TreeFolderNode } from "../types";
+import { formatSize } from "../utils/file";
 import { normalizePath, parentPath } from "../utils/path";
 import { sortItems } from "../utils/tree";
 import { IcoFile, IcoFolder } from "./ArtifactsIcons";
 
+export type DirectoryViewMode = "tile" | "list";
+
 interface DirectoryBrowserProps {
   currentFolderNode: TreeFolderNode;
   currentFolderPath: string;
+  viewMode?: DirectoryViewMode;
   selectedFolderPath: string | null;
   selectedItemIdSet: Set<string>;
   dropTargetPath: string | null;
@@ -25,6 +30,7 @@ interface DirectoryBrowserProps {
 export function DirectoryBrowser({
   currentFolderNode,
   currentFolderPath,
+  viewMode = "tile",
   selectedFolderPath,
   selectedItemIdSet,
   dropTargetPath,
@@ -42,9 +48,20 @@ export function DirectoryBrowser({
     a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
   );
   const sortedItems = sortItems(currentFolderNode.items);
+  const projectLabel = (item?: ArtifactItem) =>
+    item ? normalizeProjectName(item.projectId, item.projectName) : "-";
+  const updatedLabel = (item?: ArtifactItem) => item?.updatedAt ? formatDateTime(item.updatedAt) : "-";
 
   return (
-    <ul className="va-tree-list">
+    <ul className={`va-tree-list ${viewMode === "list" ? "list-view" : "tile-view"}`}>
+      {viewMode === "list" ? (
+        <li className="va-tree-list-header" aria-hidden="true">
+          <span>Name</span>
+          <span>Project</span>
+          <span>Updated</span>
+          <span>Size</span>
+        </li>
+      ) : null}
       {currentFolderPath !== "" && (
         <li>
           <button
@@ -54,6 +71,9 @@ export function DirectoryBrowser({
           >
             <span className="va-tree-icon" aria-hidden="true"><IcoFolder /></span>
             <span className="va-tree-label">..</span>
+            <span className="va-tree-meta list-only">-</span>
+            <span className="va-tree-meta list-only">-</span>
+            <span className="va-tree-meta list-only">-</span>
           </button>
         </li>
       )}
@@ -106,6 +126,9 @@ export function DirectoryBrowser({
             >
               <span className="va-tree-icon" aria-hidden="true"><IcoFolder /></span>
               <span className="va-tree-label">{childFolder.name}</span>
+              <span className="va-tree-meta list-only">{projectLabel(draggableFolderItem)}</span>
+              <span className="va-tree-meta list-only">{updatedLabel(draggableFolderItem)}</span>
+              <span className="va-tree-meta list-only">-</span>
             </button>
           </li>
         );
@@ -134,7 +157,10 @@ export function DirectoryBrowser({
             >
               <span className="va-tree-icon" aria-hidden="true"><IcoFile /></span>
               <span className="va-tree-label">{item.title}</span>
-              <small>v{item.version}</small>
+              <small className="tile-only">v{item.version}</small>
+              <span className="va-tree-meta list-only">{projectLabel(item)}</span>
+              <span className="va-tree-meta list-only">{updatedLabel(item)}</span>
+              <span className="va-tree-meta list-only">{item.kind === "file" ? formatSize(item.sizeBytes) : "-"}</span>
             </button>
           </li>
         );

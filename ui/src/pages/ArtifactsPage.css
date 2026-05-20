@@ -18,7 +18,22 @@
   background: radial-gradient(120% 180% at 0% 0%, rgba(6, 15, 33, 0.95) 0%, rgba(4, 10, 23, 0.98) 65%, rgba(2, 8, 21, 1) 100%);
   box-shadow: 0 20px 42px rgba(1, 5, 14, 0.35), inset 0 1px 0 rgba(97, 139, 197, 0.08);
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.va-shell.edit-mode {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.va-shell.directory-mode {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.va-shell-content {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
 }
 
@@ -167,6 +182,43 @@
   cursor: not-allowed;
 }
 
+.va-view-toggle {
+  display: inline-flex;
+  border: 1px solid rgba(77, 97, 128, 0.9);
+  border-radius: 999px;
+  background: rgba(13, 23, 40, 0.92);
+  overflow: hidden;
+}
+
+.va-view-toggle button {
+  width: 2.1rem;
+  min-height: 2rem;
+  border: 0;
+  border-right: 1px solid rgba(77, 97, 128, 0.65);
+  border-radius: 0;
+  background: transparent;
+  color: #9db7d9;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+}
+
+.va-view-toggle button svg {
+  width: 0.88rem;
+  height: 0.88rem;
+}
+
+.va-view-toggle button:last-child {
+  border-right: 0;
+}
+
+.va-view-toggle button.active {
+  background: rgba(109, 208, 245, 0.78);
+  color: #06273b;
+}
+
 .va-inline-error {
   margin: 0;
   padding: 0.42rem 0.82rem;
@@ -182,6 +234,172 @@
   overflow: hidden;
   display: grid;
   grid-template-columns: 320px minmax(0, 1fr);
+}
+
+.va-directory-pane {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  overflow: hidden;
+  background: linear-gradient(180deg, rgba(5, 12, 27, 0.95), rgba(3, 9, 22, 1));
+}
+
+.va-directory-pane.drop-target-root {
+  box-shadow: inset 0 0 0 2px rgba(109, 180, 231, 0.6);
+}
+
+.va-directory-pane > .va-tree-list {
+  min-height: 0;
+  overflow: auto;
+}
+
+.va-directory-pane > .va-tree-list.tile-view {
+  padding: 0.82rem;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.38rem;
+  align-content: start;
+}
+
+.va-directory-pane .va-tree-row {
+  min-height: 2.75rem;
+  border-color: rgba(55, 75, 105, 0.55);
+  background: rgba(11, 20, 38, 0.72);
+  padding: 0.48rem 0.58rem;
+}
+
+.va-directory-pane .va-tree-row:hover {
+  border-color: rgba(102, 143, 194, 0.84);
+  background: rgba(24, 41, 68, 0.72);
+}
+
+.va-directory-pane .va-tree-row.folder {
+  color: #bdd4f4;
+}
+
+.va-directory-pane .va-tree-row.active,
+.va-directory-pane .va-tree-row.multi-selected {
+  border-color: rgba(106, 168, 223, 0.78);
+  background: rgba(30, 56, 90, 0.5);
+  color: #d8ebff;
+}
+
+.va-directory-pane > .va-tree-list.list-view {
+  padding: 0.24rem 0.72rem 0.8rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+}
+
+.va-tree-list-header {
+  min-height: 2rem;
+  border-bottom: 1px solid rgba(80, 96, 122, 0.65);
+  color: #8fa8ca;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(150px, 0.36fr) minmax(150px, 0.34fr) 90px;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0 0.58rem 0 2rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.va-tree-list.list-view li {
+  min-width: 0;
+}
+
+.va-tree-list.list-view .va-tree-row {
+  min-height: 2.55rem;
+  border: 0;
+  border-bottom: 1px solid rgba(55, 75, 105, 0.5);
+  border-radius: 0;
+  background: transparent;
+  grid-template-columns: 1rem minmax(186px, 1fr) minmax(150px, 0.36fr) minmax(150px, 0.34fr) 90px;
+  gap: 0.8rem;
+  padding: 0 0.58rem;
+}
+
+.va-tree-list.list-view .va-tree-row:hover {
+  background: rgba(24, 41, 68, 0.45);
+}
+
+.va-tree-list.list-view .va-tree-row.active,
+.va-tree-list.list-view .va-tree-row.multi-selected {
+  background: rgba(30, 56, 90, 0.5);
+}
+
+.va-tree-list.tile-view .list-only,
+.va-tree-list.list-view .tile-only {
+  display: none;
+}
+
+.va-tree-meta {
+  min-width: 0;
+  color: #8da5c7;
+  font-size: 0.7rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.va-edit-layout {
+  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+}
+
+.va-shell.edit-sidebar-collapsed .va-edit-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.va-edit-sidebar {
+  min-height: 0;
+  border-right: 1px solid rgba(47, 65, 93, 0.8);
+  background: linear-gradient(180deg, rgba(5, 12, 27, 0.95), rgba(3, 9, 22, 1));
+  position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.va-edit-sidebar-close {
+  position: absolute;
+  top: 0.16rem;
+  right: 0.52rem;
+  z-index: 2;
+  width: 1.86rem;
+  height: 1.86rem;
+  margin: 0;
+  border-radius: 8px;
+  border: 1px solid rgba(72, 99, 136, 0.9);
+  background: rgba(13, 23, 40, 0.92);
+  color: #bcd6f8;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+}
+
+.va-edit-sidebar-close svg {
+  width: 0.92rem;
+  height: 0.92rem;
+  display: block;
+}
+
+.va-edit-sidebar .va-outline-pane {
+  border-top: 0;
+  min-height: 0;
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.va-edit-sidebar .va-outline-head {
+  padding-right: 2.8rem;
+}
+
+.va-edit-sidebar .va-outline-body {
+  height: auto !important;
+  min-height: 0;
 }
 
 .va-tree-pane {
@@ -323,7 +541,8 @@
   display: flex;
   align-items: center;
   gap: 0.35rem;
-  padding: 0.34rem 0.42rem;
+  min-height: 2.15rem;
+  padding: 0.36rem 0.52rem;
   font-size: 0.72rem;
   text-align: left;
 }
@@ -336,9 +555,24 @@
 
 .va-outline-caret {
   width: 0.66rem;
+  height: 0.66rem;
   color: #8eaed5;
-  font-size: 0.68rem;
-  line-height: 1;
+  display: inline-grid;
+  place-items: center;
+  line-height: 0;
+}
+
+.va-outline-caret::before {
+  content: "";
+  width: 0.36rem;
+  height: 0.36rem;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg) translateY(-1px);
+}
+
+.va-outline-caret.collapsed::before {
+  transform: rotate(-45deg) translateX(-1px);
 }
 
 .va-outline-body {
@@ -460,6 +694,85 @@
   gap: 0.7rem;
 }
 
+.va-edit-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 0.58rem;
+  min-width: 0;
+  padding-bottom: 0.62rem;
+  border-bottom: 1px solid rgba(47, 65, 93, 0.62);
+}
+
+.va-edit-title-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(260px, 720px) auto;
+  grid-template-areas:
+    "title version"
+    "path path";
+  align-items: center;
+  justify-content: start;
+  gap: 0.22rem 0.52rem;
+}
+
+.va-edit-title-row .va-edit-title-input {
+  grid-area: title;
+}
+
+.va-edit-title-input {
+  min-width: 0;
+  height: 2.15rem;
+  border: 1px solid rgba(77, 97, 128, 0.9);
+  border-radius: 9px;
+  background: rgba(14, 24, 42, 0.92);
+  color: #e3f0ff;
+  font-size: 0.9rem;
+  font-weight: 700;
+  padding: 0 0.58rem;
+}
+
+.va-edit-title-input:focus {
+  outline: none;
+  border-color: rgba(109, 208, 245, 0.65);
+  box-shadow: 0 0 0 2px rgba(73, 163, 210, 0.22);
+}
+
+.va-edit-title-row small {
+  grid-area: version;
+  color: #6e8bb1;
+  font-size: 0.64rem;
+  white-space: nowrap;
+}
+
+.va-edit-tags-wrap {
+  min-height: 2.15rem;
+  max-width: min(420px, 34vw);
+  border: 1px solid rgba(77, 97, 128, 0.9);
+  border-radius: 9px;
+  background: rgba(14, 24, 42, 0.92);
+  padding: 0.18rem 0.34rem;
+  display: flex;
+  align-items: center;
+  gap: 0.26rem;
+  flex-wrap: wrap;
+}
+
+.va-edit-tags-wrap input {
+  min-width: 86px;
+  flex: 1;
+  height: 1.42rem;
+  border: 0;
+  background: transparent;
+  color: #d7e8fb;
+  padding: 0;
+  font-size: 0.72rem;
+}
+
+.va-edit-tags-wrap input:focus {
+  outline: none;
+}
+
 .va-detail-head {
   display: flex;
   align-items: center;
@@ -477,13 +790,15 @@
 }
 
 .va-detail-path {
+  grid-area: path;
   color: #cde4ff;
-  font-size: 0.8rem;
+  font-size: 0.74rem;
   font-family: "JetBrains Mono", "Consolas", monospace;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 100%;
+  max-width: min(72vw, 900px);
+  opacity: 0.92;
 }
 
 .va-detail-title-block small {
@@ -496,6 +811,28 @@
   align-items: center;
   gap: 0.4rem;
   flex-shrink: 0;
+}
+
+.va-edit-head .va-detail-actions {
+  min-width: 0;
+  width: 100%;
+  justify-content: flex-end;
+  align-items: stretch;
+  flex-wrap: wrap;
+}
+
+.va-edit-head .va-edit-tags-wrap {
+  flex: 1 1 420px;
+  max-width: none;
+}
+
+.va-outline-open-btn,
+.va-home-action-btn {
+  color: #bcd6f8;
+}
+
+.va-home-action-btn {
+  border-color: rgba(103, 184, 224, 0.68);
 }
 
 .va-detail-project-picker {
@@ -567,6 +904,21 @@
   gap: 0.66rem;
   padding-right: 0.25rem;
   padding-bottom: 1rem;
+}
+
+.va-shell.edit-mode .va-detail-pane {
+  overflow: hidden;
+}
+
+.va-shell.edit-mode .va-form-grid {
+  overflow: auto;
+  gap: 0.44rem;
+}
+
+.va-shell.edit-mode .va-content-section textarea,
+.va-shell.edit-mode .va-notion-editor,
+.va-shell.edit-mode .va-markdown-preview {
+  min-height: min(58vh, 640px);
 }
 
 .va-tree-pane>.va-tree-list,
@@ -927,31 +1279,32 @@
 .va-content-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.6rem;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  min-height: 2rem;
 }
 
 .va-content-head-right {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.34rem;
 }
 
 .va-expand-btn {
-  width: 1.7rem;
-  min-width: 1.7rem;
-  height: 1.7rem;
+  width: 2rem;
+  min-width: 2rem;
+  height: 2rem;
 }
 
 .va-content-mode {
   display: inline-flex;
   border: 1px solid rgba(65, 85, 115, 0.88);
-  border-radius: 8px;
+  border-radius: 9px;
   overflow: hidden;
 }
 
 .va-content-mode button {
-  min-width: 62px;
+  min-width: 66px;
   border: 0;
   border-right: 1px solid rgba(65, 85, 115, 0.88);
   border-radius: 0;
@@ -961,7 +1314,7 @@
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  padding: 0.28rem 0.4rem;
+  padding: 0.42rem 0.48rem;
 }
 
 .va-content-mode button:last-child {
@@ -1187,12 +1540,24 @@
 }
 
 .va-tag-chip button {
+  width: 0.9rem;
+  height: 0.9rem;
   border: 0;
   background: transparent;
   color: inherit;
-  font-size: 0.76rem;
-  line-height: 1;
   padding: 0;
+  display: inline-grid;
+  place-items: center;
+  opacity: 0.78;
+}
+
+.va-tag-chip button:hover {
+  opacity: 1;
+}
+
+.va-tag-chip button svg {
+  width: 0.58rem;
+  height: 0.58rem;
 }
 
 .va-detail-meta {

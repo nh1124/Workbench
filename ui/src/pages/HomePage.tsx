@@ -195,7 +195,7 @@ function buildMonthCells(monthDate: Date): CalendarCell[] {
     cells.push({ key: `cur-${day}`, date, inCurrentMonth: true });
   }
 
-  while (cells.length % 7 !== 0 || cells.length < 35) {
+  while (cells.length < 42) {
     const nextIndex = cells.length - (firstWeekday + daysInMonth) + 1;
     const date = new Date(first.getFullYear(), first.getMonth() + 1, nextIndex);
     cells.push({ key: `next-${nextIndex}`, date, inCurrentMonth: false });
@@ -672,6 +672,5 @@ export function HomePage() {
     </section>
   );
 }
-
 
 

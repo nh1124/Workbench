@@ -113,7 +113,7 @@ export function MarkdownOutlinePanel({
         aria-expanded={!collapsed}
         aria-label={collapsed ? "Expand outline" : "Collapse outline"}
       >
-        <span className="va-outline-caret" aria-hidden="true">{collapsed ? ">" : "v"}</span>
+        <span className={`va-outline-caret${collapsed ? " collapsed" : ""}`} aria-hidden="true" />
         <strong>Outline</strong>
       </button>
 
