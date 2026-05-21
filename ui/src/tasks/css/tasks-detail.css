@@ -80,6 +80,38 @@ textarea.edit-input { resize: vertical; min-height: 90px; }
   border-radius: 5px; line-height: 1;
 }
 .detail-card-remove-btn:hover { color: #f87171; background: rgba(248,113,113,0.08); }
+.schedule-recurrence-summary {
+  border: 1px solid rgba(56,189,248,0.16);
+  border-radius: 10px;
+  background: rgba(14,165,233,0.06);
+  padding: 0.65rem 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.22rem;
+}
+.schedule-recurrence-summary span {
+  color: #7dd3fc;
+  font-size: 0.62rem;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.schedule-recurrence-summary strong { color: #e5e7eb; font-size: 0.88rem; }
+.schedule-recurrence-summary small { color: #94a3b8; font-size: 0.72rem; }
+.schedule-override-btn {
+  margin-top: 0.6rem;
+  align-self: flex-start;
+  border: 1px solid rgba(125,211,252,0.28);
+  border-radius: 999px;
+  background: rgba(14,165,233,0.08);
+  color: #bae6fd;
+  cursor: pointer;
+  font-size: 0.74rem;
+  font-weight: 800;
+  padding: 0.35rem 0.7rem;
+}
+.schedule-override-btn:hover { background: rgba(14,165,233,0.16); }
+.schedule-override-note { margin-bottom: 0.45rem; }
 
 /* ── Status / lock controls ─────────────────────────────────────────────────── */
 .status-lock-row {

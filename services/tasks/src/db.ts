@@ -422,6 +422,45 @@ export async function listScheduleItemsByDateRange(
 }
 
 /**
+ * List schedule items that either appear in the calendar window or override
+ * an occurrence in that window.
+ */
+export async function listScheduleItemsForCalendarWindow(
+  ownerCoreUserId: string,
+  startDate: string,
+  endDate: string
+): Promise<ScheduleItemRow[]> {
+  await ensureTasksSchema();
+  const owner = normalizeOwner(ownerCoreUserId);
+  if (!owner) return [];
+
+  const result = await pool.query<{
+    id: string;
+    task_id: string;
+    occurrence_date: string;
+    scheduled_date: string;
+    start_time: string | null;
+    end_time: string | null;
+    timezone: string | null;
+    created_at: string;
+    updated_at: string;
+  }>(
+    `
+      SELECT id, task_id, occurrence_date, scheduled_date, start_time, end_time, timezone, created_at, updated_at
+      FROM task_occurrence_schedule
+      WHERE owner_username = $1
+        AND (
+          (scheduled_date >= $2 AND scheduled_date <= $3)
+          OR (occurrence_date >= $2 AND occurrence_date <= $3)
+        )
+      ORDER BY scheduled_date ASC, start_time ASC NULLS LAST, created_at ASC
+    `,
+    [owner, startDate, endDate]
+  );
+  return result.rows.map(rowToScheduleItem);
+}
+
+/**
  * List all schedule items for a specific task (all occurrences).
  */
 export async function listScheduleItemsByTask(

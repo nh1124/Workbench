@@ -536,8 +536,9 @@ export function useTaskMutations(
     setInboxDoneRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>
   ) => {
     const nextStatus = (row.status === "done" ? "todo" : "done") as import("../../types/models").TaskStatus;
+    const occurrenceDate = row.occurrenceDate ?? row.date;
     try {
-      await tasksApi.completeOccurrence(row.taskId, row.date, nextStatus);
+      await tasksApi.completeOccurrence(row.taskId, occurrenceDate, nextStatus);
       const updateRows = (prev: TaskOccurrenceRow[]) =>
         prev.map((r) => (r.key === row.key ? { ...r, status: nextStatus } : r));
       setTodayRows(updateRows);
@@ -562,7 +563,7 @@ export function useTaskMutations(
     if (selectedRows.length === 0) return;
     try {
       await Promise.all(
-        selectedRows.map((row) => tasksApi.completeOccurrence(row.taskId, row.date, status))
+        selectedRows.map((row) => tasksApi.completeOccurrence(row.taskId, row.occurrenceDate ?? row.date, status))
       );
       const updatedKeys = new Set(selectedRows.map((r) => r.key));
       const updateRows = (prev: TaskOccurrenceRow[]) =>
@@ -585,7 +586,7 @@ export function useTaskMutations(
     if (selectedRows.length === 0) return;
     try {
       await Promise.all(
-        selectedRows.map((row) => tasksApi.completeOccurrence(row.taskId, row.date, "skipped"))
+        selectedRows.map((row) => tasksApi.completeOccurrence(row.taskId, row.occurrenceDate ?? row.date, "skipped"))
       );
       closeMenu();
       await refreshAfterOccurrenceMutation();
@@ -613,7 +614,7 @@ export function useTaskMutations(
     }
     try {
       await Promise.all(
-        selectedRows.map((row) => tasksApi.moveOccurrence(row.taskId, row.date, moveDateInput))
+        selectedRows.map((row) => tasksApi.moveOccurrence(row.taskId, row.occurrenceDate ?? row.date, moveDateInput))
       );
       const movedKeys = new Set(selectedRows.map((r) => r.key));
       setOccurrenceRows((prev) => prev.filter((r) => !movedKeys.has(r.key)));
@@ -672,7 +673,7 @@ export function useTaskMutations(
     if (!confirmed) return;
     try {
       await Promise.all(
-        selectedRows.map((row) => tasksApi.skipOccurrenceException(row.taskId, row.date))
+        selectedRows.map((row) => tasksApi.skipOccurrenceException(row.taskId, row.occurrenceDate ?? row.date))
       );
       const removedKeys = new Set(selectedRows.map((r) => r.key));
       setOccurrenceRows((prev) => prev.filter((r) => !removedKeys.has(r.key)));
@@ -700,7 +701,7 @@ export function useTaskMutations(
       new Map(
         selectedRows.map((r) => [
           `${r.taskId}::${r.date}`,
-          { taskId: r.taskId, occurrenceDate: r.date, row: r }
+          { taskId: r.taskId, occurrenceDate: r.occurrenceDate ?? r.date, row: r }
         ])
       ).values()
     );
@@ -862,7 +863,7 @@ export function useTaskMutations(
       }
       setScheduleItemId(null);
       setScheduleDraft((prev) =>
-        prev ? { ...prev, startTime: "", endTime: "" } : null
+        prev ? { ...prev, scheduledDate: selectedOccurrenceDate, startTime: "", endTime: "" } : null
       );
     } catch {
       pushErrorNotification("Failed to remove schedule entry.");

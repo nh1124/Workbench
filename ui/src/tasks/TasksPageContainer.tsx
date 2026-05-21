@@ -304,7 +304,7 @@ export function TasksPageContainer() {
   const handleOccurrenceClick = (event: ReactMouseEvent<HTMLButtonElement>, row: TaskOccurrenceRow) => {
     _handleOccClick(event, row, occurrenceOrderedKeys, (r) => {
       const task = tasks.find((t) => t.id === r.taskId);
-      if (task) selectTask(task, r.status, r.date);
+      if (task) selectTask(task, r.status, r.occurrenceDate ?? r.date);
     });
   };
 
@@ -873,7 +873,7 @@ export function TasksPageContainer() {
                         {dayItems.slice(0, 3).map((item) => {
                           const fullTask = tasks.find((t) => t.id === item.taskId);
                           return (
-                            <button key={item.scheduleId} type="button"
+                            <button key={`${item.scheduleId ?? "auto"}::${item.occurrenceDate}::${item.taskId}`} type="button"
                               className={`calendar-task-pill${item.status === "done" ? " done" : ""}`}
                               onClick={() => { if (fullTask) selectTask(fullTask, item.status as TaskStatus, item.occurrenceDate); }}
                               title={item.startTime ? `${item.startTime}${item.endTime ? `–${item.endTime}` : ""} ${item.title}` : item.title}>

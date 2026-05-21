@@ -18,6 +18,7 @@ import {
   deleteScheduleItemsByTaskAndScheduledDate,
   listScheduleItemsByScheduledDate,
   listScheduleItemsByDateRange,
+  listScheduleItemsForCalendarWindow,
   listScheduleItemsByTask
 } from "./db.js";
 
@@ -42,6 +43,15 @@ export async function listItemsByDateRange(
   endDate: string
 ): Promise<ScheduleItemRow[]> {
   return listScheduleItemsByDateRange(normalizeOwner(ownerCoreUserId), startDate, endDate);
+}
+
+/** Return items scheduled in the window plus overrides for occurrences in it. */
+export async function listItemsForCalendarWindow(
+  ownerCoreUserId: string,
+  startDate: string,
+  endDate: string
+): Promise<ScheduleItemRow[]> {
+  return listScheduleItemsForCalendarWindow(normalizeOwner(ownerCoreUserId), startDate, endDate);
 }
 
 /** Return all schedule items for a specific task (all occurrences). */

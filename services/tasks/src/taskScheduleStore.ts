@@ -2,7 +2,7 @@ import { listPinnedTaskIds } from "./db.js";
 import {
   type ScheduleItemRow,
   addScheduleItem,
-  listItemsByDateRange,
+  listItemsForCalendarWindow,
   listItemsByTask,
   listItemsByScheduledDate,
   removeScheduleItem,
@@ -14,11 +14,15 @@ import {
   createLbsClient,
   getLbsConfig,
   normalizeResponseTask,
+  toUiStatus,
   type LbsTask
 } from "./lbsTaskService.js";
+import type { LbsScheduleDay } from "./lbsClient.js";
+import { listDateKeys, taskOccursOnDateKey } from "./taskRecurrenceUtils.js";
 import type {
   ScheduleCalendarDay,
   ScheduleCalendarItem,
+  Task,
   TodayTask
 } from "./types.js";
 
@@ -189,17 +193,49 @@ export async function listTaskScheduleCalendar(
     `[tasks-service] listTaskScheduleCalendar owner=${ownerUsername} ${startDate}->${endDate}`
   );
 
-  const items = await listItemsByDateRange(ownerUsername, startDate, endDate);
-  if (items.length === 0) return [];
-
   const config = getLbsConfig();
   const client = createLbsClient(config, lbsAccessToken);
+  const items = await listItemsForCalendarWindow(ownerUsername, startDate, endDate);
+  const explicitOccurrenceKeys = new Set(
+    items.map((item) => `${item.taskId}::${item.occurrenceDate}`)
+  );
+  const explicitItemsInWindow = items.filter(
+    (item) => item.scheduledDate >= startDate && item.scheduledDate <= endDate
+  );
+
+  const rawTasks = (await client.listTasks(undefined, config.defaultActive)) as unknown as LbsTask[];
+  const tasks = rawTasks.map(normalizeResponseTask);
+  const taskMap = new Map(tasks.map((task) => [task.id, task]));
+  const lbsSchedule = (await client.getSchedule(startDate, endDate)) as LbsScheduleDay[];
+  const generatedStatusMap = new Map<string, { status: ReturnType<typeof toUiStatus>; load?: number; isLocked?: boolean }>();
+  for (const day of lbsSchedule) {
+    for (const task of day.tasks || []) {
+      generatedStatusMap.set(`${task.task_id}::${day.date}`, {
+        status: toUiStatus(task.status),
+        load: task.load,
+        isLocked: task.is_locked === true
+      });
+    }
+  }
+
+  const resolveTask = async (taskId: string): Promise<Task | null> => {
+    const cached = taskMap.get(taskId);
+    if (cached) return cached;
+    try {
+      const raw = (await client.getTask(taskId)) as unknown as LbsTask;
+      const normalized = normalizeResponseTask(raw);
+      taskMap.set(normalized.id, normalized);
+      return normalized;
+    } catch {
+      return null;
+    }
+  };
 
   const resolved = await Promise.all(
-    items.map(async (item): Promise<ScheduleCalendarItem | null> => {
+    explicitItemsInWindow.map(async (item): Promise<ScheduleCalendarItem | null> => {
       try {
-        const raw = (await client.getTask(item.taskId)) as unknown as LbsTask;
-        const normalized = normalizeResponseTask(raw);
+        const normalized = await resolveTask(item.taskId);
+        if (!normalized) return null;
         const withStatus = await applyResolvedStatus(
           normalized,
           lbsAccessToken,
@@ -214,9 +250,11 @@ export async function listTaskScheduleCalendar(
           status: withStatus.status,
           occurrenceDate: item.occurrenceDate,
           scheduledDate: item.scheduledDate,
+          load: withStatus.baseLoadScore,
           startTime: item.startTime,
           endTime: item.endTime,
-          timezone: item.timezone
+          timezone: item.timezone,
+          isLocked: withStatus.isLocked
         };
       } catch (error) {
         console.warn(
@@ -229,8 +267,34 @@ export async function listTaskScheduleCalendar(
     })
   );
 
+  const generated = await Promise.all(
+    tasks
+      .filter((task) => task.recurrence !== "ONCE" && (task.startTime || task.endTime))
+      .flatMap((task) =>
+        listDateKeys(startDate, endDate)
+          .filter((dateKey) => taskOccursOnDateKey(task, dateKey))
+          .filter((dateKey) => !explicitOccurrenceKeys.has(`${task.id}::${dateKey}`))
+          .map(async (dateKey): Promise<ScheduleCalendarItem> => {
+            const lbsStatus = generatedStatusMap.get(`${task.id}::${dateKey}`);
+            return {
+              taskId: task.id,
+              title: task.title,
+              context: task.context,
+              status: lbsStatus?.status ?? task.status,
+              occurrenceDate: dateKey,
+              scheduledDate: dateKey,
+              load: lbsStatus?.load ?? task.baseLoadScore,
+              startTime: task.startTime,
+              endTime: task.endTime,
+              timezone: task.timezone,
+              isLocked: lbsStatus?.isLocked ?? task.isLocked
+            };
+          })
+      )
+  );
+
   const byDate = new Map<string, ScheduleCalendarItem[]>();
-  for (const item of resolved) {
+  for (const item of [...resolved, ...generated]) {
     if (!item) continue;
     const list = byDate.get(item.scheduledDate) ?? [];
     list.push(item);
@@ -241,6 +305,11 @@ export async function listTaskScheduleCalendar(
   for (const [date, dateItems] of [...byDate.entries()].sort(([a], [b]) =>
     a.localeCompare(b)
   )) {
+    dateItems.sort((a, b) => {
+      const time = (a.startTime || "").localeCompare(b.startTime || "");
+      if (time !== 0) return time;
+      return a.title.localeCompare(b.title);
+    });
     days.push({ date, items: dateItems });
   }
   console.log(`[tasks-service] listTaskScheduleCalendar returning days=${days.length}`);

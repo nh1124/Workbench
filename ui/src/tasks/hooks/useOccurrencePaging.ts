@@ -10,7 +10,7 @@ import { tasksApi } from "../../lib/api";
 import { addDays, startOfDay, toDateKey } from "../../lib/taskDateUtils";
 import type { TaskOccurrenceRow } from "../types";
 import { OCCURRENCE_PAGE_DAYS, toTaskStatus } from "../types";
-import type { TaskScheduleDay } from "../../types/models";
+import type { ScheduleCalendarDay, TaskScheduleDay } from "../../types/models";
 import { computeOccurrenceHasMore } from "../lib/occurrencePagingUtils";
 
 /** Build flat occurrence rows from a raw schedule response. */
@@ -43,6 +43,41 @@ function buildOccurrenceRowsFromSchedule(
   }
   rows.sort((a, b) => {
     if (a.date !== b.date) return a.date.localeCompare(b.date);
+    return a.title.localeCompare(b.title);
+  });
+  return rows;
+}
+
+function buildOccurrenceRowsFromScheduleCalendar(
+  scheduleDays: ScheduleCalendarDay[],
+  todayKey: string,
+  contextFilter: string
+): TaskOccurrenceRow[] {
+  const rows: TaskOccurrenceRow[] = [];
+  for (const day of scheduleDays) {
+    const dateKey = day.date;
+    if (dateKey <= todayKey) continue;
+    for (const item of day.items) {
+      if (contextFilter && item.context !== contextFilter) continue;
+      rows.push({
+        key: `${item.scheduledDate}::${item.occurrenceDate}::${item.taskId}::${item.scheduleId ?? "auto"}`,
+        taskId: item.taskId,
+        date: item.scheduledDate,
+        occurrenceDate: item.occurrenceDate,
+        title: item.title,
+        context: item.context,
+        status: toTaskStatus(item.status),
+        load: item.load,
+        startTime: item.startTime,
+        endTime: item.endTime,
+        isLocked: item.isLocked
+      });
+    }
+  }
+  rows.sort((a, b) => {
+    if (a.date !== b.date) return a.date.localeCompare(b.date);
+    const time = (a.startTime || "").localeCompare(b.startTime || "");
+    if (time !== 0) return time;
     return a.title.localeCompare(b.title);
   });
   return rows;
@@ -106,12 +141,21 @@ export function useOccurrencePaging(
           ? addDays(baseDate, OCCURRENCE_PAGE_DAYS - 1)
           : baseDate;
 
-      const schedule = await tasksApi.schedule(
-        toDateKey(startDate),
-        toDateKey(endDate),
-        contextFilter || undefined
-      );
-      const rows = buildOccurrenceRowsFromSchedule(schedule, mode, todayKey);
+      const rows = mode === "planned"
+        ? buildOccurrenceRowsFromScheduleCalendar(
+          await tasksApi.scheduleCalendar(toDateKey(startDate), toDateKey(endDate)),
+          todayKey,
+          contextFilter
+        )
+        : buildOccurrenceRowsFromSchedule(
+          await tasksApi.schedule(
+            toDateKey(startDate),
+            toDateKey(endDate),
+            contextFilter || undefined
+          ),
+          mode,
+          todayKey
+        );
       const nextCursor =
         mode === "planned"
           ? addDays(endDate, 1)

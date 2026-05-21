@@ -112,16 +112,18 @@ export interface ScheduleItem {
 }
 
 export interface ScheduleCalendarItem {
-  scheduleId: number;
+  scheduleId?: number;
   taskId: string;
   title: string;
   context: string;
   status: TaskStatus;
   occurrenceDate: string;
   scheduledDate: string;
+  load?: number;
   startTime?: string;
   endTime?: string;
   timezone?: string;
+  isLocked?: boolean;
 }
 
 export interface ScheduleCalendarDay {
@@ -346,6 +348,40 @@ export interface DeepResearchArtifactRef {
   projectName?: string;
 }
 
+export interface DeepResearchArtifactTarget {
+  title: string;
+  path: string;
+  projectId?: string;
+  projectName?: string;
+}
+
+export interface DeepResearchAccessPlan {
+  status: {
+    tool: "deep_research_status";
+    arguments: {
+      job_id: string;
+    };
+  };
+  saveArtifact: {
+    tool: "deep_research_save_artifact";
+    arguments: {
+      job_id: string;
+      artifact_title?: string;
+      artifact_path?: string;
+      project_id?: string;
+      project_name?: string;
+    };
+  };
+  artifactItem?: {
+    tool: "artifacts.item.get";
+    arguments: {
+      id: string;
+    };
+  };
+  expectedArtifact?: DeepResearchArtifactTarget;
+  notes: string[];
+}
+
 export interface DeepResearchRunResponse {
   status: "running" | "completed";
   jobId: string;
@@ -353,6 +389,11 @@ export interface DeepResearchRunResponse {
   provider: Exclude<DeepResearchProvider, "auto">;
   model: string;
   speed: DeepResearchSpeed;
+  timedOut?: boolean;
+  background?: boolean;
+  willSaveToArtifacts?: boolean;
+  expectedArtifact?: DeepResearchArtifactTarget;
+  accessPlan?: DeepResearchAccessPlan;
   message?: string;
   resultMarkdown?: string;
   artifact?: DeepResearchArtifactRef;
@@ -375,6 +416,8 @@ export interface DeepResearchStatusResponse {
   resultMarkdown?: string;
   artifact?: DeepResearchArtifactRef;
   artifactSaveError?: string;
+  expectedArtifact?: DeepResearchArtifactTarget;
+  accessPlan: DeepResearchAccessPlan;
   errorMessage?: string;
   createdAt: string;
   updatedAt: string;

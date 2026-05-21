@@ -17,7 +17,7 @@ import {
   mergeProjectOptions,
   type ProjectOption
 } from "../../lib/taskDisplayUtils";
-import type { Task, TaskScheduleDay, TaskStatus, TodayTask } from "../../types/models";
+import type { ScheduleCalendarDay, Task, TaskScheduleDay, TaskStatus, TodayTask } from "../../types/models";
 import {
   OCCURRENCE_PAGE_DAYS,
   type TaskOccurrenceRow,
@@ -98,6 +98,7 @@ export function useTaskDataLoader(
         projectsResult,
         todaySchedule,
         countSchedule,
+        countScheduleCalendar,
         myDayTasks
       ] = await Promise.all([
         tasksApi.list(contextFilter || undefined),
@@ -107,6 +108,7 @@ export function useTaskDataLoader(
           .catch(() => ({ ok: false as const, result: { items: [] } })),
         tasksApi.schedule(todayKey, todayKey, contextFilter || undefined).catch(() => [] as TaskScheduleDay[]),
         tasksApi.schedule(countFrom, countTo, contextFilter || undefined).catch(() => [] as TaskScheduleDay[]),
+        tasksApi.scheduleCalendar(countFrom, countTo).catch(() => [] as ScheduleCalendarDay[]),
         tasksApi.todayList(todayKey).catch(() => [] as TodayTask[])
       ]);
 
@@ -140,10 +142,13 @@ export function useTaskDataLoader(
       // Planned/overdue counts
       let pCnt = 0;
       let oCnt = 0;
-      for (const day of countSchedule) {
+      for (const day of countScheduleCalendar) {
         if (day.date > todayKey) {
-          pCnt += day.tasks.length;
-        } else if (day.date < todayKey) {
+          pCnt += day.items.filter((item) => !contextFilter || item.context === contextFilter).length;
+        }
+      }
+      for (const day of countSchedule) {
+        if (day.date < todayKey) {
           oCnt += day.tasks.filter((t) => toTaskStatus(t.status) !== "done").length;
         }
       }

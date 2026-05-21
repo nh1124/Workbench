@@ -16,6 +16,8 @@ import {
 } from "./store.js";
 import type {
   DeepResearchArtifactRef,
+  DeepResearchArtifactTarget,
+  DeepResearchAccessPlan,
   DeepResearchCancelResponse,
   DeepResearchDefaults,
   DeepResearchEventLog,
@@ -113,6 +115,65 @@ function slugify(input: string): string {
 
 function defaultArtifactPath(query: string): string {
   return `research/${slugify(query).slice(0, 80)}.md`;
+}
+
+function buildArtifactTarget(params: {
+  query: string;
+  artifactTitle?: string;
+  artifactPath?: string;
+  projectId?: string;
+  projectName?: string;
+}): DeepResearchArtifactTarget {
+  return {
+    title: params.artifactTitle?.trim() || normalizeTitle(params.query),
+    path: params.artifactPath?.trim() || defaultArtifactPath(params.query),
+    projectId: params.projectId,
+    projectName: params.projectName
+  };
+}
+
+function buildAccessPlan(params: {
+  jobId: string;
+  expectedArtifact?: DeepResearchArtifactTarget;
+  artifact?: DeepResearchArtifactRef;
+}): DeepResearchAccessPlan {
+  const saveArgs: DeepResearchAccessPlan["saveArtifact"]["arguments"] = {
+    job_id: params.jobId
+  };
+  if (params.expectedArtifact) {
+    saveArgs.artifact_title = params.expectedArtifact.title;
+    saveArgs.artifact_path = params.expectedArtifact.path;
+    saveArgs.project_id = params.expectedArtifact.projectId;
+    saveArgs.project_name = params.expectedArtifact.projectName;
+  }
+
+  return {
+    status: {
+      tool: "deep_research_status",
+      arguments: {
+        job_id: params.jobId
+      }
+    },
+    saveArtifact: {
+      tool: "deep_research_save_artifact",
+      arguments: saveArgs
+    },
+    artifactItem: params.artifact
+      ? {
+          tool: "artifacts.item.get",
+          arguments: {
+            id: params.artifact.id
+          }
+        }
+      : undefined,
+    expectedArtifact: params.expectedArtifact,
+    notes: params.artifact
+      ? ["Result is complete and saved. Use artifacts.item.get with artifactItem.arguments.id to read it."]
+      : [
+          "The job is still running. Poll deep_research_status with status.arguments until status is completed.",
+          "When completed, use artifactItem.arguments.id if present, or deep_research_save_artifact to save/read from the expected path."
+        ]
+  };
 }
 
 function buildArtifactMarkdown(params: {
@@ -243,6 +304,13 @@ function toStatusResponse(job: DeepResearchJobRecord): DeepResearchStatusRespons
           projectName: typeof job.metadata.projectName === "string" ? job.metadata.projectName : undefined
         }
       : undefined;
+  const expectedArtifact = buildArtifactTarget({
+    query: job.query,
+    artifactTitle: job.artifactTitle,
+    artifactPath: job.artifactPath,
+    projectId: typeof job.metadata.projectId === "string" ? job.metadata.projectId : undefined,
+    projectName: typeof job.metadata.projectName === "string" ? job.metadata.projectName : undefined
+  });
 
   return {
     jobId: job.id,
@@ -255,6 +323,12 @@ function toStatusResponse(job: DeepResearchJobRecord): DeepResearchStatusRespons
     resultMarkdown: job.resultMarkdown,
     artifact,
     artifactSaveError,
+    expectedArtifact,
+    accessPlan: buildAccessPlan({
+      jobId: job.id,
+      expectedArtifact,
+      artifact
+    }),
     errorMessage: job.errorMessage,
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
@@ -426,6 +500,13 @@ async function finalizeCompletion(params: {
   let artifact: DeepResearchArtifactRef | undefined;
   let artifactSaveError: string | undefined;
   const completedAt = new Date().toISOString();
+  const expectedArtifact = buildArtifactTarget({
+    query: params.request.query,
+    artifactTitle: params.request.artifactTitle,
+    artifactPath: params.request.artifactPath,
+    projectId: params.request.projectId,
+    projectName: params.request.projectName
+  });
 
   if (params.request.saveToArtifacts) {
     try {
@@ -500,6 +581,11 @@ async function finalizeCompletion(params: {
     resultMarkdown: params.resultMarkdown,
     artifact,
     artifactSaveError,
+    accessPlan: buildAccessPlan({
+      jobId: params.jobId,
+      expectedArtifact,
+      artifact
+    }),
     completedAt
   };
 }
@@ -531,7 +617,7 @@ async function executeBackgroundJob(params: {
     await updateDeepResearchJobProgress(params.userId, params.jobId, {
       stage: "running",
       percent: 20,
-      message: "Running in background"
+      message: "Continuing in background after timeout"
     });
 
     const result = await runDeepResearchProvider({
@@ -706,8 +792,13 @@ export async function runDeepResearch(
       await logJobEvent({
         userId,
         jobId: createdJob.id,
-        message: `Timed out after ${request.timeoutSec}s. Continuing in background.`,
+        message: `Timed out after ${request.timeoutSec}s. The job is still running in background.`,
         stage: "running"
+      });
+      await updateDeepResearchJobProgress(userId, createdJob.id, {
+        stage: "running",
+        percent: 20,
+        message: "Continuing in background after timeout"
       });
 
       void executeBackgroundJob({
@@ -730,7 +821,30 @@ export async function runDeepResearch(
         provider: request.provider,
         model,
         speed: request.speed,
-        message: "Research is continuing in the background. Poll status with deep_research_status."
+        timedOut: true,
+        background: true,
+        willSaveToArtifacts: request.saveToArtifacts,
+        expectedArtifact: request.saveToArtifacts
+          ? buildArtifactTarget({
+              query: request.query,
+              artifactTitle: request.artifactTitle,
+              artifactPath: request.artifactPath,
+              projectId: request.projectId,
+              projectName: request.projectName
+            })
+          : undefined,
+        accessPlan: buildAccessPlan({
+          jobId: createdJob.id,
+          expectedArtifact: buildArtifactTarget({
+            query: request.query,
+            artifactTitle: request.artifactTitle,
+            artifactPath: request.artifactPath,
+            projectId: request.projectId,
+            projectName: request.projectName
+          })
+        }),
+        message:
+          "Sync timeout was reached, but the research job is still running in the background. Poll accessPlan.status, then read the saved artifact when completed."
       };
     }
 
@@ -811,6 +925,7 @@ export async function saveDeepResearchJobArtifact(
     artifactPath?: string;
     projectId?: string;
     projectName?: string;
+    createNew?: boolean;
   }
 ): Promise<DeepResearchArtifactRef> {
   const job = await getDeepResearchJob(userId, jobId);
@@ -820,7 +935,10 @@ export async function saveDeepResearchJobArtifact(
   if (job.status !== "completed" || !job.resultMarkdown) {
     throw new DeepResearchError("Only completed jobs can be saved to Artifacts", "JOB_NOT_COMPLETED", 400);
   }
-  if (job.artifactItemId && job.artifactItemPath) {
+  const hasDestinationOverride = Boolean(
+    input?.artifactTitle?.trim() || input?.artifactPath?.trim() || input?.projectId?.trim() || input?.projectName?.trim()
+  );
+  if (job.artifactItemId && job.artifactItemPath && !input?.createNew && !hasDestinationOverride) {
     return {
       id: job.artifactItemId,
       path: job.artifactItemPath,
@@ -848,7 +966,7 @@ export async function saveDeepResearchJobArtifact(
   await logJobEvent({
     userId,
     jobId,
-    message: `Artifact saved manually: ${artifact.title}`,
+    message: `Artifact saved manually: ${artifact.title} (${artifact.path})`,
     stage: "completed"
   });
   return artifact;

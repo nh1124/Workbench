@@ -875,7 +875,8 @@ const deepResearchManualSaveSchema = z.object({
   artifactTitle: z.string().optional(),
   artifactPath: z.string().optional(),
   projectId: z.string().optional(),
-  projectName: z.string().optional()
+  projectName: z.string().optional(),
+  createNew: z.boolean().optional()
 });
 
 type AuthenticatedContext = {

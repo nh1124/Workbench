@@ -11,12 +11,12 @@ const MODEL_MAP: Record<DeepResearchProvider, Record<DeepResearchSpeed, string>>
     fast: process.env.DEEP_RESEARCH_MODEL_OPENAI_FAST?.trim() || "o4-mini-deep-research"
   },
   anthropic: {
-    deep: process.env.DEEP_RESEARCH_MODEL_ANTHROPIC_DEEP?.trim() || "claude-opus-4-6",
+    deep: process.env.DEEP_RESEARCH_MODEL_ANTHROPIC_DEEP?.trim() || "claude-opus-4-7",
     fast: process.env.DEEP_RESEARCH_MODEL_ANTHROPIC_FAST?.trim() || "claude-haiku-4-5"
   }
 };
 
-const OPENAI_FALLBACK_MODEL = process.env.DEEP_RESEARCH_MODEL_OPENAI_FALLBACK?.trim() || "gpt-5.4";
+const OPENAI_FALLBACK_MODEL = process.env.DEEP_RESEARCH_MODEL_OPENAI_FALLBACK?.trim() || "gpt-5.5";
 const GEMINI_DEEP_RESEARCH_AGENT_PREFIX = "deep-research-";
 const GEMINI_INTERACTION_POLL_MS = 6000;
 

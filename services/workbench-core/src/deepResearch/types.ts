@@ -57,6 +57,40 @@ export interface DeepResearchArtifactRef {
   projectName?: string;
 }
 
+export interface DeepResearchArtifactTarget {
+  title: string;
+  path: string;
+  projectId?: string;
+  projectName?: string;
+}
+
+export interface DeepResearchAccessPlan {
+  status: {
+    tool: "deep_research_status";
+    arguments: {
+      job_id: string;
+    };
+  };
+  saveArtifact: {
+    tool: "deep_research_save_artifact";
+    arguments: {
+      job_id: string;
+      artifact_title?: string;
+      artifact_path?: string;
+      project_id?: string;
+      project_name?: string;
+    };
+  };
+  artifactItem?: {
+    tool: "artifacts.item.get";
+    arguments: {
+      id: string;
+    };
+  };
+  expectedArtifact?: DeepResearchArtifactTarget;
+  notes: string[];
+}
+
 export interface DeepResearchProgress {
   stage: "queued" | "running" | "saving_artifact" | "completed" | "failed" | "cancelled";
   percent: number;
@@ -106,6 +140,7 @@ export interface DeepResearchRunResponseCompleted {
   resultMarkdown: string;
   artifact?: DeepResearchArtifactRef;
   artifactSaveError?: string;
+  accessPlan: DeepResearchAccessPlan;
   completedAt: string;
 }
 
@@ -116,6 +151,11 @@ export interface DeepResearchRunResponseRunning {
   provider: DeepResearchProvider;
   model: string;
   speed: DeepResearchSpeed;
+  timedOut: boolean;
+  background: boolean;
+  willSaveToArtifacts: boolean;
+  expectedArtifact?: DeepResearchArtifactTarget;
+  accessPlan: DeepResearchAccessPlan;
   message: string;
 }
 
@@ -132,6 +172,8 @@ export interface DeepResearchStatusResponse {
   resultMarkdown?: string;
   artifact?: DeepResearchArtifactRef;
   artifactSaveError?: string;
+  expectedArtifact?: DeepResearchArtifactTarget;
+  accessPlan: DeepResearchAccessPlan;
   errorMessage?: string;
   createdAt: string;
   updatedAt: string;

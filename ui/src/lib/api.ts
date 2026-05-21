@@ -603,6 +603,7 @@ export const deepResearchApi = {
       artifactPath?: string;
       projectId?: string;
       projectName?: string;
+      createNew?: boolean;
     }
   ): Promise<{ status: string; artifact: DeepResearchRunResponse["artifact"] }> =>
     fetchJson<{ status: string; artifact: DeepResearchRunResponse["artifact"] }>(

@@ -32,6 +32,36 @@ import {
   IcoX
 } from "./icons";
 
+function formatScheduleTime(draft: TaskDraft): string {
+  const start = draft.startTime || "--:--";
+  const end = draft.endTime || "--:--";
+  return `${start} - ${end} / ${draft.timezone || "Asia/Tokyo"}`;
+}
+
+function describeRecurringSchedule(draft: TaskDraft): string {
+  if (draft.recurrence === "WEEKLY") {
+    const selected = [
+      draft.sun, draft.mon, draft.tue, draft.wed, draft.thu, draft.fri, draft.sat
+    ]
+      .map((enabled, index) => enabled ? weekdays[index] : "")
+      .filter(Boolean);
+    return selected.length > 0 ? `Every ${selected.join(", ")}` : "Weekly";
+  }
+  if (draft.recurrence === "EVERY_N_DAYS") {
+    const anchor = draft.anchorDate ? ` from ${draft.anchorDate}` : "";
+    return `Every ${Math.max(1, draft.intervalDays || 1)} day(s)${anchor}`;
+  }
+  if (draft.recurrence === "MONTHLY_DAY") {
+    return `Day ${Math.min(31, Math.max(1, draft.monthDay || 1))} of each month`;
+  }
+  if (draft.recurrence === "MONTHLY_NTH_WEEKDAY") {
+    const nth = Math.min(5, Math.max(1, draft.nthInMonth || 1));
+    const weekday = weekdays[Math.min(6, Math.max(0, draft.weekdayMon1 || 0))];
+    return `${nth}${nth === 1 ? "st" : nth === 2 ? "nd" : nth === 3 ? "rd" : "th"} ${weekday} of each month`;
+  }
+  return "Once";
+}
+
 export interface TaskDetailPanelProps {
   selectedTask: Task;
   draft: TaskDraft;
@@ -422,7 +452,7 @@ export function TaskDetailPanel({
                 onChange={(e) => applyAndSave({ dueDate: e.target.value })}
               />
             ) : (
-              <p className="detail-card-recurring-note">Recurring - controlled by schedule</p>
+              <p className="detail-card-recurring-note">Recurring - controlled by recurrence</p>
             )}
             <div className="edit-two-col" style={{ marginTop: "0.45rem" }}>
               <div className="edit-section">
@@ -461,7 +491,9 @@ export function TaskDetailPanel({
 
           <div className="detail-card">
             <div className="detail-card-label-row">
-              <span className="detail-card-label">Scheduled Date</span>
+              <span className="detail-card-label">
+                {draft.recurrence === "ONCE" ? "Scheduled Date" : "Schedule"}
+              </span>
               {scheduleItemId != null && (
                 <button
                   type="button"
@@ -478,8 +510,38 @@ export function TaskDetailPanel({
             </div>
             {scheduleItemLoading ? (
               <p className="detail-card-loading">Loading...</p>
+            ) : scheduleDraft && draft.recurrence !== "ONCE" && scheduleItemId == null ? (
+              <>
+                <div className="schedule-recurrence-summary">
+                  <span>{RECURRENCE_LABELS[draft.recurrence]}</span>
+                  <strong>{describeRecurringSchedule(draft)}</strong>
+                  <small>Time: {formatScheduleTime(draft)}</small>
+                  {(draft.activeFrom || draft.activeUntil) && (
+                    <small>
+                      Active: {draft.activeFrom || "start"} - {draft.activeUntil || "open"}
+                    </small>
+                  )}
+                </div>
+                <p className="detail-card-recurring-note">
+                  Repeating schedule is generated from Recurrence and the Start/End/Timezone above.
+                </p>
+                <button
+                  type="button"
+                  className="schedule-override-btn"
+                  onClick={() => {
+                    void handleSaveScheduleItem();
+                  }}
+                >
+                  Customize this occurrence
+                </button>
+              </>
             ) : scheduleDraft ? (
               <>
+                {draft.recurrence !== "ONCE" && (
+                  <p className="detail-card-recurring-note schedule-override-note">
+                    Manual override for this occurrence.
+                  </p>
+                )}
                 <input
                   type="date"
                   className={`edit-input detail-card-date${scheduleItemId != null ? " has-value" : ""}`}

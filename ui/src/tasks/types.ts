@@ -144,7 +144,10 @@ export interface TaskOccurrenceRow {
   /** Composite key: `"${date}::${taskId}"` */
   key: string;
   taskId: string;
+  /** Display/planning date for this row. */
   date: string;
+  /** LBS execution date used for completion/history operations. */
+  occurrenceDate?: string;
   title: string;
   context: string;
   status: TaskStatus;

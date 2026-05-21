@@ -75,16 +75,18 @@ export interface TodayTask extends Task {
 }
 
 export interface ScheduleCalendarItem {
-  scheduleId: number;
+  scheduleId?: number;
   taskId: string;
   title: string;
   context: string;
   status: TaskStatus;
   occurrenceDate: string;
   scheduledDate: string;
+  load?: number;
   startTime?: string;
   endTime?: string;
   timezone?: string;
+  isLocked?: boolean;
 }
 
 export interface ScheduleCalendarDay {
