@@ -19,7 +19,7 @@ function optionalEnv(name: string): string | undefined {
   return value && value.length > 0 ? value : undefined;
 }
 
-type ServiceId = "notes" | "artifacts" | "tasks" | "projects" | "lbs";
+type ServiceId = "notes" | "artifacts" | "tasks" | "projects" | "lbs" | "images";
 
 type ServiceConfig = {
   id: ServiceId;
@@ -29,6 +29,7 @@ type ServiceConfig = {
 const notesService: ServiceConfig = { id: "notes", baseUrl: requireEnv("NOTES_SERVICE_URL") };
 const artifactsService: ServiceConfig = { id: "artifacts", baseUrl: requireEnv("ARTIFACTS_SERVICE_URL") };
 const tasksService: ServiceConfig = { id: "tasks", baseUrl: requireEnv("TASKS_SERVICE_URL") };
+const imagesService: ServiceConfig = { id: "images", baseUrl: requireEnv("IMAGES_SERVICE_URL") };
 const projectsBaseUrl = optionalEnv("PROJECTS_SERVICE_URL");
 const projectsService: ServiceConfig | undefined = projectsBaseUrl ? { id: "projects", baseUrl: projectsBaseUrl } : undefined;
 
@@ -39,6 +40,7 @@ export const serviceBaseUrls = {
   notes: notesService.baseUrl,
   artifacts: artifactsService.baseUrl,
   tasks: tasksService.baseUrl,
+  images: imagesService.baseUrl,
   projects: projectsService?.baseUrl,
   lbs: lbsService?.baseUrl
 } as const;
@@ -303,6 +305,69 @@ export const artifactsClient = {
       contentBase64
     };
   }
+};
+
+export const imagesClient = {
+  defaults: (token: string) => serviceRequest<unknown>(imagesService, "/images/defaults", token),
+  generate: (token: string, payload: unknown) =>
+    serviceRequest<unknown>(imagesService, "/images/generations", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  list: (token: string, limit?: number) =>
+    serviceRequest<unknown>(imagesService, `/images/generations${buildQuery({ limit })}`, token),
+  getJob: (token: string, jobId: string) =>
+    serviceRequest<unknown>(imagesService, `/images/generations/${encodeURIComponent(jobId)}`, token),
+  cancel: (token: string, jobId: string) =>
+    serviceRequest<unknown>(imagesService, `/images/generations/${encodeURIComponent(jobId)}/cancel`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    }),
+  retry: (token: string, jobId: string, payload: unknown) =>
+    serviceRequest<unknown>(imagesService, `/images/generations/${encodeURIComponent(jobId)}/retry`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload ?? {})
+    }),
+  getAsset: (token: string, assetId: string) =>
+    serviceRequest<unknown>(imagesService, `/images/assets/${encodeURIComponent(assetId)}`, token),
+  attachArtifact: (token: string, assetId: string, payload: unknown) =>
+    serviceRequest<unknown>(imagesService, `/images/assets/${encodeURIComponent(assetId)}/artifact`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  downloadAsset: async (token: string, assetId: string, asAttachment = true) => {
+    const suffix = asAttachment ? "?download=1" : "";
+    const response = await fetch(`${imagesService.baseUrl}/images/assets/${encodeURIComponent(assetId)}/download${suffix}`, {
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    });
+
+    const arrayBuffer = await response.arrayBuffer();
+    if (!response.ok) {
+      const text = Buffer.from(arrayBuffer).toString("utf8");
+      throw new InternalServiceError(imagesService.id, response.status, text || `HTTP ${response.status}`);
+    }
+
+    const contentDisposition = response.headers.get("content-disposition");
+    const fileName = decodeContentDispositionFilename(contentDisposition) ?? `${assetId}.png`;
+    const mimeType = response.headers.get("content-type") ?? "image/png";
+    const sizeBytes = arrayBuffer.byteLength;
+    const contentBase64 = Buffer.from(arrayBuffer).toString("base64");
+    return {
+      id: assetId,
+      fileName,
+      mimeType,
+      sizeBytes,
+      contentBase64
+    };
+  },
+  deleteAsset: (token: string, assetId: string) =>
+    serviceRequest<void>(imagesService, `/images/assets/${encodeURIComponent(assetId)}`, token, { method: "DELETE" })
 };
 
 export const tasksClient = {

@@ -90,6 +90,19 @@ services:
     volumes:
       - projects_pgdata:/var/lib/postgresql/data
 
+  images-db:
+    image: postgres:16-alpine
+    container_name: workbench-images-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: images_db
+      POSTGRES_USER: images_user
+      POSTGRES_PASSWORD: images_pass
+    ports:
+      - "5547:5432"
+    volumes:
+      - images_pgdata:/var/lib/postgresql/data
+
 volumes:
   workbench_core_pgdata:
   notes_pgdata:
@@ -97,3 +110,4 @@ volumes:
   artifacts_storage:
   tasks_pgdata:
   projects_pgdata:
+  images_pgdata:

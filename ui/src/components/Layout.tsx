@@ -40,6 +40,13 @@ const navIconMap: Record<string, ReactNode> = {
       <path d="M8.5 10.5h4M10.5 8.5v4" />
     </svg>
   ),
+  Images: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <rect x="4" y="5" width="16" height="14" rx="2" />
+      <path d="M7 15l3.2-3.2 2.3 2.3 1.5-1.5L17 15" />
+      <circle cx="15.5" cy="9.5" r="1.2" />
+    </svg>
+  ),
   Artifacts: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
       <path d="M3 7h6l2 2h10v11H3z" />
@@ -60,6 +67,7 @@ export function Layout() {
   const isTasksRoute = location.pathname.startsWith("/tasks");
   const isArtifactsRoute = location.pathname.startsWith("/artifacts");
   const isResearchRoute = location.pathname.startsWith("/research");
+  const isImagesRoute = location.pathname.startsWith("/images");
   const userMenuRef = useRef<HTMLDivElement>(null);
   const notificationMenuRef = useRef<HTMLDivElement>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -391,7 +399,9 @@ export function Layout() {
                 ? "page-frame artifacts-page-frame"
                 : isResearchRoute
                   ? "page-frame research-page-frame"
-                  : "page-frame"
+                  : isImagesRoute
+                    ? "page-frame images-page-frame"
+                    : "page-frame"
           }
         >
           <Outlet />

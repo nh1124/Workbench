@@ -47,6 +47,7 @@ function serviceEmoji(manifestId: string, manifestIcon?: string): string {
   if (id.includes("task")) return "📋";
   if (id.includes("note")) return "📝";
   if (id.includes("artifact")) return "📁";
+  if (id.includes("image")) return "IMG";
   if (id.includes("calendar")) return "📅";
   if (id.includes("chat") || id.includes("message")) return "💬";
   return "⚙️";

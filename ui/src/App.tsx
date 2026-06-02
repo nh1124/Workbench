@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { ArtifactsPage } from "./pages/ArtifactsPage";
 import { HomePage } from "./pages/HomePage";
+import { ImagesPage } from "./pages/ImagesPage";
 import { LoginPage } from "./pages/LoginPage";
 import { NotesPage } from "./pages/NotesPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
@@ -22,7 +23,7 @@ function resolveStartPage(): string {
     }
 
     const parsed = JSON.parse(raw) as { startPage?: string };
-    const allowed = new Set(["/", "/projects", "/tasks", "/notes", "/research", "/artifacts"]);
+    const allowed = new Set(["/", "/projects", "/tasks", "/notes", "/research", "/images", "/artifacts"]);
     if (parsed.startPage && allowed.has(parsed.startPage)) {
       return parsed.startPage;
     }
@@ -55,6 +56,7 @@ export default function App() {
           <Route path="tasks" element={<TasksPage />} />
           <Route path="notes" element={<NotesPage />} />
           <Route path="research" element={<ResearchPage />} />
+          <Route path="images" element={<ImagesPage />} />
           <Route path="artifacts" element={<ArtifactsPage />} />
           <Route path="projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="settings" element={<SettingsPage />} />

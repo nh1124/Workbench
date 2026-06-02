@@ -6,7 +6,7 @@ Workbench is split into a Core gateway plus internal domain services.
 
 - External consumers (UI, agent runtimes, future clients) call **Workbench Core only**.
 - **Workbench Core** is the single public MCP/tool provider and external HTTP facade.
-- `notes`, `artifacts`, `tasks`, `projects`, and `lbs` are internal business services.
+- `notes`, `artifacts`, `tasks`, `projects`, `images`, and `lbs` are internal business services.
 - Each service keeps its own database and service-local account table.
 - Core delegates to services through internal HTTP clients.
 
@@ -42,6 +42,8 @@ Flow:
   - Internal tasks HTTP API
 - `services/projects`
   - Internal projects HTTP API
+- `services/images`
+  - Internal image generation HTTP API
 - `services/lbs`
   - Local FastAPI LBS backend consumed by Tasks and Core MCP tools
 
@@ -65,6 +67,7 @@ Core facade for domain resources:
 - Notes: `/api/notes`, `/api/notes/:id`, `/api/notes/projects`
 - Artifacts: `/api/artifacts`, `/api/artifacts/:id`, `/api/artifacts/projects`
 - Tasks: `/api/tasks`, `/api/tasks/:id`, `/api/tasks/:id/history`, `/api/tasks/projects`, `/api/tasks/export`, `/api/tasks/import`
+- Images: `/api/images/defaults`, `/api/images/references`, `/api/images/generations`, `/api/images/assets/:id/download`
 
 Activation behavior for `PUT /integrations/configs/:integrationId` with `enabled=true`:
 
@@ -111,11 +114,13 @@ Service `.env` files should keep secrets and DB credentials. Values such as `LBS
 - `ARTIFACTS_SERVICE_URL`
 - `TASKS_SERVICE_URL`
 - `PROJECTS_SERVICE_URL` (optional)
+- `IMAGES_SERVICE_URL`
 - `LBS_SERVICE_URL`
 - `INTERNAL_API_KEY_NOTES`
 - `INTERNAL_API_KEY_ARTIFACTS`
 - `INTERNAL_API_KEY_TASKS`
 - `INTERNAL_API_KEY_PROJECTS` (optional)
+- `INTERNAL_API_KEY_IMAGES`
 
 ### Services
 
@@ -207,5 +212,6 @@ For stable remote OAuth or MCP clients, set `CORE_EXTERNAL_BASE_URL` in `service
 - Artifacts DB: `5544`
 - Tasks DB: `5545`
 - Projects DB: `5546`
+- Images DB: `5547`
 
 LBS defaults to local sqlite for development when `services/lbs/.env` does not set `DATABASE_URL`.

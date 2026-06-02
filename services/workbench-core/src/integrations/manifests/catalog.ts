@@ -1,6 +1,7 @@
 import { integrationManifestIds, type IntegrationManifest, type IntegrationManifestId } from "../types.js";
 import { artifactsManifest } from "./artifactsManifest.js";
 import { deepResearchManifest } from "./deepResearchManifest.js";
+import { imageGenerationManifest } from "./imageGenerationManifest.js";
 import { notesManifest } from "./notesManifest.js";
 import { projectsManifest } from "./projectsManifest.js";
 import { tasksManifest } from "./tasksManifest.js";
@@ -10,6 +11,7 @@ const integrationManifestCatalog: Record<IntegrationManifestId, IntegrationManif
   artifacts: artifactsManifest,
   tasks: tasksManifest,
   projects: projectsManifest,
+  image_generation: imageGenerationManifest,
   deep_research: deepResearchManifest
 };
 

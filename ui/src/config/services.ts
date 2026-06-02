@@ -106,5 +106,6 @@ export const navItems = [
   { path: "/tasks", label: "Tasks" },
   { path: "/notes", label: "Notes" },
   { path: "/research", label: "Research" },
+  { path: "/images", label: "Images" },
   { path: "/artifacts", label: "Artifacts" }
 ] as const;

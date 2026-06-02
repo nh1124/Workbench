@@ -312,6 +312,96 @@ export interface StoredIntegrationConfig {
   updatedAt: string;
 }
 
+export type ImageProvider = "auto" | "mock" | "openai" | "nanobanana";
+export type ImageIntent = "create" | "refine" | "edit" | "context_update";
+export type ImageJobStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
+export type ImageQuality = "draft" | "standard" | "high";
+export type ImageSize = "512x512" | "768x768" | "1024x1024" | "1024x1536" | "1536x1024" | "auto";
+
+export interface ImageReferenceRecord {
+  id: string;
+  purpose: "reference" | "source" | "mask";
+  mimeType: string;
+  width?: number;
+  height?: number;
+  sizeBytes: number;
+  sha256: string;
+  projectId?: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface ImageAssetRecord {
+  id: string;
+  jobId: string;
+  sourceAssetId?: string;
+  sourceReferenceId?: string;
+  indexInJob: number;
+  mimeType: string;
+  width?: number;
+  height?: number;
+  sizeBytes: number;
+  sha256: string;
+  metadata: Record<string, unknown>;
+  artifactItemId?: string;
+  artifactItemPath?: string;
+  artifactTitle?: string;
+  projectId?: string;
+  projectName?: string;
+  createdAt: string;
+  downloadUrl?: string;
+}
+
+export interface ImageContextRef {
+  kind: "project" | "artifact" | "note" | "task" | "research" | "freeform";
+  id?: string;
+  title?: string;
+  path?: string;
+  content?: string;
+}
+
+export interface ImageJobRecord {
+  jobId: string;
+  status: ImageJobStatus;
+  intent: ImageIntent;
+  provider: Exclude<ImageProvider, "auto">;
+  model: string;
+  prompt: string;
+  instruction?: string;
+  progress: {
+    stage: string;
+    percent: number;
+    message: string;
+  };
+  errorCode?: string;
+  errorMessage?: string;
+  saveToArtifacts: boolean;
+  projectId?: string;
+  projectName?: string;
+  artifactTitle?: string;
+  artifactPath?: string;
+  assets: ImageAssetRecord[];
+  artifactRefs?: unknown[];
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export interface ImageDefaultsResponse {
+  enabled: boolean;
+  defaults: {
+    provider: ImageProvider;
+    model?: string;
+    size: ImageSize;
+    quality: ImageQuality;
+    count: number;
+    saveToArtifacts: boolean;
+  };
+  availableProviders: Record<Exclude<ImageProvider, "auto">, boolean>;
+  capabilities: Record<Exclude<ImageProvider, "auto">, string[]>;
+}
+
 export type DeepResearchProvider = "auto" | "gemini" | "openai" | "anthropic";
 export type DeepResearchSpeed = "deep" | "fast";
 export type DeepResearchJobStatus = "running" | "completed" | "failed" | "cancelled";

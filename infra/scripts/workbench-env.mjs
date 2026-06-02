@@ -75,6 +75,7 @@ function canonicalEnv() {
     "ARTIFACTS_PORT",
     "TASKS_PORT",
     "PROJECTS_PORT",
+    "IMAGES_PORT",
     "LBS_PORT",
     "LBS_API_PREFIX",
     "LBS_BIND_HOST",
@@ -106,6 +107,7 @@ function desiredRuntimeUpdates(env) {
   const artifactsUrl = serviceUrl(env, "ARTIFACTS_PORT");
   const tasksUrl = serviceUrl(env, "TASKS_PORT");
   const projectsUrl = serviceUrl(env, "PROJECTS_PORT");
+  const imagesUrl = serviceUrl(env, "IMAGES_PORT");
   const lbsBaseUrl = lbsUrl(env);
   const uiDevUrl = `http://${env.UI_DEV_HOST}:${env.UI_DEV_PORT}`;
 
@@ -146,6 +148,14 @@ function desiredRuntimeUpdates(env) {
       },
     },
     {
+      file: "services/images/.env",
+      sample: "services/images/.env.example",
+      updates: {
+        IMAGES_SERVICE_HOST: env.WORKBENCH_HOST,
+        IMAGES_SERVICE_PORT: env.IMAGES_PORT,
+      },
+    },
+    {
       file: "services/lbs/.env",
       sample: "services/lbs/.env.example",
       updates: {
@@ -166,6 +176,7 @@ function desiredRuntimeUpdates(env) {
         ARTIFACTS_SERVICE_URL: artifactsUrl,
         TASKS_SERVICE_URL: tasksUrl,
         PROJECTS_SERVICE_URL: projectsUrl,
+        IMAGES_SERVICE_URL: imagesUrl,
         LBS_SERVICE_URL: lbsBaseUrl,
       },
     },
@@ -201,6 +212,10 @@ function desiredExampleUpdates(env) {
     {
       file: "infra/env_samples/tasks.env.example",
       updates: desiredRuntimeUpdates(env).find((target) => target.file === "services/tasks/.env").updates,
+    },
+    {
+      file: "infra/env_samples/images.env.example",
+      updates: desiredRuntimeUpdates(env).find((target) => target.file === "services/images/.env").updates,
     },
     {
       file: "infra/env_samples/lbs.env.example",
@@ -309,6 +324,7 @@ function printPorts(env) {
     env.ARTIFACTS_PORT,
     env.TASKS_PORT,
     env.PROJECTS_PORT,
+    env.IMAGES_PORT,
     env.LBS_PORT,
   ];
   if (args.has("--ui")) {
