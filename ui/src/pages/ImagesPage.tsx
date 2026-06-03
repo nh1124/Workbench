@@ -19,6 +19,15 @@ const intentLabels: Record<ImageIntent, string> = {
   context_update: "Context Update"
 };
 
+type ControlTab = "compose" | "sources" | "context" | "export";
+
+const controlTabs: Array<{ id: ControlTab; label: string }> = [
+  { id: "compose", label: "Compose" },
+  { id: "sources", label: "Sources" },
+  { id: "context", label: "Context" },
+  { id: "export", label: "Export" }
+];
+
 function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
@@ -35,7 +44,7 @@ function formatDateTime(value: string): string {
 }
 
 function assetLabel(asset: ImageAssetRecord): string {
-  return `${asset.id.slice(0, 18)} · ${asset.width ?? "?"}x${asset.height ?? "?"}`;
+  return `${asset.id.slice(0, 18)} / ${asset.width ?? "?"}x${asset.height ?? "?"}`;
 }
 
 export function ImagesPage() {
@@ -64,6 +73,7 @@ export function ImagesPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [assetUrls, setAssetUrls] = useState<Record<string, string>>({});
+  const [controlTab, setControlTab] = useState<ControlTab>("compose");
   const objectUrlsRef = useRef<Record<string, string>>({});
 
   const selectedSourceAsset = useMemo(() => {
@@ -212,6 +222,8 @@ export function ImagesPage() {
               <button
                 key={value}
                 type="button"
+                role="tab"
+                aria-selected={intent === value}
                 className={intent === value ? "active" : ""}
                 onClick={() => setIntent(value)}
               >
@@ -220,163 +232,192 @@ export function ImagesPage() {
             ))}
           </div>
 
-          <label className="images-field">
-            <span>Prompt</span>
-            <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={5} />
-          </label>
-
-          <label className="images-field">
-            <span>Instruction</span>
-            <textarea
-              value={instruction}
-              onChange={(event) => setInstruction(event.target.value)}
-              rows={3}
-              placeholder="Keep the subject, improve lighting, update style..."
-            />
-          </label>
-
-          <div className="images-grid-fields">
-            <label className="images-field">
-              <span>Provider</span>
-              <select value={provider} onChange={(event) => setProvider(event.target.value as ImageProvider)}>
-                <option value="auto">Auto</option>
-                <option value="mock">Mock</option>
-                <option value="openai">OpenAI</option>
-                <option value="nanobanana">Nano Banana</option>
-              </select>
-            </label>
-            <label className="images-field">
-              <span>Size</span>
-              <select value={size} onChange={(event) => setSize(event.target.value as ImageSize)}>
-                <option value="1024x1024">1024x1024</option>
-                <option value="1024x1536">1024x1536</option>
-                <option value="1536x1024">1536x1024</option>
-                <option value="auto">Auto</option>
-              </select>
-            </label>
-            <label className="images-field">
-              <span>Quality</span>
-              <select value={quality} onChange={(event) => setQuality(event.target.value as ImageQuality)}>
-                <option value="draft">Draft</option>
-                <option value="standard">Standard</option>
-                <option value="high">High</option>
-              </select>
-            </label>
-            <label className="images-field">
-              <span>Count</span>
-              <input
-                type="number"
-                min={1}
-                max={4}
-                value={count}
-                onChange={(event) => setCount(Number(event.target.value))}
-              />
-            </label>
+          <div className="images-control-tabs" role="tablist" aria-label="Image controls">
+            {controlTabs.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={controlTab === tab.id}
+                className={controlTab === tab.id ? "active" : ""}
+                onClick={() => setControlTab(tab.id)}
+              >
+                {tab.label}
+              </button>
+            ))}
           </div>
 
-          <section className="images-source-section">
-            <div className="images-section-title">
-              <strong>Reference Images</strong>
-              <small>{references.length} uploaded</small>
-            </div>
-            <div className="images-upload-row">
-              <label className="images-upload-button">
-                Add reference
-                <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) void uploadReference(file, "reference");
-                  event.currentTarget.value = "";
-                }} />
-              </label>
-              <label className="images-upload-button">
-                Add source
-                <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) void uploadReference(file, "source");
-                  event.currentTarget.value = "";
-                }} />
-              </label>
-            </div>
-            {references.length > 0 ? (
-              <div className="images-reference-list">
-                {references.map((reference) => (
-                  <label key={reference.id}>
-                    <input
-                      type="checkbox"
-                      checked={selectedReferenceIds.includes(reference.id)}
-                      onChange={(event) => {
-                        setSelectedReferenceIds((prev) =>
-                          event.target.checked ? [...prev, reference.id] : prev.filter((id) => id !== reference.id)
-                        );
-                      }}
-                    />
-                    <span>{reference.purpose}</span>
-                    <small>{formatBytes(reference.sizeBytes)}</small>
+          <div className="images-tab-panel">
+            {controlTab === "compose" ? (
+              <>
+                <label className="images-field">
+                  <span>Prompt</span>
+                  <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={5} />
+                </label>
+
+                <label className="images-field">
+                  <span>Instruction</span>
+                  <textarea
+                    value={instruction}
+                    onChange={(event) => setInstruction(event.target.value)}
+                    rows={3}
+                    placeholder="Keep the subject, improve lighting, update style..."
+                  />
+                </label>
+
+                <div className="images-grid-fields">
+                  <label className="images-field">
+                    <span>Provider</span>
+                    <select value={provider} onChange={(event) => setProvider(event.target.value as ImageProvider)}>
+                      <option value="auto">Auto</option>
+                      <option value="mock">Mock</option>
+                      <option value="openai">OpenAI</option>
+                      <option value="nanobanana">Nano Banana</option>
+                    </select>
                   </label>
-                ))}
-              </div>
+                  <label className="images-field">
+                    <span>Size</span>
+                    <select value={size} onChange={(event) => setSize(event.target.value as ImageSize)}>
+                      <option value="1024x1024">1024x1024</option>
+                      <option value="1024x1536">1024x1536</option>
+                      <option value="1536x1024">1536x1024</option>
+                      <option value="auto">Auto</option>
+                    </select>
+                  </label>
+                  <label className="images-field">
+                    <span>Quality</span>
+                    <select value={quality} onChange={(event) => setQuality(event.target.value as ImageQuality)}>
+                      <option value="draft">Draft</option>
+                      <option value="standard">Standard</option>
+                      <option value="high">High</option>
+                    </select>
+                  </label>
+                  <label className="images-field">
+                    <span>Count</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={4}
+                      value={count}
+                      onChange={(event) => setCount(Number(event.target.value))}
+                    />
+                  </label>
+                </div>
+              </>
             ) : null}
-          </section>
 
-          <label className="images-field">
-            <span>Source Asset</span>
-            <select value={sourceAssetId} onChange={(event) => setSourceAssetId(event.target.value)}>
-              <option value="">No existing source asset</option>
-              {history.flatMap((job) => job.assets).map((asset) => (
-                <option key={asset.id} value={asset.id}>{assetLabel(asset)}</option>
-              ))}
-            </select>
-          </label>
+            {controlTab === "sources" ? (
+              <>
+                <section className="images-source-section">
+                  <div className="images-section-title">
+                    <strong>Reference Images</strong>
+                    <small>{references.length} uploaded</small>
+                  </div>
+                  <div className="images-upload-row">
+                    <label className="images-upload-button">
+                      Add reference
+                      <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        if (file) void uploadReference(file, "reference");
+                        event.currentTarget.value = "";
+                      }} />
+                    </label>
+                    <label className="images-upload-button">
+                      Add source
+                      <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        if (file) void uploadReference(file, "source");
+                        event.currentTarget.value = "";
+                      }} />
+                    </label>
+                  </div>
+                  {references.length > 0 ? (
+                    <div className="images-reference-list">
+                      {references.map((reference) => (
+                        <label key={reference.id}>
+                          <input
+                            type="checkbox"
+                            checked={selectedReferenceIds.includes(reference.id)}
+                            onChange={(event) => {
+                              setSelectedReferenceIds((prev) =>
+                                event.target.checked ? [...prev, reference.id] : prev.filter((id) => id !== reference.id)
+                              );
+                            }}
+                          />
+                          <span>{reference.purpose}</span>
+                          <small>{formatBytes(reference.sizeBytes)}</small>
+                        </label>
+                      ))}
+                    </div>
+                  ) : null}
+                </section>
 
-          <section className="images-source-section">
-            <div className="images-section-title">
-              <strong>Preserve</strong>
-            </div>
-            <div className="images-chip-row">
-              {(["subject", "composition", "style", "colors", "text", "layout"] as const).map((item) => (
-                <button
-                  key={item}
-                  type="button"
-                  className={preserve.includes(item) ? "active" : ""}
-                  onClick={() => togglePreserve(item)}
-                >
-                  {item}
-                </button>
-              ))}
-            </div>
-          </section>
+                <label className="images-field">
+                  <span>Source Asset</span>
+                  <select value={sourceAssetId} onChange={(event) => setSourceAssetId(event.target.value)}>
+                    <option value="">No existing source asset</option>
+                    {history.flatMap((job) => job.assets).map((asset) => (
+                      <option key={asset.id} value={asset.id}>{assetLabel(asset)}</option>
+                    ))}
+                  </select>
+                </label>
 
-          <label className="images-field">
-            <span>Context</span>
-            <textarea
-              value={contextText}
-              onChange={(event) => setContextText(event.target.value)}
-              rows={4}
-              placeholder="Paste project direction, brand notes, or update requirements."
-            />
-          </label>
+                <section className="images-source-section">
+                  <div className="images-section-title">
+                    <strong>Preserve</strong>
+                  </div>
+                  <div className="images-chip-row">
+                    {(["subject", "composition", "style", "colors", "text", "layout"] as const).map((item) => (
+                      <button
+                        key={item}
+                        type="button"
+                        className={preserve.includes(item) ? "active" : ""}
+                        onClick={() => togglePreserve(item)}
+                      >
+                        {item}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              </>
+            ) : null}
 
-          <section className="images-source-section">
-            <div className="images-section-title">
-              <strong>Artifacts</strong>
-            </div>
-            <label className="images-check">
-              <input type="checkbox" checked={saveToArtifacts} onChange={(event) => setSaveToArtifacts(event.target.checked)} />
-              Auto-save generated assets
-            </label>
-            <label className="images-field">
-              <span>Artifact Title</span>
-              <input value={artifactTitle} onChange={(event) => setArtifactTitle(event.target.value)} />
-            </label>
-            <label className="images-field">
-              <span>Artifact Path</span>
-              <input value={artifactPath} onChange={(event) => setArtifactPath(event.target.value)} placeholder="images/hero.png" />
-            </label>
-            <label className="images-field">
-              <span>Project ID</span>
-              <input value={projectId} onChange={(event) => setProjectId(event.target.value)} placeholder="default" />
-            </label>
-          </section>
+            {controlTab === "context" ? (
+              <label className="images-field">
+                <span>Context</span>
+                <textarea
+                  value={contextText}
+                  onChange={(event) => setContextText(event.target.value)}
+                  rows={8}
+                  placeholder="Paste project direction, brand notes, or update requirements."
+                />
+              </label>
+            ) : null}
+
+            {controlTab === "export" ? (
+              <section className="images-source-section">
+                <div className="images-section-title">
+                  <strong>Artifacts</strong>
+                </div>
+                <label className="images-check">
+                  <input type="checkbox" checked={saveToArtifacts} onChange={(event) => setSaveToArtifacts(event.target.checked)} />
+                  Auto-save generated assets
+                </label>
+                <label className="images-field">
+                  <span>Artifact Title</span>
+                  <input value={artifactTitle} onChange={(event) => setArtifactTitle(event.target.value)} />
+                </label>
+                <label className="images-field">
+                  <span>Artifact Path</span>
+                  <input value={artifactPath} onChange={(event) => setArtifactPath(event.target.value)} placeholder="images/hero.png" />
+                </label>
+                <label className="images-field">
+                  <span>Project ID</span>
+                  <input value={projectId} onChange={(event) => setProjectId(event.target.value)} placeholder="default" />
+                </label>
+              </section>
+            ) : null}
+          </div>
 
           <button className="images-primary-button" type="button" onClick={() => void runGeneration()} disabled={isLoading || !prompt.trim()}>
             {isLoading ? "Generating..." : intent === "create" ? "Generate" : "Run Update"}
@@ -438,7 +479,7 @@ export function ImagesPage() {
           {selectedJob ? (
             <section className="images-job-summary">
               <div>
-                <strong>{intentLabels[selectedJob.intent]} · {selectedJob.status}</strong>
+                <strong>{intentLabels[selectedJob.intent]} / {selectedJob.status}</strong>
                 <span>{selectedJob.provider} / {selectedJob.model}</span>
               </div>
               <p>{selectedJob.progress.message}</p>
@@ -463,7 +504,7 @@ export function ImagesPage() {
                 onClick={() => setSelectedJob(job)}
               >
                 <strong>{job.prompt}</strong>
-                <span>{intentLabels[job.intent]} · {job.status}</span>
+                <span>{intentLabels[job.intent]} / {job.status}</span>
                 <small>{formatDateTime(job.updatedAt)}</small>
               </button>
             ))}

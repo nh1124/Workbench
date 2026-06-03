@@ -1325,6 +1325,35 @@ async function provisionAccountToServices(userId: string, username: string) {
   return results;
 }
 
+async function ensureImagesAccountProvisioned(authContext: AuthenticatedContext): Promise<void> {
+  const service = serviceTargets.find((target) => target.id === "images");
+  if (!service) return;
+
+  try {
+    const response = await fetch(`${service.baseUrl}/internal/accounts`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": service.apiKey
+      },
+      body: JSON.stringify({ coreUserId: authContext.userId, username: authContext.username })
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      const message = text || `HTTP ${response.status}`;
+      await upsertProvisioning(authContext.userId, service.id, "error", message);
+      throw new Error(`Images service provisioning failed: ${message}`);
+    }
+
+    await upsertProvisioning(authContext.userId, service.id, "ok");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Images service provisioning failed";
+    await upsertProvisioning(authContext.userId, service.id, "error", message);
+    throw error;
+  }
+}
+
 app.get("/health", (_req, res) => {
   res.json({
     service: "workbench-core",
@@ -2018,6 +2047,7 @@ app.get("/api/images/defaults", async (req, res) => {
   if (!authContext) return;
 
   try {
+    await ensureImagesAccountProvisioned(authContext);
     const settings = await resolveImageSettings(authContext.userId);
     const serviceDefaults = (await imagesClient.defaults(authContext.accessToken)) as Record<string, unknown>;
     const serviceDefaultValues = (serviceDefaults.defaults as Record<string, unknown> | undefined) ?? {};
@@ -2061,6 +2091,7 @@ app.post("/api/images/references", async (req, res) => {
   const target = `${serviceBaseUrls.images}/images/references`;
   const contentType = req.header("content-type");
   try {
+    await ensureImagesAccountProvisioned(authContext);
     const upstream = await fetch(target, {
       method: "POST",
       headers: {
@@ -2091,6 +2122,7 @@ app.post("/api/images/generations", async (req, res) => {
   }
 
   try {
+    await ensureImagesAccountProvisioned(authContext);
     const settings = await resolveImageSettings(authContext.userId);
     if (!settings.enabled) {
       return res.status(400).json({ message: "Image Generation is disabled in Settings.", code: "IMAGE_GENERATION_DISABLED" });
@@ -2113,6 +2145,7 @@ app.get("/api/images/generations", async (req, res) => {
 
   const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
   try {
+    await ensureImagesAccountProvisioned(authContext);
     const result = await imagesClient.list(authContext.accessToken, Number.isFinite(limit) ? limit : undefined);
     return res.json(result);
   } catch (error) {
@@ -2125,6 +2158,7 @@ app.get("/api/images/generations/:jobId", async (req, res) => {
   if (!authContext) return;
 
   try {
+    await ensureImagesAccountProvisioned(authContext);
     const result = await imagesClient.getJob(authContext.accessToken, String(req.params.jobId));
     return res.json(result);
   } catch (error) {
@@ -2137,6 +2171,7 @@ app.post("/api/images/generations/:jobId/cancel", async (req, res) => {
   if (!authContext) return;
 
   try {
+    await ensureImagesAccountProvisioned(authContext);
     const result = await imagesClient.cancel(authContext.accessToken, String(req.params.jobId));
     return res.json(result);
   } catch (error) {
@@ -2154,6 +2189,7 @@ app.post("/api/images/generations/:jobId/retry", async (req, res) => {
   }
 
   try {
+    await ensureImagesAccountProvisioned(authContext);
     const settings = await resolveImageSettings(authContext.userId);
     if (!settings.enabled) {
       return res.status(400).json({ message: "Image Generation is disabled in Settings.", code: "IMAGE_GENERATION_DISABLED" });
@@ -2175,6 +2211,7 @@ app.get("/api/images/assets/:assetId", async (req, res) => {
   if (!authContext) return;
 
   try {
+    await ensureImagesAccountProvisioned(authContext);
     const result = await imagesClient.getAsset(authContext.accessToken, String(req.params.assetId));
     return res.json(result);
   } catch (error) {
@@ -2193,6 +2230,7 @@ app.get("/api/images/assets/:assetId/download", async (req, res) => {
   const target = `${serviceBaseUrls.images}/images/assets/${assetId}/download${suffix}`;
 
   try {
+    await ensureImagesAccountProvisioned(authContext);
     const upstream = await fetch(target, {
       headers: { Authorization: `Bearer ${authContext.accessToken}` }
     });
@@ -2216,6 +2254,7 @@ app.delete("/api/images/assets/:assetId", async (req, res) => {
   if (!authContext) return;
 
   try {
+    await ensureImagesAccountProvisioned(authContext);
     await imagesClient.deleteAsset(authContext.accessToken, String(req.params.assetId));
     return res.status(204).send();
   } catch (error) {
@@ -2233,6 +2272,7 @@ app.post("/api/images/assets/:assetId/artifact", async (req, res) => {
   }
 
   try {
+    await ensureImagesAccountProvisioned(authContext);
     const artifact = await saveImageAssetToArtifacts(authContext, String(req.params.assetId), parsed.data);
     return res.status(201).json({ status: "ok", artifact });
   } catch (error) {

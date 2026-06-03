@@ -1,11 +1,12 @@
 .images-page {
   height: 100%;
   min-height: calc(100vh - 96px);
+  color: #101828;
 }
 
 .images-workbench {
   display: grid;
-  grid-template-columns: minmax(320px, 400px) minmax(0, 1fr) minmax(260px, 320px);
+  grid-template-columns: minmax(360px, 440px) minmax(0, 1fr) minmax(260px, 320px);
   gap: 16px;
   height: 100%;
 }
@@ -15,9 +16,11 @@
 .images-history-panel {
   min-height: 0;
   overflow: auto;
-  border: 1px solid var(--border-color, #dde3ea);
+  border: 1px solid #d0d7e2;
   border-radius: 8px;
-  background: var(--panel-bg, #fff);
+  background: #ffffff;
+  color: #101828;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
 }
 
 .images-control-panel,
@@ -37,6 +40,11 @@
 .images-panel-header h2 {
   margin: 4px 0 0;
   font-size: 1.2rem;
+  color: #101828;
+}
+
+.images-page .eyebrow {
+  color: #34517a;
 }
 
 .images-status {
@@ -62,6 +70,7 @@
 }
 
 .images-intent-tabs,
+.images-control-tabs,
 .images-chip-row,
 .images-upload-row,
 .images-card-actions {
@@ -71,10 +80,17 @@
 }
 
 .images-intent-tabs {
-  margin: 16px 0;
+  margin: 16px 0 10px;
+}
+
+.images-control-tabs {
+  border-bottom: 1px solid #d9e2ee;
+  margin: 0 -4px 14px;
+  padding: 0 4px;
 }
 
 .images-intent-tabs button,
+.images-control-tabs button,
 .images-chip-row button,
 .images-card-actions button,
 .images-history-panel button,
@@ -84,19 +100,39 @@
   background: #fff;
   color: #1f2937;
   cursor: pointer;
+  font-weight: 700;
 }
 
 .images-intent-tabs button,
+.images-control-tabs button,
 .images-chip-row button {
   padding: 7px 10px;
 }
 
+.images-control-tabs button {
+  border-color: transparent;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  margin-bottom: -1px;
+}
+
 .images-intent-tabs button.active,
+.images-control-tabs button.active,
 .images-chip-row button.active,
 .images-history-list button.active {
   border-color: #2563eb;
   background: #eff6ff;
   color: #1d4ed8;
+}
+
+.images-control-tabs button.active {
+  background: #ffffff;
+  border-color: #d9e2ee #d9e2ee #ffffff;
+  color: #123c8c;
+}
+
+.images-tab-panel {
+  min-height: 360px;
 }
 
 .images-field {
@@ -108,6 +144,7 @@
 .images-field span,
 .images-section-title strong {
   font-weight: 700;
+  color: #111827;
 }
 
 .images-field input,
@@ -119,6 +156,17 @@
   padding: 9px 10px;
   font: inherit;
   background: #fff;
+  color: #111827;
+}
+
+.images-field input::placeholder,
+.images-field textarea::placeholder {
+  color: #8a94a6;
+  opacity: 1;
+}
+
+.images-field select {
+  color: #111827;
 }
 
 .images-field textarea {
@@ -134,9 +182,10 @@
 .images-source-section {
   margin: 16px 0;
   padding: 12px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid #d9e2ee;
   border-radius: 8px;
   background: #f8fafc;
+  color: #111827;
 }
 
 .images-upload-button {
@@ -146,8 +195,10 @@
   border-radius: 7px;
   padding: 8px 10px;
   background: #fff;
+  color: #111827;
   cursor: pointer;
   font-size: 0.9rem;
+  font-weight: 700;
 }
 
 .images-upload-button input {
@@ -169,6 +220,7 @@
   align-items: center;
   gap: 8px;
   font-size: 0.9rem;
+  color: #111827;
 }
 
 .images-reference-list small,
@@ -202,6 +254,7 @@
   min-height: 0;
   overflow: auto;
   padding: 16px;
+  background: #ffffff;
 }
 
 .images-result-grid {
@@ -211,11 +264,13 @@
 }
 
 .images-result-card {
-  border: 1px solid #e5e7eb;
+  border: 1px solid #d9e2ee;
   border-radius: 8px;
   padding: 10px;
   display: grid;
   gap: 10px;
+  background: #ffffff;
+  color: #101828;
 }
 
 .images-result-card img,
@@ -242,6 +297,7 @@
   display: block;
   margin-bottom: 8px;
   font-weight: 700;
+  color: #111827;
 }
 
 .images-card-actions button,
@@ -256,7 +312,7 @@
   display: grid;
   place-content: center;
   text-align: center;
-  color: #667085;
+  color: #4b5b73;
 }
 
 .images-empty-state h3 {
@@ -265,8 +321,10 @@
 }
 
 .images-job-summary {
-  border-top: 1px solid #e5e7eb;
+  border-top: 1px solid #d9e2ee;
   padding: 12px 16px;
+  background: #f8fafc;
+  color: #101828;
 }
 
 .images-job-summary div {
@@ -302,6 +360,14 @@
 
 .images-history-list span {
   color: #475467;
+}
+
+.images-history-panel .images-section-title {
+  color: #111827;
+}
+
+.images-history-list p {
+  color: #4b5b73;
 }
 
 @media (max-width: 1180px) {
