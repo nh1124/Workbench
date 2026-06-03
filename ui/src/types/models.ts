@@ -399,6 +399,7 @@ export interface ImageDefaultsResponse {
     saveToArtifacts: boolean;
   };
   availableProviders: Record<Exclude<ImageProvider, "auto">, boolean>;
+  availableModels: Record<Exclude<ImageProvider, "auto">, Array<{ id: string; label: string; description?: string }>>;
   capabilities: Record<Exclude<ImageProvider, "auto">, string[]>;
 }
 

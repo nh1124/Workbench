@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { ensureImagesSchema, getImagesPool } from "./db.js";
 import { deleteImageBuffer, putImageBuffer, readImageBuffer } from "./storage.js";
-import { adapterCapabilities, normalizeImageSize, resolveModel, resolveProvider, runProvider } from "./providers/index.js";
+import { adapterCapabilities, normalizeImageSize, providerModelOptions, resolveModel, resolveProvider, runProvider } from "./providers/index.js";
 import { ImageProviderError } from "./providers/types.js";
 import type {
   ImageAssetRecord,
@@ -384,9 +384,9 @@ export async function imageDefaults(input?: { credentials?: ImageGenerationInput
       provider,
       model:
         provider === "openai"
-          ? credentials?.defaultOpenAIModel ?? process.env.IMAGES_DEFAULT_OPENAI_MODEL ?? "gpt-image-1.5"
+          ? resolveModel("openai", undefined, credentials)
           : provider === "nanobanana"
-            ? credentials?.defaultNanobananaModel ?? process.env.IMAGES_DEFAULT_NANOBANANA_MODEL ?? "nanobanana"
+            ? resolveModel("nanobanana", undefined, credentials)
             : "workbench-mock-image",
       size: "1024x1024",
       quality: "standard",
@@ -398,6 +398,7 @@ export async function imageDefaults(input?: { credentials?: ImageGenerationInput
       openai: Boolean(credentials?.openaiApiKey),
       nanobanana: Boolean(credentials?.nanobananaApiKey)
     },
+    availableModels: providerModelOptions(),
     capabilities: adapterCapabilities()
   };
 }

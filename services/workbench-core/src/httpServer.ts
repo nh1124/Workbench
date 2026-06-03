@@ -1068,7 +1068,6 @@ async function resolveImageSettings(userId: string): Promise<{
   providerCredentials: {
     openaiApiKey?: string;
     nanobananaApiKey?: string;
-    nanobananaApiUrl?: string;
     defaultProvider?: ImageProviderChoice;
     defaultOpenAIModel?: string;
     defaultNanobananaModel?: string;
@@ -1095,7 +1094,6 @@ async function resolveImageSettings(userId: string): Promise<{
     providerCredentials: {
       openaiApiKey: configString(values, "openaiApiKey"),
       nanobananaApiKey: configString(values, "nanobananaApiKey"),
-      nanobananaApiUrl: configString(values, "nanobananaApiUrl"),
       defaultProvider: provider,
       defaultOpenAIModel: configString(values, "defaultOpenAIModel"),
       defaultNanobananaModel: configString(values, "defaultNanobananaModel")
@@ -2051,12 +2049,23 @@ app.get("/api/images/defaults", async (req, res) => {
     const settings = await resolveImageSettings(authContext.userId);
     const serviceDefaults = (await imagesClient.defaults(authContext.accessToken)) as Record<string, unknown>;
     const serviceDefaultValues = (serviceDefaults.defaults as Record<string, unknown> | undefined) ?? {};
+    const serviceAvailableModels =
+      (serviceDefaults.availableModels as Record<string, Array<{ id?: unknown }>> | undefined) ?? {};
+    const firstServiceModel = (providerId: string): string | undefined => {
+      const first = serviceAvailableModels[providerId]?.[0]?.id;
+      return typeof first === "string" ? first : undefined;
+    };
+    const configuredServiceModel = (providerId: string, configured: string | undefined): string | undefined => {
+      if (!configured) return undefined;
+      const options = serviceAvailableModels[providerId] ?? [];
+      return options.some((option) => option.id === configured) ? configured : undefined;
+    };
     const provider = settings.defaults.provider;
     const model =
       provider === "openai"
-        ? settings.providerCredentials.defaultOpenAIModel
+        ? configuredServiceModel("openai", settings.providerCredentials.defaultOpenAIModel) ?? firstServiceModel("openai")
         : provider === "nanobanana"
-          ? settings.providerCredentials.defaultNanobananaModel
+          ? configuredServiceModel("nanobanana", settings.providerCredentials.defaultNanobananaModel) ?? firstServiceModel("nanobanana")
           : typeof serviceDefaultValues.model === "string"
             ? serviceDefaultValues.model
             : "workbench-mock-image";

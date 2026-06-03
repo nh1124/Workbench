@@ -25,13 +25,6 @@ export const imageGenerationManifest: IntegrationManifest = {
       helperText: "Used when provider=nanobanana or auto selects Nano Banana."
     },
     {
-      key: "nanobananaApiUrl",
-      label: "Nano Banana API URL",
-      type: "text",
-      placeholder: "https://api.example.com/images",
-      helperText: "Provider endpoint for Nano Banana compatible image generation."
-    },
-    {
       key: "defaultProvider",
       label: "Default Provider",
       type: "select",
@@ -54,8 +47,14 @@ export const imageGenerationManifest: IntegrationManifest = {
     {
       key: "defaultNanobananaModel",
       label: "Nano Banana Model",
-      type: "text",
-      defaultValue: "nanobanana"
+      type: "select",
+      defaultValue: "gemini-3.1-flash-image",
+      options: [
+        { label: "Nano Banana 2 (Gemini 3.1 Flash Image)", value: "gemini-3.1-flash-image" },
+        { label: "Nano Banana Pro (Gemini 3 Pro Image)", value: "gemini-3-pro-image" },
+        { label: "Nano Banana (Gemini 2.5 Flash Image)", value: "gemini-2.5-flash-image" }
+      ],
+      helperText: "The Gemini API endpoint is embedded by Workbench; only the API key is required."
     },
     {
       key: "defaultSize",

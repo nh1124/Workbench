@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { imagesApi } from "../lib/api";
+import { artifactsApi, imagesApi, projectsApi } from "../lib/api";
 import type {
+  ArtifactItem,
   ImageAssetRecord,
   ImageDefaultsResponse,
   ImageIntent,
@@ -8,7 +9,8 @@ import type {
   ImageProvider,
   ImageQuality,
   ImageReferenceRecord,
-  ImageSize
+  ImageSize,
+  ProjectRecord
 } from "../types/models";
 import "./ImagesPage.css";
 
@@ -18,15 +20,6 @@ const intentLabels: Record<ImageIntent, string> = {
   edit: "Edit",
   context_update: "Context Update"
 };
-
-type ControlTab = "compose" | "sources" | "context" | "export";
-
-const controlTabs: Array<{ id: ControlTab; label: string }> = [
-  { id: "compose", label: "Compose" },
-  { id: "sources", label: "Sources" },
-  { id: "context", label: "Context" },
-  { id: "export", label: "Export" }
-];
 
 function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
@@ -55,6 +48,7 @@ export function ImagesPage() {
   const [instruction, setInstruction] = useState("");
   const [contextText, setContextText] = useState("");
   const [provider, setProvider] = useState<ImageProvider>("auto");
+  const [model, setModel] = useState("");
   const [size, setSize] = useState<ImageSize>("1024x1024");
   const [quality, setQuality] = useState<ImageQuality>("standard");
   const [count, setCount] = useState(1);
@@ -70,16 +64,40 @@ export function ImagesPage() {
   const [artifactTitle, setArtifactTitle] = useState("");
   const [artifactPath, setArtifactPath] = useState("");
   const [projectId, setProjectId] = useState("");
+  const [projects, setProjects] = useState<ProjectRecord[]>([]);
+  const [artifactItems, setArtifactItems] = useState<ArtifactItem[]>([]);
+  const [artifactSettingsOpen, setArtifactSettingsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [assetUrls, setAssetUrls] = useState<Record<string, string>>({});
-  const [controlTab, setControlTab] = useState<ControlTab>("compose");
+  const [historyOpen, setHistoryOpen] = useState(false);
   const objectUrlsRef = useRef<Record<string, string>>({});
 
   const selectedSourceAsset = useMemo(() => {
     if (!sourceAssetId) return undefined;
     return history.flatMap((job) => job.assets).find((asset) => asset.id === sourceAssetId);
   }, [history, sourceAssetId]);
+
+  const selectedProject = useMemo(
+    () => projects.find((project) => project.id === projectId),
+    [projectId, projects]
+  );
+
+  const modelOptions = useMemo(() => {
+    if (!defaults?.availableModels) return [];
+    if (provider === "auto") return [];
+    return defaults.availableModels[provider] ?? [];
+  }, [defaults, provider]);
+
+  const artifactPathOptions = useMemo(() => {
+    const directories = new Set<string>(["images/"]);
+    for (const item of artifactItems) {
+      const path = item.kind === "folder" ? item.path : item.parentPath;
+      const normalized = path.replace(/^\/+/, "").replace(/\/?$/, "/");
+      if (normalized && normalized !== "/") directories.add(normalized);
+    }
+    return [...directories].sort((a, b) => a.localeCompare(b));
+  }, [artifactItems]);
 
   const refreshHistory = async () => {
     const loaded = await imagesApi.list(40);
@@ -98,11 +116,16 @@ export function ImagesPage() {
         if (cancelled) return;
         setDefaults(loadedDefaults);
         setProvider(loadedDefaults.defaults.provider);
+        setModel(loadedDefaults.defaults.model ?? "");
         setSize(loadedDefaults.defaults.size);
         setQuality(loadedDefaults.defaults.quality);
         setCount(loadedDefaults.defaults.count);
         setSaveToArtifacts(loadedDefaults.defaults.saveToArtifacts);
-        await refreshHistory();
+        const [loadedProjects] = await Promise.all([
+          projectsApi.list(undefined, undefined, 100).catch(() => ({ items: [] })),
+          refreshHistory()
+        ]);
+        if (!cancelled) setProjects(loadedProjects.items);
       } catch (loadError) {
         if (!cancelled) {
           setError(loadError instanceof Error ? loadError.message : "Failed to load Images.");
@@ -117,6 +140,32 @@ export function ImagesPage() {
       objectUrlsRef.current = {};
     };
   }, []);
+
+  useEffect(() => {
+    if (provider === "auto") {
+      setModel("");
+      return;
+    }
+    const options = defaults?.availableModels?.[provider] ?? [];
+    if (options.length > 0 && !options.some((option) => option.id === model)) {
+      setModel(options[0].id);
+    }
+  }, [defaults, model, provider]);
+
+  useEffect(() => {
+    if (!artifactSettingsOpen) return;
+    let cancelled = false;
+    void artifactsApi.tree(projectId || undefined)
+      .then((items) => {
+        if (!cancelled) setArtifactItems(items);
+      })
+      .catch(() => {
+        if (!cancelled) setArtifactItems([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [artifactSettingsOpen, projectId]);
 
   useEffect(() => {
     const assets = selectedJob?.assets ?? [];
@@ -160,6 +209,7 @@ export function ImagesPage() {
         prompt,
         instruction: instruction || undefined,
         provider,
+        model: model || undefined,
         size,
         quality,
         count,
@@ -170,7 +220,8 @@ export function ImagesPage() {
         saveToArtifacts,
         artifactTitle: artifactTitle || undefined,
         artifactPath: artifactPath || undefined,
-        projectId: projectId || undefined
+        projectId: projectId || undefined,
+        projectName: selectedProject?.name
       });
       setSelectedJob(result);
       await refreshHistory();
@@ -187,7 +238,8 @@ export function ImagesPage() {
       await imagesApi.saveArtifact(asset.id, {
         artifactTitle: artifactTitle || undefined,
         artifactPath: artifactPath || undefined,
-        projectId: projectId || undefined
+        projectId: projectId || undefined,
+        projectName: selectedProject?.name
       });
       await refreshHistory();
     } catch (saveError) {
@@ -208,7 +260,6 @@ export function ImagesPage() {
           <header className="images-panel-header">
             <div>
               <p className="eyebrow">Image Generation</p>
-              <h2>Generate and refine images</h2>
             </div>
             <span className={defaults?.enabled === false ? "images-status off" : "images-status"}>
               {defaults?.enabled === false ? "Disabled" : "Ready"}
@@ -217,13 +268,12 @@ export function ImagesPage() {
 
           {error ? <p className="images-error">{error}</p> : null}
 
-          <div className="images-intent-tabs" role="tablist" aria-label="Image intent">
+          <div className="images-mode-row" aria-label="Image intent">
             {(Object.keys(intentLabels) as ImageIntent[]).map((value) => (
               <button
                 key={value}
                 type="button"
-                role="tab"
-                aria-selected={intent === value}
+                aria-pressed={intent === value}
                 className={intent === value ? "active" : ""}
                 onClick={() => setIntent(value)}
               >
@@ -232,192 +282,203 @@ export function ImagesPage() {
             ))}
           </div>
 
-          <div className="images-control-tabs" role="tablist" aria-label="Image controls">
-            {controlTabs.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                role="tab"
-                aria-selected={controlTab === tab.id}
-                className={controlTab === tab.id ? "active" : ""}
-                onClick={() => setControlTab(tab.id)}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
+          <section className="images-form-section">
+            <label className="images-field span-2">
+              <span>Prompt</span>
+              <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={5} />
+            </label>
 
-          <div className="images-tab-panel">
-            {controlTab === "compose" ? (
-              <>
-                <label className="images-field">
-                  <span>Prompt</span>
-                  <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={5} />
-                </label>
+            <label className="images-field span-2">
+              <span>Instruction</span>
+              <textarea
+                value={instruction}
+                onChange={(event) => setInstruction(event.target.value)}
+                rows={3}
+                placeholder="Keep the subject, improve lighting, update style..."
+              />
+            </label>
 
-                <label className="images-field">
-                  <span>Instruction</span>
-                  <textarea
-                    value={instruction}
-                    onChange={(event) => setInstruction(event.target.value)}
-                    rows={3}
-                    placeholder="Keep the subject, improve lighting, update style..."
-                  />
-                </label>
-
-                <div className="images-grid-fields">
-                  <label className="images-field">
-                    <span>Provider</span>
-                    <select value={provider} onChange={(event) => setProvider(event.target.value as ImageProvider)}>
-                      <option value="auto">Auto</option>
-                      <option value="mock">Mock</option>
-                      <option value="openai">OpenAI</option>
-                      <option value="nanobanana">Nano Banana</option>
-                    </select>
-                  </label>
-                  <label className="images-field">
-                    <span>Size</span>
-                    <select value={size} onChange={(event) => setSize(event.target.value as ImageSize)}>
-                      <option value="1024x1024">1024x1024</option>
-                      <option value="1024x1536">1024x1536</option>
-                      <option value="1536x1024">1536x1024</option>
-                      <option value="auto">Auto</option>
-                    </select>
-                  </label>
-                  <label className="images-field">
-                    <span>Quality</span>
-                    <select value={quality} onChange={(event) => setQuality(event.target.value as ImageQuality)}>
-                      <option value="draft">Draft</option>
-                      <option value="standard">Standard</option>
-                      <option value="high">High</option>
-                    </select>
-                  </label>
-                  <label className="images-field">
-                    <span>Count</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={4}
-                      value={count}
-                      onChange={(event) => setCount(Number(event.target.value))}
-                    />
-                  </label>
-                </div>
-              </>
-            ) : null}
-
-            {controlTab === "sources" ? (
-              <>
-                <section className="images-source-section">
-                  <div className="images-section-title">
-                    <strong>Reference Images</strong>
-                    <small>{references.length} uploaded</small>
-                  </div>
-                  <div className="images-upload-row">
-                    <label className="images-upload-button">
-                      Add reference
-                      <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => {
-                        const file = event.target.files?.[0];
-                        if (file) void uploadReference(file, "reference");
-                        event.currentTarget.value = "";
-                      }} />
-                    </label>
-                    <label className="images-upload-button">
-                      Add source
-                      <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => {
-                        const file = event.target.files?.[0];
-                        if (file) void uploadReference(file, "source");
-                        event.currentTarget.value = "";
-                      }} />
-                    </label>
-                  </div>
-                  {references.length > 0 ? (
-                    <div className="images-reference-list">
-                      {references.map((reference) => (
-                        <label key={reference.id}>
-                          <input
-                            type="checkbox"
-                            checked={selectedReferenceIds.includes(reference.id)}
-                            onChange={(event) => {
-                              setSelectedReferenceIds((prev) =>
-                                event.target.checked ? [...prev, reference.id] : prev.filter((id) => id !== reference.id)
-                              );
-                            }}
-                          />
-                          <span>{reference.purpose}</span>
-                          <small>{formatBytes(reference.sizeBytes)}</small>
-                        </label>
-                      ))}
-                    </div>
-                  ) : null}
-                </section>
-
-                <label className="images-field">
-                  <span>Source Asset</span>
-                  <select value={sourceAssetId} onChange={(event) => setSourceAssetId(event.target.value)}>
-                    <option value="">No existing source asset</option>
-                    {history.flatMap((job) => job.assets).map((asset) => (
-                      <option key={asset.id} value={asset.id}>{assetLabel(asset)}</option>
-                    ))}
-                  </select>
-                </label>
-
-                <section className="images-source-section">
-                  <div className="images-section-title">
-                    <strong>Preserve</strong>
-                  </div>
-                  <div className="images-chip-row">
-                    {(["subject", "composition", "style", "colors", "text", "layout"] as const).map((item) => (
-                      <button
-                        key={item}
-                        type="button"
-                        className={preserve.includes(item) ? "active" : ""}
-                        onClick={() => togglePreserve(item)}
-                      >
-                        {item}
-                      </button>
-                    ))}
-                  </div>
-                </section>
-              </>
-            ) : null}
-
-            {controlTab === "context" ? (
+            <div className="images-grid-fields">
               <label className="images-field">
-                <span>Context</span>
-                <textarea
-                  value={contextText}
-                  onChange={(event) => setContextText(event.target.value)}
-                  rows={8}
-                  placeholder="Paste project direction, brand notes, or update requirements."
+                <span>Provider</span>
+                <select value={provider} onChange={(event) => setProvider(event.target.value as ImageProvider)}>
+                  <option value="auto">Auto</option>
+                  <option value="mock">Mock</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="nanobanana">Nano Banana</option>
+                </select>
+              </label>
+              <label className="images-field">
+                <span>Model</span>
+                <select value={model} disabled={provider === "auto"} onChange={(event) => setModel(event.target.value)}>
+                  {provider === "auto" ? (
+                    <option value="">Auto-selected by provider</option>
+                  ) : modelOptions.length > 0 ? (
+                    modelOptions.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label} / {option.id}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="">Default model</option>
+                  )}
+                </select>
+              </label>
+              <label className="images-field">
+                <span>Size</span>
+                <select value={size} onChange={(event) => setSize(event.target.value as ImageSize)}>
+                  <option value="1024x1024">1024x1024</option>
+                  <option value="1024x1536">1024x1536</option>
+                  <option value="1536x1024">1536x1024</option>
+                  <option value="auto">Auto</option>
+                </select>
+              </label>
+              <label className="images-field">
+                <span>Quality</span>
+                <select value={quality} onChange={(event) => setQuality(event.target.value as ImageQuality)}>
+                  <option value="draft">Draft</option>
+                  <option value="standard">Standard</option>
+                  <option value="high">High</option>
+                </select>
+              </label>
+              <label className="images-field">
+                <span>Count</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={4}
+                  value={count}
+                  onChange={(event) => setCount(Number(event.target.value))}
                 />
               </label>
-            ) : null}
+            </div>
+          </section>
 
-            {controlTab === "export" ? (
-              <section className="images-source-section">
-                <div className="images-section-title">
-                  <strong>Artifacts</strong>
-                </div>
-                <label className="images-check">
-                  <input type="checkbox" checked={saveToArtifacts} onChange={(event) => setSaveToArtifacts(event.target.checked)} />
-                  Auto-save generated assets
-                </label>
-                <label className="images-field">
-                  <span>Artifact Title</span>
-                  <input value={artifactTitle} onChange={(event) => setArtifactTitle(event.target.value)} />
-                </label>
-                <label className="images-field">
-                  <span>Artifact Path</span>
-                  <input value={artifactPath} onChange={(event) => setArtifactPath(event.target.value)} placeholder="images/hero.png" />
-                </label>
-                <label className="images-field">
-                  <span>Project ID</span>
-                  <input value={projectId} onChange={(event) => setProjectId(event.target.value)} placeholder="default" />
-                </label>
-              </section>
+          <section className="images-source-section">
+            <div className="images-section-title">
+              <strong>Reference Images</strong>
+              <small>{references.length} uploaded</small>
+            </div>
+            <div className="images-upload-row">
+              <label className="images-upload-button">
+                Add reference
+                <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void uploadReference(file, "reference");
+                  event.currentTarget.value = "";
+                }} />
+              </label>
+              <label className="images-upload-button">
+                Add source
+                <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void uploadReference(file, "source");
+                  event.currentTarget.value = "";
+                }} />
+              </label>
+            </div>
+            {references.length > 0 ? (
+              <div className="images-reference-list">
+                {references.map((reference) => (
+                  <label key={reference.id}>
+                    <input
+                      type="checkbox"
+                      checked={selectedReferenceIds.includes(reference.id)}
+                      onChange={(event) => {
+                        setSelectedReferenceIds((prev) =>
+                          event.target.checked ? [...prev, reference.id] : prev.filter((id) => id !== reference.id)
+                        );
+                      }}
+                    />
+                    <span>{reference.purpose}</span>
+                    <small>{formatBytes(reference.sizeBytes)}</small>
+                  </label>
+                ))}
+              </div>
             ) : null}
-          </div>
+          </section>
+
+          <label className="images-field">
+            <span>Source Asset</span>
+            <select value={sourceAssetId} onChange={(event) => setSourceAssetId(event.target.value)}>
+              <option value="">No existing source asset</option>
+              {history.flatMap((job) => job.assets).map((asset) => (
+                <option key={asset.id} value={asset.id}>{assetLabel(asset)}</option>
+              ))}
+            </select>
+          </label>
+
+          <section className="images-source-section">
+            <div className="images-section-title">
+              <strong>Preserve</strong>
+            </div>
+            <div className="images-chip-row">
+              {(["subject", "composition", "style", "colors", "text", "layout"] as const).map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  className={preserve.includes(item) ? "active" : ""}
+                  onClick={() => togglePreserve(item)}
+                >
+                  {item}
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <label className="images-field">
+            <span>Context</span>
+            <textarea
+              value={contextText}
+              onChange={(event) => setContextText(event.target.value)}
+              rows={4}
+              placeholder="Paste project direction, brand notes, or update requirements."
+            />
+          </label>
+
+          <details
+            className="images-source-section images-advanced-section"
+            open={artifactSettingsOpen}
+            onToggle={(event) => setArtifactSettingsOpen(event.currentTarget.open)}
+          >
+            <summary>
+              <strong>Artifacts</strong>
+              <small>Advanced save settings</small>
+            </summary>
+            <label className="images-check">
+              <input type="checkbox" checked={saveToArtifacts} onChange={(event) => setSaveToArtifacts(event.target.checked)} />
+              Auto-save generated assets
+            </label>
+            <label className="images-field">
+              <span>Artifact Title</span>
+              <input value={artifactTitle} onChange={(event) => setArtifactTitle(event.target.value)} />
+            </label>
+            <label className="images-field">
+              <span>Project</span>
+              <select value={projectId} onChange={(event) => setProjectId(event.target.value)}>
+                <option value="">Default Project</option>
+                {projects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="images-field">
+              <span>Artifact Path</span>
+              <input
+                list="images-artifact-path-options"
+                value={artifactPath}
+                onChange={(event) => setArtifactPath(event.target.value)}
+                placeholder="images/hero.png"
+              />
+              <datalist id="images-artifact-path-options">
+                {artifactPathOptions.map((path) => (
+                  <option key={path} value={path} />
+                ))}
+              </datalist>
+            </label>
+          </details>
 
           <button className="images-primary-button" type="button" onClick={() => void runGeneration()} disabled={isLoading || !prompt.trim()}>
             {isLoading ? "Generating..." : intent === "create" ? "Generate" : "Run Update"}
@@ -488,28 +549,50 @@ export function ImagesPage() {
           ) : null}
         </main>
 
-        <aside className="images-history-panel">
-          <div className="images-section-title">
-            <strong>History</strong>
-            <button type="button" onClick={() => void refreshHistory()}>Refresh</button>
-          </div>
-          <div className="images-history-list">
-            {history.length === 0 ? (
-              <p>No generations yet.</p>
-            ) : history.map((job) => (
-              <button
-                key={job.jobId}
-                type="button"
-                className={selectedJob?.jobId === job.jobId ? "active" : ""}
-                onClick={() => setSelectedJob(job)}
-              >
-                <strong>{job.prompt}</strong>
-                <span>{intentLabels[job.intent]} / {job.status}</span>
-                <small>{formatDateTime(job.updatedAt)}</small>
-              </button>
-            ))}
-          </div>
-        </aside>
+        <button
+          className="images-history-rail"
+          type="button"
+          aria-expanded={historyOpen}
+          onClick={() => setHistoryOpen((open) => !open)}
+        >
+          History
+          <span>{history.length}</span>
+        </button>
+
+        {historyOpen ? (
+          <>
+            <button className="images-history-backdrop" type="button" aria-label="Close history" onClick={() => setHistoryOpen(false)} />
+
+            <aside className="images-history-panel open">
+              <div className="images-section-title">
+                <strong>History</strong>
+                <div className="images-history-actions">
+                  <button type="button" onClick={() => void refreshHistory()}>Refresh</button>
+                  <button type="button" onClick={() => setHistoryOpen(false)}>Close</button>
+                </div>
+              </div>
+              <div className="images-history-list">
+                {history.length === 0 ? (
+                  <p>No generations yet.</p>
+                ) : history.map((job) => (
+                  <button
+                    key={job.jobId}
+                    type="button"
+                    className={selectedJob?.jobId === job.jobId ? "active" : ""}
+                    onClick={() => {
+                      setSelectedJob(job);
+                      setHistoryOpen(false);
+                    }}
+                  >
+                    <strong>{job.prompt}</strong>
+                    <span>{intentLabels[job.intent]} / {job.status}</span>
+                    <small>{formatDateTime(job.updatedAt)}</small>
+                  </button>
+                ))}
+              </div>
+            </aside>
+          </>
+        ) : null}
       </section>
     </div>
   );

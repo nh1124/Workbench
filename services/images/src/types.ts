@@ -49,7 +49,6 @@ export interface ImageGenerationInput {
 export interface ImageProviderCredentials {
   openaiApiKey?: string;
   nanobananaApiKey?: string;
-  nanobananaApiUrl?: string;
   defaultProvider?: ImageProvider;
   defaultOpenAIModel?: string;
   defaultNanobananaModel?: string;
@@ -140,5 +139,6 @@ export interface ImageDefaultsResponse {
     saveToArtifacts: boolean;
   };
   availableProviders: Record<ResolvedImageProvider, boolean>;
+  availableModels: Record<ResolvedImageProvider, Array<{ id: string; label: string; description?: string }>>;
   capabilities: Record<ResolvedImageProvider, Array<ImageIntent | "reference" | "source">>;
 }

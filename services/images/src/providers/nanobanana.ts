@@ -1,7 +1,42 @@
 import type { ImageProviderAdapter, ProviderGenerateInput, ProviderGenerateResult } from "./types.js";
 import { ImageProviderError } from "./types.js";
 
+export const NANO_BANANA_MODELS = [
+  {
+    id: "gemini-3.1-flash-image",
+    label: "Nano Banana 2",
+    description: "Gemini 3.1 Flash Image"
+  },
+  {
+    id: "gemini-3-pro-image",
+    label: "Nano Banana Pro",
+    description: "Gemini 3 Pro Image"
+  },
+  {
+    id: "gemini-2.5-flash-image",
+    label: "Nano Banana",
+    description: "Gemini 2.5 Flash Image"
+  }
+] as const;
+
+export const DEFAULT_NANO_BANANA_MODEL = NANO_BANANA_MODELS[0].id;
+
 type NanoBananaPayload = {
+  candidates?: Array<{
+    content?: {
+      parts?: Array<{
+        text?: string;
+        inlineData?: {
+          data?: string;
+          mimeType?: string;
+        };
+        inline_data?: {
+          data?: string;
+          mime_type?: string;
+        };
+      }>;
+    };
+  }>;
   images?: Array<{
     b64_json?: string;
     base64?: string;
@@ -27,6 +62,14 @@ type NanoBananaPayload = {
   message?: string;
 };
 
+function resolveNanoBananaModel(model: string): string {
+  return NANO_BANANA_MODELS.some((option) => option.id === model) ? model : DEFAULT_NANO_BANANA_MODEL;
+}
+
+function buildEndpoint(model: string): string {
+  return `https://generativelanguage.googleapis.com/v1/models/${encodeURIComponent(model)}:generateContent`;
+}
+
 function buildPrompt(input: ProviderGenerateInput): string {
   return [
     input.prompt.trim(),
@@ -35,6 +78,27 @@ function buildPrompt(input: ProviderGenerateInput): string {
     input.preserve?.length ? `Preserve: ${input.preserve.join(", ")}` : undefined,
     input.negativePrompt?.trim() ? `Avoid: ${input.negativePrompt.trim()}` : undefined
   ].filter((line): line is string => Boolean(line)).join("\n\n");
+}
+
+function aspectRatioForSize(size: string): string | undefined {
+  if (size === "1024x1536") return "2:3";
+  if (size === "1536x1024") return "3:2";
+  if (size === "1024x1024" || size === "768x768" || size === "512x512") return "1:1";
+  return undefined;
+}
+
+function buildParts(input: ProviderGenerateInput): Array<Record<string, unknown>> {
+  const parts: Array<Record<string, unknown>> = [{ text: buildPrompt(input) }];
+  for (const image of input.images) {
+    if (image.purpose === "mask") continue;
+    parts.push({
+      inlineData: {
+        mimeType: image.mimeType,
+        data: image.buffer.toString("base64")
+      }
+    });
+  }
+  return parts;
 }
 
 async function downloadHttpsImage(url: string, signal?: AbortSignal): Promise<Buffer> {
@@ -55,37 +119,38 @@ export const nanoBananaProvider: ImageProviderAdapter = {
   capabilities: ["create", "refine", "edit", "context_update", "reference", "source"],
   async generate(input: ProviderGenerateInput): Promise<ProviderGenerateResult> {
     const apiKey = input.credentials?.nanobananaApiKey?.trim();
-    const endpoint = input.credentials?.nanobananaApiUrl?.trim() || process.env.NANOBANANA_API_URL?.trim();
+    const model = resolveNanoBananaModel(input.model);
+    const aspectRatio = aspectRatioForSize(input.size);
     if (!apiKey) {
       throw new ImageProviderError("Nano Banana API key is not configured", "MISSING_PROVIDER_KEY", 400);
     }
-    if (!endpoint) {
-      throw new ImageProviderError("Nano Banana API URL is not configured", "PROVIDER_UNAVAILABLE", 400);
-    }
 
-    const response = await fetch(endpoint, {
+    const response = await fetch(buildEndpoint(model), {
       method: "POST",
       signal: input.signal,
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`
+        "x-goog-api-key": apiKey
       },
       body: JSON.stringify({
-        model: input.model,
-        intent: input.intent,
-        prompt: buildPrompt(input),
-        size: input.size,
-        count: input.count,
-        quality: input.quality,
-        stylePreset: input.stylePreset,
-        seed: input.seed,
-        preserve: input.preserve,
-        images: input.images.map((image) => ({
-          id: image.id,
-          purpose: image.purpose,
-          mimeType: image.mimeType,
-          base64: image.buffer.toString("base64")
-        }))
+        contents: [
+          {
+            role: "user",
+            parts: buildParts(input)
+          }
+        ],
+        generationConfig: {
+          responseModalities: ["Image"],
+          ...(aspectRatio
+            ? {
+                responseFormat: {
+                  image: {
+                    aspectRatio
+                  }
+                }
+              }
+            : {})
+        }
       })
     });
 
@@ -107,6 +172,21 @@ export const nanoBananaProvider: ImageProviderAdapter = {
 
     const imageRows = payload.images ?? payload.data ?? [];
     const images = [];
+    for (const candidate of payload.candidates ?? []) {
+      for (const part of candidate.content?.parts ?? []) {
+        const inlineData = part.inlineData ?? (part.inline_data ? {
+          data: part.inline_data.data,
+          mimeType: part.inline_data.mime_type
+        } : undefined);
+        if (inlineData?.data) {
+          images.push({
+            buffer: Buffer.from(inlineData.data, "base64"),
+            mimeType: inlineData.mimeType ?? "image/png",
+            metadata: {}
+          });
+        }
+      }
+    }
     for (const item of imageRows) {
       const encoded = item.b64_json ?? item.base64;
       if (encoded) {
@@ -134,7 +214,7 @@ export const nanoBananaProvider: ImageProviderAdapter = {
 
     return {
       provider: "nanobanana",
-      model: input.model,
+      model,
       images,
       metadata: {}
     };

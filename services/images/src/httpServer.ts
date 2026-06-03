@@ -93,7 +93,6 @@ const generationSchema = z.object({
   providerCredentials: z.object({
     openaiApiKey: z.string().optional(),
     nanobananaApiKey: z.string().optional(),
-    nanobananaApiUrl: z.string().optional(),
     defaultProvider: providerSchema.optional(),
     defaultOpenAIModel: z.string().optional(),
     defaultNanobananaModel: z.string().optional()

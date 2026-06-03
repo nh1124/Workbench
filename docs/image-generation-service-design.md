@@ -855,7 +855,7 @@ export const imageGenerationManifest: IntegrationManifest = {
 - API key の所在。
   - 対策: 初期は Core integration config。将来は provider credential service か Images service encrypted store。
 - Nano Banana の正式 API 名称やモデル ID が変わり得る。
-  - 対策: provider id は `nanobanana` のままでも、model id と endpoint は env/config 化する。
+  - 対策: provider id は `nanobanana` のままにし、Gemini API の endpoint と対応 model id は adapter 内の埋め込み候補として管理する。UI は Images defaults から返る候補を選択する。
 
 ## 21. 最小 MVP
 

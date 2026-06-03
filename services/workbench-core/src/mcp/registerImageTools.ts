@@ -79,7 +79,6 @@ async function withImageSettings(userId: string, payload: Record<string, unknown
     providerCredentials: {
       openaiApiKey: configString(values, "openaiApiKey"),
       nanobananaApiKey: configString(values, "nanobananaApiKey"),
-      nanobananaApiUrl: configString(values, "nanobananaApiUrl"),
       defaultProvider: configString(values, "defaultProvider") ?? "auto",
       defaultOpenAIModel: configString(values, "defaultOpenAIModel"),
       defaultNanobananaModel: configString(values, "defaultNanobananaModel")

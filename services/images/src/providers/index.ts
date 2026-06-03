@@ -2,7 +2,7 @@ import type { ImageProviderCredentials, ImageSize, ResolvedImageProvider } from 
 import type { ImageProviderAdapter, ProviderGenerateInput, ProviderGenerateResult } from "./types.js";
 import { ImageProviderError } from "./types.js";
 import { mockProvider } from "./mock.js";
-import { nanoBananaProvider } from "./nanobanana.js";
+import { DEFAULT_NANO_BANANA_MODEL, NANO_BANANA_MODELS, nanoBananaProvider } from "./nanobanana.js";
 import { openAiProvider } from "./openai.js";
 
 const adapters: Record<ResolvedImageProvider, ImageProviderAdapter> = {
@@ -21,6 +21,21 @@ export function adapterCapabilities(): Record<ResolvedImageProvider, ImageProvid
     mock: mockProvider.capabilities,
     openai: openAiProvider.capabilities,
     nanobanana: nanoBananaProvider.capabilities
+  };
+}
+
+export function providerModelOptions(): Record<ResolvedImageProvider, Array<{ id: string; label: string; description?: string }>> {
+  return {
+    mock: [{ id: "workbench-mock-image", label: "Mock Image" }],
+    openai: [
+      { id: "gpt-image-1.5", label: "GPT Image 1.5" },
+      { id: "gpt-image-1", label: "GPT Image 1" }
+    ],
+    nanobanana: NANO_BANANA_MODELS.map((model) => ({
+      id: model.id,
+      label: model.label,
+      description: model.description
+    }))
   };
 }
 
@@ -44,12 +59,14 @@ export function resolveProvider(input: {
 }
 
 export function resolveModel(provider: ResolvedImageProvider, explicitModel?: string, credentials?: ImageProviderCredentials): string {
-  if (explicitModel?.trim()) return explicitModel.trim();
   if (provider === "openai") {
+    if (explicitModel?.trim()) return explicitModel.trim();
     return credentials?.defaultOpenAIModel?.trim() || optionalEnv("IMAGES_DEFAULT_OPENAI_MODEL") || "gpt-image-1.5";
   }
   if (provider === "nanobanana") {
-    return credentials?.defaultNanobananaModel?.trim() || optionalEnv("IMAGES_DEFAULT_NANOBANANA_MODEL") || "nanobanana";
+    const requested = explicitModel?.trim() || credentials?.defaultNanobananaModel?.trim() || optionalEnv("IMAGES_DEFAULT_NANOBANANA_MODEL");
+    if (requested && NANO_BANANA_MODELS.some((model) => model.id === requested)) return requested;
+    return DEFAULT_NANO_BANANA_MODEL;
   }
   return "workbench-mock-image";
 }
