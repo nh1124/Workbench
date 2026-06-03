@@ -80,20 +80,13 @@ function buildPrompt(input: ProviderGenerateInput): string {
   ].filter((line): line is string => Boolean(line)).join("\n\n");
 }
 
-function aspectRatioForSize(size: string): string | undefined {
-  if (size === "1024x1536") return "2:3";
-  if (size === "1536x1024") return "3:2";
-  if (size === "1024x1024" || size === "768x768" || size === "512x512") return "1:1";
-  return undefined;
-}
-
 function buildParts(input: ProviderGenerateInput): Array<Record<string, unknown>> {
   const parts: Array<Record<string, unknown>> = [{ text: buildPrompt(input) }];
   for (const image of input.images) {
     if (image.purpose === "mask") continue;
     parts.push({
-      inlineData: {
-        mimeType: image.mimeType,
+      inline_data: {
+        mime_type: image.mimeType,
         data: image.buffer.toString("base64")
       }
     });
@@ -120,7 +113,6 @@ export const nanoBananaProvider: ImageProviderAdapter = {
   async generate(input: ProviderGenerateInput): Promise<ProviderGenerateResult> {
     const apiKey = input.credentials?.nanobananaApiKey?.trim();
     const model = resolveNanoBananaModel(input.model);
-    const aspectRatio = aspectRatioForSize(input.size);
     if (!apiKey) {
       throw new ImageProviderError("Nano Banana API key is not configured", "MISSING_PROVIDER_KEY", 400);
     }
@@ -138,19 +130,7 @@ export const nanoBananaProvider: ImageProviderAdapter = {
             role: "user",
             parts: buildParts(input)
           }
-        ],
-        generationConfig: {
-          responseModalities: ["Image"],
-          ...(aspectRatio
-            ? {
-                responseFormat: {
-                  image: {
-                    aspectRatio
-                  }
-                }
-              }
-            : {})
-        }
+        ]
       })
     });
 
