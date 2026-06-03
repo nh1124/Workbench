@@ -178,6 +178,7 @@ function desiredRuntimeUpdates(env) {
         PROJECTS_SERVICE_URL: projectsUrl,
         IMAGES_SERVICE_URL: imagesUrl,
         LBS_SERVICE_URL: lbsBaseUrl,
+        INTERNAL_API_KEY_IMAGES: "workbench-internal-images",
       },
     },
     {
