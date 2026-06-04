@@ -98,7 +98,7 @@ export const mockProvider: ImageProviderAdapter = {
   provider: "mock",
   capabilities: ["create", "refine", "edit", "context_update", "reference", "source"],
   async generate(input: ProviderGenerateInput): Promise<ProviderGenerateResult> {
-    const count = Math.max(1, Math.min(4, input.count));
+    const count = Math.max(1, Math.min(8, input.count));
     const images = Array.from({ length: count }, (_value, index) => {
       const image = createMockPng(input, index);
       return {

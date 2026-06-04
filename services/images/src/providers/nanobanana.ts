@@ -107,16 +107,7 @@ async function downloadHttpsImage(url: string, signal?: AbortSignal): Promise<Bu
   return buffer;
 }
 
-export const nanoBananaProvider: ImageProviderAdapter = {
-  provider: "nanobanana",
-  capabilities: ["create", "refine", "edit", "context_update", "reference", "source"],
-  async generate(input: ProviderGenerateInput): Promise<ProviderGenerateResult> {
-    const apiKey = input.credentials?.nanobananaApiKey?.trim();
-    const model = resolveNanoBananaModel(input.model);
-    if (!apiKey) {
-      throw new ImageProviderError("Nano Banana API key is not configured", "MISSING_PROVIDER_KEY", 400);
-    }
-
+async function generateOne(input: ProviderGenerateInput, apiKey: string, model: string, index: number) {
     const response = await fetch(buildEndpoint(model), {
       method: "POST",
       signal: input.signal,
@@ -128,7 +119,10 @@ export const nanoBananaProvider: ImageProviderAdapter = {
         contents: [
           {
             role: "user",
-            parts: buildParts(input)
+            parts: [
+              ...buildParts(input),
+              ...(input.count > 1 ? [{ text: `Variant ${index + 1} of ${input.count}. Create a distinct option while following the same requirements.` }] : [])
+            ]
           }
         ]
       })
@@ -191,6 +185,25 @@ export const nanoBananaProvider: ImageProviderAdapter = {
     if (images.length === 0) {
       throw new ImageProviderError("Nano Banana returned no image data", "PROVIDER_EXECUTION_FAILED", 502);
     }
+
+    return images;
+}
+
+export const nanoBananaProvider: ImageProviderAdapter = {
+  provider: "nanobanana",
+  capabilities: ["create", "refine", "edit", "context_update", "reference", "source"],
+  async generate(input: ProviderGenerateInput): Promise<ProviderGenerateResult> {
+    const apiKey = input.credentials?.nanobananaApiKey?.trim();
+    const model = resolveNanoBananaModel(input.model);
+    if (!apiKey) {
+      throw new ImageProviderError("Nano Banana API key is not configured", "MISSING_PROVIDER_KEY", 400);
+    }
+
+    const count = Math.max(1, Math.min(8, Math.round(input.count)));
+    const batches = await Promise.all(
+      Array.from({ length: count }, (_value, index) => generateOne(input, apiKey, model, index))
+    );
+    const images = batches.flat();
 
     return {
       provider: "nanobanana",

@@ -325,6 +325,8 @@ export const imagesClient = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({})
     }),
+  deleteJob: (token: string, jobId: string) =>
+    serviceRequest<void>(imagesService, `/images/generations/${encodeURIComponent(jobId)}`, token, { method: "DELETE" }),
   retry: (token: string, jobId: string, payload: unknown) =>
     serviceRequest<unknown>(imagesService, `/images/generations/${encodeURIComponent(jobId)}/retry`, token, {
       method: "POST",

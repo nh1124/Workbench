@@ -3,6 +3,7 @@ import { artifactsApi, imagesApi, projectsApi } from "../lib/api";
 import type {
   ArtifactItem,
   ImageAssetRecord,
+  ImageContextRef,
   ImageDefaultsResponse,
   ImageIntent,
   ImageJobRecord,
@@ -21,6 +22,22 @@ const intentLabels: Record<ImageIntent, string> = {
   context_update: "Context Update"
 };
 
+const contextNameStorageKey = "workbench.images.contextNames";
+
+function readStoredContextNames(): Record<string, string> {
+  try {
+    const raw = window.localStorage.getItem(contextNameStorageKey);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string")
+    );
+  } catch {
+    return {};
+  }
+}
+
 function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
@@ -38,6 +55,78 @@ function formatDateTime(value: string): string {
 
 function assetLabel(asset: ImageAssetRecord): string {
   return `${asset.id.slice(0, 18)} / ${asset.width ?? "?"}x${asset.height ?? "?"}`;
+}
+
+type ImageHistoryGroup = {
+  key: string;
+  label: string;
+  detail: string;
+  jobs: ImageJobRecord[];
+  updatedAt: string;
+};
+
+type ImagePreviewItem = {
+  key: string;
+  label: string;
+  asset: ImageAssetRecord;
+  job?: ImageJobRecord;
+  kind: "source" | "result";
+};
+
+function compactText(value: string | undefined, maxLength = 96): string {
+  const normalized = value?.replace(/\s+/g, " ").trim() ?? "";
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength - 3)}...`;
+}
+
+function contextRefLabel(ref: ImageContextRef): string {
+  return compactText(ref.title || ref.path || ref.content || ref.id || ref.kind, 72) || ref.kind;
+}
+
+function contextInfoForJob(job: ImageJobRecord): { key: string; label: string; detail: string } {
+  const refs = job.contextSnapshot?.refs ?? [];
+  if (refs.length > 0) {
+    const first = refs[0];
+    const label = contextRefLabel(first);
+    const detailParts = [
+      first.kind,
+      refs.length > 1 ? `+${refs.length - 1} refs` : undefined,
+      compactText(job.contextSnapshot?.summary, 96)
+    ].filter(Boolean);
+    const key = refs
+      .map((ref) => `${ref.kind}:${ref.id || ref.path || ref.title || compactText(ref.content, 64)}`)
+      .join("|");
+    return {
+      key: `context:${key}`,
+      label,
+      detail: detailParts.join(" / ") || "Context"
+    };
+  }
+
+  if (job.projectName || job.artifactPath || job.artifactTitle) {
+    return {
+      key: `artifact:${job.projectId || job.projectName || "default"}:${job.artifactPath || job.artifactTitle || ""}`,
+      label: job.projectName ? `Project: ${job.projectName}` : "Artifacts",
+      detail: compactText(job.artifactPath || job.artifactTitle, 96) || "Artifact context"
+    };
+  }
+
+  const sourceAssetIds = Array.isArray(job.request.sourceAssetIds)
+    ? job.request.sourceAssetIds.filter((id): id is string => typeof id === "string")
+    : [];
+  if (sourceAssetIds.length > 0) {
+    return {
+      key: `source:${sourceAssetIds.join("|")}`,
+      label: "Source asset",
+      detail: sourceAssetIds.map((id) => id.slice(0, 18)).join(", ")
+    };
+  }
+
+  return {
+    key: "context:none",
+    label: "No explicit context",
+    detail: "Prompt-only generations"
+  };
 }
 
 export function ImagesPage() {
@@ -70,13 +159,37 @@ export function ImagesPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [assetUrls, setAssetUrls] = useState<Record<string, string>>({});
-  const [historyOpen, setHistoryOpen] = useState(false);
+  const [rightTab, setRightTab] = useState<"preview" | "history">("preview");
+  const [contextNames, setContextNames] = useState<Record<string, string>>(() => readStoredContextNames());
+  const [editingContextKey, setEditingContextKey] = useState("");
+  const [contextNameDraft, setContextNameDraft] = useState("");
   const objectUrlsRef = useRef<Record<string, string>>({});
 
   const selectedSourceAsset = useMemo(() => {
     if (!sourceAssetId) return undefined;
     return history.flatMap((job) => job.assets).find((asset) => asset.id === sourceAssetId);
   }, [history, sourceAssetId]);
+
+  const allHistoryAssets = useMemo(() => history.flatMap((job) => job.assets), [history]);
+
+  const jobByAssetId = useMemo(() => {
+    const map = new Map<string, ImageJobRecord>();
+    for (const job of history) {
+      for (const asset of job.assets) {
+        map.set(asset.id, job);
+      }
+    }
+    return map;
+  }, [history]);
+
+  const selectedJobSourceAssets = useMemo(() => {
+    const sourceIds = selectedJob?.request?.sourceAssetIds;
+    if (!Array.isArray(sourceIds)) return [];
+    return sourceIds
+      .filter((id): id is string => typeof id === "string")
+      .map((id) => allHistoryAssets.find((asset) => asset.id === id))
+      .filter((asset): asset is ImageAssetRecord => Boolean(asset));
+  }, [allHistoryAssets, selectedJob]);
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === projectId),
@@ -99,12 +212,35 @@ export function ImagesPage() {
     return [...directories].sort((a, b) => a.localeCompare(b));
   }, [artifactItems]);
 
+  const historyGroups = useMemo<ImageHistoryGroup[]>(() => {
+    const groups = new Map<string, ImageHistoryGroup>();
+    for (const job of history) {
+      const info = contextInfoForJob(job);
+      const label = contextNames[info.key]?.trim() || info.label;
+      const existing = groups.get(info.key);
+      if (existing) {
+        existing.jobs.push(job);
+        if (new Date(job.updatedAt).getTime() > new Date(existing.updatedAt).getTime()) {
+          existing.updatedAt = job.updatedAt;
+        }
+      } else {
+        groups.set(info.key, {
+          ...info,
+          label,
+          jobs: [job],
+          updatedAt: job.updatedAt
+        });
+      }
+    }
+    return [...groups.values()].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  }, [contextNames, history]);
+
   const refreshHistory = async () => {
     const loaded = await imagesApi.list(40);
     setHistory(loaded.items);
     setSelectedJob((current) => {
       if (!current) return loaded.items[0];
-      return loaded.items.find((item) => item.jobId === current.jobId) ?? current;
+      return loaded.items.find((item) => item.jobId === current.jobId) ?? loaded.items[0];
     });
   };
 
@@ -153,6 +289,10 @@ export function ImagesPage() {
   }, [defaults, model, provider]);
 
   useEffect(() => {
+    window.localStorage.setItem(contextNameStorageKey, JSON.stringify(contextNames));
+  }, [contextNames]);
+
+  useEffect(() => {
     if (!artifactSettingsOpen) return;
     let cancelled = false;
     void artifactsApi.tree(projectId || undefined)
@@ -168,7 +308,7 @@ export function ImagesPage() {
   }, [artifactSettingsOpen, projectId]);
 
   useEffect(() => {
-    const assets = selectedJob?.assets ?? [];
+    const assets = [...(selectedJob?.assets ?? []), ...selectedJobSourceAssets];
     for (const asset of assets) {
       if (objectUrlsRef.current[asset.id]) continue;
       void imagesApi.downloadAsset(asset.id).then((blob) => {
@@ -184,7 +324,7 @@ export function ImagesPage() {
         setAssetUrls((prev) => ({ ...prev, [selectedSourceAsset.id]: url }));
       }).catch(() => undefined);
     }
-  }, [selectedJob, selectedSourceAsset]);
+  }, [selectedJob, selectedJobSourceAssets, selectedSourceAsset]);
 
   const uploadReference = async (file: File, purpose: "reference" | "source") => {
     setError("");
@@ -247,11 +387,83 @@ export function ImagesPage() {
     }
   };
 
+  const deleteHistoryJob = async (jobId: string) => {
+    if (!window.confirm("Delete this image history item?")) return;
+    setError("");
+    try {
+      await imagesApi.removeJob(jobId);
+      const next = history.filter((job) => job.jobId !== jobId);
+      setHistory(next);
+      setSelectedJob((current) => {
+        if (!current || current.jobId === jobId) return next[0];
+        return next.some((job) => job.jobId === current.jobId) ? current : next[0];
+      });
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "History delete failed.");
+    }
+  };
+
   const togglePreserve = (value: typeof preserve[number]) => {
     setPreserve((prev) => prev.includes(value) ? prev.filter((item) => item !== value) : [...prev, value]);
   };
 
+  const renameContext = (key: string, value: string) => {
+    setContextNames((prev) => {
+      const next = { ...prev };
+      if (value.trim()) {
+        next[key] = value;
+      } else {
+        delete next[key];
+      }
+      return next;
+    });
+  };
+
+  const startContextRename = (group: ImageHistoryGroup) => {
+    setEditingContextKey(group.key);
+    setContextNameDraft(contextNames[group.key] ?? group.label);
+  };
+
+  const commitContextRename = () => {
+    if (!editingContextKey) return;
+    renameContext(editingContextKey, contextNameDraft.trim());
+    setEditingContextKey("");
+    setContextNameDraft("");
+  };
+
+  const cancelContextRename = () => {
+    setEditingContextKey("");
+    setContextNameDraft("");
+  };
+
   const currentAssets = selectedJob?.assets ?? [];
+  const previewItems = useMemo(() => {
+    const items: ImagePreviewItem[] = [];
+    const sourceAssets = selectedJobSourceAssets.length > 0
+      ? selectedJobSourceAssets
+      : selectedSourceAsset
+        ? [selectedSourceAsset]
+        : [];
+    sourceAssets.forEach((asset, index) => {
+      items.push({
+        key: `source-${asset.id}`,
+        label: sourceAssets.length > 1 ? `Source ${index + 1}` : "Source",
+        asset,
+        job: jobByAssetId.get(asset.id),
+        kind: "source"
+      });
+    });
+    currentAssets.forEach((asset, index) => {
+      items.push({
+        key: `result-${asset.id}`,
+        label: currentAssets.length > 1 ? `Result ${index + 1}` : "Latest Result",
+        asset,
+        job: selectedJob,
+        kind: "result"
+      });
+    });
+    return items;
+  }, [currentAssets, jobByAssetId, selectedJob, selectedJobSourceAssets, selectedSourceAsset]);
 
   return (
     <div className="images-page">
@@ -346,7 +558,7 @@ export function ImagesPage() {
                 <input
                   type="number"
                   min={1}
-                  max={4}
+                  max={8}
                   value={count}
                   onChange={(event) => setCount(Number(event.target.value))}
                 />
@@ -486,113 +698,230 @@ export function ImagesPage() {
         </aside>
 
         <main className="images-result-panel">
-          <section className="images-preview-area">
-            {selectedSourceAsset ? (
-              <div className="images-before-after">
-                <div>
-                  <span>Source</span>
-                  {assetUrls[selectedSourceAsset.id] ? <img src={assetUrls[selectedSourceAsset.id]} alt="Source asset" /> : <div className="images-placeholder" />}
-                </div>
-                <div>
-                  <span>Latest Result</span>
-                  {currentAssets[0] && assetUrls[currentAssets[0].id] ? (
-                    <img src={assetUrls[currentAssets[0].id]} alt="Generated result" />
-                  ) : (
-                    <div className="images-placeholder" />
-                  )}
-                </div>
-              </div>
-            ) : currentAssets.length > 0 ? (
-              <div className="images-result-grid">
-                {currentAssets.map((asset) => (
-                  <article key={asset.id} className="images-result-card">
-                    {assetUrls[asset.id] ? <img src={assetUrls[asset.id]} alt={asset.id} /> : <div className="images-placeholder" />}
-                    <div>
-                      <strong>{asset.width ?? "?"}x{asset.height ?? "?"}</strong>
-                      <small>{formatBytes(asset.sizeBytes)}</small>
-                    </div>
-                    <div className="images-card-actions">
-                      <button type="button" onClick={() => void imagesApi.downloadAsset(asset.id, true).then((blob) => {
-                        const url = URL.createObjectURL(blob);
-                        const link = document.createElement("a");
-                        link.href = url;
-                        link.download = `${asset.id}.png`;
-                        link.click();
-                        setTimeout(() => URL.revokeObjectURL(url), 60000);
-                      })}>Download</button>
-                      <button type="button" onClick={() => void saveAsset(asset)}>Save to Artifacts</button>
-                      <button type="button" onClick={() => {
-                        setSourceAssetId(asset.id);
-                        setIntent("refine");
-                      }}>Use as Source</button>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            ) : (
-              <div className="images-empty-state">
-                <h3>No image selected</h3>
-                <p>Generate a new image, upload a reference, or choose a previous asset to refine.</p>
-              </div>
-            )}
-          </section>
+          <div className="images-right-tabs" role="tablist" aria-label="Image output">
+            <button
+              type="button"
+              className={rightTab === "preview" ? "active" : ""}
+              aria-selected={rightTab === "preview"}
+              role="tab"
+              onClick={() => setRightTab("preview")}
+            >
+              Preview
+            </button>
+            <button
+              type="button"
+              className={rightTab === "history" ? "active" : ""}
+              aria-selected={rightTab === "history"}
+              role="tab"
+              onClick={() => setRightTab("history")}
+            >
+              History
+              <span>{historyGroups.length}</span>
+            </button>
+          </div>
 
-          {selectedJob ? (
-            <section className="images-job-summary">
-              <div>
-                <strong>{intentLabels[selectedJob.intent]} / {selectedJob.status}</strong>
-                <span>{selectedJob.provider} / {selectedJob.model}</span>
-              </div>
-              <p>{selectedJob.progress.message}</p>
-              {selectedJob.errorMessage ? <p className="images-error">{selectedJob.errorMessage}</p> : null}
-            </section>
-          ) : null}
-        </main>
-
-        <button
-          className="images-history-rail"
-          type="button"
-          aria-expanded={historyOpen}
-          onClick={() => setHistoryOpen((open) => !open)}
-        >
-          History
-          <span>{history.length}</span>
-        </button>
-
-        {historyOpen ? (
-          <>
-            <button className="images-history-backdrop" type="button" aria-label="Close history" onClick={() => setHistoryOpen(false)} />
-
-            <aside className="images-history-panel open">
+          {rightTab === "preview" ? (
+            <section className="images-preview-area">
+              {previewItems.length > 0 || isLoading ? (
+                  <div className="images-preview-timeline">
+                    {isLoading ? (
+                      <article className="images-single-preview images-generating-preview">
+                        <div className="images-single-preview-head">
+                          <div>
+                            <strong>Generating</strong>
+                            <small>{count} image{count === 1 ? "" : "s"} in progress</small>
+                          </div>
+                        </div>
+                        <div className="images-generating-frame">
+                          <div className="images-generating-spinner" aria-hidden="true" />
+                          <strong>Generating image...</strong>
+                          <span>New result tiles will appear here when the job completes.</span>
+                        </div>
+                        <dl className="images-preview-meta">
+                          <div className="span-2">
+                            <dt>Prompt</dt>
+                            <dd>{prompt}</dd>
+                          </div>
+                          {instruction ? (
+                            <div className="span-2">
+                              <dt>Instruction</dt>
+                              <dd>{instruction}</dd>
+                            </div>
+                          ) : null}
+                          {contextText.trim() ? (
+                            <div className="span-2">
+                              <dt>Context</dt>
+                              <dd>{contextText.trim()}</dd>
+                            </div>
+                          ) : null}
+                          <div>
+                            <dt>Mode</dt>
+                            <dd>{intentLabels[intent]} / running</dd>
+                          </div>
+                          <div>
+                            <dt>Provider</dt>
+                            <dd>{provider}{model ? ` / ${model}` : ""}</dd>
+                          </div>
+                        </dl>
+                      </article>
+                    ) : null}
+                    {previewItems.map(({ key, label, asset, job, kind }) => {
+                      const contextInfo = job ? contextInfoForJob(job) : undefined;
+                      const contextLabel = contextInfo ? contextNames[contextInfo.key]?.trim() || contextInfo.label : undefined;
+                      return (
+                      <article key={key} className="images-single-preview">
+                        <div className="images-single-preview-head">
+                          <div>
+                            <strong>{label}</strong>
+                            <small>{asset.width ?? "?"}x{asset.height ?? "?"} / {formatBytes(asset.sizeBytes)}</small>
+                          </div>
+                        </div>
+                        <div className="images-single-image-frame">
+                          {assetUrls[asset.id] ? (
+                            <img src={assetUrls[asset.id]} alt={label} />
+                          ) : (
+                            <div className="images-placeholder" />
+                          )}
+                        </div>
+                        {job ? (
+                          <dl className="images-preview-meta">
+                            <div className="span-2">
+                              <dt>{kind === "source" ? "Source Prompt" : "Prompt"}</dt>
+                              <dd>{job.prompt}</dd>
+                            </div>
+                            {job.instruction ? (
+                              <div className="span-2">
+                                <dt>Instruction</dt>
+                                <dd>{job.instruction}</dd>
+                              </div>
+                            ) : null}
+                            {contextInfo && contextInfo.key !== "context:none" ? (
+                              <div className="span-2">
+                                <dt>Context</dt>
+                                <dd>{contextLabel}{contextInfo.detail ? ` / ${contextInfo.detail}` : ""}</dd>
+                              </div>
+                            ) : null}
+                            <div>
+                              <dt>Mode</dt>
+                              <dd>{intentLabels[job.intent]} / {job.status}</dd>
+                            </div>
+                            <div>
+                              <dt>Provider</dt>
+                              <dd>{job.provider} / {job.model}</dd>
+                            </div>
+                            <div>
+                              <dt>Created</dt>
+                              <dd>{formatDateTime(job.createdAt)}</dd>
+                            </div>
+                            <div>
+                              <dt>Asset</dt>
+                              <dd>#{asset.indexInJob + 1} / {asset.id.slice(0, 18)}</dd>
+                            </div>
+                          </dl>
+                        ) : (
+                          <p className="images-preview-note">Source asset selected for refinement.</p>
+                        )}
+                        <div className="images-card-actions">
+                          <button type="button" onClick={() => void imagesApi.downloadAsset(asset.id, true).then((blob) => {
+                            const url = URL.createObjectURL(blob);
+                            const link = document.createElement("a");
+                            link.href = url;
+                            link.download = `${asset.id}.png`;
+                            link.click();
+                            setTimeout(() => URL.revokeObjectURL(url), 60000);
+                          })}>Download</button>
+                          <button type="button" onClick={() => void saveAsset(asset)}>Save to Artifacts</button>
+                          <button type="button" onClick={() => {
+                            setSourceAssetId(asset.id);
+                            setIntent("refine");
+                          }}>Use as Source</button>
+                        </div>
+                      </article>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="images-empty-state">
+                    <h3>No image selected</h3>
+                    <p>Generate a new image, upload a reference, or choose a previous asset to refine.</p>
+                  </div>
+                )}
+              </section>
+          ) : (
+            <section className="images-history-panel">
               <div className="images-section-title">
                 <strong>History</strong>
-                <div className="images-history-actions">
-                  <button type="button" onClick={() => void refreshHistory()}>Refresh</button>
-                  <button type="button" onClick={() => setHistoryOpen(false)}>Close</button>
-                </div>
+                <button type="button" onClick={() => void refreshHistory()}>Refresh</button>
               </div>
-              <div className="images-history-list">
-                {history.length === 0 ? (
+              <div className="images-history-groups">
+                {historyGroups.length === 0 ? (
                   <p>No generations yet.</p>
-                ) : history.map((job) => (
-                  <button
-                    key={job.jobId}
-                    type="button"
-                    className={selectedJob?.jobId === job.jobId ? "active" : ""}
-                    onClick={() => {
-                      setSelectedJob(job);
-                      setHistoryOpen(false);
-                    }}
-                  >
-                    <strong>{job.prompt}</strong>
-                    <span>{intentLabels[job.intent]} / {job.status}</span>
-                    <small>{formatDateTime(job.updatedAt)}</small>
-                  </button>
+                ) : historyGroups.map((group) => (
+                  <section key={group.key} className="images-history-group">
+                    <header>
+                      <div className="images-context-name-field">
+                        {editingContextKey === group.key ? (
+                          <input
+                            autoFocus
+                            value={contextNameDraft}
+                            onBlur={commitContextRename}
+                            onChange={(event) => setContextNameDraft(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                commitContextRename();
+                              }
+                              if (event.key === "Escape") {
+                                event.preventDefault();
+                                cancelContextRename();
+                              }
+                            }}
+                          />
+                        ) : (
+                          <button
+                            type="button"
+                            className="images-context-name-button"
+                            title="Rename context"
+                            onClick={() => startContextRename(group)}
+                          >
+                            {group.label}
+                          </button>
+                        )}
+                        <small>{group.detail}</small>
+                      </div>
+                      <span>{group.jobs.length}</span>
+                    </header>
+                    <div className="images-history-list">
+                      {group.jobs.map((job) => (
+                        <div key={job.jobId} className={selectedJob?.jobId === job.jobId ? "images-history-item active" : "images-history-item"}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedJob(job);
+                              setRightTab("preview");
+                            }}
+                          >
+                            <strong>{job.prompt}</strong>
+                            <span>{intentLabels[job.intent]} / {job.status}</span>
+                            <small>{formatDateTime(job.updatedAt)}</small>
+                          </button>
+                          <button
+                            className="images-history-delete"
+                            type="button"
+                            aria-label={`Delete ${job.prompt}`}
+                            onClick={() => void deleteHistoryJob(job.jobId)}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
                 ))}
               </div>
-            </aside>
-          </>
-        ) : null}
+            </section>
+          )}
+        </main>
       </section>
     </div>
   );

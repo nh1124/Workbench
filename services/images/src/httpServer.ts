@@ -12,6 +12,7 @@ import {
   cancelImageJob,
   createImageReference,
   deleteImageAsset,
+  deleteImageJob,
   getImageAsset,
   getImageJob,
   imageDefaults,
@@ -72,7 +73,7 @@ const generationSchema = z.object({
   provider: providerSchema.optional(),
   model: z.string().optional(),
   size: sizeSchema.optional(),
-  count: z.number().int().min(1).max(4).optional(),
+  count: z.number().int().min(1).max(8).optional(),
   quality: qualitySchema.optional(),
   stylePreset: z.string().optional(),
   seed: z.number().int().optional(),
@@ -222,6 +223,16 @@ app.post("/images/generations/:jobId/cancel", requireUserAuth, async (req, res) 
     return res.status(404).json({ message: "Image generation job not found" });
   }
   return res.json(job);
+});
+
+app.delete("/images/generations/:jobId", requireUserAuth, async (req, res) => {
+  const owner = ownerFromRequest(req, res);
+  if (!owner) return;
+  const deleted = await deleteImageJob(owner, String(req.params.jobId));
+  if (!deleted) {
+    return res.status(404).json({ message: "Image generation job not found" });
+  }
+  return res.status(204).send();
 });
 
 app.post("/images/generations/:jobId/retry", requireUserAuth, async (req, res) => {

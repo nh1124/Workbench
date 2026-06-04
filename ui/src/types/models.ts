@@ -360,14 +360,23 @@ export interface ImageContextRef {
   content?: string;
 }
 
+export interface ImageContextSnapshot {
+  refs: ImageContextRef[];
+  summary?: string;
+}
+
 export interface ImageJobRecord {
   jobId: string;
   status: ImageJobStatus;
   intent: ImageIntent;
+  parentJobId?: string;
   provider: Exclude<ImageProvider, "auto">;
   model: string;
   prompt: string;
   instruction?: string;
+  negativePrompt?: string;
+  request: Record<string, unknown>;
+  contextSnapshot?: ImageContextSnapshot;
   progress: {
     stage: string;
     percent: number;
@@ -386,6 +395,8 @@ export interface ImageJobRecord {
   updatedAt: string;
   startedAt?: string;
   completedAt?: string;
+  cancelledAt?: string;
+  deletedAt?: string;
 }
 
 export interface ImageDefaultsResponse {

@@ -45,6 +45,7 @@ type ImageJobRow = {
   started_at: string | null;
   completed_at: string | null;
   cancelled_at: string | null;
+  deleted_at: string | null;
 };
 
 type ImageAssetRow = {
@@ -204,7 +205,8 @@ function toJob(row: ImageJobRow, assets: ImageAssetRecord[]): ImageJobRecord {
     updatedAt: new Date(row.updated_at).toISOString(),
     startedAt: dateOrUndefined(row.started_at),
     completedAt: dateOrUndefined(row.completed_at),
-    cancelledAt: dateOrUndefined(row.cancelled_at)
+    cancelledAt: dateOrUndefined(row.cancelled_at),
+    deletedAt: dateOrUndefined(row.deleted_at)
   };
 }
 
@@ -459,7 +461,7 @@ export async function listImageJobs(ownerCoreUserId: string, limit = 50): Promis
     `
       SELECT *
       FROM image_generation_jobs
-      WHERE owner_core_user_id = $1
+      WHERE owner_core_user_id = $1 AND deleted_at IS NULL
       ORDER BY updated_at DESC
       LIMIT $2
     `,
@@ -477,7 +479,7 @@ export async function getImageJob(ownerCoreUserId: string, jobId: string): Promi
     `
       SELECT *
       FROM image_generation_jobs
-      WHERE id = $1 AND owner_core_user_id = $2
+      WHERE id = $1 AND owner_core_user_id = $2 AND deleted_at IS NULL
       LIMIT 1
     `,
     [jobId, owner]
@@ -524,6 +526,41 @@ export async function deleteImageAsset(ownerCoreUserId: string, assetId: string)
     [assetId, owner]
   );
   await deleteImageBuffer(row.storage_key).catch(() => undefined);
+  return true;
+}
+
+export async function deleteImageJob(ownerCoreUserId: string, jobId: string): Promise<boolean> {
+  await ensureImagesSchema();
+  const owner = normalizeOwner(ownerCoreUserId);
+  const pool = getImagesPool();
+  const assets = await pool.query<ImageAssetRow>(
+    `
+      SELECT *
+      FROM image_assets
+      WHERE job_id = $1 AND owner_core_user_id = $2 AND deleted_at IS NULL
+    `,
+    [jobId, owner]
+  );
+  const result = await pool.query<ImageJobRow>(
+    `
+      UPDATE image_generation_jobs
+      SET deleted_at = NOW(), updated_at = NOW()
+      WHERE id = $1 AND owner_core_user_id = $2 AND deleted_at IS NULL
+      RETURNING *
+    `,
+    [jobId, owner]
+  );
+  if (!result.rows[0]) return false;
+
+  await pool.query(
+    `
+      UPDATE image_assets
+      SET deleted_at = NOW()
+      WHERE job_id = $1 AND owner_core_user_id = $2 AND deleted_at IS NULL
+    `,
+    [jobId, owner]
+  );
+  await Promise.all(assets.rows.map((row) => deleteImageBuffer(row.storage_key).catch(() => undefined)));
   return true;
 }
 
@@ -654,7 +691,7 @@ export async function runImageGeneration(ownerCoreUserId: string, input: ImageGe
   const jobId = `imgjob_${randomUUID()}`;
   const intent = input.intent ?? "create";
   const size = normalizeImageSize(input.size) as ImageSize;
-  const count = Math.max(1, Math.min(4, Math.round(input.count ?? 1)));
+  const count = Math.max(1, Math.min(8, Math.round(input.count ?? 1)));
   const quality = input.quality ?? "standard";
   const initialProgress: ImageProgress = {
     stage: "provider_running",

@@ -907,7 +907,7 @@ const imageGenerationRequestSchema = z.object({
   provider: imageProviderSchema.optional(),
   model: z.string().optional(),
   size: imageSizeSchema.optional(),
-  count: z.number().int().min(1).max(4).optional(),
+  count: z.number().int().min(1).max(8).optional(),
   quality: imageQualitySchema.optional(),
   stylePreset: z.string().optional(),
   seed: z.number().int().optional(),
@@ -1079,7 +1079,7 @@ async function resolveImageSettings(userId: string): Promise<{
   const size = pickImageSize(configString(values, "defaultSize")) ?? "1024x1024";
   const quality = pickImageQuality(configString(values, "defaultQuality")) ?? "standard";
   const countRaw = Number(configString(values, "defaultCount") ?? "1");
-  const count = Number.isFinite(countRaw) ? Math.max(1, Math.min(4, Math.round(countRaw))) : 1;
+  const count = Number.isFinite(countRaw) ? Math.max(1, Math.min(8, Math.round(countRaw))) : 1;
   const saveToArtifacts = configBoolean(values, "defaultSaveToArtifacts") ?? false;
 
   return {
@@ -2183,6 +2183,19 @@ app.post("/api/images/generations/:jobId/cancel", async (req, res) => {
     await ensureImagesAccountProvisioned(authContext);
     const result = await imagesClient.cancel(authContext.accessToken, String(req.params.jobId));
     return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.delete("/api/images/generations/:jobId", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  try {
+    await ensureImagesAccountProvisioned(authContext);
+    await imagesClient.deleteJob(authContext.accessToken, String(req.params.jobId));
+    return res.status(204).send();
   } catch (error) {
     return respondInternalError(res, error);
   }

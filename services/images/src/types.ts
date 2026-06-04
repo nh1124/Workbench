@@ -122,6 +122,7 @@ export interface ImageJobRecord {
   startedAt?: string;
   completedAt?: string;
   cancelledAt?: string;
+  deletedAt?: string;
 }
 
 export interface ImageGenerationResponse extends ImageJobRecord {

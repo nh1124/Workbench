@@ -30,7 +30,7 @@ const imageGenerationSchema = {
   provider: imageProviderSchema.optional(),
   model: z.string().optional(),
   size: imageSizeSchema.optional(),
-  count: z.number().int().min(1).max(4).optional(),
+  count: z.number().int().min(1).max(8).optional(),
   quality: imageQualitySchema.optional(),
   stylePreset: z.string().optional(),
   seed: z.number().int().optional(),

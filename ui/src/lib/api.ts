@@ -686,6 +686,10 @@ export const imagesApi = {
       method: "POST",
       body: JSON.stringify({})
     }),
+  removeJob: (jobId: string): Promise<void> =>
+    fetchJson<void>(`${coreBaseUrl()}/api/images/generations/${encodeURIComponent(jobId)}`, {
+      method: "DELETE"
+    }),
   retry: (jobId: string, payload: Partial<ImageGeneratePayload>): Promise<ImageJobRecord> =>
     fetchJson<ImageJobRecord>(`${coreBaseUrl()}/api/images/generations/${encodeURIComponent(jobId)}/retry`, {
       method: "POST",

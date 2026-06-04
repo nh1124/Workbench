@@ -113,7 +113,8 @@ export async function ensureImagesSchema(): Promise<void> {
             completed_at TIMESTAMPTZ,
             cancelled_at TIMESTAMPTZ,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            deleted_at TIMESTAMPTZ
           );
         `);
 
@@ -121,6 +122,7 @@ export async function ensureImagesSchema(): Promise<void> {
         await pool.query(`ALTER TABLE image_generation_jobs ADD COLUMN IF NOT EXISTS parent_job_id TEXT;`);
         await pool.query(`ALTER TABLE image_generation_jobs ADD COLUMN IF NOT EXISTS instruction TEXT;`);
         await pool.query(`ALTER TABLE image_generation_jobs ADD COLUMN IF NOT EXISTS context_snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb;`);
+        await pool.query(`ALTER TABLE image_generation_jobs ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;`);
         await pool.query(`
           CREATE INDEX IF NOT EXISTS idx_image_jobs_owner_updated
           ON image_generation_jobs(owner_core_user_id, updated_at DESC);
