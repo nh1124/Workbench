@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { artifactsApi, imagesApi, projectsApi } from "../lib/api";
+import { IcoDownload, IcoRefresh, IcoRepeat, IcoTrash, IcoUpload } from "../tasks/components/icons";
+import { IcoFloppy } from "../artifacts/components/ArtifactsIcons";
 import type {
   ArtifactItem,
   ImageAssetRecord,
@@ -573,6 +575,7 @@ export function ImagesPage() {
             </div>
             <div className="images-upload-row">
               <label className="images-upload-button">
+                <IcoUpload />
                 Add reference
                 <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => {
                   const file = event.target.files?.[0];
@@ -581,6 +584,7 @@ export function ImagesPage() {
                 }} />
               </label>
               <label className="images-upload-button">
+                <IcoUpload />
                 Add source
                 <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => {
                   const file = event.target.files?.[0];
@@ -822,19 +826,43 @@ export function ImagesPage() {
                           <p className="images-preview-note">Source asset selected for refinement.</p>
                         )}
                         <div className="images-card-actions">
-                          <button type="button" onClick={() => void imagesApi.downloadAsset(asset.id, true).then((blob) => {
+                          <button
+                            type="button"
+                            className="images-icon-button"
+                            title="Download"
+                            aria-label="Download image"
+                            onClick={() => void imagesApi.downloadAsset(asset.id, true).then((blob) => {
                             const url = URL.createObjectURL(blob);
                             const link = document.createElement("a");
                             link.href = url;
                             link.download = `${asset.id}.png`;
                             link.click();
                             setTimeout(() => URL.revokeObjectURL(url), 60000);
-                          })}>Download</button>
-                          <button type="button" onClick={() => void saveAsset(asset)}>Save to Artifacts</button>
-                          <button type="button" onClick={() => {
-                            setSourceAssetId(asset.id);
-                            setIntent("refine");
-                          }}>Use as Source</button>
+                          })}
+                          >
+                            <IcoDownload />
+                          </button>
+                          <button
+                            type="button"
+                            className="images-icon-button"
+                            title="Save to Artifacts"
+                            aria-label="Save image to Artifacts"
+                            onClick={() => void saveAsset(asset)}
+                          >
+                            <IcoFloppy />
+                          </button>
+                          <button
+                            type="button"
+                            className="images-icon-button"
+                            title="Use as Source"
+                            aria-label="Use image as source"
+                            onClick={() => {
+                              setSourceAssetId(asset.id);
+                              setIntent("refine");
+                            }}
+                          >
+                            <IcoRepeat />
+                          </button>
                         </div>
                       </article>
                       );
@@ -851,7 +879,15 @@ export function ImagesPage() {
             <section className="images-history-panel">
               <div className="images-section-title">
                 <strong>History</strong>
-                <button type="button" onClick={() => void refreshHistory()}>Refresh</button>
+                <button
+                  type="button"
+                  className="images-icon-button"
+                  title="Refresh history"
+                  aria-label="Refresh history"
+                  onClick={() => void refreshHistory()}
+                >
+                  <IcoRefresh />
+                </button>
               </div>
               <div className="images-history-groups">
                 {historyGroups.length === 0 ? (
@@ -906,12 +942,13 @@ export function ImagesPage() {
                             <small>{formatDateTime(job.updatedAt)}</small>
                           </button>
                           <button
-                            className="images-history-delete"
+                            className="images-history-delete images-icon-button"
                             type="button"
                             aria-label={`Delete ${job.prompt}`}
+                            title="Delete"
                             onClick={() => void deleteHistoryJob(job.jobId)}
                           >
-                            Delete
+                            <IcoTrash />
                           </button>
                         </div>
                       ))}
