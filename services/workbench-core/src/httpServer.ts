@@ -26,17 +26,21 @@ import {
   claimLocalJobsForClient,
   completeLocalJobForClient,
   createLocalJob,
+  deleteLocalClient,
   failLocalJobForClient,
   getLocalJob,
   getLocalJobForClient,
   listLocalClients,
+  listLocalJobsForUser,
   LocalClientStoreError,
   recordLocalClientHeartbeat,
   registerLocalClient,
+  revokeLocalClientTokens,
   updateLocalClient,
   verifyLocalClientToken,
   type LocalClient,
   type LocalJobKind,
+  type LocalJobStatus,
   type LocalJobTarget
 } from "./localClientsStore.js";
 import { listSyncEvents, recordSyncEvent, type SyncAction, type SyncDomain } from "./syncStore.js";
@@ -977,6 +981,7 @@ const localClientHeartbeatSchema = z.object({
 
 const localJobKindSchema = z.enum(["download_artifact", "download_task_attachment", "materialize_resource"]);
 const localJobTargetSchema = z.enum(["downloads", "sync-folder"]);
+const localJobStatusSchema = z.enum(["pending", "running", "completed", "failed"]);
 
 const localJobCreateSchema = z.object({
   localClientId: z.string().min(1).optional(),
@@ -1006,6 +1011,10 @@ type AuthenticatedContext = {
   userId: string;
   username: string;
   accessToken: string;
+};
+
+type SyncAccessContext = AuthenticatedContext & {
+  localClient?: LocalClient;
 };
 
 function readBearerToken(req: express.Request): string | undefined {
@@ -1075,6 +1084,30 @@ async function requireLocalClientContext(
   }
 }
 
+async function requireSyncAccessContext(
+  req: express.Request,
+  res: express.Response
+): Promise<SyncAccessContext | undefined> {
+  if (readBearerToken(req)) {
+    return requireAuthenticatedContext(req, res);
+  }
+
+  const localContext = await requireLocalClientContext(req, res);
+  if (!localContext) return undefined;
+  const user = await findUserById(localContext.client.userId);
+  if (!user) {
+    res.status(401).json({ message: "Invalid local client user" });
+    return undefined;
+  }
+  const bundle = issueTokenBundle({ userId: user.id, username: user.username });
+  return {
+    userId: user.id,
+    username: user.username,
+    accessToken: bundle.accessToken,
+    localClient: localContext.client
+  };
+}
+
 function respondInternalError(res: express.Response, error: unknown): express.Response {
   if (error instanceof LocalClientStoreError) {
     return res.status(error.status).json({ message: error.message, code: error.code });
@@ -1094,7 +1127,13 @@ function respondInternalError(res: express.Response, error: unknown): express.Re
 function objectId(value: unknown): string | undefined {
   if (!value || typeof value !== "object") return undefined;
   const id = (value as { id?: unknown }).id;
-  return typeof id === "string" && id.trim().length > 0 ? id : undefined;
+  if (typeof id === "string" && id.trim().length > 0) return id;
+  const nestedItem = (value as { item?: unknown }).item;
+  if (nestedItem && typeof nestedItem === "object") {
+    const nestedId = (nestedItem as { id?: unknown }).id;
+    if (typeof nestedId === "string" && nestedId.trim().length > 0) return nestedId;
+  }
+  return undefined;
 }
 
 function recordSyncEventBestEffort(
@@ -1109,6 +1148,167 @@ function recordSyncEventBestEffort(
     const message = error instanceof Error ? error.message : String(error);
     console.warn("[sync] failed to record event", { domain, resourceId, action, message });
   });
+}
+
+function asJsonRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function asNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function withoutKeys(record: Record<string, unknown>, keys: string[]): Record<string, unknown> {
+  const next = { ...record };
+  for (const key of keys) {
+    delete next[key];
+  }
+  return next;
+}
+
+type SyncPushApplied = {
+  index: number;
+  clientOpId?: string;
+  domain: SyncDomain;
+  action: SyncAction;
+  resourceId: string;
+  version: number;
+  cursor: string;
+  result?: unknown;
+};
+
+type SyncPushRejected = {
+  index: number;
+  clientOpId?: string;
+  op: Record<string, unknown>;
+  code: string;
+  message: string;
+};
+
+async function applySyncPushOperation(
+  authContext: SyncAccessContext,
+  op: Record<string, unknown>,
+  index: number
+): Promise<SyncPushApplied> {
+  const clientOpId = asNonEmptyString(op.clientOpId);
+  const domain = asNonEmptyString(op.domain) as SyncDomain | undefined;
+  const action = asNonEmptyString(op.action) as SyncAction | undefined;
+  const payload = asJsonRecord(op.payload);
+  const resourceId = asNonEmptyString(op.resourceId) ?? asNonEmptyString(payload.id);
+
+  if (!domain || !["notes", "artifacts"].includes(domain)) {
+    throw new LocalClientStoreError(400, "SYNC_DOMAIN_NOT_SUPPORTED", "Only notes and artifacts sync push operations are supported in this phase.");
+  }
+  if (!action || !["create", "update", "delete", "upsert"].includes(action)) {
+    throw new LocalClientStoreError(400, "SYNC_ACTION_NOT_SUPPORTED", "Unsupported sync push action.");
+  }
+
+  if (domain === "notes") {
+    let result: unknown;
+    let nextResourceId = resourceId;
+    if (action === "create") {
+      result = await notesClient.create(authContext.accessToken, payload);
+      nextResourceId = objectId(result);
+    } else if (action === "update" || action === "upsert") {
+      if (!resourceId) {
+        result = await notesClient.create(authContext.accessToken, payload);
+        nextResourceId = objectId(result);
+      } else {
+        result = await notesClient.update(authContext.accessToken, resourceId, payload);
+        nextResourceId = objectId(result) ?? resourceId;
+      }
+    } else {
+      if (!resourceId) {
+        throw new LocalClientStoreError(400, "SYNC_RESOURCE_ID_REQUIRED", "Delete requires resourceId.");
+      }
+      await notesClient.remove(authContext.accessToken, resourceId);
+      nextResourceId = resourceId;
+      result = { id: resourceId, deleted: true };
+    }
+
+    if (!nextResourceId) {
+      throw new LocalClientStoreError(502, "SYNC_RESOURCE_ID_MISSING", "Applied operation did not return a resource id.");
+    }
+    const event = await recordSyncEvent(authContext.userId, "notes", nextResourceId, action === "upsert" ? "update" : action, {
+      source: "sync-push",
+      clientOpId,
+      localClientId: authContext.localClient?.id
+    });
+    return {
+      index,
+      clientOpId,
+      domain: "notes",
+      action: event.action,
+      resourceId: nextResourceId,
+      version: event.version,
+      cursor: event.cursor,
+      result
+    };
+  }
+
+  let result: unknown;
+  let nextResourceId = resourceId;
+  if (action === "create") {
+    const kind = asNonEmptyString(payload.kind) ?? "note";
+    if (kind === "folder") {
+      result = await artifactsClient.createFolder(authContext.accessToken, withoutKeys(payload, ["kind"]));
+    } else if (kind === "file") {
+      const filename = asNonEmptyString(payload.filename) ?? asNonEmptyString(payload.originalFilename);
+      const contentBase64 = asNonEmptyString(payload.contentBase64);
+      if (!filename || !contentBase64) {
+        throw new LocalClientStoreError(400, "SYNC_FILE_PAYLOAD_INVALID", "Artifact file create requires filename and contentBase64.");
+      }
+      result = await artifactsClient.uploadFile(authContext.accessToken, {
+        projectId: asNonEmptyString(payload.projectId),
+        projectName: asNonEmptyString(payload.projectName),
+        directoryPath: asNonEmptyString(payload.directoryPath),
+        scope: asNonEmptyString(payload.scope) as "private" | "org" | "project" | undefined,
+        tags: Array.isArray(payload.tags) ? payload.tags.filter((tag): tag is string => typeof tag === "string") : undefined,
+        filename,
+        mimeType: asNonEmptyString(payload.mimeType),
+        contentBase64
+      });
+    } else {
+      result = await artifactsClient.createNote(authContext.accessToken, withoutKeys(payload, ["kind"]));
+    }
+    nextResourceId = objectId(result);
+  } else if (action === "update" || action === "upsert") {
+    if (!resourceId) {
+      result = await artifactsClient.createNote(authContext.accessToken, withoutKeys({ ...payload, kind: "note" }, ["kind"]));
+      nextResourceId = objectId(result);
+    } else if (asNonEmptyString(payload.kind) === "file" || asNonEmptyString(payload.contentBase64)) {
+      throw new LocalClientStoreError(400, "SYNC_FILE_UPDATE_NOT_SUPPORTED", "Artifact file content updates are not supported by sync push yet.");
+    } else {
+      result = await artifactsClient.updateItem(authContext.accessToken, resourceId, withoutKeys(payload, ["kind"]));
+      nextResourceId = objectId(result) ?? resourceId;
+    }
+  } else {
+    if (!resourceId) {
+      throw new LocalClientStoreError(400, "SYNC_RESOURCE_ID_REQUIRED", "Delete requires resourceId.");
+    }
+    await artifactsClient.removeItem(authContext.accessToken, resourceId);
+    nextResourceId = resourceId;
+    result = { id: resourceId, deleted: true };
+  }
+
+  if (!nextResourceId) {
+    throw new LocalClientStoreError(502, "SYNC_RESOURCE_ID_MISSING", "Applied operation did not return a resource id.");
+  }
+  const event = await recordSyncEvent(authContext.userId, "artifacts", nextResourceId, action === "upsert" ? "update" : action, {
+    source: "sync-push",
+    clientOpId,
+    localClientId: authContext.localClient?.id
+  });
+  return {
+    index,
+    clientOpId,
+    domain: "artifacts",
+    action: event.action,
+    resourceId: nextResourceId,
+    version: event.version,
+    cursor: event.cursor,
+    result
+  };
 }
 
 function respondDeepResearchError(res: express.Response, error: unknown): express.Response {
@@ -2471,6 +2671,37 @@ app.patch("/api/local-clients/:id", async (req, res) => {
   }
 });
 
+app.post("/api/local-clients/:id/revoke", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  try {
+    const revoked = await revokeLocalClientTokens(authContext.userId, String(req.params.id));
+    if (!revoked) {
+      return res.status(404).json({ message: "Local client not found or no active token exists" });
+    }
+    const client = await updateLocalClient(authContext.userId, String(req.params.id), { enabled: false });
+    return res.json({ revoked: true, client });
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.delete("/api/local-clients/:id", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  try {
+    const deleted = await deleteLocalClient(authContext.userId, String(req.params.id));
+    if (!deleted) {
+      return res.status(404).json({ message: "Local client not found" });
+    }
+    return res.status(204).send();
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
 app.post("/api/local-clients/:id/heartbeat", async (req, res) => {
   const localContext = await requireLocalClientContext(req, res);
   if (!localContext) return;
@@ -2486,6 +2717,30 @@ app.post("/api/local-clients/:id/heartbeat", async (req, res) => {
   try {
     const client = await recordLocalClientHeartbeat(localContext.client, parsed.data);
     return res.json(client);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.get("/api/local-jobs", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const status = typeof req.query.status === "string" ? req.query.status : undefined;
+  const parsedStatus = status ? localJobStatusSchema.safeParse(status) : undefined;
+  if (parsedStatus && !parsedStatus.success) {
+    return res.status(400).json({ message: parsedStatus.error.flatten() });
+  }
+  const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
+  const localClientId = typeof req.query.localClientId === "string" ? req.query.localClientId : undefined;
+
+  try {
+    const jobs = await listLocalJobsForUser(authContext.userId, {
+      localClientId,
+      status: parsedStatus?.success ? (parsedStatus.data as LocalJobStatus) : undefined,
+      limit: Number.isFinite(limit) ? limit : undefined
+    });
+    return res.json({ items: jobs });
   } catch (error) {
     return respondInternalError(res, error);
   }
@@ -2653,7 +2908,7 @@ app.get("/api/local-jobs/:jobId/download", async (req, res) => {
 });
 
 app.get("/api/sync/snapshot", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
+  const authContext = await requireSyncAccessContext(req, res);
   if (!authContext) return;
 
   const requestedDomains = typeof req.query.domains === "string"
@@ -2685,7 +2940,7 @@ app.get("/api/sync/snapshot", async (req, res) => {
 });
 
 app.get("/api/sync/pull", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
+  const authContext = await requireSyncAccessContext(req, res);
   if (!authContext) return;
 
   const cursor = typeof req.query.cursor === "string" ? req.query.cursor : undefined;
@@ -2700,7 +2955,7 @@ app.get("/api/sync/pull", async (req, res) => {
 });
 
 app.get("/api/sync/blobs/:blobId", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
+  const authContext = await requireSyncAccessContext(req, res);
   if (!authContext) return;
 
   const blobId = String(req.params.blobId);
@@ -2739,7 +2994,7 @@ app.get("/api/sync/blobs/:blobId", async (req, res) => {
 });
 
 app.put("/api/sync/blobs/:blobId", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
+  const authContext = await requireSyncAccessContext(req, res);
   if (!authContext) return;
 
   return res.status(501).json({
@@ -2748,7 +3003,7 @@ app.put("/api/sync/blobs/:blobId", async (req, res) => {
 });
 
 app.post("/api/sync/push", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
+  const authContext = await requireSyncAccessContext(req, res);
   if (!authContext) return;
 
   const parsed = syncPushSchema.safeParse(req.body ?? {});
@@ -2756,15 +3011,28 @@ app.post("/api/sync/push", async (req, res) => {
     return res.status(400).json({ message: parsed.error.flatten() });
   }
 
-  return res.status(202).json({
-    applied: [],
-    rejected: parsed.data.ops.map((op, index) => ({
-      index,
-      op,
-      code: "SYNC_PUSH_NOT_IMPLEMENTED",
-      message: "Sync push acceptance is scaffolded; domain-specific operation application is not enabled yet."
-    })),
-    serverCursor: undefined
+  const applied: SyncPushApplied[] = [];
+  const rejected: SyncPushRejected[] = [];
+  for (const [index, op] of parsed.data.ops.entries()) {
+    const clientOpId = asNonEmptyString(op.clientOpId);
+    try {
+      applied.push(await applySyncPushOperation(authContext, op, index));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Sync push operation failed";
+      rejected.push({
+        index,
+        clientOpId,
+        op,
+        code: error instanceof LocalClientStoreError ? error.code : "SYNC_PUSH_OPERATION_FAILED",
+        message
+      });
+    }
+  }
+
+  return res.status(rejected.length > 0 && applied.length === 0 ? 409 : 202).json({
+    applied,
+    rejected,
+    serverCursor: applied.length > 0 ? applied[applied.length - 1].cursor : undefined
   });
 });
 

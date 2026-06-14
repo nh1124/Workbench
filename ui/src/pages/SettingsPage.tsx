@@ -18,6 +18,7 @@ import type {
   IntegrationConfigState,
   IntegrationManifest,
   LocalClientRecord,
+  LocalJobRecord,
   StoredIntegrationConfig,
   WorkbenchUserSession
 } from "../types/models";
@@ -145,6 +146,7 @@ export function SettingsPage() {
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [accountMessage, setAccountMessage] = useState("");
   const [localClients, setLocalClients] = useState<LocalClientRecord[]>([]);
+  const [localJobs, setLocalJobs] = useState<LocalJobRecord[]>([]);
   const [localClientsMessage, setLocalClientsMessage] = useState("");
   const [localClientsLoading, setLocalClientsLoading] = useState(false);
 
@@ -175,10 +177,11 @@ export function SettingsPage() {
 
   const loadAccountScopedData = async () => {
     try {
-      const [, configRows, clientsResult] = await Promise.all([
+      const [, configRows, clientsResult, jobsResult] = await Promise.all([
         coreApi.me(),
         coreApi.listIntegrationConfigs(),
-        coreApi.listLocalClients()
+        coreApi.listLocalClients(),
+        coreApi.listLocalJobs({ limit: 25 })
       ]);
       setIntegrationConfigs((current) =>
         normalizeManifestConfigs(manifests, {
@@ -187,6 +190,7 @@ export function SettingsPage() {
         })
       );
       setLocalClients(clientsResult.items);
+      setLocalJobs(jobsResult.items);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to load account data";
       setAccountMessage(message);
@@ -268,13 +272,18 @@ export function SettingsPage() {
   const refreshLocalClients = async () => {
     if (!session) {
       setLocalClients([]);
+      setLocalJobs([]);
       return;
     }
     setLocalClientsLoading(true);
     setLocalClientsMessage("");
     try {
-      const result = await coreApi.listLocalClients();
-      setLocalClients(result.items);
+      const [clientsResult, jobsResult] = await Promise.all([
+        coreApi.listLocalClients(),
+        coreApi.listLocalJobs({ limit: 25 })
+      ]);
+      setLocalClients(clientsResult.items);
+      setLocalJobs(jobsResult.items);
       setLocalClientsMessage("Local clients refreshed.");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to load local clients";
@@ -307,6 +316,34 @@ export function SettingsPage() {
       setLocalClientsMessage(updated.enabled ? "Local client enabled." : "Local client disabled.");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to update local client";
+      setLocalClientsMessage(message);
+    }
+  };
+
+  const revokeLocalClient = async (client: LocalClientRecord) => {
+    setLocalClientsMessage("");
+    try {
+      const result = await coreApi.revokeLocalClient(client.id);
+      const revokedClient = result.client;
+      if (revokedClient) {
+        setLocalClients((current) => current.map((item) => (item.id === revokedClient.id ? revokedClient : item)));
+      }
+      setLocalClientsMessage("Local client token revoked.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to revoke local client";
+      setLocalClientsMessage(message);
+    }
+  };
+
+  const deleteLocalClient = async (client: LocalClientRecord) => {
+    setLocalClientsMessage("");
+    try {
+      await coreApi.deleteLocalClient(client.id);
+      setLocalClients((current) => current.filter((item) => item.id !== client.id));
+      setLocalJobs((current) => current.filter((item) => item.localClientId !== client.id));
+      setLocalClientsMessage("Local client deleted.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to delete local client";
       setLocalClientsMessage(message);
     }
   };
@@ -882,12 +919,50 @@ export function SettingsPage() {
                         <button type="button" onClick={() => void toggleLocalClientEnabled(client)}>
                           {client.enabled ? "Disable" : "Enable"}
                         </button>
+                        <button type="button" onClick={() => void revokeLocalClient(client)}>
+                          Revoke
+                        </button>
+                        <button type="button" className="danger-button" onClick={() => void deleteLocalClient(client)}>
+                          Delete
+                        </button>
                       </div>
                     </article>
                   ))}
                 </div>
               )}
               {localClientsMessage ? <p className="info">{localClientsMessage}</p> : null}
+            </section>
+
+            <section className="account-local-jobs">
+              <div className="account-local-clients-header">
+                <div>
+                  <h3>Local Job History</h3>
+                  <p className="muted">Recent daemon-claimed download and materialization jobs.</p>
+                </div>
+              </div>
+              {localJobs.length === 0 ? (
+                <p className="info">No local jobs recorded yet.</p>
+              ) : (
+                <div className="account-local-job-list">
+                  {localJobs.map((job) => {
+                    const client = localClients.find((item) => item.id === job.localClientId);
+                    const localPath = typeof job.result.localPath === "string" ? job.result.localPath : "";
+                    return (
+                      <article key={job.id} className="account-local-job-row">
+                        <div>
+                          <strong>{job.kind.replaceAll("_", " ")}</strong>
+                          <p>{client?.clientName ?? job.localClientId} / {job.target}</p>
+                          {localPath ? <small>{localPath}</small> : job.errorMessage ? <small>{job.errorMessage}</small> : null}
+                        </div>
+                        <div className={`account-local-job-status ${job.status}`}>
+                          <span>{job.status}</span>
+                          <small>{new Date(job.updatedAt).toLocaleString()}</small>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
             </section>
 
             {session ? <p className="info">Signed in as {session.username}</p> : null}

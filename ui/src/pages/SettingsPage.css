@@ -533,7 +533,8 @@
   color: #ffffff;
 }
 
-.account-local-clients {
+.account-local-clients,
+.account-local-jobs {
   margin-top: 0.9rem;
   border: 1px solid rgba(51, 65, 85, 0.78);
   border-radius: 14px;
@@ -630,6 +631,74 @@
   padding: 0.42rem 0.66rem;
 }
 
+.account-local-job-list {
+  display: grid;
+  gap: 0.48rem;
+}
+
+.account-local-job-row {
+  border: 1px solid rgba(51, 65, 85, 0.62);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.58);
+  padding: 0.66rem 0.72rem;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.account-local-job-row strong {
+  color: #e5eefb;
+  font-size: 0.86rem;
+  text-transform: capitalize;
+}
+
+.account-local-job-row p {
+  margin: 0.22rem 0 0;
+  color: #94a3b8;
+  font-size: 0.76rem;
+}
+
+.account-local-job-row small {
+  display: block;
+  margin-top: 0.16rem;
+  color: #64748b;
+  font-size: 0.68rem;
+  overflow-wrap: anywhere;
+}
+
+.account-local-job-status {
+  display: grid;
+  justify-items: end;
+  gap: 0.12rem;
+  flex-shrink: 0;
+}
+
+.account-local-job-status span {
+  border: 1px solid #334155;
+  border-radius: 999px;
+  padding: 0.12rem 0.46rem;
+  font-size: 0.66rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.account-local-job-status.completed span {
+  border-color: rgba(74, 222, 128, 0.45);
+  color: #86efac;
+}
+
+.account-local-job-status.running span,
+.account-local-job-status.pending span {
+  border-color: rgba(34, 211, 238, 0.48);
+  color: #67e8f9;
+}
+
+.account-local-job-status.failed span {
+  border-color: rgba(248, 113, 113, 0.5);
+  color: #fca5a5;
+}
+
 @media (max-width: 980px) {
   .settings-shell {
     grid-template-columns: 1fr;
@@ -649,12 +718,15 @@
   }
 
   .account-local-client-card,
+  .account-local-job-row,
   .account-local-clients-header {
     flex-direction: column;
   }
 
-  .account-local-client-actions {
+  .account-local-client-actions,
+  .account-local-job-status {
     justify-content: flex-start;
+    justify-items: start;
   }
 }
 

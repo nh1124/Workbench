@@ -1127,6 +1127,23 @@ export const coreApi = {
       method: "PATCH",
       body: JSON.stringify(payload)
     }),
+  revokeLocalClient: (id: string): Promise<{ revoked: true; client?: LocalClientRecord }> =>
+    fetchJson(`${coreBaseUrl()}/api/local-clients/${encodeURIComponent(id)}/revoke`, {
+      method: "POST",
+      body: JSON.stringify({})
+    }),
+  deleteLocalClient: (id: string): Promise<void> =>
+    fetchJson(`${coreBaseUrl()}/api/local-clients/${encodeURIComponent(id)}`, {
+      method: "DELETE"
+    }),
+  listLocalJobs: (options: { localClientId?: string; status?: LocalJobRecord["status"]; limit?: number } = {}): Promise<{ items: LocalJobRecord[] }> => {
+    const params = new URLSearchParams();
+    if (options.localClientId) params.set("localClientId", options.localClientId);
+    if (options.status) params.set("status", options.status);
+    if (options.limit) params.set("limit", String(options.limit));
+    const query = params.toString();
+    return fetchJson(`${coreBaseUrl()}/api/local-jobs${query ? `?${query}` : ""}`);
+  },
   getLocalJob: (id: string): Promise<LocalJobRecord> =>
     fetchJson(`${coreBaseUrl()}/api/local-jobs/${encodeURIComponent(id)}`)
 };

@@ -283,6 +283,37 @@ export async function listLocalClients(userId: string): Promise<LocalClient[]> {
   return result.rows.map(toClient);
 }
 
+export async function revokeLocalClientTokens(userId: string, id: string): Promise<boolean> {
+  await ensureCoreSchema();
+  const pool = getCorePool();
+  const result = await pool.query(
+    `
+      UPDATE local_client_tokens t
+      SET revoked_at = NOW()
+      FROM local_clients c
+      WHERE t.local_client_id = c.id
+        AND c.user_id = $1
+        AND c.id = $2
+        AND t.revoked_at IS NULL
+    `,
+    [userId, id]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+export async function deleteLocalClient(userId: string, id: string): Promise<boolean> {
+  await ensureCoreSchema();
+  const pool = getCorePool();
+  const result = await pool.query(
+    `
+      DELETE FROM local_clients
+      WHERE user_id = $1 AND id = $2
+    `,
+    [userId, id]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
 export async function updateLocalClient(
   userId: string,
   id: string,
@@ -461,6 +492,43 @@ export async function getLocalJob(userId: string, jobId: string): Promise<LocalJ
     [userId, jobId]
   );
   return result.rows[0] ? toJob(result.rows[0]) : undefined;
+}
+
+export async function listLocalJobsForUser(
+  userId: string,
+  options: {
+    localClientId?: string;
+    status?: LocalJobStatus;
+    limit?: number;
+  } = {}
+): Promise<LocalJob[]> {
+  await ensureCoreSchema();
+  const pool = getCorePool();
+  const values: unknown[] = [userId];
+  const where = ["user_id = $1"];
+  if (options.localClientId) {
+    values.push(options.localClientId);
+    where.push(`local_client_id = $${values.length}`);
+  }
+  if (options.status) {
+    values.push(options.status);
+    where.push(`status = $${values.length}`);
+  }
+  const limit = Math.max(1, Math.min(200, Math.floor(options.limit ?? 50)));
+  values.push(limit);
+  const result = await pool.query<LocalJobRow>(
+    `
+      SELECT
+        id, user_id, local_client_id, kind, target, payload_json, status, attempts,
+        claimed_at, completed_at, failed_at, expires_at, result_json, error_message, created_at, updated_at
+      FROM local_jobs
+      WHERE ${where.join(" AND ")}
+      ORDER BY created_at DESC
+      LIMIT $${values.length}
+    `,
+    values
+  );
+  return result.rows.map(toJob);
 }
 
 export async function getLocalJobForClient(localClientId: string, jobId: string): Promise<LocalJob | undefined> {
