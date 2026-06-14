@@ -17,6 +17,7 @@ import {
 import type {
   IntegrationConfigState,
   IntegrationManifest,
+  LocalClientRecord,
   StoredIntegrationConfig,
   WorkbenchUserSession
 } from "../types/models";
@@ -143,6 +144,9 @@ export function SettingsPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [accountMessage, setAccountMessage] = useState("");
+  const [localClients, setLocalClients] = useState<LocalClientRecord[]>([]);
+  const [localClientsMessage, setLocalClientsMessage] = useState("");
+  const [localClientsLoading, setLocalClientsLoading] = useState(false);
 
   useEffect(() => {
     setSettings(loadUiSettings());
@@ -171,13 +175,18 @@ export function SettingsPage() {
 
   const loadAccountScopedData = async () => {
     try {
-      const [, configRows] = await Promise.all([coreApi.me(), coreApi.listIntegrationConfigs()]);
+      const [, configRows, clientsResult] = await Promise.all([
+        coreApi.me(),
+        coreApi.listIntegrationConfigs(),
+        coreApi.listLocalClients()
+      ]);
       setIntegrationConfigs((current) =>
         normalizeManifestConfigs(manifests, {
           ...current,
           ...toStateMapFromDb(configRows)
         })
       );
+      setLocalClients(clientsResult.items);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to load account data";
       setAccountMessage(message);
@@ -254,6 +263,52 @@ export function SettingsPage() {
     setProfileEmail("");
     setDeleteConfirmation("");
     setAccountMessage("Account session cleared.");
+  };
+
+  const refreshLocalClients = async () => {
+    if (!session) {
+      setLocalClients([]);
+      return;
+    }
+    setLocalClientsLoading(true);
+    setLocalClientsMessage("");
+    try {
+      const result = await coreApi.listLocalClients();
+      setLocalClients(result.items);
+      setLocalClientsMessage("Local clients refreshed.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to load local clients";
+      setLocalClientsMessage(message);
+    } finally {
+      setLocalClientsLoading(false);
+    }
+  };
+
+  const setDefaultLocalClient = async (client: LocalClientRecord) => {
+    setLocalClientsMessage("");
+    try {
+      const updated = await coreApi.updateLocalClient(client.id, { default: true });
+      setLocalClients((current) => current.map((item) => ({
+        ...item,
+        default: item.id === updated.id
+      })));
+      setLocalClientsMessage("Default local client updated.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to update local client";
+      setLocalClientsMessage(message);
+    }
+  };
+
+  const toggleLocalClientEnabled = async (client: LocalClientRecord) => {
+    setLocalClientsMessage("");
+    try {
+      const updated = await coreApi.updateLocalClient(client.id, { enabled: !client.enabled });
+      setLocalClients((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      setLocalClientsMessage(updated.enabled ? "Local client enabled." : "Local client disabled.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to update local client";
+      setLocalClientsMessage(message);
+    }
   };
 
   const setServiceFieldValue = (manifestId: string, fieldKey: string, value: string | number | boolean) => {
@@ -791,6 +846,49 @@ export function SettingsPage() {
                 </div>
               </section>
             </div>
+
+            <section className="account-local-clients">
+              <div className="account-local-clients-header">
+                <div>
+                  <h3>Local Clients</h3>
+                  <p className="muted">Registered sync daemons for this account.</p>
+                </div>
+                <button type="button" onClick={() => void refreshLocalClients()} disabled={localClientsLoading}>
+                  {localClientsLoading ? "Refreshing..." : "Refresh"}
+                </button>
+              </div>
+
+              {localClients.length === 0 ? (
+                <p className="info">No local clients registered yet.</p>
+              ) : (
+                <div className="account-local-client-list">
+                  {localClients.map((client) => (
+                    <article key={client.id} className="account-local-client-card">
+                      <div>
+                        <div className="account-local-client-title">
+                          <strong>{client.clientName}</strong>
+                          {client.default ? <span>Default</span> : null}
+                          <span className={client.heartbeat?.online ? "online" : "offline"}>
+                            {client.heartbeat?.online ? "Online" : "Offline"}
+                          </span>
+                        </div>
+                        <p>{client.platform} / {client.syncRootLabel}</p>
+                        <small>{client.id}</small>
+                      </div>
+                      <div className="account-local-client-actions">
+                        <button type="button" onClick={() => void setDefaultLocalClient(client)} disabled={client.default}>
+                          Set Default
+                        </button>
+                        <button type="button" onClick={() => void toggleLocalClientEnabled(client)}>
+                          {client.enabled ? "Disable" : "Enable"}
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+              {localClientsMessage ? <p className="info">{localClientsMessage}</p> : null}
+            </section>
 
             {session ? <p className="info">Signed in as {session.username}</p> : null}
             {accountMessage ? <p className="info">{accountMessage}</p> : null}

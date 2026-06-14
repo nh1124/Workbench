@@ -22,6 +22,24 @@ import { registerProjectsTools } from "./mcp/registerProjectsTools.js";
 import { registerTasksTools } from "./mcp/registerTasksTools.js";
 import { ensureIntegrationLinked } from "./integrationLinking.js";
 import { artifactsClient, imagesClient, InternalServiceError, notesClient, projectsClient, serviceBaseUrls, tasksClient } from "./internalClients.js";
+import {
+  claimLocalJobsForClient,
+  completeLocalJobForClient,
+  createLocalJob,
+  failLocalJobForClient,
+  getLocalJob,
+  getLocalJobForClient,
+  listLocalClients,
+  LocalClientStoreError,
+  recordLocalClientHeartbeat,
+  registerLocalClient,
+  updateLocalClient,
+  verifyLocalClientToken,
+  type LocalClient,
+  type LocalJobKind,
+  type LocalJobTarget
+} from "./localClientsStore.js";
+import { listSyncEvents, recordSyncEvent, type SyncAction, type SyncDomain } from "./syncStore.js";
 import { DeepResearchError } from "./deepResearch/errors.js";
 import {
   cancelDeepResearch,
@@ -932,6 +950,58 @@ const imageArtifactSaveSchema = z.object({
   projectName: z.string().optional()
 });
 
+const jsonRecordSchema = z.record(z.unknown());
+
+const localClientRegisterSchema = z.object({
+  deviceId: z.string().min(1),
+  clientName: z.string().min(1),
+  platform: z.string().min(1),
+  capabilities: jsonRecordSchema.optional(),
+  syncRootId: z.string().min(1).optional(),
+  syncRootLabel: z.string().min(1).optional(),
+  default: z.boolean().optional()
+});
+
+const localClientPatchSchema = z.object({
+  clientName: z.string().min(1).optional(),
+  enabled: z.boolean().optional(),
+  capabilities: jsonRecordSchema.optional(),
+  syncRootLabel: z.string().min(1).optional(),
+  default: z.boolean().optional()
+});
+
+const localClientHeartbeatSchema = z.object({
+  daemonVersion: z.string().optional(),
+  syncRootState: jsonRecordSchema.optional()
+});
+
+const localJobKindSchema = z.enum(["download_artifact", "download_task_attachment", "materialize_resource"]);
+const localJobTargetSchema = z.enum(["downloads", "sync-folder"]);
+
+const localJobCreateSchema = z.object({
+  localClientId: z.string().min(1).optional(),
+  kind: localJobKindSchema,
+  target: localJobTargetSchema,
+  payload: jsonRecordSchema.optional(),
+  ttlSeconds: z.number().int().positive().optional()
+});
+
+const localJobClaimSchema = z.object({
+  limit: z.number().int().positive().max(25).optional()
+});
+
+const localJobCompleteSchema = z.object({
+  result: jsonRecordSchema.default({})
+});
+
+const localJobFailSchema = z.object({
+  error: z.string().min(1)
+});
+
+const syncPushSchema = z.object({
+  ops: z.array(jsonRecordSchema).default([])
+});
+
 type AuthenticatedContext = {
   userId: string;
   username: string;
@@ -980,7 +1050,36 @@ async function requireAuthenticatedContext(
   }
 }
 
+async function requireLocalClientContext(
+  req: express.Request,
+  res: express.Response
+): Promise<{ client: LocalClient } | undefined> {
+  const localClientId = req.header("x-workbench-local-client-id")?.trim();
+  const localClientToken = req.header("x-workbench-local-client-token")?.trim();
+  if (!localClientId || !localClientToken) {
+    res.status(401).json({ message: "Missing local client credentials" });
+    return undefined;
+  }
+
+  try {
+    const client = await verifyLocalClientToken(localClientId, localClientToken);
+    return { client };
+  } catch (error) {
+    if (error instanceof LocalClientStoreError) {
+      res.status(error.status).json({ message: error.message, code: error.code });
+      return undefined;
+    }
+    const message = error instanceof Error ? error.message : "Local client authentication failed";
+    res.status(401).json({ message });
+    return undefined;
+  }
+}
+
 function respondInternalError(res: express.Response, error: unknown): express.Response {
+  if (error instanceof LocalClientStoreError) {
+    return res.status(error.status).json({ message: error.message, code: error.code });
+  }
+
   if (error instanceof InternalServiceError) {
     if (error.status === 401 || error.status === 403 || error.status === 404 || error.status === 400) {
       return res.status(error.status).json({ message: error.body || error.message });
@@ -990,6 +1089,26 @@ function respondInternalError(res: express.Response, error: unknown): express.Re
 
   const message = error instanceof Error ? error.message : "Unexpected internal error";
   return res.status(500).json({ message });
+}
+
+function objectId(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const id = (value as { id?: unknown }).id;
+  return typeof id === "string" && id.trim().length > 0 ? id : undefined;
+}
+
+function recordSyncEventBestEffort(
+  userId: string,
+  domain: SyncDomain,
+  resourceId: string | undefined,
+  action: SyncAction,
+  payload: Record<string, unknown> = {}
+): void {
+  if (!resourceId) return;
+  void recordSyncEvent(userId, domain, resourceId, action, payload).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn("[sync] failed to record event", { domain, resourceId, action, message });
+  });
 }
 
 function respondDeepResearchError(res: express.Response, error: unknown): express.Response {
@@ -2302,6 +2421,353 @@ app.post("/api/images/assets/:assetId/artifact", async (req, res) => {
   }
 });
 
+// Local clients and daemon-pulled jobs
+app.post("/api/local-clients/register", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const parsed = localClientRegisterSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json({ message: parsed.error.flatten() });
+  }
+
+  try {
+    const result = await registerLocalClient(authContext.userId, parsed.data);
+    return res.status(201).json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.get("/api/local-clients", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  try {
+    const clients = await listLocalClients(authContext.userId);
+    return res.json({ items: clients });
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.patch("/api/local-clients/:id", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const parsed = localClientPatchSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json({ message: parsed.error.flatten() });
+  }
+
+  try {
+    const client = await updateLocalClient(authContext.userId, String(req.params.id), parsed.data);
+    if (!client) {
+      return res.status(404).json({ message: "Local client not found" });
+    }
+    return res.json(client);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/local-clients/:id/heartbeat", async (req, res) => {
+  const localContext = await requireLocalClientContext(req, res);
+  if (!localContext) return;
+  if (localContext.client.id !== String(req.params.id)) {
+    return res.status(403).json({ message: "Local client credentials do not match route client id" });
+  }
+
+  const parsed = localClientHeartbeatSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json({ message: parsed.error.flatten() });
+  }
+
+  try {
+    const client = await recordLocalClientHeartbeat(localContext.client, parsed.data);
+    return res.json(client);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/local-jobs", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const parsed = localJobCreateSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json({ message: parsed.error.flatten() });
+  }
+
+  try {
+    const job = await createLocalJob(authContext.userId, {
+      localClientId: parsed.data.localClientId,
+      kind: parsed.data.kind as LocalJobKind,
+      target: parsed.data.target as LocalJobTarget,
+      payload: parsed.data.payload,
+      ttlSeconds: parsed.data.ttlSeconds
+    });
+    return res.status(201).json(job);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.get("/api/local-jobs/:jobId", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  try {
+    const job = await getLocalJob(authContext.userId, String(req.params.jobId));
+    if (!job) {
+      return res.status(404).json({ message: "Local job not found" });
+    }
+    return res.json(job);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/local-jobs/claim", async (req, res) => {
+  const localContext = await requireLocalClientContext(req, res);
+  if (!localContext) return;
+
+  const parsed = localJobClaimSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json({ message: parsed.error.flatten() });
+  }
+
+  try {
+    await recordLocalClientHeartbeat(localContext.client, {
+      syncRootState: { claiming: true }
+    });
+    const jobs = await claimLocalJobsForClient(localContext.client.id, parsed.data.limit ?? 5);
+    return res.json({ items: jobs });
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/local-jobs/:jobId/complete", async (req, res) => {
+  const localContext = await requireLocalClientContext(req, res);
+  if (!localContext) return;
+
+  const parsed = localJobCompleteSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json({ message: parsed.error.flatten() });
+  }
+
+  try {
+    const job = await completeLocalJobForClient(localContext.client.id, String(req.params.jobId), parsed.data.result);
+    if (!job) {
+      return res.status(404).json({ message: "Local job not found or already terminal" });
+    }
+    return res.json(job);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/local-jobs/:jobId/fail", async (req, res) => {
+  const localContext = await requireLocalClientContext(req, res);
+  if (!localContext) return;
+
+  const parsed = localJobFailSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json({ message: parsed.error.flatten() });
+  }
+
+  try {
+    const job = await failLocalJobForClient(localContext.client.id, String(req.params.jobId), parsed.data.error);
+    if (!job) {
+      return res.status(404).json({ message: "Local job not found or already terminal" });
+    }
+    return res.json(job);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.get("/api/local-jobs/:jobId/download", async (req, res) => {
+  const localContext = await requireLocalClientContext(req, res);
+  if (!localContext) return;
+
+  try {
+    const job = await getLocalJobForClient(localContext.client.id, String(req.params.jobId));
+    if (!job) {
+      return res.status(404).json({ message: "Local job not found" });
+    }
+    if (job.status !== "running" && job.status !== "completed") {
+      return res.status(409).json({ message: "Local job must be claimed before download" });
+    }
+
+    const user = await findUserById(job.userId);
+    if (!user) {
+      return res.status(404).json({ message: "Job owner not found" });
+    }
+    const bundle = issueTokenBundle({ userId: user.id, username: user.username });
+    let targetUrl: string | undefined;
+
+    if (job.kind === "download_artifact" || (job.kind === "materialize_resource" && job.payload.domain === "artifacts")) {
+      const artifactItemId = typeof job.payload.artifactItemId === "string"
+        ? job.payload.artifactItemId
+        : typeof job.payload.id === "string"
+          ? job.payload.id
+          : undefined;
+      if (!artifactItemId) {
+        return res.status(400).json({ message: "Job payload is missing artifactItemId" });
+      }
+      targetUrl = `${serviceBaseUrls.artifacts}/artifacts/items/${encodeURIComponent(artifactItemId)}/download?download=1`;
+    }
+
+    if (job.kind === "download_task_attachment") {
+      const taskId = typeof job.payload.taskId === "string" ? job.payload.taskId : undefined;
+      const attachmentId = typeof job.payload.attachmentId === "string" ? job.payload.attachmentId : undefined;
+      if (!taskId || !attachmentId) {
+        return res.status(400).json({ message: "Job payload is missing taskId or attachmentId" });
+      }
+      targetUrl = `${serviceBaseUrls.tasks}/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}/download?download=1`;
+    }
+
+    if (!targetUrl) {
+      return res.status(400).json({ message: `Unsupported local job kind for download: ${job.kind}` });
+    }
+
+    const upstream = await fetch(targetUrl, {
+      headers: {
+        Authorization: `Bearer ${bundle.accessToken}`
+      }
+    });
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    const contentType = upstream.headers.get("content-type");
+    const disposition = upstream.headers.get("content-disposition");
+    const length = upstream.headers.get("content-length");
+    if (contentType) res.setHeader("Content-Type", contentType);
+    if (disposition) res.setHeader("Content-Disposition", disposition);
+    if (length) res.setHeader("Content-Length", length);
+    return res.status(upstream.status).send(buffer);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.get("/api/sync/snapshot", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const requestedDomains = typeof req.query.domains === "string"
+    ? req.query.domains.split(",").map((value) => value.trim()).filter(Boolean)
+    : ["projects", "notes", "artifacts", "tasks"];
+  const domainSet = new Set(requestedDomains);
+
+  try {
+    const snapshot: Record<string, unknown> = {};
+    if (domainSet.has("projects")) {
+      snapshot.projects = await projectsClient.list(authContext.accessToken, undefined, undefined, 100);
+    }
+    if (domainSet.has("notes")) {
+      snapshot.notes = await notesClient.list(authContext.accessToken, undefined, 500);
+    }
+    if (domainSet.has("artifacts")) {
+      snapshot.artifacts = await artifactsClient.treeList(authContext.accessToken, { limit: 500 });
+    }
+    if (domainSet.has("tasks")) {
+      snapshot.tasks = await tasksClient.list(authContext.accessToken, undefined, undefined, 500);
+    }
+    return res.json({
+      generatedAt: new Date().toISOString(),
+      domains: snapshot
+    });
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.get("/api/sync/pull", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const cursor = typeof req.query.cursor === "string" ? req.query.cursor : undefined;
+  const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : 100;
+
+  try {
+    const result = await listSyncEvents(authContext.userId, cursor, Number.isFinite(limit) ? limit : 100);
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.get("/api/sync/blobs/:blobId", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const blobId = String(req.params.blobId);
+  let targetUrl: string | undefined;
+  if (blobId.startsWith("artifact:")) {
+    const id = blobId.slice("artifact:".length);
+    targetUrl = `${serviceBaseUrls.artifacts}/artifacts/items/${encodeURIComponent(id)}/download?download=1`;
+  } else if (blobId.startsWith("task-attachment:")) {
+    const [, taskId, attachmentId] = blobId.split(":");
+    if (taskId && attachmentId) {
+      targetUrl = `${serviceBaseUrls.tasks}/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}/download?download=1`;
+    }
+  }
+
+  if (!targetUrl) {
+    return res.status(404).json({ message: "Unsupported sync blob id" });
+  }
+
+  try {
+    const upstream = await fetch(targetUrl, {
+      headers: {
+        Authorization: `Bearer ${authContext.accessToken}`
+      }
+    });
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    const contentType = upstream.headers.get("content-type");
+    const disposition = upstream.headers.get("content-disposition");
+    const length = upstream.headers.get("content-length");
+    if (contentType) res.setHeader("Content-Type", contentType);
+    if (disposition) res.setHeader("Content-Disposition", disposition);
+    if (length) res.setHeader("Content-Length", length);
+    return res.status(upstream.status).send(buffer);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.put("/api/sync/blobs/:blobId", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  return res.status(501).json({
+    message: "Sync blob upload is not enabled yet; use existing domain upload APIs until sync push application is implemented."
+  });
+});
+
+app.post("/api/sync/push", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const parsed = syncPushSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json({ message: parsed.error.flatten() });
+  }
+
+  return res.status(202).json({
+    applied: [],
+    rejected: parsed.data.ops.map((op, index) => ({
+      index,
+      op,
+      code: "SYNC_PUSH_NOT_IMPLEMENTED",
+      message: "Sync push acceptance is scaffolded; domain-specific operation application is not enabled yet."
+    })),
+    serverCursor: undefined
+  });
+});
+
 // External facade for projects
 app.get("/api/projects", async (req, res) => {
   const authContext = await requireAuthenticatedContext(req, res);
@@ -2332,6 +2798,10 @@ app.post("/api/projects", async (req, res) => {
 
   try {
     const result = await projectsClient.create(authContext.accessToken, req.body);
+    recordSyncEventBestEffort(authContext.userId, "projects", objectId(result), "create", {
+      source: "core-api",
+      resource: result as Record<string, unknown>
+    });
     return res.status(201).json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -2380,6 +2850,11 @@ app.patch("/api/projects/:projectId", async (req, res) => {
 
   try {
     const result = await projectsClient.update(authContext.accessToken, String(req.params.projectId), req.body);
+    recordSyncEventBestEffort(authContext.userId, "projects", String(req.params.projectId), "update", {
+      source: "core-api",
+      patch: req.body as Record<string, unknown>,
+      resource: result as Record<string, unknown>
+    });
     return res.json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -2392,6 +2867,9 @@ app.delete("/api/projects/:projectId", async (req, res) => {
 
   try {
     await projectsClient.remove(authContext.accessToken, String(req.params.projectId));
+    recordSyncEventBestEffort(authContext.userId, "projects", String(req.params.projectId), "delete", {
+      source: "core-api"
+    });
     return res.status(204).send();
   } catch (error) {
     return respondInternalError(res, error);
@@ -2444,6 +2922,10 @@ app.post("/api/notes", async (req, res) => {
 
   try {
     const result = await notesClient.create(authContext.accessToken, req.body);
+    recordSyncEventBestEffort(authContext.userId, "notes", objectId(result), "create", {
+      source: "core-api",
+      resource: result as Record<string, unknown>
+    });
     return res.status(201).json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -2456,6 +2938,11 @@ app.patch("/api/notes/:id", async (req, res) => {
 
   try {
     const result = await notesClient.update(authContext.accessToken, String(req.params.id), req.body);
+    recordSyncEventBestEffort(authContext.userId, "notes", String(req.params.id), "update", {
+      source: "core-api",
+      patch: req.body as Record<string, unknown>,
+      resource: result as Record<string, unknown>
+    });
     return res.json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -2468,6 +2955,9 @@ app.delete("/api/notes/:id", async (req, res) => {
 
   try {
     await notesClient.remove(authContext.accessToken, String(req.params.id));
+    recordSyncEventBestEffort(authContext.userId, "notes", String(req.params.id), "delete", {
+      source: "core-api"
+    });
     return res.status(204).send();
   } catch (error) {
     return respondInternalError(res, error);
@@ -2560,6 +3050,10 @@ app.post("/api/artifacts/folders", async (req, res) => {
 
   try {
     const result = await artifactsClient.createFolder(authContext.accessToken, req.body);
+    recordSyncEventBestEffort(authContext.userId, "artifacts", objectId(result), "create", {
+      source: "core-api",
+      resource: result as Record<string, unknown>
+    });
     return res.status(201).json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -2572,6 +3066,10 @@ app.post("/api/artifacts/notes", async (req, res) => {
 
   try {
     const result = await artifactsClient.createNote(authContext.accessToken, req.body);
+    recordSyncEventBestEffort(authContext.userId, "artifacts", objectId(result), "create", {
+      source: "core-api",
+      resource: result as Record<string, unknown>
+    });
     return res.status(201).json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -2639,6 +3137,11 @@ app.patch("/api/artifacts/items/:id", async (req, res) => {
 
   try {
     const result = await artifactsClient.updateItem(authContext.accessToken, String(req.params.id), req.body);
+    recordSyncEventBestEffort(authContext.userId, "artifacts", String(req.params.id), "update", {
+      source: "core-api",
+      patch: req.body as Record<string, unknown>,
+      resource: result as Record<string, unknown>
+    });
     return res.json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -2651,6 +3154,9 @@ app.delete("/api/artifacts/items/:id", async (req, res) => {
 
   try {
     await artifactsClient.removeItem(authContext.accessToken, String(req.params.id));
+    recordSyncEventBestEffort(authContext.userId, "artifacts", String(req.params.id), "delete", {
+      source: "core-api"
+    });
     return res.status(204).send();
   } catch (error) {
     return respondInternalError(res, error);
@@ -2740,6 +3246,10 @@ app.post("/api/artifacts", async (req, res) => {
 
   try {
     const result = await artifactsClient.create(authContext.accessToken, req.body);
+    recordSyncEventBestEffort(authContext.userId, "artifacts", objectId(result), "create", {
+      source: "core-api",
+      resource: result as Record<string, unknown>
+    });
     return res.status(201).json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -2752,6 +3262,11 @@ app.patch("/api/artifacts/:id", async (req, res) => {
 
   try {
     const result = await artifactsClient.update(authContext.accessToken, String(req.params.id), req.body);
+    recordSyncEventBestEffort(authContext.userId, "artifacts", String(req.params.id), "update", {
+      source: "core-api",
+      patch: req.body as Record<string, unknown>,
+      resource: result as Record<string, unknown>
+    });
     return res.json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -2764,6 +3279,9 @@ app.delete("/api/artifacts/:id", async (req, res) => {
 
   try {
     await artifactsClient.remove(authContext.accessToken, String(req.params.id));
+    recordSyncEventBestEffort(authContext.userId, "artifacts", String(req.params.id), "delete", {
+      source: "core-api"
+    });
     return res.status(204).send();
   } catch (error) {
     return respondInternalError(res, error);
@@ -2810,6 +3328,12 @@ app.put("/api/tasks/:id/pin", async (req, res) => {
 
   try {
     const result = await tasksClient.setPin(authContext.accessToken, String(req.params.id), pinned);
+    recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
+      source: "core-api",
+      relation: "pin",
+      pinned,
+      resource: result as Record<string, unknown>
+    });
     return res.json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -2849,6 +3373,13 @@ app.post("/api/tasks/:id/occurrences/complete", async (req, res) => {
 
   try {
     const result = await tasksClient.completeOccurrence(authContext.accessToken, String(req.params.id), targetDate, status);
+    recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
+      source: "core-api",
+      relation: "occurrence",
+      targetDate,
+      status,
+      resource: result as Record<string, unknown>
+    });
     return res.json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -2994,6 +3525,10 @@ app.post("/api/tasks", async (req, res) => {
 
   try {
     const result = await tasksClient.create(authContext.accessToken, req.body);
+    recordSyncEventBestEffort(authContext.userId, "tasks", objectId(result), "create", {
+      source: "core-api",
+      resource: result as Record<string, unknown>
+    });
     return res.status(201).json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -3006,6 +3541,11 @@ app.patch("/api/tasks/:id", async (req, res) => {
 
   try {
     const result = await tasksClient.update(authContext.accessToken, String(req.params.id), req.body);
+    recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
+      source: "core-api",
+      patch: req.body as Record<string, unknown>,
+      resource: result as Record<string, unknown>
+    });
     return res.json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -3018,6 +3558,9 @@ app.delete("/api/tasks/:id", async (req, res) => {
 
   try {
     await tasksClient.remove(authContext.accessToken, String(req.params.id));
+    recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "delete", {
+      source: "core-api"
+    });
     return res.status(204).send();
   } catch (error) {
     return respondInternalError(res, error);

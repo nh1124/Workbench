@@ -312,6 +312,42 @@ export interface StoredIntegrationConfig {
   updatedAt: string;
 }
 
+export interface LocalClientRecord {
+  id: string;
+  userId: string;
+  deviceId: string;
+  clientName: string;
+  platform: string;
+  capabilities: Record<string, unknown>;
+  syncRootId: string;
+  syncRootLabel: string;
+  enabled: boolean;
+  default: boolean;
+  createdAt: string;
+  updatedAt: string;
+  heartbeat?: {
+    daemonVersion?: string;
+    syncRootState: Record<string, unknown>;
+    lastSeenAt: string;
+    online: boolean;
+  };
+}
+
+export interface LocalJobRecord {
+  id: string;
+  userId: string;
+  localClientId: string;
+  kind: "download_artifact" | "download_task_attachment" | "materialize_resource";
+  target: "downloads" | "sync-folder";
+  payload: Record<string, unknown>;
+  status: "pending" | "running" | "completed" | "failed";
+  attempts: number;
+  result: Record<string, unknown>;
+  errorMessage?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type ImageProvider = "auto" | "mock" | "openai" | "nanobanana";
 export type ImageIntent = "create" | "refine" | "edit" | "context_update";
 export type ImageJobStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted";

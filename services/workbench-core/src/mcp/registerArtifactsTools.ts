@@ -1,7 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { artifactsClient } from "../internalClients.js";
-import { asMcpText, runWithAuth } from "./helpers.js";
+import { createLocalJob, getLocalJob } from "../localClientsStore.js";
+import { asMcpText, runWithAuth, runWithAuthContext } from "./helpers.js";
 
 type ToolContext = {
   accessToken: string;
@@ -412,6 +413,59 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
         artifactsClient.downloadFile(ctx.accessToken, id, asAttachment ?? true)
       );
       return asMcpText(result);
+    }
+  );
+
+  server.registerTool(
+    "artifacts.download.to_client",
+    {
+      title: "Download Artifact File To Local Client",
+      description:
+        "Create a daemon-pulled local job that downloads an artifact file to an enabled Workbench local client. " +
+        "Use this instead of artifacts.download when a local path is needed.",
+      inputSchema: {
+        id: z.string().min(1),
+        localClientId: z.string().optional(),
+        target: z.enum(["downloads", "sync-folder"]).optional(),
+        filename: z.string().optional()
+      }
+    },
+    async ({ id, localClientId, target, filename }) => {
+      const job = await runWithAuthContext(ctx.accessToken, ({ userId }) =>
+        createLocalJob(userId, {
+          localClientId,
+          kind: "download_artifact",
+          target: target ?? "downloads",
+          payload: {
+            artifactItemId: id,
+            filename
+          }
+        })
+      );
+      return asMcpText({
+        jobId: job.id,
+        localClientId: job.localClientId,
+        status: job.status,
+        target: job.target
+      });
+    }
+  );
+
+  server.registerTool(
+    "artifacts.download.to_client.status",
+    {
+      title: "Get Local Client Artifact Download Job Status",
+      description: "Read completion status and local path result for an artifact download local-client job.",
+      inputSchema: {
+        jobId: z.string().min(1)
+      }
+    },
+    async ({ jobId }) => {
+      const job = await runWithAuthContext(ctx.accessToken, ({ userId }) => getLocalJob(userId, jobId));
+      if (!job) {
+        throw new Error("Local job not found");
+      }
+      return asMcpText(job);
     }
   );
 }

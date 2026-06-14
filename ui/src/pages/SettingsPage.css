@@ -533,6 +533,103 @@
   color: #ffffff;
 }
 
+.account-local-clients {
+  margin-top: 0.9rem;
+  border: 1px solid rgba(51, 65, 85, 0.78);
+  border-radius: 14px;
+  background: linear-gradient(180deg, #111827 0%, #0f172a 100%);
+  padding: 1rem 1.05rem;
+  display: grid;
+  gap: 0.72rem;
+}
+
+.account-local-clients-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.8rem;
+  align-items: flex-start;
+}
+
+.account-local-clients-header h3 {
+  margin: 0 0 0.18rem;
+  font-size: 1.05rem;
+}
+
+.account-local-client-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.account-local-client-card {
+  border: 1px solid rgba(51, 65, 85, 0.68);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.7);
+  padding: 0.72rem;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.7rem;
+  align-items: flex-start;
+}
+
+.account-local-client-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.36rem;
+}
+
+.account-local-client-title strong {
+  color: #e5eefb;
+  font-size: 0.92rem;
+}
+
+.account-local-client-title span {
+  border: 1px solid #334155;
+  border-radius: 999px;
+  padding: 0.12rem 0.42rem;
+  color: #cbd5e1;
+  font-size: 0.66rem;
+  font-weight: 700;
+}
+
+.account-local-client-title .online {
+  border-color: rgba(34, 211, 238, 0.55);
+  color: #67e8f9;
+}
+
+.account-local-client-title .offline {
+  color: #94a3b8;
+}
+
+.account-local-client-card p {
+  margin: 0.26rem 0 0;
+  color: #94a3b8;
+  font-size: 0.78rem;
+}
+
+.account-local-client-card small {
+  display: block;
+  margin-top: 0.18rem;
+  color: #64748b;
+  font-size: 0.68rem;
+  overflow-wrap: anywhere;
+}
+
+.account-local-client-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.38rem;
+}
+
+.account-local-client-actions button,
+.account-local-clients-header button {
+  min-height: 2.1rem;
+  border-radius: 10px;
+  font-size: 0.75rem;
+  padding: 0.42rem 0.66rem;
+}
+
 @media (max-width: 980px) {
   .settings-shell {
     grid-template-columns: 1fr;
@@ -549,6 +646,15 @@
   .account-tile input {
     width: 100%;
     max-width: none;
+  }
+
+  .account-local-client-card,
+  .account-local-clients-header {
+    flex-direction: column;
+  }
+
+  .account-local-client-actions {
+    justify-content: flex-start;
   }
 }
 

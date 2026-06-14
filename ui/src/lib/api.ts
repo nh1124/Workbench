@@ -19,6 +19,8 @@ import type {
   ArtifactItem,
   ArtifactProjectSummary,
   IntegrationManifest,
+  LocalClientRecord,
+  LocalJobRecord,
   Note,
   NoteProjectSummary,
   ProjectDefaultSelection,
@@ -1114,7 +1116,19 @@ export const coreApi = {
     fetchJson(`${coreBaseUrl()}/integrations/configs/${encodeURIComponent(integrationId)}`, {
       method: "PUT",
       body: JSON.stringify(payload)
-    })
+    }),
+  listLocalClients: (): Promise<{ items: LocalClientRecord[] }> =>
+    fetchJson(`${coreBaseUrl()}/api/local-clients`),
+  updateLocalClient: (
+    id: string,
+    payload: { clientName?: string; enabled?: boolean; capabilities?: Record<string, unknown>; syncRootLabel?: string; default?: boolean }
+  ): Promise<LocalClientRecord> =>
+    fetchJson(`${coreBaseUrl()}/api/local-clients/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    }),
+  getLocalJob: (id: string): Promise<LocalJobRecord> =>
+    fetchJson(`${coreBaseUrl()}/api/local-jobs/${encodeURIComponent(id)}`)
 };
 
 export async function saveWorkbenchSession(session: WorkbenchAuthResponse | WorkbenchRefreshResponse): Promise<void> {

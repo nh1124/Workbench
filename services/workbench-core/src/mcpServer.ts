@@ -13,11 +13,16 @@ const server = new McpServer({
 });
 
 registerAuthTools(server);
-registerNotesTools(server);
-registerArtifactsTools(server);
-registerTasksTools(server);
-registerProjectsTools(server);
-registerDeepResearchTools(server);
+
+const accessToken = process.env.WORKBENCH_MCP_ACCESS_TOKEN?.trim();
+if (accessToken) {
+  const ctx = { accessToken };
+  registerNotesTools(server, ctx);
+  registerArtifactsTools(server, ctx);
+  registerTasksTools(server, ctx);
+  registerProjectsTools(server, ctx);
+  registerDeepResearchTools(server, ctx);
+}
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
