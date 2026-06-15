@@ -296,6 +296,15 @@ function sanitizeFileName(raw: string): string {
   return cleaned.slice(0, 180);
 }
 
+function sanitizePathSegment(raw: string, fallback = "untitled"): string {
+  const cleaned = raw
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned || cleaned === "." || cleaned === "..") return fallback;
+  return cleaned.slice(0, 180);
+}
+
 function parseContentDispositionFilename(value: string | null): string | undefined {
   if (!value) return undefined;
   const utf8 = value.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
@@ -469,6 +478,48 @@ function titleFor(relativePath: string): string {
   return ext ? name.slice(0, -ext.length) : name;
 }
 
+function defaultNotePath(title: string): string {
+  const base = sanitizePathSegment(title, "untitled");
+  return /\.[a-z0-9]{1,12}$/i.test(base) ? base : `${base}.md`;
+}
+
+function normalizeArtifactRelativePath(raw: string, fallbackLeaf = "untitled.md"): string {
+  const normalized = normalizeRelativePath(raw).replace(/^\/+/, "");
+  const segments = normalized
+    .split("/")
+    .map((segment, index, values) => sanitizePathSegment(segment, index === values.length - 1 ? fallbackLeaf : "folder"))
+    .filter((segment) => segment.length > 0);
+  return normalizeRelativePath(segments.join("/"));
+}
+
+async function uniqueRelativePath(
+  config: DaemonConfig,
+  requestedRelativePath: string,
+  excludeRelativePath?: string
+): Promise<string> {
+  const normalized = normalizeArtifactRelativePath(requestedRelativePath);
+  const parent = directoryPathFor(normalized);
+  const leaf = basename(normalized);
+  const parsed = leaf.match(/^(.*?)(\.[^.]+)?$/);
+  const base = parsed?.[1] || "untitled";
+  const ext = parsed?.[2] || "";
+  for (let index = 0; index < 1000; index += 1) {
+    const candidateLeaf = index === 0 ? `${base}${ext}` : `${base} (${index})${ext}`;
+    const candidate = parent ? `${parent}/${candidateLeaf}` : candidateLeaf;
+    if (excludeRelativePath && normalizeRelativePath(excludeRelativePath) === candidate) {
+      return candidate;
+    }
+    const absolutePath = resolveSyncRootRelativePath(config, candidate);
+    if (!absolutePath) continue;
+    try {
+      await fs.access(absolutePath);
+    } catch {
+      return candidate;
+    }
+  }
+  return parent ? `${parent}/${base}-${Date.now()}${ext}` : `${base}-${Date.now()}${ext}`;
+}
+
 function localProjectId(state: DaemonState): string {
   return `local:${state.config.syncRootId}`;
 }
@@ -609,6 +660,205 @@ export async function getLocalArtifactItemById(
   return resource ? buildLocalArtifactItem(state, resource, options) : undefined;
 }
 
+function getLocalArtifactResourceById(state: DaemonState, id: string): ManifestResource | undefined {
+  const local = decodeLocalItemId(id);
+  const resources = listResources(state.manifestStore);
+  return resources.find((item) => item.resourceId === id)
+    ?? (local ? resources.find((item) => item.kind === local.kind && item.relativePath === local.relativePath) : undefined);
+}
+
+async function readLocalNoteContent(state: DaemonState, relativePath: string): Promise<string> {
+  const absolutePath = resolveSyncRootRelativePath(state.config, relativePath);
+  if (!absolutePath) return "";
+  try {
+    return await fs.readFile(absolutePath, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+async function writeLocalNoteAndQueue(
+  state: DaemonState,
+  options: {
+    relativePath: string;
+    contentMarkdown: string;
+    resourceId?: string;
+    action: "create" | "update";
+    previousRelativePath?: string;
+  }
+): Promise<LocalArtifactItem> {
+  const now = new Date().toISOString();
+  const relativePath = normalizeArtifactRelativePath(options.relativePath);
+  const absolutePath = resolveSyncRootRelativePath(state.config, relativePath);
+  if (!absolutePath) {
+    throw new Error("Invalid artifact note path");
+  }
+
+  if (options.previousRelativePath && options.previousRelativePath !== relativePath) {
+    supersedeOpenOutboxForPath(
+      state,
+      options.previousRelativePath,
+      () => true,
+      "Local note path changed through daemon facade; stale operation was superseded.",
+      now
+    );
+    const previousAbsolutePath = resolveSyncRootRelativePath(state.config, options.previousRelativePath);
+    if (previousAbsolutePath) {
+      await fs.rm(previousAbsolutePath, { force: true }).catch(() => {
+        // Best-effort cleanup after local rename.
+      });
+    }
+    removeResource(state.manifestStore, options.previousRelativePath);
+  }
+
+  supersedeOpenOutboxForPath(
+    state,
+    relativePath,
+    () => true,
+    "Local note was changed through daemon facade; stale operation was superseded.",
+    now
+  );
+
+  await fs.mkdir(dirname(absolutePath), { recursive: true });
+  await fs.writeFile(absolutePath, options.contentMarkdown, "utf8");
+  const stat = await fs.stat(absolutePath);
+  const checksum = await hashFile(absolutePath);
+  const payload = await buildOutboxPayloadForFile(state.config, absolutePath, relativePath, "note");
+
+  enqueueManifestOutbox(state.manifestStore, {
+    relativePath,
+    domain: "artifacts",
+    action: options.action,
+    resourceId: options.action === "update" ? options.resourceId : undefined,
+    payload
+  });
+  upsertManifestResource(state.manifestStore, {
+    relativePath,
+    domain: "artifacts",
+    kind: "note",
+    resourceId: options.resourceId,
+    checksum,
+    sizeBytes: stat.size,
+    dirty: true,
+    lastSeenAt: now,
+    localUpdatedAt: stat.mtime.toISOString()
+  });
+  setMeta(state.manifestStore, "lastScanAt", now);
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
+  await refreshManifestStats(state);
+
+  const resource = getResource(state.manifestStore, relativePath);
+  return resource
+    ? buildLocalArtifactItem(state, resource, { includeContent: true })
+    : {
+        id: localItemId("note", relativePath),
+        projectId: localProjectId(state),
+        projectName: localProjectName(state),
+        kind: "note",
+        title: titleFor(relativePath),
+        path: relativePath,
+        parentPath: directoryPathFor(relativePath) ?? "",
+        scope: "private",
+        tags: [],
+        mimeType: "text/markdown",
+        sizeBytes: stat.size,
+        version: 1,
+        contentMarkdown: options.contentMarkdown,
+        createdAt: now,
+        updatedAt: now
+      };
+}
+
+export async function createLocalArtifactNote(
+  state: DaemonState,
+  input: Record<string, unknown>
+): Promise<LocalArtifactItem> {
+  const title = typeof input.title === "string" && input.title.trim() ? input.title.trim() : "Untitled";
+  const requestedPath = typeof input.path === "string" && input.path.trim() ? input.path.trim() : defaultNotePath(title);
+  const relativePath = await uniqueRelativePath(state.config, requestedPath);
+  const contentMarkdown = typeof input.contentMarkdown === "string" ? input.contentMarkdown : "";
+  return writeLocalNoteAndQueue(state, {
+    relativePath,
+    contentMarkdown,
+    action: "create"
+  });
+}
+
+export async function updateLocalArtifactItem(
+  state: DaemonState,
+  id: string,
+  input: Record<string, unknown>
+): Promise<LocalArtifactItem | undefined> {
+  const resource = getLocalArtifactResourceById(state, id);
+  if (!resource) return undefined;
+  if (resource.kind !== "note") {
+    throw new Error("Only local note items can be updated through the daemon facade in this phase");
+  }
+
+  const item = await buildLocalArtifactItem(state, resource, { includeContent: true });
+  let nextRelativePath = resource.relativePath;
+  if (typeof input.path === "string" && input.path.trim()) {
+    nextRelativePath = await uniqueRelativePath(state.config, input.path.trim(), resource.relativePath);
+  } else if (typeof input.title === "string" && input.title.trim() && input.title.trim() !== item.title) {
+    const parent = directoryPathFor(resource.relativePath);
+    const requested = parent ? `${parent}/${defaultNotePath(input.title.trim())}` : defaultNotePath(input.title.trim());
+    nextRelativePath = await uniqueRelativePath(state.config, requested, resource.relativePath);
+  }
+
+  const contentMarkdown = typeof input.contentMarkdown === "string"
+    ? input.contentMarkdown
+    : item.contentMarkdown ?? await readLocalNoteContent(state, resource.relativePath);
+  return writeLocalNoteAndQueue(state, {
+    relativePath: nextRelativePath,
+    previousRelativePath: resource.relativePath,
+    contentMarkdown,
+    resourceId: resource.resourceId,
+    action: resource.resourceId ? "update" : "create"
+  });
+}
+
+export async function deleteLocalArtifactItem(state: DaemonState, id: string): Promise<boolean> {
+  const resource = getLocalArtifactResourceById(state, id);
+  if (!resource) return false;
+  const now = new Date().toISOString();
+  supersedeOpenOutboxForPath(
+    state,
+    resource.relativePath,
+    () => true,
+    "Local artifact was deleted through daemon facade; stale operation was superseded.",
+    now
+  );
+
+  const absolutePath = resolveSyncRootRelativePath(state.config, resource.relativePath);
+  if (absolutePath) {
+    await fs.rm(absolutePath, { force: true }).catch(() => {
+      // Best-effort local file deletion.
+    });
+  }
+
+  if (resource.resourceId) {
+    enqueueManifestOutbox(state.manifestStore, {
+      relativePath: resource.relativePath,
+      domain: "artifacts",
+      action: "delete",
+      resourceId: resource.resourceId,
+      payload: {}
+    });
+    upsertManifestResource(state.manifestStore, {
+      ...resource,
+      dirty: true,
+      lastSeenAt: now
+    });
+  } else {
+    removeResource(state.manifestStore, resource.relativePath);
+  }
+
+  setMeta(state.manifestStore, "lastScanAt", now);
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
+  await refreshManifestStats(state);
+  return true;
+}
+
 async function buildOutboxPayloadForFile(
   config: DaemonConfig,
   absolutePath: string,
@@ -721,7 +971,7 @@ export async function scanSyncFolder(state: DaemonState): Promise<void> {
     if (hasOpenOutboxForPath(state.manifestStore, relativePath)) continue;
 
     const payload = await buildOutboxPayloadForFile(state.config, absolutePath, relativePath, kind);
-    const action = kind === "note" && existing?.resourceId ? "update" : "create";
+    const action = existing?.resourceId ? "update" : "create";
     enqueueManifestOutbox(state.manifestStore, {
       relativePath,
       domain: "artifacts",
@@ -1207,6 +1457,50 @@ function startStatusServer(state: DaemonState): void {
         return;
       }
       writeJson(res, item);
+      return;
+    }
+
+    if (url.pathname === "/api/artifacts/notes" && req.method === "POST") {
+      try {
+        const body = await readRequestJson(req);
+        const item = await createLocalArtifactNote(state, body);
+        scheduleTick(state, 0);
+        writeJson(res, item, 201);
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+      }
+      return;
+    }
+
+    if (artifactItemMatch && req.method === "PATCH") {
+      try {
+        const body = await readRequestJson(req);
+        const item = await updateLocalArtifactItem(state, decodeURIComponent(artifactItemMatch[1]), body);
+        if (!item) {
+          writeJson(res, { message: "Local artifact item not found" }, 404);
+          return;
+        }
+        scheduleTick(state, 0);
+        writeJson(res, item);
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+      }
+      return;
+    }
+
+    if (artifactItemMatch && req.method === "DELETE") {
+      try {
+        const deleted = await deleteLocalArtifactItem(state, decodeURIComponent(artifactItemMatch[1]));
+        if (!deleted) {
+          writeJson(res, { message: "Local artifact item not found" }, 404);
+          return;
+        }
+        scheduleTick(state, 0);
+        res.statusCode = 204;
+        res.end();
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+      }
       return;
     }
 

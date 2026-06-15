@@ -254,7 +254,11 @@ npm run build
   - Added local artifact read facade for `GET /api/sync/snapshot`, `GET /api/artifacts/tree`, `GET /api/artifacts/tree/list`, `GET /api/artifacts/items/:id`, and artifact download.
 - `[partial]` Serve local-first reads from daemon SQLite when offline.
   - Artifact tree/item reads are served from `.workbench/manifest.sqlite` plus files in the sync folder.
-- `[pending]` Queue local UI writes into daemon outbox.
+- `[partial]` Queue local UI writes into daemon outbox.
+  - Added `POST /api/artifacts/notes` for local Markdown note creation.
+  - Added `PATCH /api/artifacts/items/:id` for local Markdown note content/path/title updates.
+  - Added `DELETE /api/artifacts/items/:id` for local note/file deletion.
+  - File upload, folder creation, note section patch, and multipart replacement through daemon facade remain pending.
 - `[pending]` Make desktop UI point to daemon loopback URL when local mode is enabled.
 - `[implemented]` Add Settings UI display/actions for daemon status and open conflicts.
 - `[implemented]` Add offline/sync/conflict status display in the main app shell.
@@ -282,10 +286,10 @@ npm run build
 
 ## Recommended Next Implementation Order
 
-1. Extend `POST /api/sync/push` to task occurrence/subtask/schedule operations and project default selection.
-2. Queue local UI writes into daemon outbox for selected artifact routes.
+1. Complete remaining daemon artifact write facade routes: folder creation, file upload/replacement, and note section patch.
+2. Make desktop UI point to daemon loopback URL when local mode is enabled.
 3. Add Tauri integration for sync folder selection, open folder, and daemon lifecycle.
-4. Add project default selection sync push support.
+4. Extend `POST /api/sync/push` to task occurrence/subtask/schedule operations and project default selection.
 
 ## Current Daemon Usage
 

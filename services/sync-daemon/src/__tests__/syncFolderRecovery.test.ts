@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile, unlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
@@ -13,7 +13,16 @@ import {
   upsertResource,
   type ManifestStore
 } from "../manifestStore.js";
-import { getLocalArtifactItemById, listLocalArtifactItems, scanSyncFolder, type DaemonConfig, type DaemonState } from "../index.js";
+import {
+  createLocalArtifactNote,
+  deleteLocalArtifactItem,
+  getLocalArtifactItemById,
+  listLocalArtifactItems,
+  scanSyncFolder,
+  updateLocalArtifactItem,
+  type DaemonConfig,
+  type DaemonState
+} from "../index.js";
 
 const tempRoots: string[] = [];
 
@@ -119,6 +128,80 @@ describe("sync folder recovery", () => {
       const loaded = await getLocalArtifactItemById(state, note.id, { includeContent: true });
       assert.equal(loaded?.path, "docs/brief.md");
       assert.equal(loaded?.contentMarkdown, "# Brief\nLocal note\n");
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("queues local note facade writes into the outbox", async () => {
+    const { root, store, state } = await createState();
+    try {
+      const created = await createLocalArtifactNote(state, {
+        title: "Local Draft",
+        contentMarkdown: "# Local\n"
+      });
+      assert.equal(created.kind, "note");
+      assert.equal(created.path, "Local Draft.md");
+      assert.equal(await readFile(join(root, "Local Draft.md"), "utf8"), "# Local\n");
+
+      let manifest = readManifestFromStore(store);
+      assert.equal(manifest.resources?.length, 1);
+      assert.equal(manifest.resources?.[0].dirty, true);
+      assert.equal(manifest.outbox?.length, 1);
+      assert.equal(manifest.outbox?.[0].action, "create");
+      assert.equal(manifest.outbox?.[0].status, "pending");
+
+      const updated = await updateLocalArtifactItem(state, created.id, {
+        title: "Renamed Draft",
+        contentMarkdown: "# Changed\n"
+      });
+      assert.equal(updated?.path, "Renamed Draft.md");
+      assert.equal(await readFile(join(root, "Renamed Draft.md"), "utf8"), "# Changed\n");
+
+      manifest = readManifestFromStore(store);
+      assert.equal(manifest.resources?.length, 1);
+      assert.equal(manifest.resources?.[0].relativePath, "Renamed Draft.md");
+      assert.deepEqual(manifest.outbox?.map((item) => `${item.action}:${item.status}`).sort(), [
+        "create:pending",
+        "create:superseded"
+      ]);
+
+      assert.ok(updated?.id);
+      assert.equal(await deleteLocalArtifactItem(state, updated.id), true);
+      manifest = readManifestFromStore(store);
+      assert.equal(manifest.resources?.length, 0);
+      assert.deepEqual(manifest.outbox?.map((item) => `${item.action}:${item.status}`).sort(), [
+        "create:superseded",
+        "create:superseded"
+      ]);
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("queues existing local file changes as update operations", async () => {
+    const { root, store, state } = await createState();
+    try {
+      const filePath = join(root, "asset.txt");
+      await writeFile(filePath, "old", "utf8");
+      upsertResource(store, {
+        relativePath: "asset.txt",
+        domain: "artifacts",
+        kind: "file",
+        resourceId: "cloud-file-1",
+        checksum: checksum("old"),
+        sizeBytes: 3,
+        dirty: false
+      });
+
+      await writeFile(filePath, "new", "utf8");
+      await scanSyncFolder(state);
+
+      const manifest = readManifestFromStore(store);
+      assert.equal(manifest.outbox?.length, 1);
+      assert.equal(manifest.outbox?.[0].action, "update");
+      assert.equal(manifest.outbox?.[0].resourceId, "cloud-file-1");
+      assert.equal(manifest.outbox?.[0].payload.kind, "file");
     } finally {
       closeManifestStore(store);
     }
