@@ -450,8 +450,13 @@ export function setMeta(store: ManifestStore, key: string, value: string | undef
     INSERT INTO meta (key, value)
     VALUES (?, ?)
     ON CONFLICT(key)
-    DO UPDATE SET value = excluded.value
+      DO UPDATE SET value = excluded.value
   `).run(key, value);
+}
+
+export function getMeta(store: ManifestStore, key: string): string | undefined {
+  const row = store.db.prepare("SELECT value FROM meta WHERE key = ?").get(key) as { value: string } | undefined;
+  return row?.value;
 }
 
 export function readManifestStats(store: ManifestStore): {
@@ -542,6 +547,16 @@ export function hasOpenOutboxForPath(store: ManifestStore, relativePath: string)
   return Boolean(row);
 }
 
+export function listOpenOutboxForResource(store: ManifestStore, resourceId: string): OutboxItem[] {
+  return (store.db.prepare(`
+    SELECT id, client_op_id, relative_path, domain, action, resource_id, payload_json,
+           status, attempts, last_error, created_at, updated_at, applied_at
+    FROM outbox
+    WHERE resource_id = ? AND status IN ('pending', 'failed')
+    ORDER BY created_at ASC
+  `).all(resourceId) as OutboxRow[]).map(toOutbox);
+}
+
 export function listOpenOutboxForPath(store: ManifestStore, relativePath: string): OutboxItem[] {
   return (store.db.prepare(`
     SELECT id, client_op_id, relative_path, domain, action, resource_id, payload_json,
@@ -550,6 +565,17 @@ export function listOpenOutboxForPath(store: ManifestStore, relativePath: string
     WHERE relative_path = ? AND status IN ('pending', 'failed')
     ORDER BY created_at ASC
   `).all(relativePath) as OutboxRow[]).map(toOutbox);
+}
+
+export function listOpenOutboxUnderPath(store: ManifestStore, relativePath: string): OutboxItem[] {
+  const prefix = `${relativePath.replace(/\/+$/, "")}/%`;
+  return (store.db.prepare(`
+    SELECT id, client_op_id, relative_path, domain, action, resource_id, payload_json,
+           status, attempts, last_error, created_at, updated_at, applied_at
+    FROM outbox
+    WHERE (relative_path = ? OR relative_path LIKE ?) AND status IN ('pending', 'failed')
+    ORDER BY created_at ASC
+  `).all(relativePath, prefix) as OutboxRow[]).map(toOutbox);
 }
 
 export function enqueueOutbox(

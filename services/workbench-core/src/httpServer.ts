@@ -1225,6 +1225,10 @@ function withoutKeys(record: Record<string, unknown>, keys: string[]): Record<st
   return next;
 }
 
+function syncEventPayloadMetadata(payload: Record<string, unknown>): Record<string, unknown> {
+  return withoutKeys(payload, ["contentBase64"]);
+}
+
 function requireSyncString(record: Record<string, unknown>, fieldName: string, code: string, message: string): string {
   const value = asNonEmptyString(record[fieldName]);
   if (!value) {
@@ -1626,7 +1630,8 @@ async function applySyncPushOperation(
     const event = await recordSyncEvent(authContext.userId, "notes", nextResourceId, action === "upsert" ? "update" : action, {
       source: "sync-push",
       clientOpId,
-      localClientId: authContext.localClient?.id
+      localClientId: authContext.localClient?.id,
+      ...(action === "delete" ? { deleted: true } : {})
     });
     return {
       index,
@@ -1682,7 +1687,8 @@ async function applySyncPushOperation(
       source: "sync-push",
       clientOpId,
       localClientId: authContext.localClient?.id,
-      relation
+      relation,
+      ...(action === "delete" ? { deleted: true } : {})
     });
     return {
       index,
@@ -1800,10 +1806,12 @@ async function applySyncPushOperation(
       throw new LocalClientStoreError(502, "SYNC_RESOURCE_ID_MISSING", "Applied operation did not return a resource id.");
     }
     const event = await recordSyncEvent(authContext.userId, "tasks", nextResourceId, eventAction, {
+      ...syncEventPayloadMetadata(payload),
       source: "sync-push",
       clientOpId,
       localClientId: authContext.localClient?.id,
-      relation
+      relation,
+      ...(action === "delete" ? { deleted: true } : {})
     });
     return {
       index,
@@ -1880,7 +1888,8 @@ async function applySyncPushOperation(
   const event = await recordSyncEvent(authContext.userId, "artifacts", nextResourceId, action === "upsert" ? "update" : action, {
     source: "sync-push",
     clientOpId,
-    localClientId: authContext.localClient?.id
+    localClientId: authContext.localClient?.id,
+    ...(action === "delete" ? { deleted: true } : {})
   });
   return {
     index,
@@ -3800,6 +3809,14 @@ app.put("/api/projects/default", async (req, res) => {
 
   try {
     const result = await projectsClient.setDefault(authContext.accessToken, req.body);
+    const body = asJsonRecord(req.body);
+    const projectId = asNonEmptyString(body.projectId) ?? objectId(result);
+    recordSyncEventBestEffort(authContext.userId, "projects", projectId, "update", {
+      source: "core-api",
+      relation: "default",
+      projectId,
+      resource: result as Record<string, unknown>
+    });
     return res.json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -3842,7 +3859,8 @@ app.delete("/api/projects/:projectId", async (req, res) => {
   try {
     await projectsClient.remove(authContext.accessToken, String(req.params.projectId));
     recordSyncEventBestEffort(authContext.userId, "projects", String(req.params.projectId), "delete", {
-      source: "core-api"
+      source: "core-api",
+      deleted: true
     });
     return res.status(204).send();
   } catch (error) {
@@ -3930,7 +3948,8 @@ app.delete("/api/notes/:id", async (req, res) => {
   try {
     await notesClient.remove(authContext.accessToken, String(req.params.id));
     recordSyncEventBestEffort(authContext.userId, "notes", String(req.params.id), "delete", {
-      source: "core-api"
+      source: "core-api",
+      deleted: true
     });
     return res.status(204).send();
   } catch (error) {
@@ -4129,7 +4148,8 @@ app.delete("/api/artifacts/items/:id", async (req, res) => {
   try {
     await artifactsClient.removeItem(authContext.accessToken, String(req.params.id));
     recordSyncEventBestEffort(authContext.userId, "artifacts", String(req.params.id), "delete", {
-      source: "core-api"
+      source: "core-api",
+      deleted: true
     });
     return res.status(204).send();
   } catch (error) {
@@ -4254,7 +4274,8 @@ app.delete("/api/artifacts/:id", async (req, res) => {
   try {
     await artifactsClient.remove(authContext.accessToken, String(req.params.id));
     recordSyncEventBestEffort(authContext.userId, "artifacts", String(req.params.id), "delete", {
-      source: "core-api"
+      source: "core-api",
+      deleted: true
     });
     return res.status(204).send();
   } catch (error) {
@@ -4372,6 +4393,14 @@ app.post("/api/tasks/:id/occurrences/move", async (req, res) => {
 
   try {
     const result = await tasksClient.moveOccurrence(authContext.accessToken, String(req.params.id), sourceDate, targetDate);
+    recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
+      source: "core-api",
+      relation: "occurrence",
+      operation: "move",
+      sourceDate,
+      targetDate,
+      resource: result as Record<string, unknown>
+    });
     return res.json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -4389,6 +4418,13 @@ app.post("/api/tasks/:id/occurrences/skip-exception", async (req, res) => {
 
   try {
     const result = await tasksClient.skipOccurrenceException(authContext.accessToken, String(req.params.id), targetDate);
+    recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
+      source: "core-api",
+      relation: "occurrence",
+      operation: "skipException",
+      targetDate,
+      resource: result as Record<string, unknown>
+    });
     return res.json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -4533,7 +4569,8 @@ app.delete("/api/tasks/:id", async (req, res) => {
   try {
     await tasksClient.remove(authContext.accessToken, String(req.params.id));
     recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "delete", {
-      source: "core-api"
+      source: "core-api",
+      deleted: true
     });
     return res.status(204).send();
   } catch (error) {
@@ -4699,7 +4736,8 @@ app.delete("/api/tasks/:id/attachments/:attachmentId", async (req, res) => {
       source: "core-api",
       relation: "attachment",
       action: "delete",
-      attachmentId: String(req.params.attachmentId)
+      attachmentId: String(req.params.attachmentId),
+      deleted: true
     });
     return res.status(204).send();
   } catch (error) {
@@ -4730,6 +4768,14 @@ app.post("/api/tasks/:id/occurrences/:date/subtasks", async (req, res) => {
       String(req.params.date),
       req.body?.title
     );
+    recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
+      source: "core-api",
+      relation: "subtask",
+      action: "create",
+      occurrenceDate: String(req.params.date),
+      subtaskId: objectId(result),
+      subtask: result as Record<string, unknown>
+    });
     return res.status(201).json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -4747,6 +4793,15 @@ app.patch("/api/tasks/:id/occurrences/:date/subtasks/:subtaskId", async (req, re
       String(req.params.subtaskId),
       req.body
     );
+    recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
+      source: "core-api",
+      relation: "subtask",
+      action: "update",
+      occurrenceDate: String(req.params.date),
+      subtaskId: String(req.params.subtaskId),
+      patch: req.body as Record<string, unknown>,
+      subtask: result as Record<string, unknown>
+    });
     return res.json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -4763,6 +4818,14 @@ app.delete("/api/tasks/:id/occurrences/:date/subtasks/:subtaskId", async (req, r
       String(req.params.date),
       String(req.params.subtaskId)
     );
+    recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
+      source: "core-api",
+      relation: "subtask",
+      action: "delete",
+      occurrenceDate: String(req.params.date),
+      subtaskId: String(req.params.subtaskId),
+      deleted: true
+    });
     return res.status(204).send();
   } catch (error) {
     return respondInternalError(res, error);
@@ -4797,6 +4860,17 @@ app.post("/api/tasks/today", async (req, res) => {
       timezone: typeof timezone === "string" ? timezone : undefined
     };
     const result = await tasksClient.addToday(authContext.accessToken, taskId, scheduledDate, occurrenceDate, opts);
+    recordSyncEventBestEffort(authContext.userId, "tasks", taskId, "update", {
+      source: "core-api",
+      relation: "today",
+      action: "create",
+      scheduledDate,
+      occurrenceDate,
+      startTime: opts.startTime,
+      endTime: opts.endTime,
+      timezone: opts.timezone,
+      scheduleItem: result as Record<string, unknown>
+    });
     return res.status(201).json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -4813,6 +4887,14 @@ app.delete("/api/tasks/today/:taskId", async (req, res) => {
   if (!scheduledDate) return res.status(400).json({ message: "scheduledDate query parameter is required (YYYY-MM-DD)" });
   try {
     const result = await tasksClient.removeFromToday(authContext.accessToken, taskId, scheduledDate);
+    recordSyncEventBestEffort(authContext.userId, "tasks", taskId, "update", {
+      source: "core-api",
+      relation: "today",
+      action: "delete",
+      scheduledDate,
+      deleted: true,
+      result: result as Record<string, unknown>
+    });
     return res.json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -4830,6 +4912,14 @@ app.put("/api/tasks/schedule-items/:id", async (req, res) => {
     const patch = req.body as { scheduledDate?: string; occurrenceDate?: string; startTime?: string | null; endTime?: string | null; timezone?: string | null };
     const result = await tasksClient.updateScheduleItem(authContext.accessToken, scheduleId, patch);
     if (!result) return res.status(404).json({ message: "Schedule item not found" });
+    recordSyncEventBestEffort(authContext.userId, "tasks", result.taskId, "update", {
+      source: "core-api",
+      relation: "scheduleItem",
+      action: "update",
+      scheduleId,
+      patch: patch as Record<string, unknown>,
+      scheduleItem: result as Record<string, unknown>
+    });
     return res.json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -4842,7 +4932,20 @@ app.delete("/api/tasks/schedule-items/:id", async (req, res) => {
   const scheduleId = parseInt(req.params.id, 10);
   if (isNaN(scheduleId)) return res.status(400).json({ message: "id must be a number" });
   try {
+    const body = asJsonRecord(req.body);
+    const taskId = asNonEmptyString(body.taskId) ?? (typeof req.query.taskId === "string" ? req.query.taskId.trim() : undefined);
+    const scheduledDate = asNonEmptyString(body.scheduledDate) ?? (typeof req.query.scheduledDate === "string" ? req.query.scheduledDate.trim() : undefined);
+    const occurrenceDate = asNonEmptyString(body.occurrenceDate) ?? (typeof req.query.occurrenceDate === "string" ? req.query.occurrenceDate.trim() : undefined);
     await tasksClient.deleteScheduleItem(authContext.accessToken, scheduleId);
+    recordSyncEventBestEffort(authContext.userId, "tasks", taskId, "update", {
+      source: "core-api",
+      relation: "scheduleItem",
+      action: "delete",
+      scheduleId,
+      scheduledDate,
+      occurrenceDate,
+      deleted: true
+    });
     return res.status(204).send();
   } catch (error) {
     return respondInternalError(res, error);

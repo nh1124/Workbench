@@ -424,14 +424,28 @@ describe("local client HTTP APIs", () => {
       const recorded = await harness.syncStore.recordSyncEvent(userId, "notes", "note-http-sync", "update", {
         title: "HTTP sync note"
       });
+      const recordedDelete = await harness.syncStore.recordSyncEvent(userId, "notes", "note-http-tombstone", "delete", {
+        source: "test"
+      });
       const pullResponse = await requestJson(server.baseUrl, "GET", "/api/sync/pull?limit=10", {
         headers: daemonHeaders
       });
       assert.equal(pullResponse.status, 200);
       const events = pullResponse.body.events as Array<Record<string, unknown>>;
-      assert.equal(events.length, 1);
+      assert.equal(events.length, 2);
       assert.equal(events[0].cursor, recorded.cursor);
       assert.equal(events[0].resourceId, "note-http-sync");
+      assert.equal(events[1].cursor, recordedDelete.cursor);
+      assert.equal(events[1].resourceId, "note-http-tombstone");
+      assert.equal(events[1].action, "delete");
+      const deletePayload = events[1].payload as Record<string, unknown>;
+      assert.equal(deletePayload.deleted, true);
+      assert.equal(typeof deletePayload.deletedAt, "string");
+      assert.equal(typeof deletePayload.resourceDeletedAt, "string");
+
+      const versions = await harness.syncStore.listSyncResourceVersions(userId, ["notes"]);
+      const tombstoneVersion = versions.find((version) => version.resourceId === "note-http-tombstone");
+      assert.equal(tombstoneVersion?.deletedAt, deletePayload.deletedAt);
 
       const snapshotResponse = await requestJson(server.baseUrl, "GET", "/api/sync/snapshot?domains=", {
         headers: daemonHeaders

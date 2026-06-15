@@ -1,17 +1,20 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { hostname, homedir, platform } from "node:os";
-import { basename, dirname, extname, join, relative, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { promises as fs, watch, type FSWatcher } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import {
   enqueueOutbox as enqueueManifestOutbox,
+  getMeta,
   getResource,
   hasOpenOutboxForPath,
   listConflicts,
+  listOpenOutboxForResource,
   listOpenOutboxForPath,
+  listOpenOutboxUnderPath,
   listPendingOutbox,
   listResources,
   markOutboxApplied,
@@ -96,6 +99,8 @@ export type DaemonState = {
   lastClaimAt?: string;
   lastScanAt?: string;
   lastPushAt?: string;
+  lastRemotePullAt?: string;
+  remoteArtifactCursor?: string;
   lastError?: string;
   processedJobs: number;
   outboxPending: number;
@@ -250,6 +255,8 @@ async function refreshManifestStats(state: DaemonState): Promise<void> {
   state.conflictsOpen = stats.conflictsOpen;
   state.lastScanAt = stats.lastScanAt ?? state.lastScanAt;
   state.lastPushAt = stats.lastPushAt ?? state.lastPushAt;
+  state.lastRemotePullAt = getMeta(state.manifestStore, "lastRemotePullAt") ?? state.lastRemotePullAt;
+  state.remoteArtifactCursor = getMeta(state.manifestStore, "remoteArtifactCursor") ?? state.remoteArtifactCursor;
 }
 
 async function heartbeat(state: DaemonState): Promise<void> {
@@ -270,7 +277,8 @@ async function heartbeat(state: DaemonState): Promise<void> {
         conflictsOpen: state.conflictsOpen,
         watcherActive: state.watcherActive,
         lastScanAt: state.lastScanAt,
-        lastPushAt: state.lastPushAt
+        lastPushAt: state.lastPushAt,
+        lastRemotePullAt: state.lastRemotePullAt
       }
     })
   });
@@ -289,13 +297,18 @@ async function claimJobs(state: DaemonState): Promise<LocalJob[]> {
   return result.items;
 }
 
-function sanitizeFileName(raw: string): string {
+function isReservedWindowsName(value: string): boolean {
+  return /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(value);
+}
+
+export function sanitizeFileName(raw: string): string {
   const fallback = "download.bin";
   const cleaned = raw
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
     .replace(/\s+/g, " ")
-    .trim();
-  if (!cleaned || cleaned === "." || cleaned === "..") return fallback;
+    .trim()
+    .replace(/[. ]+$/g, "");
+  if (!cleaned || cleaned === "." || cleaned === ".." || isReservedWindowsName(cleaned)) return fallback;
   return cleaned.slice(0, 180);
 }
 
@@ -303,8 +316,9 @@ function sanitizePathSegment(raw: string, fallback = "untitled"): string {
   const cleaned = raw
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
     .replace(/\s+/g, " ")
-    .trim();
-  if (!cleaned || cleaned === "." || cleaned === "..") return fallback;
+    .trim()
+    .replace(/[. ]+$/g, "");
+  if (!cleaned || cleaned === "." || cleaned === ".." || isReservedWindowsName(cleaned)) return fallback;
   return cleaned.slice(0, 180);
 }
 
@@ -361,6 +375,9 @@ async function downloadJobFile(state: DaemonState, job: LocalJob): Promise<{
   const filename = sanitizeFileName(requestedName || headerName || basename(job.id));
   const directory = job.target === "sync-folder" ? state.config.syncRoot : state.config.downloadsDir;
   const localPath = await uniquePath(directory, filename);
+  if (!isPathInsideDirectory(directory, localPath)) {
+    throw new Error("Invalid local job download path");
+  }
   await fs.mkdir(dirname(localPath), { recursive: true });
   await fs.writeFile(localPath, buffer);
 
@@ -371,13 +388,35 @@ async function downloadJobFile(state: DaemonState, job: LocalJob): Promise<{
   };
 }
 
-function normalizeRelativePath(pathValue: string): string {
+export function normalizeRelativePath(pathValue: string): string {
   return pathValue.replace(/\\/g, "/");
 }
 
+function pathHasUnsafeRootOrTraversal(pathValue: string): boolean {
+  const normalized = normalizeRelativePath(pathValue);
+  const trimmed = normalized.trim();
+  if (!trimmed) return false;
+  if (isAbsolute(pathValue) || isAbsolute(normalized) || /^[A-Za-z]:/.test(trimmed) || trimmed.startsWith("//")) {
+    return true;
+  }
+  return normalized.split("/").some((segment) => segment === "..");
+}
+
+function pathContainsReservedSegment(pathValue: string): boolean {
+  return normalizeRelativePath(pathValue).split("/").some((segment) => isReservedWindowsName(segment));
+}
+
+function isPathInsideDirectory(directory: string, candidate: string): boolean {
+  const relativePath = normalizeRelativePath(relative(resolve(directory), resolve(candidate)));
+  return relativePath === "" || (relativePath !== ".." && !relativePath.startsWith("../"));
+}
+
 function relativeSyncPath(config: DaemonConfig, absolutePath: string): string | undefined {
+  if (!isPathInsideDirectory(config.syncRoot, absolutePath)) {
+    return undefined;
+  }
   const rel = relative(config.syncRoot, absolutePath);
-  if (!rel || rel.startsWith("..") || resolve(config.syncRoot, rel) === resolve(config.syncRoot, ".workbench")) {
+  if (!rel || resolve(config.syncRoot, rel) === resolve(config.syncRoot, ".workbench")) {
     return undefined;
   }
   return normalizeRelativePath(rel);
@@ -387,6 +426,7 @@ function isIgnoredSyncRelativePath(relativePath: string): boolean {
   const normalized = normalizeRelativePath(relativePath).replace(/^\/+/, "");
   const fileName = basename(normalized).toLowerCase();
   if (!normalized || normalized === ".workbench" || normalized.startsWith(".workbench/")) return true;
+  if (pathContainsReservedSegment(normalized)) return true;
   if (fileName === "thumbs.db" || fileName === ".ds_store") return true;
   if (fileName.startsWith("~$") || fileName.startsWith(".~")) return true;
   if (fileName.endsWith("~") || fileName.endsWith(".tmp") || fileName.endsWith(".temp")) return true;
@@ -505,6 +545,7 @@ function defaultNotePath(title: string): string {
 }
 
 function normalizeArtifactRelativePath(raw: string, fallbackLeaf = "untitled.md"): string {
+  if (pathHasUnsafeRootOrTraversal(raw)) return "";
   const normalized = normalizeRelativePath(raw).replace(/^\/+/, "");
   const segments = normalized
     .split("/")
@@ -514,6 +555,7 @@ function normalizeArtifactRelativePath(raw: string, fallbackLeaf = "untitled.md"
 }
 
 function normalizeArtifactFolderPath(raw: string): string {
+  if (pathHasUnsafeRootOrTraversal(raw)) return "";
   const normalized = normalizeRelativePath(raw).replace(/^\/+|\/+$/g, "");
   const segments = normalized
     .split("/")
@@ -529,6 +571,7 @@ async function uniqueRelativePath(
   fallbackLeaf = "untitled.md"
 ): Promise<string> {
   const normalized = normalizeArtifactRelativePath(requestedRelativePath, fallbackLeaf);
+  if (!normalized) return "";
   const parent = directoryPathFor(normalized);
   const leaf = basename(normalized);
   const parsed = leaf.match(/^(.*?)(\.[^.]+)?$/);
@@ -563,7 +606,7 @@ function localItemId(kind: "folder" | "note" | "file", relativePath: string): st
   return `local-${kind}:${Buffer.from(normalizeRelativePath(relativePath), "utf8").toString("base64url")}`;
 }
 
-function decodeLocalItemId(id: string): { kind: "folder" | "note" | "file"; relativePath: string } | undefined {
+export function decodeLocalItemId(id: string): { kind: "folder" | "note" | "file"; relativePath: string } | undefined {
   const match = id.match(/^local-(folder|note|file):(.+)$/);
   if (!match) return undefined;
   try {
@@ -576,12 +619,18 @@ function decodeLocalItemId(id: string): { kind: "folder" | "note" | "file"; rela
   }
 }
 
-function resolveSyncRootRelativePath(config: DaemonConfig, relativePath: string): string | undefined {
-  const normalized = normalizeRelativePath(relativePath).replace(/^\/+/, "");
+export function resolveSyncRootRelativePath(config: DaemonConfig, relativePath: string): string | undefined {
+  if (pathHasUnsafeRootOrTraversal(relativePath)) return undefined;
+  const normalized = normalizeRelativePath(relativePath);
   if (!normalized || isIgnoredSyncRelativePath(normalized)) return undefined;
   const absolutePath = resolve(config.syncRoot, normalized);
-  const relativeToRoot = relative(config.syncRoot, absolutePath);
-  if (!relativeToRoot || relativeToRoot.startsWith("..") || resolve(config.syncRoot, relativeToRoot) === resolve(config.syncRoot, ".workbench")) {
+  const relativeToRoot = normalizeRelativePath(relative(config.syncRoot, absolutePath));
+  if (
+    !relativeToRoot
+    || relativeToRoot === ".."
+    || relativeToRoot.startsWith("../")
+    || resolve(config.syncRoot, relativeToRoot) === resolve(config.syncRoot, ".workbench")
+  ) {
     return undefined;
   }
   return absolutePath;
@@ -920,9 +969,13 @@ export async function createLocalArtifactFile(
       ? input.filename.trim()
       : "file";
   const filename = sanitizePathSegment(rawFilename, "file");
-  const directoryPath = typeof input.directoryPath === "string" && input.directoryPath.trim()
-    ? normalizeArtifactFolderPath(input.directoryPath)
-    : undefined;
+  let directoryPath: string | undefined;
+  if (typeof input.directoryPath === "string" && input.directoryPath.trim()) {
+    directoryPath = normalizeArtifactFolderPath(input.directoryPath);
+    if (!directoryPath) {
+      throw new Error("Invalid artifact file path");
+    }
+  }
   const requestedPath = directoryPath ? `${directoryPath}/${filename}` : filename;
   const relativePath = await uniqueRelativePath(state.config, requestedPath, undefined, filename);
   const absolutePath = resolveSyncRootRelativePath(state.config, relativePath);
@@ -1102,6 +1155,9 @@ export async function createLocalArtifactNote(
   const title = typeof input.title === "string" && input.title.trim() ? input.title.trim() : "Untitled";
   const requestedPath = typeof input.path === "string" && input.path.trim() ? input.path.trim() : defaultNotePath(title);
   const relativePath = await uniqueRelativePath(state.config, requestedPath);
+  if (!relativePath) {
+    throw new Error("Invalid artifact note path");
+  }
   const contentMarkdown = typeof input.contentMarkdown === "string" ? input.contentMarkdown : "";
   return writeLocalNoteAndQueue(state, {
     relativePath,
@@ -1125,10 +1181,16 @@ export async function updateLocalArtifactItem(
   let nextRelativePath = resource.relativePath;
   if (typeof input.path === "string" && input.path.trim()) {
     nextRelativePath = await uniqueRelativePath(state.config, input.path.trim(), resource.relativePath);
+    if (!nextRelativePath) {
+      throw new Error("Invalid artifact note path");
+    }
   } else if (typeof input.title === "string" && input.title.trim() && input.title.trim() !== item.title) {
     const parent = directoryPathFor(resource.relativePath);
     const requested = parent ? `${parent}/${defaultNotePath(input.title.trim())}` : defaultNotePath(input.title.trim());
     nextRelativePath = await uniqueRelativePath(state.config, requested, resource.relativePath);
+    if (!nextRelativePath) {
+      throw new Error("Invalid artifact note path");
+    }
   }
 
   const contentMarkdown = typeof input.contentMarkdown === "string"
@@ -1404,6 +1466,664 @@ export async function scanSyncFolder(state: DaemonState): Promise<void> {
   await refreshManifestStats(state);
 }
 
+type RemoteArtifactKind = "folder" | "note" | "file";
+
+type RemoteArtifactItem = {
+  id: string;
+  kind: RemoteArtifactKind;
+  title?: string;
+  path?: string;
+  parentPath?: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  version?: number;
+  updatedAt?: string;
+  contentMarkdown?: string;
+  contentBase64?: string;
+};
+
+type RemoteSyncEvent = {
+  cursor?: string;
+  domain?: string;
+  resourceId?: string;
+  action?: string;
+  version?: number;
+  payload?: Record<string, unknown>;
+  createdAt?: string;
+};
+
+type SyncPullResponse = {
+  events?: RemoteSyncEvent[];
+  nextCursor?: string;
+};
+
+type SyncSnapshotResponse = {
+  generatedAt?: string;
+  domains?: {
+    artifacts?: unknown;
+  };
+};
+
+const REMOTE_ARTIFACT_CURSOR_META_KEY = "remoteArtifactCursor";
+const LAST_REMOTE_PULL_AT_META_KEY = "lastRemotePullAt";
+const REMOTE_PULL_LIMIT = 100;
+const REMOTE_CURSOR_DRAIN_LIMIT = 500;
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function asNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function parseRemoteArtifactKind(value: unknown): RemoteArtifactKind | undefined {
+  return value === "folder" || value === "note" || value === "file" ? value : undefined;
+}
+
+function remoteArtifactFromUnknown(value: unknown, fallbackResourceId?: string): RemoteArtifactItem | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+  const id = asString(record.id) ?? fallbackResourceId;
+  const kind = parseRemoteArtifactKind(record.kind);
+  if (!id || !kind) return undefined;
+  return {
+    id,
+    kind,
+    title: asString(record.title),
+    path: asString(record.path),
+    parentPath: asString(record.parentPath),
+    mimeType: asString(record.mimeType),
+    sizeBytes: asNumber(record.sizeBytes),
+    version: asNumber(record.version),
+    updatedAt: asString(record.updatedAt),
+    contentMarkdown: typeof record.contentMarkdown === "string" ? record.contentMarkdown : undefined,
+    contentBase64: typeof record.contentBase64 === "string" ? record.contentBase64 : undefined
+  };
+}
+
+function remoteArtifactFromEvent(event: RemoteSyncEvent): RemoteArtifactItem | undefined {
+  const payload = asRecord(event.payload) ?? {};
+  const resource = remoteArtifactFromUnknown(payload.resource, event.resourceId);
+  if (resource) return resource;
+
+  const patch = remoteArtifactFromUnknown({
+    ...asRecord(payload.patch),
+    id: event.resourceId,
+    kind: asRecord(payload.patch)?.kind ?? asRecord(payload.patch)?.type
+  }, event.resourceId);
+  if (patch) return patch;
+
+  return remoteArtifactFromUnknown(payload, event.resourceId);
+}
+
+function isRemoteTombstone(event: RemoteSyncEvent, item?: RemoteArtifactItem): boolean {
+  const payload = asRecord(event.payload) ?? {};
+  return event.action === "delete"
+    || payload.deleted === true
+    || payload.tombstone === true
+    || typeof payload.deletedAt === "string"
+    || (item ? (asRecord(item)?.deleted === true || asRecord(item)?.tombstone === true) : false);
+}
+
+function fallbackRemoteArtifactLeaf(item: RemoteArtifactItem): string {
+  if (item.kind === "note") {
+    return defaultNotePath(item.title ?? item.id);
+  }
+  if (item.kind === "file") {
+    return sanitizePathSegment(item.title ?? item.id, "file");
+  }
+  return sanitizePathSegment(item.title ?? item.id, "folder");
+}
+
+function relativePathForRemoteArtifact(item: RemoteArtifactItem): string | undefined {
+  if (item.kind === "folder") {
+    const requested = item.path ?? (item.parentPath ? `${item.parentPath}/${item.title ?? item.id}` : item.title ?? item.id);
+    const relativePath = normalizeArtifactFolderPath(requested);
+    return relativePath && !isIgnoredSyncRelativePath(relativePath) ? relativePath : undefined;
+  }
+
+  const requested = item.path ?? (item.parentPath ? `${item.parentPath}/${fallbackRemoteArtifactLeaf(item)}` : fallbackRemoteArtifactLeaf(item));
+  const relativePath = normalizeArtifactRelativePath(requested, fallbackRemoteArtifactLeaf(item));
+  return relativePath && !isIgnoredSyncRelativePath(relativePath) ? relativePath : undefined;
+}
+
+function findResourceById(state: DaemonState, resourceId: string): ManifestResource | undefined {
+  return listResources(state.manifestStore).find((resource) => resource.resourceId === resourceId);
+}
+
+function pathIsSelfOrChild(relativePath: string, parentPath: string): boolean {
+  const normalizedPath = normalizeRelativePath(relativePath);
+  const normalizedParent = normalizeRelativePath(parentPath).replace(/\/+$/, "");
+  return normalizedPath === normalizedParent || normalizedPath.startsWith(`${normalizedParent}/`);
+}
+
+function resourcesUnderPath(state: DaemonState, relativePath: string): ManifestResource[] {
+  return listResources(state.manifestStore).filter((resource) => pathIsSelfOrChild(resource.relativePath, relativePath));
+}
+
+async function localPathExists(absolutePath: string): Promise<boolean> {
+  try {
+    await fs.access(absolutePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function isLocalArtifactDirty(
+  state: DaemonState,
+  relativePath: string,
+  resource: ManifestResource | undefined
+): Promise<boolean> {
+  const absolutePath = resolveSyncRootRelativePath(state.config, relativePath);
+  if (!absolutePath) return true;
+  if (resource?.dirty) return true;
+  if (!resource) return localPathExists(absolutePath);
+
+  let stat;
+  try {
+    stat = await fs.stat(absolutePath);
+  } catch {
+    return true;
+  }
+  if (!stat.isFile()) return true;
+  if (resource.checksum) {
+    return await hashFile(absolutePath) !== resource.checksum;
+  }
+  if (resource.sizeBytes !== undefined) {
+    return stat.size !== resource.sizeBytes;
+  }
+  return false;
+}
+
+function hasOpenOutboxForRemoteArtifact(state: DaemonState, relativePath?: string, resourceId?: string): boolean {
+  if (relativePath && hasOpenOutboxForPath(state.manifestStore, relativePath)) return true;
+  if (resourceId && listOpenOutboxForResource(state.manifestStore, resourceId).length > 0) return true;
+  return false;
+}
+
+function hasOpenOutboxUnderRemoteFolder(state: DaemonState, relativePath: string, resourceId?: string): boolean {
+  if (listOpenOutboxUnderPath(state.manifestStore, relativePath).length > 0) return true;
+  if (resourceId && listOpenOutboxForResource(state.manifestStore, resourceId).length > 0) return true;
+  return false;
+}
+
+async function directoryHasUntrackedVisibleEntries(
+  state: DaemonState,
+  relativePath: string,
+  trackedResources: ManifestResource[]
+): Promise<boolean> {
+  if (!resolveSyncRootRelativePath(state.config, relativePath)) return true;
+  const trackedPaths = new Set(trackedResources.map((resource) => normalizeRelativePath(resource.relativePath)));
+  const stack = [normalizeRelativePath(relativePath)];
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) continue;
+    const absolutePath = resolveSyncRootRelativePath(state.config, current);
+    if (!absolutePath) return true;
+
+    let entries;
+    try {
+      entries = await fs.readdir(absolutePath, { withFileTypes: true });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") continue;
+      return true;
+    }
+
+    for (const entry of entries) {
+      const childRelativePath = normalizeRelativePath(`${current}/${entry.name}`);
+      if (isIgnoredSyncRelativePath(childRelativePath)) continue;
+      if (entry.isDirectory()) {
+        const containsTrackedResource = trackedResources.some((resource) => pathIsSelfOrChild(resource.relativePath, childRelativePath));
+        if (!containsTrackedResource) return true;
+        stack.push(childRelativePath);
+      } else if (!trackedPaths.has(childRelativePath)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+async function writeRemoteConflict(
+  state: DaemonState,
+  input: {
+    relativePath: string;
+    resourceId?: string;
+    action: "create" | "update" | "delete";
+    payload: Record<string, unknown>;
+    errorMessage: string;
+    createdAt: string;
+  }
+): Promise<void> {
+  const conflictId = randomUUID();
+  const conflictBaseName = sanitizeFileName(input.relativePath.replace(/[\\/]/g, "__")) || "remote-conflict";
+  const timestamp = input.createdAt.replace(/[:.]/g, "-");
+  const conflictPath = join(state.config.syncRoot, ".workbench", "conflicts", `${timestamp}-${conflictId}-${conflictBaseName}.json`);
+  const conflict = recordConflict(state.manifestStore, {
+    id: conflictId,
+    relativePath: input.relativePath,
+    domain: "artifacts",
+    action: input.action,
+    resourceId: input.resourceId,
+    payload: input.payload,
+    errorMessage: input.errorMessage,
+    conflictPath,
+    status: "open",
+    createdAt: input.createdAt
+  });
+  await fs.mkdir(dirname(conflictPath), { recursive: true });
+  await fs.writeFile(conflictPath, `${JSON.stringify({
+    conflictId: conflict.id,
+    relativePath: input.relativePath,
+    action: input.action,
+    resourceId: input.resourceId,
+    errorMessage: input.errorMessage,
+    remotePayload: input.payload,
+    createdAt: input.createdAt
+  }, null, 2)}\n`, "utf8");
+}
+
+async function canApplyRemoteArtifact(
+  state: DaemonState,
+  options: {
+    relativePath: string;
+    resourceId?: string;
+    action: "create" | "update" | "delete";
+    payload: Record<string, unknown>;
+    createdAt: string;
+  }
+): Promise<boolean> {
+  const pathResource = getResource(state.manifestStore, options.relativePath);
+  const idResource = options.resourceId ? findResourceById(state, options.resourceId) : undefined;
+  const resource = pathResource ?? idResource;
+  if (hasOpenOutboxForRemoteArtifact(state, options.relativePath, options.resourceId)) {
+    await writeRemoteConflict(state, {
+      ...options,
+      errorMessage: "Remote artifact change arrived while local outbox work is open."
+    });
+    return false;
+  }
+
+  if (await isLocalArtifactDirty(state, options.relativePath, pathResource)) {
+    await writeRemoteConflict(state, {
+      ...options,
+      errorMessage: "Remote artifact change conflicts with unsynced local file state."
+    });
+    return false;
+  }
+
+  if (idResource && idResource.relativePath !== options.relativePath) {
+    if (hasOpenOutboxForRemoteArtifact(state, idResource.relativePath, options.resourceId)
+      || await isLocalArtifactDirty(state, idResource.relativePath, idResource)) {
+      await writeRemoteConflict(state, {
+        ...options,
+        errorMessage: "Remote artifact move conflicts with unsynced local file state."
+      });
+      return false;
+    }
+  }
+
+  return !resource?.dirty;
+}
+
+async function canApplyRemoteArtifactFolderDelete(
+  state: DaemonState,
+  options: {
+    relativePath: string;
+    resourceId?: string;
+    payload: Record<string, unknown>;
+    createdAt: string;
+  }
+): Promise<boolean> {
+  if (hasOpenOutboxUnderRemoteFolder(state, options.relativePath, options.resourceId)) {
+    await writeRemoteConflict(state, {
+      ...options,
+      action: "delete",
+      errorMessage: "Remote artifact folder delete arrived while local outbox work is open under the folder."
+    });
+    return false;
+  }
+
+  const trackedResources = resourcesUnderPath(state, options.relativePath);
+  for (const resource of trackedResources) {
+    if (await isLocalArtifactDirty(state, resource.relativePath, resource)) {
+      await writeRemoteConflict(state, {
+        ...options,
+        action: "delete",
+        errorMessage: "Remote artifact folder delete conflicts with unsynced local file state under the folder."
+      });
+      return false;
+    }
+  }
+
+  if (await directoryHasUntrackedVisibleEntries(state, options.relativePath, trackedResources)) {
+    await writeRemoteConflict(state, {
+      ...options,
+      action: "delete",
+      errorMessage: "Remote artifact folder delete conflicts with untracked local files under the folder."
+    });
+    return false;
+  }
+
+  return true;
+}
+
+async function fetchRemoteArtifactBlob(state: DaemonState, artifactId: string): Promise<Buffer | undefined> {
+  if (!state.identity) throw new Error("Missing local client identity");
+  const response = await fetch(`${state.config.coreUrl}/api/sync/blobs/${encodeURIComponent(`artifact:${artifactId}`)}`, {
+    headers: {
+      "x-workbench-local-client-id": state.identity.localClientId,
+      "x-workbench-local-client-token": state.identity.localClientToken
+    }
+  });
+  const length = Number(response.headers.get("content-length") ?? "");
+  if (Number.isFinite(length) && length > state.config.maxSyncFileBytes) {
+    return undefined;
+  }
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (!response.ok) {
+    throw new Error(buffer.toString("utf8") || `HTTP ${response.status}`);
+  }
+  return buffer.byteLength <= state.config.maxSyncFileBytes ? buffer : undefined;
+}
+
+async function remoteArtifactBuffer(
+  state: DaemonState,
+  item: RemoteArtifactItem,
+  relativePath: string,
+  createdAt: string,
+  payload: Record<string, unknown>
+): Promise<Buffer | undefined> {
+  if (item.kind === "note") {
+    return typeof item.contentMarkdown === "string" ? Buffer.from(item.contentMarkdown, "utf8") : undefined;
+  }
+
+  if (typeof item.contentBase64 === "string") {
+    const buffer = decodeContentBase64(item.contentBase64);
+    if (buffer.byteLength <= state.config.maxSyncFileBytes) return buffer;
+    await writeRemoteConflict(state, {
+      relativePath,
+      resourceId: item.id,
+      action: "update",
+      payload,
+      errorMessage: `Remote artifact file exceeds max sync size of ${state.config.maxSyncFileBytes} bytes.`,
+      createdAt
+    });
+    return undefined;
+  }
+
+  if (typeof item.sizeBytes === "number" && item.sizeBytes > state.config.maxSyncFileBytes) {
+    await writeRemoteConflict(state, {
+      relativePath,
+      resourceId: item.id,
+      action: "update",
+      payload,
+      errorMessage: `Remote artifact file exceeds max sync size of ${state.config.maxSyncFileBytes} bytes.`,
+      createdAt
+    });
+    return undefined;
+  }
+
+  const buffer = await fetchRemoteArtifactBlob(state, item.id);
+  if (buffer) return buffer;
+  await writeRemoteConflict(state, {
+    relativePath,
+    resourceId: item.id,
+    action: "update",
+    payload,
+    errorMessage: `Remote artifact file exceeds max sync size of ${state.config.maxSyncFileBytes} bytes.`,
+    createdAt
+  });
+  return undefined;
+}
+
+async function applyRemoteArtifactItem(
+  state: DaemonState,
+  item: RemoteArtifactItem,
+  options: {
+    action: "create" | "update";
+    payload: Record<string, unknown>;
+    createdAt: string;
+  }
+): Promise<void> {
+  const relativePath = relativePathForRemoteArtifact(item);
+  if (!relativePath) return;
+
+  if (item.kind === "folder") {
+    const folderPath = resolveSyncRootRelativePath(state.config, relativePath);
+    if (!folderPath) return;
+    if (hasOpenOutboxForRemoteArtifact(state, relativePath, item.id)) {
+      await writeRemoteConflict(state, {
+        relativePath,
+        resourceId: item.id,
+        action: options.action,
+        payload: options.payload,
+        errorMessage: "Remote artifact folder change arrived while local outbox work is open.",
+        createdAt: options.createdAt
+      });
+      return;
+    }
+    try {
+      const stat = await fs.stat(folderPath);
+      if (!stat.isDirectory()) {
+        await writeRemoteConflict(state, {
+          relativePath,
+          resourceId: item.id,
+          action: options.action,
+          payload: options.payload,
+          errorMessage: "Remote artifact folder conflicts with a local file at the same path.",
+          createdAt: options.createdAt
+        });
+        return;
+      }
+    } catch {
+      // Missing directory will be created below.
+    }
+    await fs.mkdir(folderPath, { recursive: true });
+    return;
+  }
+
+  if (!await canApplyRemoteArtifact(state, {
+    relativePath,
+    resourceId: item.id,
+    action: options.action,
+    payload: options.payload,
+    createdAt: options.createdAt
+  })) {
+    return;
+  }
+
+  const buffer = await remoteArtifactBuffer(state, item, relativePath, options.createdAt, options.payload);
+  if (!buffer) return;
+
+  const absolutePath = resolveSyncRootRelativePath(state.config, relativePath);
+  if (!absolutePath) return;
+  const previousById = findResourceById(state, item.id);
+  await fs.mkdir(dirname(absolutePath), { recursive: true });
+  await fs.writeFile(absolutePath, buffer);
+  const stat = await fs.stat(absolutePath);
+  const now = options.createdAt;
+  upsertManifestResource(state.manifestStore, {
+    relativePath,
+    domain: "artifacts",
+    kind: item.kind,
+    resourceId: item.id,
+    checksum: createHash("sha256").update(buffer).digest("hex"),
+    sizeBytes: stat.size,
+    dirty: false,
+    lastSeenAt: now,
+    lastSyncedAt: now,
+    localUpdatedAt: stat.mtime.toISOString()
+  });
+
+  if (previousById && previousById.relativePath !== relativePath) {
+    const previousPath = resolveSyncRootRelativePath(state.config, previousById.relativePath);
+    if (previousPath) {
+      await fs.rm(previousPath, { force: true }).catch(() => {
+        // Best-effort cleanup after a clean remote move.
+      });
+    }
+    removeResource(state.manifestStore, previousById.relativePath);
+  }
+}
+
+async function applyRemoteArtifactDelete(
+  state: DaemonState,
+  event: RemoteSyncEvent,
+  item: RemoteArtifactItem | undefined,
+  createdAt: string
+): Promise<void> {
+  const resourceId = event.resourceId ?? item?.id;
+  const existing = resourceId ? findResourceById(state, resourceId) : undefined;
+  const relativePath = existing?.relativePath ?? (item ? relativePathForRemoteArtifact(item) : undefined);
+  if (!relativePath) return;
+
+  const payload = asRecord(event.payload) ?? {};
+  if (item?.kind === "folder") {
+    if (!await canApplyRemoteArtifactFolderDelete(state, {
+      relativePath,
+      resourceId,
+      payload,
+      createdAt
+    })) {
+      return;
+    }
+    const absolutePath = resolveSyncRootRelativePath(state.config, relativePath);
+    if (absolutePath) {
+      await fs.rm(absolutePath, { recursive: true, force: true });
+    }
+    for (const resource of resourcesUnderPath(state, relativePath)) {
+      removeResource(state.manifestStore, resource.relativePath);
+    }
+    return;
+  }
+
+  if (!await canApplyRemoteArtifact(state, {
+    relativePath,
+    resourceId,
+    action: "delete",
+    payload,
+    createdAt
+  })) {
+    return;
+  }
+
+  const absolutePath = resolveSyncRootRelativePath(state.config, relativePath);
+  if (absolutePath) {
+    await fs.rm(absolutePath, { force: true });
+  }
+  removeResource(state.manifestStore, relativePath);
+}
+
+async function applyRemoteArtifactEvent(state: DaemonState, event: RemoteSyncEvent): Promise<void> {
+  if (event.domain !== "artifacts") return;
+  const payload = asRecord(event.payload) ?? {};
+  if (asString(payload.localClientId) === state.identity?.localClientId) return;
+  const createdAt = asString(event.createdAt) ?? new Date().toISOString();
+  const item = remoteArtifactFromEvent(event);
+  if (isRemoteTombstone(event, item)) {
+    await applyRemoteArtifactDelete(state, event, item, createdAt);
+    return;
+  }
+  if (!item) return;
+  await applyRemoteArtifactItem(state, item, {
+    action: event.action === "create" ? "create" : "update",
+    payload,
+    createdAt
+  });
+}
+
+async function applyRemoteArtifactSnapshotEntry(
+  state: DaemonState,
+  value: unknown,
+  generatedAt: string
+): Promise<void> {
+  const item = remoteArtifactFromUnknown(value);
+  if (!item) return;
+  await applyRemoteArtifactItem(state, item, {
+    action: "update",
+    payload: { source: "sync-snapshot", resource: value },
+    createdAt: generatedAt
+  });
+}
+
+async function getSyncPullPage(state: DaemonState, cursor: string | undefined, limit: number): Promise<SyncPullResponse> {
+  if (!state.identity) throw new Error("Missing local client identity");
+  const query = new URLSearchParams();
+  if (cursor !== undefined) {
+    query.set("cursor", cursor);
+  }
+  query.set("limit", String(limit));
+  return coreJson<SyncPullResponse>(state.config, `/api/sync/pull?${query.toString()}`, {
+    method: "GET",
+    localIdentity: state.identity
+  });
+}
+
+async function bootstrapRemoteArtifactSnapshot(state: DaemonState): Promise<string | undefined> {
+  if (!state.identity) throw new Error("Missing local client identity");
+  const snapshot = await coreJson<SyncSnapshotResponse>(state.config, "/api/sync/snapshot?domains=artifacts", {
+    method: "GET",
+    localIdentity: state.identity
+  });
+  const generatedAt = asString(snapshot.generatedAt) ?? new Date().toISOString();
+  const artifacts = Array.isArray(snapshot.domains?.artifacts) ? snapshot.domains.artifacts : [];
+  for (const artifact of artifacts) {
+    await applyRemoteArtifactSnapshotEntry(state, artifact, generatedAt);
+  }
+
+  let cursor: string | undefined;
+  for (let pageIndex = 0; pageIndex < 20; pageIndex += 1) {
+    const page = await getSyncPullPage(state, cursor, REMOTE_CURSOR_DRAIN_LIMIT);
+    const events = page.events ?? [];
+    for (const event of events) {
+      const eventTime = event.createdAt ? Date.parse(event.createdAt) : Number.NaN;
+      if (Number.isFinite(eventTime) && eventTime > Date.parse(generatedAt)) {
+        await applyRemoteArtifactEvent(state, event);
+      }
+    }
+    if (!page.nextCursor || page.nextCursor === cursor) {
+      return cursor ?? "0";
+    }
+    cursor = page.nextCursor;
+    if (events.length < REMOTE_CURSOR_DRAIN_LIMIT) {
+      return cursor;
+    }
+  }
+  return cursor ?? "0";
+}
+
+export async function pullRemoteArtifactSyncState(state: DaemonState): Promise<void> {
+  if (!state.identity) return;
+  let cursor = getMeta(state.manifestStore, REMOTE_ARTIFACT_CURSOR_META_KEY) ?? state.remoteArtifactCursor;
+  if (!cursor) {
+    cursor = await bootstrapRemoteArtifactSnapshot(state);
+  } else {
+    const page = await getSyncPullPage(state, cursor, REMOTE_PULL_LIMIT);
+    for (const event of page.events ?? []) {
+      await applyRemoteArtifactEvent(state, event);
+    }
+    cursor = page.nextCursor ?? cursor;
+  }
+
+  const now = new Date().toISOString();
+  setMeta(state.manifestStore, REMOTE_ARTIFACT_CURSOR_META_KEY, cursor ?? "0");
+  setMeta(state.manifestStore, LAST_REMOTE_PULL_AT_META_KEY, now);
+  state.remoteArtifactCursor = cursor ?? "0";
+  state.lastRemotePullAt = now;
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
+  await refreshManifestStats(state);
+}
+
 type SyncPushResponse = {
   applied?: Array<{
     index: number;
@@ -1516,6 +2236,10 @@ async function pushOutbox(state: DaemonState): Promise<void> {
   const applied = result.applied ?? [];
   const rejected = result.rejected ?? [];
   const now = new Date().toISOString();
+  if (result.serverCursor) {
+    setMeta(state.manifestStore, REMOTE_ARTIFACT_CURSOR_META_KEY, result.serverCursor);
+    state.remoteArtifactCursor = result.serverCursor;
+  }
   for (const appliedItem of applied) {
     const item = pending[appliedItem.index];
     if (!item) continue;
@@ -1621,6 +2345,7 @@ async function performTick(state: DaemonState): Promise<void> {
     for (const job of jobs) {
       await processJob(state, job);
     }
+    await pullRemoteArtifactSyncState(state);
     await scanSyncFolder(state);
     await pushOutbox(state);
     await heartbeat(state);
@@ -1816,6 +2541,8 @@ function daemonStatusPayload(state: DaemonState): Record<string, unknown> {
     lastClaimAt: state.lastClaimAt,
     lastScanAt: state.lastScanAt,
     lastPushAt: state.lastPushAt,
+    lastRemotePullAt: state.lastRemotePullAt,
+    remoteArtifactCursor: state.remoteArtifactCursor,
     lastError: state.lastError,
     processedJobs: state.processedJobs,
     outboxPending: state.outboxPending,

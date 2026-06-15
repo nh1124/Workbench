@@ -32,6 +32,7 @@ type SyncEventRow = {
   version: number;
   payload_json: unknown;
   created_at: string;
+  resource_deleted_at?: string | null;
 };
 
 type SyncResourceVersionRow = {
@@ -48,6 +49,19 @@ function jsonObject(value: unknown): Record<string, unknown> {
 }
 
 function toEvent(row: SyncEventRow): SyncEvent {
+  const payload = { ...jsonObject(row.payload_json) };
+  const resourceDeletedAt = row.resource_deleted_at ? new Date(row.resource_deleted_at).toISOString() : undefined;
+  if (resourceDeletedAt && payload.resourceDeletedAt === undefined) {
+    payload.resourceDeletedAt = resourceDeletedAt;
+  }
+  if (row.action === "delete") {
+    if (payload.deleted === undefined) {
+      payload.deleted = true;
+    }
+    if (resourceDeletedAt && payload.deletedAt === undefined) {
+      payload.deletedAt = resourceDeletedAt;
+    }
+  }
   return {
     cursor: String(row.id),
     userId: row.user_id,
@@ -55,7 +69,7 @@ function toEvent(row: SyncEventRow): SyncEvent {
     resourceId: row.resource_id,
     action: row.action as SyncAction,
     version: row.version,
-    payload: jsonObject(row.payload_json),
+    payload,
     createdAt: new Date(row.created_at).toISOString()
   };
 }
@@ -83,7 +97,7 @@ export async function recordSyncEvent(
 
   await pool.query("BEGIN");
   try {
-    const versionResult = await pool.query<{ version: number }>(
+    const versionResult = await pool.query<{ version: number; deleted_at: string | null }>(
       `
         INSERT INTO sync_resource_versions (user_id, domain, resource_id, version, deleted_at, updated_at)
         VALUES ($1, $2, $3, 1, CASE WHEN $4 = 'delete' THEN NOW() ELSE NULL END, NOW())
@@ -92,18 +106,31 @@ export async function recordSyncEvent(
           version = sync_resource_versions.version + 1,
           deleted_at = CASE WHEN $4 = 'delete' THEN NOW() ELSE NULL END,
           updated_at = NOW()
-        RETURNING version
+        RETURNING version, deleted_at
       `,
       [userId, domain, resourceId, action]
     );
-    const version = versionResult.rows[0].version;
+    const versionRow = versionResult.rows[0];
+    const version = versionRow.version;
+    const eventPayload = { ...payload };
+    if (action === "delete") {
+      if (eventPayload.deleted === undefined) {
+        eventPayload.deleted = true;
+      }
+      if (versionRow.deleted_at && eventPayload.deletedAt === undefined) {
+        eventPayload.deletedAt = new Date(versionRow.deleted_at).toISOString();
+      }
+      if (versionRow.deleted_at && eventPayload.resourceDeletedAt === undefined) {
+        eventPayload.resourceDeletedAt = new Date(versionRow.deleted_at).toISOString();
+      }
+    }
     const eventResult = await pool.query<SyncEventRow>(
       `
         INSERT INTO sync_events (user_id, domain, resource_id, action, version, payload_json)
         VALUES ($1, $2, $3, $4, $5, $6::jsonb)
         RETURNING id, user_id, domain, resource_id, action, version, payload_json, created_at
       `,
-      [userId, domain, resourceId, action, version, JSON.stringify(payload)]
+      [userId, domain, resourceId, action, version, JSON.stringify(eventPayload)]
     );
     await pool.query("COMMIT");
     return toEvent(eventResult.rows[0]);
@@ -144,10 +171,15 @@ export async function listSyncEvents(
   const safeLimit = Math.max(1, Math.min(500, Math.floor(limit)));
   const result = await pool.query<SyncEventRow>(
     `
-      SELECT id, user_id, domain, resource_id, action, version, payload_json, created_at
-      FROM sync_events
-      WHERE user_id = $1 AND id > $2
-      ORDER BY id ASC
+      SELECT e.id, e.user_id, e.domain, e.resource_id, e.action, e.version, e.payload_json, e.created_at,
+        v.deleted_at AS resource_deleted_at
+      FROM sync_events e
+      LEFT JOIN sync_resource_versions v
+        ON v.user_id = e.user_id
+       AND v.domain = e.domain
+       AND v.resource_id = e.resource_id
+      WHERE e.user_id = $1 AND e.id > $2
+      ORDER BY e.id ASC
       LIMIT $3
     `,
     [userId, parsedCursor, safeLimit]
@@ -157,6 +189,31 @@ export async function listSyncEvents(
     events,
     nextCursor: events.length > 0 ? events[events.length - 1].cursor : cursor
   };
+}
+
+export async function listSyncResourceVersions(
+  userId: string,
+  domains?: SyncDomain[],
+  limit = 500
+): Promise<SyncResourceVersion[]> {
+  await ensureCoreSchema();
+  const pool = getCorePool();
+  const safeLimit = Math.max(1, Math.min(1000, Math.floor(limit)));
+  const domainFilter = domains?.filter((domain): domain is SyncDomain =>
+    ["projects", "notes", "artifacts", "tasks"].includes(domain)
+  );
+  const result = await pool.query<SyncResourceVersionRow>(
+    `
+      SELECT user_id, domain, resource_id, version, updated_at, deleted_at
+      FROM sync_resource_versions
+      WHERE user_id = $1
+        AND ($2::text[] IS NULL OR domain = ANY($2::text[]))
+      ORDER BY updated_at DESC, domain ASC, resource_id ASC
+      LIMIT $3
+    `,
+    [userId, domainFilter && domainFilter.length > 0 ? domainFilter : null, safeLimit]
+  );
+  return result.rows.map(toResourceVersion);
 }
 
 export async function recordSyncPushRejection(

@@ -66,6 +66,11 @@ Last updated: 2026-06-16
   - `POST /api/sync/push`
 - `[implemented]` Sync endpoints accept either normal bearer auth or daemon local-client credentials.
 - `[partial]` Core facade writes best-effort sync events for representative Projects, Notes, Artifacts, and Tasks mutations.
+- `[implemented]` Delete sync events include tombstone metadata in pull responses and resource-version listings.
+  - `deleted`
+  - `deletedAt`
+  - `resourceDeletedAt`
+- `[implemented]` Core task relation mutations now emit best-effort sync events for occurrence, subtask, Today, and schedule item paths handled through Core.
 - `[partial]` `GET /api/sync/blobs/:blobId` supports:
   - `artifact:<artifactItemId>`
   - `task-attachment:<taskId>:<attachmentId>`
@@ -114,6 +119,13 @@ Last updated: 2026-06-16
   - expose local status at `http://127.0.0.1:<port>/status`.
   - expose local conflict list/resolve endpoints under `http://127.0.0.1:<port>/conflicts`.
   - recover stale local outbox entries when files are changed, removed, or restored before a pending sync push finishes.
+  - pull remote artifact snapshot/incremental events before local scan/push,
+  - persist remote artifact cursor and last remote pull timestamp in manifest meta,
+  - apply clean remote artifact note/file/folder changes into the sync folder,
+  - fetch small remote artifact file blobs through Core,
+  - create conflicts instead of overwriting dirty local artifact files or folders,
+  - apply remote folder deletes only when tracked local contents are clean,
+  - reject unsafe remote paths under `.workbench` or outside the sync root.
 - `[implemented]` Daemon MCP tools were added in `services/sync-daemon/src/mcpServer.ts`.
   - `workbench.local.clients.current`
   - `workbench.local.path.resolve`
@@ -173,6 +185,10 @@ npm run build
   - Covers local folder creation.
   - Covers local file upload outbox writes.
   - Covers local Markdown content patch and section updates.
+- `[implemented]` Sync daemon path safety tests were added.
+  - Covers traversal, absolute paths, encoded local ids, `.workbench`, temp/partial files, reserved Windows names, and hostile download filenames.
+- `[implemented]` Sync daemon remote artifact pull tests were added.
+  - Covers snapshot bootstrap, incremental note updates, blob fetch, dirty-local conflicts, clean folder deletes, untracked-folder conflicts, and metadata path rejection.
 
 ## Pending / Partial Work
 
@@ -218,14 +234,19 @@ npm run build
   - Supersedes pending delete outbox entries when files reappear before push.
   - Supersedes stale pending create/update outbox entries when files change again before push.
   - Auto-resolves open conflict records tied to superseded outbox entries.
-  - Still needs remote snapshot reconciliation when the cloud changed while the daemon was offline.
+- `[implemented]` Artifact remote snapshot/incremental pull reconciliation exists.
+  - Bootstrap reads `/api/sync/snapshot?domains=artifacts`.
+  - Incremental pull reads `/api/sync/pull` from the stored cursor.
+  - Clean remote artifact changes are materialized locally before local scan/push.
+  - Dirty local state or open outbox work creates `.workbench/conflicts` records instead of overwriting local files.
+- `[pending]` Remote reconciliation for Projects, Notes, and Tasks is not implemented in the daemon yet.
 
 ### Sync Folder Watcher
 
 - `[partial]` Polling scanner detects local create/update/delete.
 - `[implemented]` Scanner ignores `.workbench`.
 - `[implemented]` Add native file watcher for sync folder changes with interval-scan fallback.
-- `[partial]` Ignore temp files, lock files, and partial writes.
+- `[implemented]` Ignore temp files, lock files, partial writes, and reserved Windows device names.
 - `[implemented]` Debounce and wait for file size/checksum stability before enqueueing changes.
 - `[pending]` Detect local rename as rename instead of delete/create.
 - `[partial]` Map local files back to domain resources through manifest entries.
@@ -235,6 +256,8 @@ npm run build
 ### Unified Sync Push / Pull
 
 - `[partial]` `snapshot` and `pull` endpoints exist.
+- `[implemented]` Pull events for deletes include tombstone metadata.
+- `[implemented]` `sync_resource_versions` can be listed internally with `deletedAt` for tombstones.
 - `[implemented]` `POST /api/sync/push` operation application exists for:
   - Projects create/update/delete/upsert.
   - Projects default selection.
@@ -253,8 +276,8 @@ npm run build
   - Tasks schedule item create/update/delete/upsert through relation `scheduleItem`.
 - `[implemented]` Add optional `baseVersion` conflict checks before applying sync push operations.
 - `[partial]` Return applied/rejected operations with stable-ish error codes for implemented domains.
-- `[pending]` Add server-side tombstone semantics for domains that still hard-delete.
-- `[pending]` Ensure all Core facade mutations record sync events consistently.
+- `[partial]` Server-side tombstone event metadata exists, but underlying domain services still hard-delete their own records.
+- `[partial]` Core facade mutations now cover the main Projects, Notes, Artifacts, and Tasks paths, including task relation changes. Continue auditing new or direct mutation routes as they are added.
 - `[pending]` Decide and implement how direct internal service changes outside Core are handled.
 
 ### Blob Upload / Replacement
@@ -317,10 +340,11 @@ npm run build
 
 ### Security Hardening
 
-- `[partial]` Daemon writes only to configured downloads or sync folder.
+- `[implemented]` Daemon writes only to configured downloads or sync folder.
 - `[partial]` Daemon loopback API allows browser UI access with permissive local CORS.
   - Auth headers are allowed for local daemon token use.
-- `[pending]` Add path allowlist tests for Windows/macOS/Linux edge cases.
+- `[implemented]` Add path allowlist tests for Windows/macOS/Linux edge cases covered by Node path handling.
+  - Rejects absolute paths, drive-prefixed paths, UNC-style roots, `..` traversal, `.workbench`, temp/partial files, and reserved Windows device names.
 - `[implemented]` Add optional local daemon loopback token for status/API endpoints.
   - `WORKBENCH_DAEMON_API_TOKEN` or `WORKBENCH_LOCAL_DAEMON_TOKEN` enables token enforcement.
   - UI stores/sends the token via `x-workbench-daemon-token`.
@@ -330,12 +354,13 @@ npm run build
 
 ## Recommended Next Implementation Order
 
-1. Add remote snapshot reconciliation so daemon startup can merge cloud changes made while the PC was offline.
-2. Add tombstone semantics and consistent sync event recording for all remaining Core mutation paths.
-3. Package `services/sync-daemon` as a production Tauri sidecar binary and add optional auto-start.
-4. Add path allowlist tests for Windows/macOS/Linux edge cases and tighten local-path disclosure policy.
-5. Add scoped local client capabilities enforcement and broader audit trail for registration/default/disable changes.
-6. Decide whether empty local folders should become first-class cloud folder resources immediately or remain local until they contain synced files.
+1. Package `services/sync-daemon` as a production Tauri sidecar binary and add optional auto-start.
+2. Add scoped local client capabilities enforcement and broader audit trail for registration/default/disable/job lifecycle changes.
+3. Tighten local-path disclosure policy for non-local callers and job result visibility.
+4. Extend daemon remote reconciliation beyond Artifacts to Projects, Notes, and Tasks.
+5. Decide whether empty local folders should become first-class cloud folder resources immediately or remain local until they contain synced files.
+6. Detect local rename as rename instead of delete/create.
+7. Decide and implement the policy for direct internal service mutations outside Core.
 
 ## Current Daemon Usage
 
