@@ -101,6 +101,7 @@ Last updated: 2026-06-15
   - push local outbox changes to Core through `POST /api/sync/push`,
   - expose local status at `http://127.0.0.1:<port>/status`.
   - expose local conflict list/resolve endpoints under `http://127.0.0.1:<port>/conflicts`.
+  - recover stale local outbox entries when files are changed, removed, or restored before a pending sync push finishes.
 - `[implemented]` Daemon MCP tools were added in `services/sync-daemon/src/mcpServer.ts`.
   - `workbench.local.clients.current`
   - `workbench.local.path.resolve`
@@ -149,6 +150,10 @@ npm run build
   - Covers daemon-authenticated heartbeat, job claim, job completion, and revoked-token rejection.
   - Covers daemon-authenticated sync pull/snapshot/push/blob-upload-placeholder endpoints and unauthenticated sync rejection.
   - `httpServer.ts` now exports the Express app and starts listening only when executed directly, so HTTP routes can be tested on an ephemeral port.
+- `[implemented]` Sync daemon recovery tests were added in `services/sync-daemon/src/__tests__/syncFolderRecovery.test.ts`.
+  - Covers cancelling ghost creates when local files disappear before push.
+  - Covers superseding pending deletes when local files reappear.
+  - Covers replacing stale pending updates when files are edited again before push.
 
 ## Pending / Partial Work
 
@@ -188,7 +193,11 @@ npm run build
 - `[implemented]` Migrate legacy `.workbench/manifest.json` into SQLite when the DB is empty.
 - `[partial]` Add recovery behavior when manifest and files disagree.
   - Removes ignored or ID-less resource entries when their local file no longer exists.
-  - Still needs full remote/local conflict recovery.
+  - Supersedes stale pending create/update outbox entries when files are removed before push.
+  - Supersedes pending delete outbox entries when files reappear before push.
+  - Supersedes stale pending create/update outbox entries when files change again before push.
+  - Still needs conflict-record auto-resolution for conflicts tied to superseded outbox entries.
+  - Still needs remote snapshot reconciliation when the cloud changed while the daemon was offline.
 
 ### Sync Folder Watcher
 
@@ -261,7 +270,7 @@ npm run build
 
 ## Recommended Next Implementation Order
 
-1. Add full manifest recovery behavior when local files and SQLite disagree.
+1. Add conflict-record auto-resolution for conflicts tied to superseded local outbox entries.
 2. Extend `POST /api/sync/push` to Projects and Tasks, and add baseVersion checks.
 3. Implement artifact file replacement and `PUT /api/sync/blobs/:blobId`.
 4. Add daemon local API facade for offline UI reads/writes.

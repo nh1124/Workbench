@@ -25,7 +25,7 @@ export type OutboxItem = {
   action: "create" | "update" | "delete";
   resourceId?: string;
   payload: Record<string, unknown>;
-  status: "pending" | "applied" | "failed";
+  status: "pending" | "applied" | "failed" | "superseded";
   attempts: number;
   lastError?: string;
   createdAt: string;
@@ -194,7 +194,13 @@ function toOutbox(row: OutboxRow): OutboxItem {
     action: row.action === "delete" ? "delete" : row.action === "update" ? "update" : "create",
     resourceId: row.resource_id ?? undefined,
     payload: parseJsonRecord(row.payload_json),
-    status: row.status === "applied" ? "applied" : row.status === "failed" ? "failed" : "pending",
+    status: row.status === "applied"
+      ? "applied"
+      : row.status === "failed"
+        ? "failed"
+        : row.status === "superseded"
+          ? "superseded"
+          : "pending",
     attempts: Number(row.attempts ?? 0),
     lastError: row.last_error ?? undefined,
     createdAt: row.created_at,
@@ -530,10 +536,20 @@ export function hasOpenOutboxForPath(store: ManifestStore, relativePath: string)
   const row = store.db.prepare(`
     SELECT id
     FROM outbox
-    WHERE relative_path = ? AND status != 'applied'
+    WHERE relative_path = ? AND status IN ('pending', 'failed')
     LIMIT 1
   `).get(relativePath) as { id: string } | undefined;
   return Boolean(row);
+}
+
+export function listOpenOutboxForPath(store: ManifestStore, relativePath: string): OutboxItem[] {
+  return (store.db.prepare(`
+    SELECT id, client_op_id, relative_path, domain, action, resource_id, payload_json,
+           status, attempts, last_error, created_at, updated_at, applied_at
+    FROM outbox
+    WHERE relative_path = ? AND status IN ('pending', 'failed')
+    ORDER BY created_at ASC
+  `).all(relativePath) as OutboxRow[]).map(toOutbox);
 }
 
 export function enqueueOutbox(
@@ -607,6 +623,16 @@ export function markOutboxFailed(store: ManifestStore, id: string, errorMessage:
         updated_at = ?
     WHERE id = ?
   `).run(errorMessage.slice(0, 2000), updatedAt, id);
+}
+
+export function markOutboxSuperseded(store: ManifestStore, id: string, reason: string, updatedAt: string): void {
+  store.db.prepare(`
+    UPDATE outbox
+    SET status = 'superseded',
+        last_error = ?,
+        updated_at = ?
+    WHERE id = ? AND status IN ('pending', 'failed')
+  `).run(reason.slice(0, 2000), updatedAt, id);
 }
 
 export function recordLocalJob(

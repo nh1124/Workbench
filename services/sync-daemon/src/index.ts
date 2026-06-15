@@ -10,10 +10,12 @@ import {
   getResource,
   hasOpenOutboxForPath,
   listConflicts,
+  listOpenOutboxForPath,
   listPendingOutbox,
   listResources,
   markOutboxApplied,
   markOutboxFailed,
+  markOutboxSuperseded,
   migrateLegacyManifestJson,
   openManifestStore,
   readManifestStats,
@@ -49,7 +51,7 @@ type ClientIdentity = {
   syncRootId: string;
 };
 
-type DaemonConfig = {
+export type DaemonConfig = {
   coreUrl: string;
   accessToken?: string;
   syncRoot: string;
@@ -65,7 +67,7 @@ type DaemonConfig = {
   watchDebounceMs: number;
 };
 
-type DaemonState = {
+export type DaemonState = {
   config: DaemonConfig;
   manifestStore: ManifestStore;
   identity?: ClientIdentity;
@@ -474,7 +476,31 @@ async function buildOutboxPayloadForFile(
   };
 }
 
-async function scanSyncFolder(state: DaemonState): Promise<void> {
+function supersedeOpenOutboxForPath(
+  state: DaemonState,
+  relativePath: string,
+  predicate: (item: OutboxItem) => boolean,
+  reason: string,
+  updatedAt: string
+): OutboxItem[] {
+  const superseded: OutboxItem[] = [];
+  for (const item of listOpenOutboxForPath(state.manifestStore, relativePath)) {
+    if (!predicate(item)) continue;
+    markOutboxSuperseded(state.manifestStore, item.id, reason, updatedAt);
+    superseded.push(item);
+  }
+  return superseded;
+}
+
+function hasOpenOutboxAction(
+  state: DaemonState,
+  relativePath: string,
+  predicate: (item: OutboxItem) => boolean
+): boolean {
+  return listOpenOutboxForPath(state.manifestStore, relativePath).some(predicate);
+}
+
+export async function scanSyncFolder(state: DaemonState): Promise<void> {
   const currentPaths = new Set<string>();
   const files = await walkSyncFiles(state.config);
   const now = new Date().toISOString();
@@ -501,6 +527,30 @@ async function scanSyncFolder(state: DaemonState): Promise<void> {
     }
 
     const checksum = await hashFile(absolutePath);
+    const openOutboxItems = listOpenOutboxForPath(state.manifestStore, relativePath);
+    const hasOpenDelete = openOutboxItems.some((item) => item.action === "delete");
+    const hasStaleWrite = openOutboxItems.some(
+      (item) => (item.action === "create" || item.action === "update") && existing?.checksum !== checksum
+    );
+    if (hasOpenDelete) {
+      supersedeOpenOutboxForPath(
+        state,
+        relativePath,
+        (item) => item.action === "delete",
+        "Local file exists again; pending delete was superseded by recovery scan.",
+        now
+      );
+    }
+    if (hasStaleWrite) {
+      supersedeOpenOutboxForPath(
+        state,
+        relativePath,
+        (item) => item.action === "create" || item.action === "update",
+        "Local file changed before sync completed; stale write was superseded by recovery scan.",
+        now
+      );
+    }
+
     if (existing?.checksum === checksum && !existing.dirty) {
       upsertManifestResource(state.manifestStore, {
         ...existing,
@@ -536,7 +586,22 @@ async function scanSyncFolder(state: DaemonState): Promise<void> {
       removeResource(state.manifestStore, resource.relativePath);
       continue;
     }
-    if (currentPaths.has(resource.relativePath) || hasOpenOutboxForPath(state.manifestStore, resource.relativePath)) continue;
+    if (currentPaths.has(resource.relativePath)) continue;
+
+    const supersededWrites = supersedeOpenOutboxForPath(
+      state,
+      resource.relativePath,
+      (item) => item.action === "create" || item.action === "update",
+      "Local file was removed before sync completed; stale write was superseded by recovery scan.",
+      now
+    );
+    if (supersededWrites.length > 0 && !resource.resourceId) {
+      removeResource(state.manifestStore, resource.relativePath);
+      continue;
+    }
+    if (hasOpenOutboxAction(state, resource.relativePath, (item) => item.action === "delete")) continue;
+    if (hasOpenOutboxForPath(state.manifestStore, resource.relativePath)) continue;
+
     if (!resource.resourceId) {
       removeResource(state.manifestStore, resource.relativePath);
       continue;
@@ -980,4 +1045,6 @@ async function main(): Promise<void> {
   }, config.intervalMs);
 }
 
-await main();
+if (process.argv[1] && resolve(process.argv[1]) === __filename) {
+  await main();
+}
