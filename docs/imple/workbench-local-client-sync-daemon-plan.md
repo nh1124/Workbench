@@ -332,10 +332,19 @@ npm run build
   - Folder open/status commands are functional in Tauri.
   - Start/stop now manage a background daemon process.
   - `WORKBENCH_DAEMON_COMMAND` and `WORKBENCH_DAEMON_ARGS` can override the default command.
+  - `WORKBENCH_DAEMON_SIDECAR_PATH` and `WORKBENCH_DAEMON_SIDECAR_ARGS` can point the desktop app at a production daemon executable.
+  - Packaged sidecars are discovered from Tauri resource/executable/current directories as `workbench-sync-daemon` or `workbench-sync-daemon.exe`, including `sidecars/` and `binaries/` subdirectories.
   - Default development command is `npm run dev --workspace services/sync-daemon` from the inferred repo root.
 - `[implemented]` Add managed background process support for development/desktop.
-- `[pending]` Package daemon as a production Tauri sidecar binary.
-- `[pending]` Add optional auto-start.
+- `[partial]` Package daemon as a production Tauri sidecar binary.
+  - `WORKBENCH_DAEMON_EXTERNAL_BIN` can add one or more external binaries to generated `tauri.conf.json`.
+  - `NATIVE_BUNDLE_ACTIVE` can explicitly enable or disable Tauri bundle generation.
+  - The runtime launcher prefers explicit command override, explicit sidecar path, packaged sidecar, then development npm fallback.
+  - Still needs a repeatable CI/build pipeline that produces the platform-specific daemon executable before Tauri packaging.
+- `[implemented]` Add optional auto-start.
+  - Desktop Settings exposes an Auto-start Daemon toggle.
+  - Preference is stored in Tauri app config as `daemon-preferences.json`.
+  - On desktop startup, the native shell starts the daemon if auto-start is enabled.
 - `[pending]` Store local client token in OS secure storage instead of plain `.workbench/client-identity.json`.
 
 ### Security Hardening
@@ -354,9 +363,9 @@ npm run build
 
 ## Recommended Next Implementation Order
 
-1. Package `services/sync-daemon` as a production Tauri sidecar binary and add optional auto-start.
-2. Add scoped local client capabilities enforcement and broader audit trail for registration/default/disable/job lifecycle changes.
-3. Tighten local-path disclosure policy for non-local callers and job result visibility.
+1. Add scoped local client capabilities enforcement and broader audit trail for registration/default/disable/job lifecycle changes.
+2. Tighten local-path disclosure policy for non-local callers and job result visibility.
+3. Add a repeatable production daemon executable build pipeline for Tauri sidecar packaging.
 4. Extend daemon remote reconciliation beyond Artifacts to Projects, Notes, and Tasks.
 5. Decide whether empty local folders should become first-class cloud folder resources immediately or remain local until they contain synced files.
 6. Detect local rename as rename instead of delete/create.
@@ -383,3 +392,5 @@ npm run dev --workspace services/sync-daemon
 ```
 
 Override with `WORKBENCH_DAEMON_COMMAND` and optional `WORKBENCH_DAEMON_ARGS` when using a packaged daemon.
+For sidecar-style packaging, set `WORKBENCH_DAEMON_EXTERNAL_BIN` during `npm run tauri:prepare --workspace native/desktop`
+and place the runtime executable where the desktop app can discover it, or set `WORKBENCH_DAEMON_SIDECAR_PATH`.

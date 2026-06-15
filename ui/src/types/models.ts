@@ -354,6 +354,10 @@ export interface LocalJobRecord {
   updatedAt: string;
 }
 
+export interface LocalDaemonPreferences {
+  autoStart: boolean;
+}
+
 export interface LocalJobEventRecord {
   id: string;
   jobId: string;

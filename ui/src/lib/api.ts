@@ -26,6 +26,7 @@ import type {
   IntegrationManifest,
   LocalClientRecord,
   LocalDaemonConflictRecord,
+  LocalDaemonPreferences,
   LocalDaemonStatus,
   LocalJobRecord,
   Note,
@@ -151,8 +152,12 @@ export const nativeDaemonApi = {
   openDownloadsFolder: (): Promise<boolean> => invokeNative<boolean>("open_downloads_folder"),
   readStatus: (port?: number): Promise<LocalDaemonStatus> =>
     invokeNative<LocalDaemonStatus>("read_daemon_status", { port: port ?? null }),
-  start: (): Promise<void> => invokeNative<void>("start_daemon"),
-  stop: (): Promise<void> => invokeNative<void>("stop_daemon")
+  readPreferences: (): Promise<LocalDaemonPreferences> =>
+    invokeNative<LocalDaemonPreferences>("read_daemon_preferences"),
+  setAutoStart: (autoStart: boolean): Promise<LocalDaemonPreferences> =>
+    invokeNative<LocalDaemonPreferences>("set_daemon_auto_start", { autoStart }),
+  start: (): Promise<boolean> => invokeNative<boolean>("start_daemon"),
+  stop: (): Promise<boolean> => invokeNative<boolean>("stop_daemon")
 };
 
 async function loadSessionFromStorage(): Promise<StoredAuthSession | undefined> {

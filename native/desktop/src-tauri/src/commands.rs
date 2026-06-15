@@ -1,6 +1,7 @@
 //! Tauri command handlers exposed to the frontend via `invoke`.
 
 use std::{
+  fs,
   io::{Read, Write},
   net::{SocketAddr, TcpStream},
   path::{Path, PathBuf},
@@ -17,6 +18,8 @@ use crate::{secure_storage, window};
 const DEFAULT_DAEMON_HTTP_PORT: u16 = 35780;
 const DAEMON_STATUS_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_DAEMON_STATUS_RESPONSE_BYTES: usize = 1024 * 1024;
+const DAEMON_PREFERENCES_FILE: &str = "daemon-preferences.json";
+const DEFAULT_DAEMON_SIDECAR_NAME: &str = "workbench-sync-daemon";
 
 struct ManagedDaemon {
   child: Child,
@@ -226,6 +229,13 @@ fn split_daemon_args(args: &str) -> Vec<String> {
   args.split_whitespace().map(ToString::to_string).collect()
 }
 
+fn daemon_args_from_env(name: &str) -> Vec<String> {
+  std::env::var(name)
+    .ok()
+    .map(|value| split_daemon_args(&value))
+    .unwrap_or_default()
+}
+
 fn has_package_json(path: &Path) -> bool {
   path.join("package.json").is_file()
 }
@@ -277,17 +287,110 @@ fn infer_repo_root() -> PathBuf {
   std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
-fn resolve_daemon_command() -> Result<DaemonCommand, String> {
+fn command_cwd_from_program(program: &Path) -> PathBuf {
+  program
+    .parent()
+    .map(Path::to_path_buf)
+    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+}
+
+fn daemon_executable_names(base_name: &str) -> Vec<String> {
+  let trimmed = base_name.trim();
+  if trimmed.is_empty() {
+    return daemon_executable_names(DEFAULT_DAEMON_SIDECAR_NAME);
+  }
+
+  let mut names = vec![trimmed.to_string()];
+  #[cfg(target_os = "windows")]
+  {
+    if !trimmed.to_ascii_lowercase().ends_with(".exe") {
+      names.push(format!("{trimmed}.exe"));
+    }
+  }
+  names
+}
+
+fn sidecar_search_roots(app: Option<&tauri::AppHandle>) -> Vec<PathBuf> {
+  let mut roots = Vec::new();
+  if let Some(app) = app {
+    if let Ok(resource_dir) = app.path().resource_dir() {
+      roots.push(resource_dir);
+    }
+  }
+  if let Some(exe_parent) = current_exe_parent() {
+    roots.push(exe_parent);
+  }
+  if let Ok(current_dir) = std::env::current_dir() {
+    roots.push(current_dir);
+  }
+  roots
+}
+
+fn find_packaged_sidecar(app: Option<&tauri::AppHandle>) -> Option<PathBuf> {
+  let base_name = std::env::var("WORKBENCH_DAEMON_SIDECAR_NAME")
+    .ok()
+    .filter(|value| !value.trim().is_empty())
+    .unwrap_or_else(|| DEFAULT_DAEMON_SIDECAR_NAME.to_string());
+  let names = daemon_executable_names(&base_name);
+
+  for root in sidecar_search_roots(app) {
+    for name in &names {
+      for candidate in [
+        root.join(name),
+        root.join("sidecars").join(name),
+        root.join("binaries").join(name),
+      ] {
+        if candidate.is_file() {
+          return Some(candidate);
+        }
+      }
+    }
+  }
+
+  None
+}
+
+fn resolve_explicit_sidecar() -> Result<Option<DaemonCommand>, String> {
+  let Ok(raw_path) = std::env::var("WORKBENCH_DAEMON_SIDECAR_PATH") else {
+    return Ok(None);
+  };
+  let trimmed = raw_path.trim();
+  if trimmed.is_empty() {
+    return Err("WORKBENCH_DAEMON_SIDECAR_PATH was set but empty".to_string());
+  }
+
+  let path = PathBuf::from(trimmed);
+  if !path.is_file() {
+    return Err(format!(
+      "WORKBENCH_DAEMON_SIDECAR_PATH does not point to a file: {}",
+      path.display()
+    ));
+  }
+
+  Ok(Some(DaemonCommand {
+    program: path_to_string(path.clone()),
+    args: daemon_args_from_env("WORKBENCH_DAEMON_SIDECAR_ARGS"),
+    cwd: command_cwd_from_program(&path),
+  }))
+}
+
+fn resolve_packaged_sidecar(app: Option<&tauri::AppHandle>) -> Option<DaemonCommand> {
+  let path = find_packaged_sidecar(app)?;
+  Some(DaemonCommand {
+    program: path_to_string(path.clone()),
+    args: daemon_args_from_env("WORKBENCH_DAEMON_SIDECAR_ARGS"),
+    cwd: command_cwd_from_program(&path),
+  })
+}
+
+fn resolve_daemon_command(app: Option<&tauri::AppHandle>) -> Result<DaemonCommand, String> {
   if let Ok(command) = std::env::var("WORKBENCH_DAEMON_COMMAND") {
     let program = command.trim();
     if program.is_empty() {
       return Err("WORKBENCH_DAEMON_COMMAND was set but empty".to_string());
     }
 
-    let args = std::env::var("WORKBENCH_DAEMON_ARGS")
-      .ok()
-      .map(|value| split_daemon_args(&value))
-      .unwrap_or_default();
+    let args = daemon_args_from_env("WORKBENCH_DAEMON_ARGS");
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
     return Ok(DaemonCommand {
@@ -295,6 +398,14 @@ fn resolve_daemon_command() -> Result<DaemonCommand, String> {
       args,
       cwd,
     });
+  }
+
+  if let Some(command) = resolve_explicit_sidecar()? {
+    return Ok(command);
+  }
+
+  if let Some(command) = resolve_packaged_sidecar(app) {
+    return Ok(command);
   }
 
   let cwd = infer_repo_root();
@@ -325,8 +436,8 @@ fn configure_daemon_env(command: &mut Command) {
   }
 }
 
-fn spawn_daemon() -> Result<Child, String> {
-  let daemon_command = resolve_daemon_command()?;
+fn spawn_daemon(app: Option<&tauri::AppHandle>) -> Result<Child, String> {
+  let daemon_command = resolve_daemon_command(app)?;
   let mut command = Command::new(&daemon_command.program);
   command
     .args(&daemon_command.args)
@@ -341,6 +452,95 @@ fn spawn_daemon() -> Result<Child, String> {
       daemon_command.cwd.display()
     )
   })
+}
+
+fn daemon_preferences_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+  app
+    .path()
+    .app_config_dir()
+    .map(|path| path.join(DAEMON_PREFERENCES_FILE))
+    .map_err(|error| format!("failed to resolve app config directory: {error}"))
+}
+
+fn normalize_daemon_preferences(value: serde_json::Value) -> serde_json::Value {
+  let auto_start = value
+    .get("autoStart")
+    .and_then(serde_json::Value::as_bool)
+    .unwrap_or(false);
+  serde_json::json!({
+    "autoStart": auto_start
+  })
+}
+
+fn read_daemon_preferences_from_disk(app: &tauri::AppHandle) -> Result<serde_json::Value, String> {
+  let path = daemon_preferences_path(app)?;
+  if !path.is_file() {
+    return Ok(normalize_daemon_preferences(serde_json::json!({})));
+  }
+
+  let raw = fs::read_to_string(&path)
+    .map_err(|error| format!("failed to read daemon preferences {}: {error}", path.display()))?;
+  let parsed = serde_json::from_str::<serde_json::Value>(&raw)
+    .map_err(|error| format!("failed to parse daemon preferences {}: {error}", path.display()))?;
+  Ok(normalize_daemon_preferences(parsed))
+}
+
+fn write_daemon_preferences_to_disk(
+  app: &tauri::AppHandle,
+  preferences: &serde_json::Value,
+) -> Result<(), String> {
+  let path = daemon_preferences_path(app)?;
+  let parent = path
+    .parent()
+    .ok_or_else(|| format!("daemon preferences path has no parent: {}", path.display()))?;
+  fs::create_dir_all(parent)
+    .map_err(|error| format!("failed to create daemon preferences directory {}: {error}", parent.display()))?;
+  let serialized = serde_json::to_string_pretty(preferences)
+    .map_err(|error| format!("failed to serialize daemon preferences: {error}"))?;
+  fs::write(&path, format!("{serialized}\n"))
+    .map_err(|error| format!("failed to write daemon preferences {}: {error}", path.display()))
+}
+
+fn start_daemon_with_app(app: Option<&tauri::AppHandle>) -> Result<bool, String> {
+  let mut managed = managed_daemon()
+    .lock()
+    .map_err(|_| "sync daemon process lock was poisoned".to_string())?;
+
+  if let Some(daemon) = managed.as_mut() {
+    match daemon.child.try_wait() {
+      Ok(None) => return Ok(false),
+      Ok(Some(_status)) => {
+        *managed = None;
+      }
+      Err(error) => return Err(format!("failed to inspect sync daemon process: {error}")),
+    }
+  }
+
+  let child = spawn_daemon(app)?;
+  *managed = Some(ManagedDaemon { child });
+  Ok(true)
+}
+
+pub fn start_daemon_if_auto_start_enabled(app: &tauri::AppHandle) {
+  let preferences = match read_daemon_preferences_from_disk(app) {
+    Ok(preferences) => preferences,
+    Err(error) => {
+      eprintln!("[workbench-native] failed to read daemon preferences: {error}");
+      return;
+    }
+  };
+
+  if !preferences
+    .get("autoStart")
+    .and_then(serde_json::Value::as_bool)
+    .unwrap_or(false)
+  {
+    return;
+  }
+
+  if let Err(error) = start_daemon_with_app(Some(app)) {
+    eprintln!("[workbench-native] failed to auto-start sync daemon: {error}");
+  }
 }
 
 #[cfg(target_os = "windows")]
@@ -427,24 +627,25 @@ pub fn read_daemon_status(port: Option<u16>) -> Result<serde_json::Value, String
 }
 
 #[tauri::command]
-pub fn start_daemon() -> Result<bool, String> {
-  let mut managed = managed_daemon()
-    .lock()
-    .map_err(|_| "sync daemon process lock was poisoned".to_string())?;
+pub fn read_daemon_preferences(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+  read_daemon_preferences_from_disk(&app)
+}
 
-  if let Some(daemon) = managed.as_mut() {
-    match daemon.child.try_wait() {
-      Ok(None) => return Ok(false),
-      Ok(Some(_status)) => {
-        *managed = None;
-      }
-      Err(error) => return Err(format!("failed to inspect sync daemon process: {error}")),
-    }
-  }
+#[tauri::command]
+pub fn set_daemon_auto_start(
+  app: tauri::AppHandle,
+  auto_start: bool,
+) -> Result<serde_json::Value, String> {
+  let preferences = normalize_daemon_preferences(serde_json::json!({
+    "autoStart": auto_start
+  }));
+  write_daemon_preferences_to_disk(&app, &preferences)?;
+  Ok(preferences)
+}
 
-  let child = spawn_daemon()?;
-  *managed = Some(ManagedDaemon { child });
-  Ok(true)
+#[tauri::command]
+pub fn start_daemon(app: tauri::AppHandle) -> Result<bool, String> {
+  start_daemon_with_app(Some(&app))
 }
 
 #[tauri::command]

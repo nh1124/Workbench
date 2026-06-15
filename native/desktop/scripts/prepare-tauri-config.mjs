@@ -17,6 +17,29 @@ function required(name) {
   return value;
 }
 
+function optionalBoolean(name, fallback) {
+  const value = process.env[name];
+  if (value === undefined || value.trim() === "") {
+    return fallback;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  throw new Error(`${name} must be a boolean-like value.`);
+}
+
+function optionalList(name) {
+  const value = process.env[name];
+  if (!value) return [];
+  return value
+    .split(path.delimiter)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+const daemonExternalBins = optionalList("WORKBENCH_DAEMON_EXTERNAL_BIN");
+const bundleActive = optionalBoolean("NATIVE_BUNDLE_ACTIVE", daemonExternalBins.length > 0 ? true : false);
+
 const config = {
   $schema: "https://schema.tauri.app/config/2",
   productName: required("NATIVE_APP_NAME"),
@@ -40,9 +63,13 @@ const config = {
     ]
   },
   bundle: {
-    active: false
+    active: bundleActive
   }
 };
+
+if (daemonExternalBins.length > 0) {
+  config.bundle.externalBin = daemonExternalBins;
+}
 
 if (!Number.isFinite(config.app.windows[0].width) || !Number.isFinite(config.app.windows[0].height)) {
   throw new Error("NATIVE_WINDOW_WIDTH and NATIVE_WINDOW_HEIGHT must be numeric values.");

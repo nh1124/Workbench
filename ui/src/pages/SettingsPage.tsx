@@ -180,6 +180,7 @@ export function SettingsPage() {
   const [localDaemonMessage, setLocalDaemonMessage] = useState("");
   const [localDaemonLoading, setLocalDaemonLoading] = useState(false);
   const [localDaemonResolving, setLocalDaemonResolving] = useState<Record<string, boolean>>({});
+  const [localDaemonAutoStart, setLocalDaemonAutoStart] = useState(false);
 
   useEffect(() => {
     setSettings(loadUiSettings());
@@ -217,6 +218,31 @@ export function SettingsPage() {
       localDaemonSectionRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
     }, 0);
   }, [activeTab, location.search]);
+
+  useEffect(() => {
+    if (!nativeRuntimeAvailable) {
+      setLocalDaemonAutoStart(false);
+      return;
+    }
+
+    let cancelled = false;
+    nativeDaemonApi.readPreferences()
+      .then((preferences) => {
+        if (!cancelled) {
+          setLocalDaemonAutoStart(preferences.autoStart);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          const message = error instanceof Error ? error.message : "Failed to load daemon preferences";
+          setLocalDaemonMessage(message);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [nativeRuntimeAvailable]);
 
   const refreshManifests = async () => {
     const loaded = await fetchAllServiceManifests();
@@ -411,6 +437,18 @@ export function SettingsPage() {
     }
   };
 
+  const toggleNativeDaemonAutoStart = async (enabled: boolean) => {
+    setLocalDaemonMessage("");
+    try {
+      const preferences = await nativeDaemonApi.setAutoStart(enabled);
+      setLocalDaemonAutoStart(preferences.autoStart);
+      setLocalDaemonMessage(preferences.autoStart ? "Daemon auto-start enabled." : "Daemon auto-start disabled.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to update daemon auto-start";
+      setLocalDaemonMessage(message);
+    }
+  };
+
   const chooseNativeSyncFolder = async () => {
     setLocalDaemonMessage("");
     try {
@@ -462,8 +500,8 @@ export function SettingsPage() {
   const startNativeDaemon = async () => {
     setLocalDaemonMessage("");
     try {
-      await nativeDaemonApi.start();
-      setLocalDaemonMessage("Daemon start requested.");
+      const started = await nativeDaemonApi.start();
+      setLocalDaemonMessage(started ? "Daemon started." : "Daemon is already running.");
       void refreshLocalDaemon(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to start daemon";
@@ -474,8 +512,8 @@ export function SettingsPage() {
   const stopNativeDaemon = async () => {
     setLocalDaemonMessage("");
     try {
-      await nativeDaemonApi.stop();
-      setLocalDaemonMessage("Daemon stop requested.");
+      const stopped = await nativeDaemonApi.stop();
+      setLocalDaemonMessage(stopped ? "Daemon stopped." : "Daemon was not started by this app.");
       void refreshLocalDaemon(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to stop daemon";
@@ -1202,6 +1240,25 @@ export function SettingsPage() {
                   />
                   <span className="integration-switch-slider" aria-hidden="true" />
                   <span className="sr-only">{localModeEnabled ? "Disable local mode" : "Enable local mode"}</span>
+                </label>
+              </div>
+
+              <div className="account-local-mode-control">
+                <div>
+                  <strong>Auto-start Daemon</strong>
+                  <small>{nativeRuntimeAvailable ? "Starts with desktop app" : "Desktop runtime only"}</small>
+                </div>
+                <label className="integration-switch">
+                  <input
+                    type="checkbox"
+                    checked={localDaemonAutoStart}
+                    disabled={!nativeRuntimeAvailable}
+                    onChange={(event) => void toggleNativeDaemonAutoStart(event.target.checked)}
+                  />
+                  <span className="integration-switch-slider" aria-hidden="true" />
+                  <span className="sr-only">
+                    {localDaemonAutoStart ? "Disable daemon auto-start" : "Enable daemon auto-start"}
+                  </span>
                 </label>
               </div>
 

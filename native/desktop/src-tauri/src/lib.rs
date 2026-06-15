@@ -93,6 +93,7 @@ pub fn run() {
           eprintln!("[workbench-native] tray icon setup failed: {error}");
         }
 
+        commands::start_daemon_if_auto_start_enabled(app.handle());
         shortcuts::register(app);
       }
       Ok(())
@@ -108,6 +109,8 @@ pub fn run() {
       commands::open_sync_folder,
       commands::open_downloads_folder,
       commands::read_daemon_status,
+      commands::read_daemon_preferences,
+      commands::set_daemon_auto_start,
       commands::start_daemon,
       commands::stop_daemon,
       commands::save_file_with_dialog,
