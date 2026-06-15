@@ -43,7 +43,7 @@ import {
   type LocalJobStatus,
   type LocalJobTarget
 } from "./localClientsStore.js";
-import { listSyncEvents, recordSyncEvent, type SyncAction, type SyncDomain } from "./syncStore.js";
+import { getSyncResourceVersion, listSyncEvents, recordSyncEvent, type SyncAction, type SyncDomain } from "./syncStore.js";
 import { DeepResearchError } from "./deepResearch/errors.js";
 import {
   cancelDeepResearch,
@@ -1158,6 +1158,18 @@ function asNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+function asBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function optionalNonNegativeInteger(value: unknown, fieldName: string): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new LocalClientStoreError(400, "SYNC_BASE_VERSION_INVALID", `${fieldName} must be a non-negative integer.`);
+  }
+  return value;
+}
+
 function withoutKeys(record: Record<string, unknown>, keys: string[]): Record<string, unknown> {
   const next = { ...record };
   for (const key of keys) {
@@ -1185,6 +1197,31 @@ type SyncPushRejected = {
   message: string;
 };
 
+async function assertSyncBaseVersion(
+  authContext: SyncAccessContext,
+  domain: SyncDomain,
+  resourceId: string | undefined,
+  op: Record<string, unknown>
+): Promise<void> {
+  const baseVersion = optionalNonNegativeInteger(op.baseVersion, "baseVersion");
+  if (baseVersion === undefined) return;
+
+  if (!resourceId) {
+    if (baseVersion === 0) return;
+    throw new LocalClientStoreError(409, "SYNC_VERSION_CONFLICT", "baseVersion does not match an existing resource.");
+  }
+
+  const current = await getSyncResourceVersion(authContext.userId, domain, resourceId);
+  const currentVersion = current?.version ?? 0;
+  if (currentVersion !== baseVersion) {
+    throw new LocalClientStoreError(
+      409,
+      "SYNC_VERSION_CONFLICT",
+      `Sync resource version conflict: expected ${baseVersion}, current ${currentVersion}.`
+    );
+  }
+}
+
 async function applySyncPushOperation(
   authContext: SyncAccessContext,
   op: Record<string, unknown>,
@@ -1196,12 +1233,14 @@ async function applySyncPushOperation(
   const payload = asJsonRecord(op.payload);
   const resourceId = asNonEmptyString(op.resourceId) ?? asNonEmptyString(payload.id);
 
-  if (!domain || !["notes", "artifacts"].includes(domain)) {
-    throw new LocalClientStoreError(400, "SYNC_DOMAIN_NOT_SUPPORTED", "Only notes and artifacts sync push operations are supported in this phase.");
+  if (!domain || !["projects", "notes", "artifacts", "tasks"].includes(domain)) {
+    throw new LocalClientStoreError(400, "SYNC_DOMAIN_NOT_SUPPORTED", "Only projects, notes, artifacts, and tasks sync push operations are supported in this phase.");
   }
   if (!action || !["create", "update", "delete", "upsert"].includes(action)) {
     throw new LocalClientStoreError(400, "SYNC_ACTION_NOT_SUPPORTED", "Unsupported sync push action.");
   }
+
+  await assertSyncBaseVersion(authContext, domain, resourceId, op);
 
   if (domain === "notes") {
     let result: unknown;
@@ -1238,6 +1277,110 @@ async function applySyncPushOperation(
       index,
       clientOpId,
       domain: "notes",
+      action: event.action,
+      resourceId: nextResourceId,
+      version: event.version,
+      cursor: event.cursor,
+      result
+    };
+  }
+
+  if (domain === "projects") {
+    let result: unknown;
+    let nextResourceId = resourceId;
+    if (action === "create") {
+      result = await projectsClient.create(authContext.accessToken, payload);
+      nextResourceId = objectId(result);
+    } else if (action === "update" || action === "upsert") {
+      if (!resourceId) {
+        result = await projectsClient.create(authContext.accessToken, payload);
+        nextResourceId = objectId(result);
+      } else {
+        result = await projectsClient.update(authContext.accessToken, resourceId, payload);
+        nextResourceId = objectId(result) ?? resourceId;
+      }
+    } else {
+      if (!resourceId) {
+        throw new LocalClientStoreError(400, "SYNC_RESOURCE_ID_REQUIRED", "Delete requires resourceId.");
+      }
+      await projectsClient.remove(authContext.accessToken, resourceId);
+      nextResourceId = resourceId;
+      result = { id: resourceId, deleted: true };
+    }
+
+    if (!nextResourceId) {
+      throw new LocalClientStoreError(502, "SYNC_RESOURCE_ID_MISSING", "Applied operation did not return a resource id.");
+    }
+    const event = await recordSyncEvent(authContext.userId, "projects", nextResourceId, action === "upsert" ? "update" : action, {
+      source: "sync-push",
+      clientOpId,
+      localClientId: authContext.localClient?.id
+    });
+    return {
+      index,
+      clientOpId,
+      domain: "projects",
+      action: event.action,
+      resourceId: nextResourceId,
+      version: event.version,
+      cursor: event.cursor,
+      result
+    };
+  }
+
+  if (domain === "tasks") {
+    let result: unknown;
+    let nextResourceId = resourceId;
+    const relation = asNonEmptyString(op.relation) ?? asNonEmptyString(payload.relation);
+
+    if (relation === "pin") {
+      if (action !== "update" && action !== "upsert") {
+        throw new LocalClientStoreError(400, "SYNC_TASK_RELATION_ACTION_NOT_SUPPORTED", "Task pin sync push requires update or upsert action.");
+      }
+      if (!resourceId) {
+        throw new LocalClientStoreError(400, "SYNC_RESOURCE_ID_REQUIRED", "Task pin update requires resourceId.");
+      }
+      const pinned = asBoolean(payload.pinned);
+      if (pinned === undefined) {
+        throw new LocalClientStoreError(400, "SYNC_TASK_PIN_PAYLOAD_INVALID", "Task pin update requires pinned(boolean).");
+      }
+      result = await tasksClient.setPin(authContext.accessToken, resourceId, pinned);
+      nextResourceId = resourceId;
+    } else if (relation) {
+      throw new LocalClientStoreError(400, "SYNC_TASK_RELATION_NOT_SUPPORTED", "Only task pin relation sync push is supported in this phase.");
+    } else if (action === "create") {
+      result = await tasksClient.create(authContext.accessToken, payload);
+      nextResourceId = objectId(result);
+    } else if (action === "update" || action === "upsert") {
+      if (!resourceId) {
+        result = await tasksClient.create(authContext.accessToken, payload);
+        nextResourceId = objectId(result);
+      } else {
+        result = await tasksClient.update(authContext.accessToken, resourceId, withoutKeys(payload, ["relation"]));
+        nextResourceId = objectId(result) ?? resourceId;
+      }
+    } else {
+      if (!resourceId) {
+        throw new LocalClientStoreError(400, "SYNC_RESOURCE_ID_REQUIRED", "Delete requires resourceId.");
+      }
+      await tasksClient.remove(authContext.accessToken, resourceId);
+      nextResourceId = resourceId;
+      result = { id: resourceId, deleted: true };
+    }
+
+    if (!nextResourceId) {
+      throw new LocalClientStoreError(502, "SYNC_RESOURCE_ID_MISSING", "Applied operation did not return a resource id.");
+    }
+    const event = await recordSyncEvent(authContext.userId, "tasks", nextResourceId, action === "upsert" ? "update" : action, {
+      source: "sync-push",
+      clientOpId,
+      localClientId: authContext.localClient?.id,
+      relation
+    });
+    return {
+      index,
+      clientOpId,
+      domain: "tasks",
       action: event.action,
       resourceId: nextResourceId,
       version: event.version,

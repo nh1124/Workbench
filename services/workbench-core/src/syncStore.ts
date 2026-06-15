@@ -14,6 +14,15 @@ export interface SyncEvent {
   createdAt: string;
 }
 
+export interface SyncResourceVersion {
+  userId: string;
+  domain: SyncDomain;
+  resourceId: string;
+  version: number;
+  updatedAt: string;
+  deletedAt?: string;
+}
+
 type SyncEventRow = {
   id: string | number;
   user_id: string;
@@ -23,6 +32,15 @@ type SyncEventRow = {
   version: number;
   payload_json: unknown;
   created_at: string;
+};
+
+type SyncResourceVersionRow = {
+  user_id: string;
+  domain: string;
+  resource_id: string;
+  version: number;
+  updated_at: string;
+  deleted_at: string | null;
 };
 
 function jsonObject(value: unknown): Record<string, unknown> {
@@ -39,6 +57,17 @@ function toEvent(row: SyncEventRow): SyncEvent {
     version: row.version,
     payload: jsonObject(row.payload_json),
     createdAt: new Date(row.created_at).toISOString()
+  };
+}
+
+function toResourceVersion(row: SyncResourceVersionRow): SyncResourceVersion {
+  return {
+    userId: row.user_id,
+    domain: row.domain as SyncDomain,
+    resourceId: row.resource_id,
+    version: Number(row.version),
+    updatedAt: new Date(row.updated_at).toISOString(),
+    deletedAt: row.deleted_at ? new Date(row.deleted_at).toISOString() : undefined
   };
 }
 
@@ -82,6 +111,26 @@ export async function recordSyncEvent(
     await pool.query("ROLLBACK");
     throw error;
   }
+}
+
+export async function getSyncResourceVersion(
+  userId: string,
+  domain: SyncDomain,
+  resourceId: string
+): Promise<SyncResourceVersion | undefined> {
+  await ensureCoreSchema();
+  const pool = getCorePool();
+  const result = await pool.query<SyncResourceVersionRow>(
+    `
+      SELECT user_id, domain, resource_id, version, updated_at, deleted_at
+      FROM sync_resource_versions
+      WHERE user_id = $1 AND domain = $2 AND resource_id = $3
+      LIMIT 1
+    `,
+    [userId, domain, resourceId]
+  );
+  const row = result.rows[0];
+  return row ? toResourceVersion(row) : undefined;
 }
 
 export async function listSyncEvents(

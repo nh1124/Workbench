@@ -377,6 +377,53 @@ describe("local client HTTP APIs", () => {
       assert.deepEqual(pushResponse.body.applied, []);
       assert.deepEqual(pushResponse.body.rejected, []);
 
+      await harness.syncStore.recordSyncEvent(userId, "projects", "project-http-sync", "update", {
+        name: "HTTP sync project"
+      });
+      const conflictPushResponse = await requestJson(server.baseUrl, "POST", "/api/sync/push", {
+        headers: daemonHeaders,
+        body: {
+          ops: [
+            {
+              clientOpId: "project-conflict-op",
+              domain: "projects",
+              action: "update",
+              resourceId: "project-http-sync",
+              baseVersion: 0,
+              payload: { name: "Stale local name" }
+            }
+          ]
+        }
+      });
+      assert.equal(conflictPushResponse.status, 409);
+      assert.deepEqual(conflictPushResponse.body.applied, []);
+      const rejected = conflictPushResponse.body.rejected as Array<Record<string, unknown>>;
+      assert.equal(rejected.length, 1);
+      assert.equal(rejected[0].clientOpId, "project-conflict-op");
+      assert.equal(rejected[0].code, "SYNC_VERSION_CONFLICT");
+
+      const unsupportedTaskPushResponse = await requestJson(server.baseUrl, "POST", "/api/sync/push", {
+        headers: daemonHeaders,
+        body: {
+          ops: [
+            {
+              clientOpId: "task-subtask-op",
+              domain: "tasks",
+              action: "update",
+              resourceId: "task-http-sync",
+              relation: "subtask",
+              payload: { occurrenceDate: "2026-06-15" }
+            }
+          ]
+        }
+      });
+      assert.equal(unsupportedTaskPushResponse.status, 409);
+      assert.deepEqual(unsupportedTaskPushResponse.body.applied, []);
+      const taskRejected = unsupportedTaskPushResponse.body.rejected as Array<Record<string, unknown>>;
+      assert.equal(taskRejected.length, 1);
+      assert.equal(taskRejected[0].clientOpId, "task-subtask-op");
+      assert.equal(taskRejected[0].code, "SYNC_TASK_RELATION_NOT_SUPPORTED");
+
       const blobUploadResponse = await requestJson(server.baseUrl, "PUT", "/api/sync/blobs/test-blob", {
         headers: daemonHeaders,
         body: { contentBase64: "AA==" }

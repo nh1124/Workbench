@@ -216,16 +216,19 @@ npm run build
 
 - `[partial]` `snapshot` and `pull` endpoints exist.
 - `[partial]` `POST /api/sync/push` operation application exists for:
+  - Projects create/update/delete/upsert.
   - Notes create/update/delete/upsert.
   - Artifacts folder create.
   - Artifacts note create/update/delete/upsert.
   - Artifacts file create/upload.
   - Artifacts item delete by resource id.
+  - Tasks create/update/delete/upsert.
+  - Tasks pin update/upsert.
 - `[pending]` Extend `POST /api/sync/push` to:
-  - Projects create/update/delete/default selection.
+  - Projects default selection.
   - Artifact file replacement/update.
-  - Tasks create/update/delete/pin/occurrence/subtask/schedule operations.
-- `[pending]` Add `baseVersion` conflict checks.
+  - Tasks occurrence/subtask/schedule operations.
+- `[implemented]` Add optional `baseVersion` conflict checks before applying sync push operations.
 - `[partial]` Return applied/rejected operations with stable-ish error codes for implemented domains.
 - `[pending]` Add server-side tombstone semantics for domains that still hard-delete.
 - `[pending]` Ensure all Core facade mutations record sync events consistently.
@@ -271,7 +274,7 @@ npm run build
 
 ## Recommended Next Implementation Order
 
-1. Extend `POST /api/sync/push` to Projects and Tasks, and add baseVersion checks.
+1. Extend `POST /api/sync/push` to task occurrence/subtask/schedule operations and project default selection.
 2. Implement artifact file replacement and `PUT /api/sync/blobs/:blobId`.
 3. Add daemon local API facade for offline UI reads/writes.
 4. Add Tauri integration for sync folder selection, open folder, and daemon lifecycle.
