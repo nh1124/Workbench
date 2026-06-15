@@ -221,12 +221,12 @@ npm run build
   - Artifacts folder create.
   - Artifacts note create/update/delete/upsert.
   - Artifacts file create/upload.
+  - Artifacts file replacement/update through `contentBase64`.
   - Artifacts item delete by resource id.
   - Tasks create/update/delete/upsert.
   - Tasks pin update/upsert.
 - `[pending]` Extend `POST /api/sync/push` to:
   - Projects default selection.
-  - Artifact file replacement/update.
   - Tasks occurrence/subtask/schedule operations.
 - `[implemented]` Add optional `baseVersion` conflict checks before applying sync push operations.
 - `[partial]` Return applied/rejected operations with stable-ish error codes for implemented domains.
@@ -237,10 +237,14 @@ npm run build
 ### Blob Upload / Replacement
 
 - `[partial]` Blob download exists for artifact and task attachment ids.
-- `[pending]` Implement `PUT /api/sync/blobs/:blobId`.
-- `[pending]` Add artifact file replacement endpoint with expected version.
+- `[partial]` Implement `PUT /api/sync/blobs/:blobId`.
+  - Artifact file blobs are supported via `artifact:<id>`.
+  - Task attachment blob upload is still pending.
+- `[implemented]` Add artifact file replacement endpoint with expected version.
 - `[pending]` Add task attachment upload/update operation through sync push.
-- `[pending]` Add checksum validation on upload and download completion.
+- `[partial]` Add checksum validation on upload and download completion.
+  - Artifact blob PUT and artifact file sync push validate optional `sha256:<hex>` checksums.
+  - Download completion checksum reporting remains job/daemon-side only.
 
 ### Local UI Through Daemon
 
@@ -275,7 +279,7 @@ npm run build
 ## Recommended Next Implementation Order
 
 1. Extend `POST /api/sync/push` to task occurrence/subtask/schedule operations and project default selection.
-2. Implement artifact file replacement and `PUT /api/sync/blobs/:blobId`.
+2. Add task attachment upload/update operation through sync push and blob PUT.
 3. Add daemon local API facade for offline UI reads/writes.
 4. Add Tauri integration for sync folder selection, open folder, and daemon lifecycle.
 

@@ -1007,6 +1007,15 @@ const syncPushSchema = z.object({
   ops: z.array(jsonRecordSchema).default([])
 });
 
+const syncBlobPutSchema = z.object({
+  contentBase64: z.string(),
+  filename: z.string().min(1).optional(),
+  mimeType: z.string().min(1).optional(),
+  checksum: z.string().min(1).optional(),
+  baseVersion: z.number().int().nonnegative().optional(),
+  expectedVersion: z.number().int().positive().optional()
+});
+
 type AuthenticatedContext = {
   userId: string;
   username: string;
@@ -1168,6 +1177,32 @@ function optionalNonNegativeInteger(value: unknown, fieldName: string): number |
     throw new LocalClientStoreError(400, "SYNC_BASE_VERSION_INVALID", `${fieldName} must be a non-negative integer.`);
   }
   return value;
+}
+
+function optionalPositiveInteger(value: unknown, fieldName: string): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new LocalClientStoreError(400, "SYNC_EXPECTED_VERSION_INVALID", `${fieldName} must be a positive integer.`);
+  }
+  return value;
+}
+
+function decodeContentBase64(contentBase64: string): { compactBase64: string; buffer: Buffer } {
+  const compactBase64 = contentBase64.replace(/\s+/g, "");
+  if (compactBase64.length === 0) {
+    return { compactBase64, buffer: Buffer.alloc(0) };
+  }
+  if (compactBase64.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(compactBase64)) {
+    throw new LocalClientStoreError(400, "SYNC_BLOB_BASE64_INVALID", "contentBase64 must be valid base64.");
+  }
+  return {
+    compactBase64,
+    buffer: Buffer.from(compactBase64, "base64")
+  };
+}
+
+function sha256Checksum(buffer: Buffer): string {
+  return `sha256:${createHash("sha256").update(buffer).digest("hex")}`;
 }
 
 function withoutKeys(record: Record<string, unknown>, keys: string[]): Record<string, unknown> {
@@ -1419,8 +1454,20 @@ async function applySyncPushOperation(
     if (!resourceId) {
       result = await artifactsClient.createNote(authContext.accessToken, withoutKeys({ ...payload, kind: "note" }, ["kind"]));
       nextResourceId = objectId(result);
-    } else if (asNonEmptyString(payload.kind) === "file" || asNonEmptyString(payload.contentBase64)) {
-      throw new LocalClientStoreError(400, "SYNC_FILE_UPDATE_NOT_SUPPORTED", "Artifact file content updates are not supported by sync push yet.");
+    } else if (typeof payload.contentBase64 === "string") {
+      const { compactBase64, buffer } = decodeContentBase64(payload.contentBase64);
+      const checksum = sha256Checksum(buffer);
+      const expectedChecksum = asNonEmptyString(payload.checksum);
+      if (expectedChecksum && expectedChecksum !== checksum) {
+        throw new LocalClientStoreError(400, "SYNC_BLOB_CHECKSUM_MISMATCH", "Artifact file checksum mismatch.");
+      }
+      result = await artifactsClient.replaceFileContent(authContext.accessToken, resourceId, {
+        filename: asNonEmptyString(payload.filename) ?? asNonEmptyString(payload.originalFilename),
+        mimeType: asNonEmptyString(payload.mimeType),
+        contentBase64: compactBase64,
+        expectedVersion: optionalPositiveInteger(payload.expectedVersion, "expectedVersion")
+      });
+      nextResourceId = objectId(result) ?? resourceId;
     } else {
       result = await artifactsClient.updateItem(authContext.accessToken, resourceId, withoutKeys(payload, ["kind"]));
       nextResourceId = objectId(result) ?? resourceId;
@@ -3140,9 +3187,66 @@ app.put("/api/sync/blobs/:blobId", async (req, res) => {
   const authContext = await requireSyncAccessContext(req, res);
   if (!authContext) return;
 
-  return res.status(501).json({
-    message: "Sync blob upload is not enabled yet; use existing domain upload APIs until sync push application is implemented."
-  });
+  const parsed = syncBlobPutSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json({ message: parsed.error.flatten() });
+  }
+
+  const blobId = String(req.params.blobId);
+  if (blobId.startsWith("task-attachment:")) {
+    return res.status(501).json({
+      message: "Task attachment blob upload is not enabled yet; use task attachment APIs until sync attachment push is implemented."
+    });
+  }
+  if (!blobId.startsWith("artifact:")) {
+    return res.status(404).json({ message: "Unsupported sync blob id" });
+  }
+
+  const resourceId = blobId.slice("artifact:".length).trim();
+  if (!resourceId) {
+    return res.status(400).json({ message: "Artifact blob id is missing a resource id" });
+  }
+
+  try {
+    await assertSyncBaseVersion(authContext, "artifacts", resourceId, { baseVersion: parsed.data.baseVersion });
+    const { compactBase64, buffer } = decodeContentBase64(parsed.data.contentBase64);
+    const checksum = sha256Checksum(buffer);
+    if (parsed.data.checksum && parsed.data.checksum !== checksum) {
+      return res.status(400).json({
+        message: "Blob checksum mismatch",
+        code: "SYNC_BLOB_CHECKSUM_MISMATCH",
+        expected: parsed.data.checksum,
+        actual: checksum
+      });
+    }
+
+    const result = await artifactsClient.replaceFileContent(authContext.accessToken, resourceId, {
+      filename: parsed.data.filename,
+      mimeType: parsed.data.mimeType,
+      contentBase64: compactBase64,
+      expectedVersion: parsed.data.expectedVersion
+    });
+    const event = await recordSyncEvent(authContext.userId, "artifacts", resourceId, "update", {
+      source: "sync-blob-put",
+      blobId,
+      localClientId: authContext.localClient?.id,
+      checksum,
+      sizeBytes: buffer.length
+    });
+
+    return res.json({
+      blobId,
+      domain: "artifacts",
+      resourceId,
+      sizeBytes: buffer.length,
+      checksum,
+      version: event.version,
+      cursor: event.cursor,
+      result
+    });
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
 });
 
 app.post("/api/sync/push", async (req, res) => {

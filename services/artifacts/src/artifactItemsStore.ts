@@ -9,6 +9,7 @@ import { ensureArtifactsSchema, getArtifactsPool } from "./db.js";
 import type {
   ArtifactFileData,
   ArtifactFileInput,
+  ArtifactFileReplacementInput,
   ArtifactItem,
   ArtifactPreviewStatus,
   ArtifactItemKind,
@@ -1317,6 +1318,125 @@ export async function createArtifactFile(input: ArtifactFileInput, ownerUsername
     await touchUpdatedAt(client, owner, projectContext.projectId, parentPath);
     await client.query("COMMIT");
     return toArtifactItem(inserted.rows[0], false);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function replaceArtifactFileContent(
+  id: string,
+  input: ArtifactFileReplacementInput,
+  ownerUsername: string
+): Promise<ArtifactItem | undefined> {
+  await ensureArtifactsSchema();
+  const pool = getArtifactsPool();
+  const owner = normalizeOwner(ownerUsername);
+
+  const client = await pool.connect();
+  let oldPreviewStoragePath: string | undefined;
+  try {
+    await client.query("BEGIN");
+
+    const existing = await readItemRowById(client, id, owner, true);
+    if (!existing) {
+      await client.query("ROLLBACK");
+      return undefined;
+    }
+    if (existing.kind !== "file" || !existing.storage_path) {
+      throw new Error("Only file items support file content replacement");
+    }
+    if (input.expectedVersion !== undefined && existing.version !== input.expectedVersion) {
+      throw new Error(`Artifact file version conflict: expected ${input.expectedVersion}, current ${existing.version}`);
+    }
+
+    const requestedFilename = input.originalFilename?.trim();
+    const nextMimeType = input.mimeType || existing.mime_type || "application/octet-stream";
+    let nextPath = existing.path;
+    let nextParentPath = existing.parent_path;
+    let nextStoragePath = existing.storage_path;
+    let nextTitle = existing.title;
+
+    if (requestedFilename) {
+      const cleanFileName = normalizePathSegment(requestedFilename);
+      if (cleanFileName) {
+        const requestedPath = existing.parent_path ? `${existing.parent_path}/${cleanFileName}` : cleanFileName;
+        nextPath = await ensureUniquePath(client, owner, existing.project_id, requestedPath, id);
+        nextParentPath = parentPathFromPath(nextPath);
+        nextTitle = leafNameFromPath(nextPath);
+        nextStoragePath = buildStorageRelativePath(owner, existing.project_id, existing.id, nextPath);
+      }
+    }
+
+    const absoluteStoragePath = resolveStorageAbsolutePath(nextStoragePath);
+    await fs.mkdir(path.dirname(absoluteStoragePath), { recursive: true });
+    await fs.writeFile(absoluteStoragePath, input.buffer);
+
+    await upsertFolderByPath(
+      client,
+      owner,
+      existing.project_id,
+      existing.project_name ?? undefined,
+      nextParentPath,
+      normalizeScope(existing.scope)
+    );
+
+    const nextPreviewStatus = isWordDocumentFile(nextPath, nextMimeType) ? WORD_PREVIEW_PENDING_STATUS : null;
+    oldPreviewStoragePath = existing.preview_pdf_storage_path ?? undefined;
+
+    await client.query(
+      `
+        UPDATE artifact_items
+        SET
+          title = $3,
+          path = $4,
+          parent_path = $5,
+          mime_type = $6,
+          size_bytes = $7,
+          storage_path = $8,
+          preview_pdf_storage_path = NULL,
+          preview_pdf_size_bytes = NULL,
+          preview_pdf_status = $9,
+          preview_pdf_error = NULL,
+          preview_pdf_updated_at = NULL,
+          version = version + 1,
+          updated_at = NOW()
+        WHERE id = $1 AND owner_username = $2
+      `,
+      [
+        id,
+        owner,
+        nextTitle,
+        nextPath,
+        nextParentPath,
+        nextMimeType,
+        input.sizeBytes,
+        nextStoragePath,
+        nextPreviewStatus
+      ]
+    );
+
+    const updated = await readItemRowById(client, id, owner);
+    if (existing.parent_path !== nextParentPath) {
+      await touchUpdatedAt(client, owner, existing.project_id, existing.parent_path);
+    }
+    await touchUpdatedAt(client, owner, existing.project_id, nextParentPath);
+    await client.query("COMMIT");
+
+    if (existing.storage_path !== nextStoragePath) {
+      await fs.rm(resolveStorageAbsolutePath(existing.storage_path), { force: true }).catch(() => {
+        // Best-effort cleanup of the old file path after extension changes.
+      });
+    }
+    if (oldPreviewStoragePath) {
+      await fs.rm(resolveStorageAbsolutePath(oldPreviewStoragePath), { force: true }).catch(() => {
+        // Best-effort cleanup of stale previews.
+      });
+    }
+
+    return updated ? toArtifactItem(updated, false) : undefined;
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;

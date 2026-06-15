@@ -80,6 +80,14 @@ export interface ArtifactFileInput {
   sizeBytes: number;
 }
 
+export interface ArtifactFileReplacementInput {
+  expectedVersion?: number;
+  originalFilename?: string;
+  mimeType?: string;
+  buffer: Buffer;
+  sizeBytes: number;
+}
+
 export interface ArtifactItemUpdate {
   projectId?: string;
   title?: string;

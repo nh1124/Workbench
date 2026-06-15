@@ -19,6 +19,7 @@ import {
   patchArtifactNoteContent,
   readArtifactPreviewPdfData,
   readArtifactFileData,
+  replaceArtifactFileContent,
   updateArtifactNoteSection,
   updateArtifactItem
 } from "./artifactItemsStore.js";
@@ -682,6 +683,51 @@ app.patch("/artifacts/items/:id/section", requireUserAuth, async (req, res) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Section update failed";
     return res.status(400).json({ message });
+  }
+});
+
+app.put("/artifacts/items/:id/file", requireUserAuth, upload.single("file"), async (req, res) => {
+  const owner = req.authUser?.coreUserId;
+  if (!owner) {
+    return res.status(401).json({ message: "Missing auth context" });
+  }
+  if (!req.file) {
+    return res.status(400).json({ message: "File is required" });
+  }
+
+  const expectedVersionRaw = typeof req.body.expectedVersion === "string" ? req.body.expectedVersion.trim() : undefined;
+  let expectedVersion: number | undefined;
+  if (expectedVersionRaw) {
+    const parsedExpectedVersion = Number(expectedVersionRaw);
+    if (!Number.isInteger(parsedExpectedVersion) || parsedExpectedVersion <= 0) {
+      return res.status(400).json({ message: "expectedVersion must be a positive integer" });
+    }
+    expectedVersion = parsedExpectedVersion;
+  }
+
+  try {
+    const updated = await replaceArtifactFileContent(
+      String(req.params.id),
+      {
+        expectedVersion,
+        originalFilename: typeof req.body.filename === "string" ? req.body.filename : undefined,
+        mimeType: req.file.mimetype,
+        buffer: req.file.buffer,
+        sizeBytes: req.file.size
+      },
+      owner
+    );
+    if (!updated) {
+      return res.status(404).json({ message: "Artifact file not found" });
+    }
+    if (updated.kind === "file" && isWordDocumentCandidate(updated.path, updated.mimeType)) {
+      scheduleWordPreviewGeneration(updated.id, owner);
+    }
+    return res.json(updated);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "File replacement failed";
+    const status = message.toLowerCase().includes("version conflict") ? 409 : 400;
+    return res.status(status).json({ message });
   }
 });
 

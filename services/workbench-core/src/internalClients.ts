@@ -273,6 +273,47 @@ export const artifactsClient = {
     }
     return JSON.parse(text) as unknown;
   },
+  replaceFileContent: async (
+    token: string,
+    id: string,
+    payload: {
+      filename?: string;
+      mimeType?: string;
+      contentBase64: string;
+      expectedVersion?: number;
+    }
+  ) => {
+    const fileBuffer = Buffer.from(payload.contentBase64, "base64");
+    const formData = new FormData();
+    if (payload.expectedVersion !== undefined) {
+      formData.append("expectedVersion", String(payload.expectedVersion));
+    }
+    if (payload.filename) {
+      formData.append("filename", payload.filename);
+    }
+    formData.append(
+      "file",
+      new Blob([fileBuffer], { type: payload.mimeType || "application/octet-stream" }),
+      payload.filename || id
+    );
+
+    const response = await fetch(`${artifactsService.baseUrl}/artifacts/items/${encodeURIComponent(id)}/file`, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${token}`
+      },
+      body: formData
+    });
+
+    const text = await response.text();
+    if (!response.ok) {
+      throw new InternalServiceError(artifactsService.id, response.status, text || `HTTP ${response.status}`);
+    }
+    if (!text.trim()) {
+      return undefined as unknown;
+    }
+    return JSON.parse(text) as unknown;
+  },
   downloadFile: async (token: string, id: string, asAttachment = true) => {
     const suffix = asAttachment ? "?download=1" : "";
     const response = await fetch(

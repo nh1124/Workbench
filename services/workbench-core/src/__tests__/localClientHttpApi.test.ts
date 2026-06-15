@@ -424,11 +424,21 @@ describe("local client HTTP APIs", () => {
       assert.equal(taskRejected[0].clientOpId, "task-subtask-op");
       assert.equal(taskRejected[0].code, "SYNC_TASK_RELATION_NOT_SUPPORTED");
 
-      const blobUploadResponse = await requestJson(server.baseUrl, "PUT", "/api/sync/blobs/test-blob", {
+      const unsupportedBlobUploadResponse = await requestJson(server.baseUrl, "PUT", "/api/sync/blobs/test-blob", {
         headers: daemonHeaders,
         body: { contentBase64: "AA==" }
       });
-      assert.equal(blobUploadResponse.status, 501);
+      assert.equal(unsupportedBlobUploadResponse.status, 404);
+
+      const checksumBlobUploadResponse = await requestJson(server.baseUrl, "PUT", "/api/sync/blobs/artifact:artifact-http-sync", {
+        headers: daemonHeaders,
+        body: {
+          contentBase64: "AA==",
+          checksum: "sha256:not-the-actual-digest"
+        }
+      });
+      assert.equal(checksumBlobUploadResponse.status, 400);
+      assert.equal(checksumBlobUploadResponse.body.code, "SYNC_BLOB_CHECKSUM_MISMATCH");
     } finally {
       await server.close();
       await cleanupTestUser(pool, userId);
