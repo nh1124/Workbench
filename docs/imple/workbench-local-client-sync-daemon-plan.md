@@ -1,6 +1,6 @@
 # Workbench Local Client / Sync Daemon Implementation Plan
 
-Last updated: 2026-06-15
+Last updated: 2026-06-16
 
 ## Status Legend
 
@@ -74,9 +74,21 @@ Last updated: 2026-06-15
   - Artifacts folder create.
   - Artifacts note create/update/delete/upsert.
   - Artifacts file create/upload.
+  - Artifacts file replacement/update through `contentBase64`.
   - Artifacts item delete by resource id.
-  - Artifact file content replacement is still not supported.
-- `[partial]` `PUT /api/sync/blobs/:blobId` currently returns `501`.
+- `[implemented]` `POST /api/sync/push` applies representative Projects and Tasks operations.
+  - Projects create/update/delete/upsert.
+  - Project default selection through relation `default`.
+  - Tasks create/update/delete/upsert.
+  - Tasks pin update/upsert.
+  - Tasks attachment create/update/delete through relation `attachment`.
+  - Tasks occurrence complete/move/skipException through relation `occurrence`.
+  - Tasks subtask create/update/delete/upsert through relation `subtask`.
+  - Tasks Today add/remove through relation `today`.
+  - Tasks schedule item create/update/delete/upsert through relation `scheduleItem`.
+- `[implemented]` `PUT /api/sync/blobs/:blobId` supports artifact file and task attachment replacement.
+  - `artifact:<artifactItemId>`
+  - `task-attachment:<taskId>:<attachmentId>`
 
 ### Sync Daemon Service
 
@@ -125,6 +137,8 @@ Last updated: 2026-06-15
 - `[implemented]` Settings account page displays recent local job history and result paths.
 - `[implemented]` Settings account page displays local daemon status and open sync conflicts.
 - `[implemented]` Settings account page can resolve local conflicts with retry, ignore, or close.
+- `[implemented]` Settings account page has a Local Mode toggle that routes supported artifact reads/writes to the daemon.
+- `[implemented]` Desktop Settings can call native daemon commands to choose/open folders, read daemon status, and request start/stop.
 - `[implemented]` Settings can open the Account tab and Sync Daemon section from `/settings?tab=account&section=sync-daemon`.
 
 ### Main App Shell
@@ -155,6 +169,10 @@ npm run build
   - Covers superseding pending deletes when local files reappear.
   - Covers replacing stale pending updates when files are edited again before push.
   - Covers auto-resolving open conflicts when their failed outbox items are superseded.
+- `[implemented]` Sync daemon artifact facade tests were extended.
+  - Covers local folder creation.
+  - Covers local file upload outbox writes.
+  - Covers local Markdown content patch and section updates.
 
 ## Pending / Partial Work
 
@@ -215,8 +233,9 @@ npm run build
 ### Unified Sync Push / Pull
 
 - `[partial]` `snapshot` and `pull` endpoints exist.
-- `[partial]` `POST /api/sync/push` operation application exists for:
+- `[implemented]` `POST /api/sync/push` operation application exists for:
   - Projects create/update/delete/upsert.
+  - Projects default selection.
   - Notes create/update/delete/upsert.
   - Artifacts folder create.
   - Artifacts note create/update/delete/upsert.
@@ -226,9 +245,10 @@ npm run build
   - Tasks create/update/delete/upsert.
   - Tasks pin update/upsert.
   - Tasks attachment create/update/delete through relation `attachment`.
-- `[pending]` Extend `POST /api/sync/push` to:
-  - Projects default selection.
-  - Tasks occurrence/subtask/schedule operations.
+  - Tasks occurrence complete/move/skipException through relation `occurrence`.
+  - Tasks subtask create/update/delete/upsert through relation `subtask`.
+  - Tasks Today add/remove through relation `today`.
+  - Tasks schedule item create/update/delete/upsert through relation `scheduleItem`.
 - `[implemented]` Add optional `baseVersion` conflict checks before applying sync push operations.
 - `[partial]` Return applied/rejected operations with stable-ish error codes for implemented domains.
 - `[pending]` Add server-side tombstone semantics for domains that still hard-delete.
@@ -238,7 +258,7 @@ npm run build
 ### Blob Upload / Replacement
 
 - `[partial]` Blob download exists for artifact and task attachment ids.
-- `[partial]` Implement `PUT /api/sync/blobs/:blobId`.
+- `[implemented]` Implement `PUT /api/sync/blobs/:blobId`.
   - Artifact file blobs are supported via `artifact:<id>`.
   - Task attachment replacement blobs are supported via `task-attachment:<taskId>:<attachmentId>`.
 - `[implemented]` Add artifact file replacement endpoint with expected version.
@@ -249,28 +269,43 @@ npm run build
 
 ### Local UI Through Daemon
 
-- `[partial]` Add daemon HTTP facade compatible with selected `/api/*` routes.
+- `[implemented]` Add daemon HTTP facade compatible with selected artifact `/api/*` routes.
   - Added `GET /api/sync/status`.
   - Added local artifact read facade for `GET /api/sync/snapshot`, `GET /api/artifacts/tree`, `GET /api/artifacts/tree/list`, `GET /api/artifacts/items/:id`, and artifact download.
+  - Added `POST /api/artifacts/folders`.
+  - Added `POST /api/artifacts/upload`.
+  - Added `POST /api/artifacts/notes`.
+  - Added `PATCH /api/artifacts/items/:id`.
+  - Added `PATCH /api/artifacts/items/:id/content-patch`.
+  - Added `PATCH /api/artifacts/items/:id/section`.
+  - Added `DELETE /api/artifacts/items/:id`.
 - `[partial]` Serve local-first reads from daemon SQLite when offline.
   - Artifact tree/item reads are served from `.workbench/manifest.sqlite` plus files in the sync folder.
 - `[partial]` Queue local UI writes into daemon outbox.
   - Added `POST /api/artifacts/notes` for local Markdown note creation.
   - Added `PATCH /api/artifacts/items/:id` for local Markdown note content/path/title updates.
   - Added `DELETE /api/artifacts/items/:id` for local note/file deletion.
-  - File upload, folder creation, note section patch, and multipart replacement through daemon facade remain pending.
-- `[pending]` Make desktop UI point to daemon loopback URL when local mode is enabled.
+  - Added `POST /api/artifacts/upload` for local file upload.
+  - Added `POST /api/artifacts/folders` for sync-root folder creation.
+  - Added content patch and note section patch routes.
+  - Empty folders are local filesystem directories and are not yet synced as standalone cloud folder resources until they contain files.
+- `[implemented]` Make artifact UI use the daemon loopback URL when Local Mode is enabled.
+  - Tree, item read, note create/update/delete, folder create, file upload, and file download route through the daemon.
+  - Existing Core route remains active when Local Mode is disabled.
 - `[implemented]` Add Settings UI display/actions for daemon status and open conflicts.
 - `[implemented]` Add offline/sync/conflict status display in the main app shell.
 
 ### Desktop / OS Integration
 
-- `[pending]` Add Tauri commands for:
+- `[implemented]` Add Tauri commands for:
   - choose sync folder,
   - open sync folder,
   - open downloads folder,
   - start/stop daemon,
   - read daemon status.
+- `[partial]` The UI can invoke the native daemon commands from Settings.
+  - Folder open/status commands are functional in Tauri.
+  - Start/stop currently return explicit sidecar-not-configured errors.
 - `[pending]` Package daemon as Tauri sidecar or managed background process.
 - `[pending]` Add optional auto-start.
 - `[pending]` Store local client token in OS secure storage instead of plain `.workbench/client-identity.json`.
@@ -286,10 +321,12 @@ npm run build
 
 ## Recommended Next Implementation Order
 
-1. Complete remaining daemon artifact write facade routes: folder creation, file upload/replacement, and note section patch.
-2. Make desktop UI point to daemon loopback URL when local mode is enabled.
-3. Add Tauri integration for sync folder selection, open folder, and daemon lifecycle.
-4. Extend `POST /api/sync/push` to task occurrence/subtask/schedule operations and project default selection.
+1. Package `services/sync-daemon` as a Tauri sidecar or managed background process, then replace the current start/stop error skeletons.
+2. Add loopback API authentication for daemon HTTP endpoints and wire the token into the desktop UI.
+3. Add local job retry scheduling, expiry cleanup, idempotency keys, and job event history/audit rows.
+4. Add remote snapshot reconciliation so daemon startup can merge cloud changes made while the PC was offline.
+5. Add tombstone semantics and consistent sync event recording for all remaining Core mutation paths.
+6. Decide whether empty local folders should become first-class cloud folder resources immediately or remain local until they contain synced files.
 
 ## Current Daemon Usage
 

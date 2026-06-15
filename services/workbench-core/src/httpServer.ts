@@ -1221,6 +1221,153 @@ function withoutKeys(record: Record<string, unknown>, keys: string[]): Record<st
   return next;
 }
 
+function requireSyncString(record: Record<string, unknown>, fieldName: string, code: string, message: string): string {
+  const value = asNonEmptyString(record[fieldName]);
+  if (!value) {
+    throw new LocalClientStoreError(400, code, message);
+  }
+  return value;
+}
+
+function optionalSyncString(record: Record<string, unknown>, fieldName: string, code: string, message: string): string | undefined {
+  if (record[fieldName] === undefined) return undefined;
+  const value = asNonEmptyString(record[fieldName]);
+  if (!value) {
+    throw new LocalClientStoreError(400, code, message);
+  }
+  return value;
+}
+
+function optionalRawString(record: Record<string, unknown>, fieldName: string, code: string, message: string): string | undefined {
+  const value = record[fieldName];
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    throw new LocalClientStoreError(400, code, message);
+  }
+  return value;
+}
+
+function optionalNullableRawString(
+  record: Record<string, unknown>,
+  fieldName: string,
+  code: string,
+  message: string
+): string | null | undefined {
+  const value = record[fieldName];
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== "string") {
+    throw new LocalClientStoreError(400, code, message);
+  }
+  return value;
+}
+
+function optionalNonNegativeSyncInteger(
+  record: Record<string, unknown>,
+  fieldName: string,
+  code: string,
+  message: string
+): number | undefined {
+  const value = record[fieldName];
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new LocalClientStoreError(400, code, message);
+  }
+  return value;
+}
+
+function asPositiveInteger(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return value;
+  if (typeof value === "string" && /^[1-9]\d*$/.test(value)) {
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function optionalScheduleItemId(payload: Record<string, unknown>): number | undefined {
+  return asPositiveInteger(payload.scheduleId) ?? asPositiveInteger(payload.id);
+}
+
+function taskRelationTaskId(op: Record<string, unknown>, payload: Record<string, unknown>): string | undefined {
+  return asNonEmptyString(op.resourceId) ?? asNonEmptyString(payload.taskId);
+}
+
+function requireTaskRelationTaskId(
+  op: Record<string, unknown>,
+  payload: Record<string, unknown>,
+  code: string,
+  message: string
+): string {
+  const taskId = taskRelationTaskId(op, payload);
+  if (!taskId) {
+    throw new LocalClientStoreError(400, code, message);
+  }
+  return taskId;
+}
+
+function scheduleCreatePayload(payload: Record<string, unknown>, taskId: string, code: string) {
+  const scheduledDate = requireSyncString(payload, "scheduledDate", code, "Task schedule create requires scheduledDate.");
+  const occurrenceDate = optionalRawString(payload, "occurrenceDate", code, "occurrenceDate must be a string when provided.") ?? scheduledDate;
+  const startTime = optionalRawString(payload, "startTime", code, "startTime must be a string when provided.");
+  const endTime = optionalRawString(payload, "endTime", code, "endTime must be a string when provided.");
+  const timezone = optionalRawString(payload, "timezone", code, "timezone must be a string when provided.");
+  return { taskId, scheduledDate, occurrenceDate, opts: { startTime, endTime, timezone } };
+}
+
+function scheduleItemPatchPayload(payload: Record<string, unknown>): {
+  scheduledDate?: string;
+  occurrenceDate?: string;
+  startTime?: string | null;
+  endTime?: string | null;
+  timezone?: string | null;
+} {
+  const code = "SYNC_TASK_SCHEDULE_ITEM_PAYLOAD_INVALID";
+  const patch: {
+    scheduledDate?: string;
+    occurrenceDate?: string;
+    startTime?: string | null;
+    endTime?: string | null;
+    timezone?: string | null;
+  } = {};
+  const scheduledDate = optionalSyncString(payload, "scheduledDate", code, "scheduledDate must be a non-empty string when provided.");
+  const occurrenceDate = optionalRawString(payload, "occurrenceDate", code, "occurrenceDate must be a string when provided.");
+  const startTime = optionalNullableRawString(payload, "startTime", code, "startTime must be a string, null, or omitted.");
+  const endTime = optionalNullableRawString(payload, "endTime", code, "endTime must be a string, null, or omitted.");
+  const timezone = optionalNullableRawString(payload, "timezone", code, "timezone must be a string, null, or omitted.");
+
+  if (scheduledDate !== undefined) patch.scheduledDate = scheduledDate;
+  if (occurrenceDate !== undefined) patch.occurrenceDate = occurrenceDate;
+  if (startTime !== undefined) patch.startTime = startTime;
+  if (endTime !== undefined) patch.endTime = endTime;
+  if (timezone !== undefined) patch.timezone = timezone;
+  if (Object.keys(patch).length === 0) {
+    throw new LocalClientStoreError(400, code, "Task schedule item update requires at least one patch field.");
+  }
+  return patch;
+}
+
+function subtaskUpdatePayload(payload: Record<string, unknown>): { title?: string; isDone?: boolean; sortOrder?: number } {
+  const code = "SYNC_TASK_SUBTASK_PAYLOAD_INVALID";
+  const updates: { title?: string; isDone?: boolean; sortOrder?: number } = {};
+  const title = optionalSyncString(payload, "title", code, "Subtask title must be a non-empty string when provided.");
+  const isDone = payload.isDone;
+  const sortOrder = optionalNonNegativeSyncInteger(payload, "sortOrder", code, "Subtask sortOrder must be a non-negative integer when provided.");
+
+  if (title !== undefined) updates.title = title;
+  if (isDone !== undefined) {
+    if (typeof isDone !== "boolean") {
+      throw new LocalClientStoreError(400, code, "Subtask isDone must be a boolean when provided.");
+    }
+    updates.isDone = isDone;
+  }
+  if (sortOrder !== undefined) updates.sortOrder = sortOrder;
+  if (Object.keys(updates).length === 0) {
+    throw new LocalClientStoreError(400, code, "Subtask update requires title, isDone, or sortOrder.");
+  }
+  return updates;
+}
+
 type SyncPushApplied = {
   index: number;
   clientOpId?: string;
@@ -1265,6 +1412,161 @@ async function assertSyncBaseVersion(
   }
 }
 
+async function applyTaskOccurrenceSyncPush(
+  authContext: SyncAccessContext,
+  op: Record<string, unknown>,
+  payload: Record<string, unknown>,
+  action: SyncAction
+): Promise<{ result: unknown; nextResourceId: string }> {
+  if (action !== "update" && action !== "upsert") {
+    throw new LocalClientStoreError(400, "SYNC_TASK_OCCURRENCE_ACTION_NOT_SUPPORTED", "Task occurrence sync push requires update or upsert action.");
+  }
+
+  const taskId = requireTaskRelationTaskId(op, payload, "SYNC_RESOURCE_ID_REQUIRED", "Task occurrence sync push requires task resourceId or payload.taskId.");
+  const operation = asNonEmptyString(payload.operation) ?? asNonEmptyString(payload.kind);
+  const normalizedOperation = operation === "skip-exception" ? "skipException" : operation;
+  const inferredOperation = normalizedOperation
+    ?? (asNonEmptyString(payload.sourceDate) ? "move" : asNonEmptyString(payload.status) ? "complete" : undefined);
+
+  if (inferredOperation === "complete") {
+    const targetDate = requireSyncString(payload, "targetDate", "SYNC_TASK_OCCURRENCE_PAYLOAD_INVALID", "Occurrence complete requires targetDate.");
+    const status = requireSyncString(payload, "status", "SYNC_TASK_OCCURRENCE_PAYLOAD_INVALID", "Occurrence complete requires status.");
+    return {
+      result: await tasksClient.completeOccurrence(authContext.accessToken, taskId, targetDate, status),
+      nextResourceId: taskId
+    };
+  }
+
+  if (inferredOperation === "move") {
+    const sourceDate = requireSyncString(payload, "sourceDate", "SYNC_TASK_OCCURRENCE_PAYLOAD_INVALID", "Occurrence move requires sourceDate.");
+    const targetDate = requireSyncString(payload, "targetDate", "SYNC_TASK_OCCURRENCE_PAYLOAD_INVALID", "Occurrence move requires targetDate.");
+    return {
+      result: await tasksClient.moveOccurrence(authContext.accessToken, taskId, sourceDate, targetDate),
+      nextResourceId: taskId
+    };
+  }
+
+  if (inferredOperation === "skipException") {
+    const targetDate = requireSyncString(payload, "targetDate", "SYNC_TASK_OCCURRENCE_PAYLOAD_INVALID", "Occurrence skipException requires targetDate.");
+    return {
+      result: await tasksClient.skipOccurrenceException(authContext.accessToken, taskId, targetDate),
+      nextResourceId: taskId
+    };
+  }
+
+  throw new LocalClientStoreError(400, "SYNC_TASK_OCCURRENCE_PAYLOAD_INVALID", "Task occurrence sync push requires operation complete, move, or skipException.");
+}
+
+async function applyTaskSubtaskSyncPush(
+  authContext: SyncAccessContext,
+  op: Record<string, unknown>,
+  payload: Record<string, unknown>,
+  action: SyncAction
+): Promise<{ result: unknown; nextResourceId: string }> {
+  const taskId = requireTaskRelationTaskId(op, payload, "SYNC_RESOURCE_ID_REQUIRED", "Task subtask sync push requires task resourceId or payload.taskId.");
+  const occurrenceDate = requireSyncString(payload, "occurrenceDate", "SYNC_TASK_SUBTASK_PAYLOAD_INVALID", "Task subtask sync push requires occurrenceDate.");
+  const subtaskId = asNonEmptyString(payload.subtaskId) ?? asNonEmptyString(payload.id);
+
+  if (action === "create" || (action === "upsert" && !subtaskId)) {
+    const title = requireSyncString(payload, "title", "SYNC_TASK_SUBTASK_PAYLOAD_INVALID", "Subtask create requires title.");
+    return {
+      result: await tasksClient.createSubtask(authContext.accessToken, taskId, occurrenceDate, title),
+      nextResourceId: taskId
+    };
+  }
+
+  if (action === "update" || action === "upsert") {
+    if (!subtaskId) {
+      throw new LocalClientStoreError(400, "SYNC_TASK_SUBTASK_ID_REQUIRED", "Subtask update requires subtaskId.");
+    }
+    return {
+      result: await tasksClient.updateSubtask(authContext.accessToken, taskId, occurrenceDate, subtaskId, subtaskUpdatePayload(payload)),
+      nextResourceId: taskId
+    };
+  }
+
+  if (action === "delete") {
+    if (!subtaskId) {
+      throw new LocalClientStoreError(400, "SYNC_TASK_SUBTASK_ID_REQUIRED", "Subtask delete requires subtaskId.");
+    }
+    await tasksClient.deleteSubtask(authContext.accessToken, taskId, occurrenceDate, subtaskId);
+    return {
+      result: { id: subtaskId, taskId, occurrenceDate, deleted: true },
+      nextResourceId: taskId
+    };
+  }
+
+  throw new LocalClientStoreError(400, "SYNC_TASK_SUBTASK_ACTION_NOT_SUPPORTED", "Unsupported task subtask sync push action.");
+}
+
+async function applyTaskTodaySyncPush(
+  authContext: SyncAccessContext,
+  op: Record<string, unknown>,
+  payload: Record<string, unknown>,
+  action: SyncAction
+): Promise<{ result: unknown; nextResourceId: string }> {
+  const taskId = requireTaskRelationTaskId(op, payload, "SYNC_RESOURCE_ID_REQUIRED", "Task today sync push requires task resourceId or payload.taskId.");
+
+  if (action === "create" || action === "upsert") {
+    const schedule = scheduleCreatePayload(payload, taskId, "SYNC_TASK_TODAY_PAYLOAD_INVALID");
+    return {
+      result: await tasksClient.addToday(authContext.accessToken, schedule.taskId, schedule.scheduledDate, schedule.occurrenceDate, schedule.opts),
+      nextResourceId: taskId
+    };
+  }
+
+  if (action === "delete") {
+    const scheduledDate = requireSyncString(payload, "scheduledDate", "SYNC_TASK_TODAY_PAYLOAD_INVALID", "Task today delete requires scheduledDate.");
+    return {
+      result: await tasksClient.removeFromToday(authContext.accessToken, taskId, scheduledDate),
+      nextResourceId: taskId
+    };
+  }
+
+  throw new LocalClientStoreError(400, "SYNC_TASK_TODAY_ACTION_NOT_SUPPORTED", "Task today sync push requires create, upsert, or delete action.");
+}
+
+async function applyTaskScheduleItemSyncPush(
+  authContext: SyncAccessContext,
+  op: Record<string, unknown>,
+  payload: Record<string, unknown>,
+  action: SyncAction
+): Promise<{ result: unknown; nextResourceId: string }> {
+  const taskId = requireTaskRelationTaskId(op, payload, "SYNC_RESOURCE_ID_REQUIRED", "Task scheduleItem sync push requires task resourceId or payload.taskId.");
+  const scheduleId = optionalScheduleItemId(payload);
+
+  if (action === "create" || (action === "upsert" && !scheduleId)) {
+    const schedule = scheduleCreatePayload(payload, taskId, "SYNC_TASK_SCHEDULE_ITEM_PAYLOAD_INVALID");
+    return {
+      result: await tasksClient.addToday(authContext.accessToken, schedule.taskId, schedule.scheduledDate, schedule.occurrenceDate, schedule.opts),
+      nextResourceId: taskId
+    };
+  }
+
+  if (action === "update" || action === "upsert") {
+    if (!scheduleId) {
+      throw new LocalClientStoreError(400, "SYNC_TASK_SCHEDULE_ITEM_ID_REQUIRED", "Task schedule item update requires scheduleId.");
+    }
+    return {
+      result: await tasksClient.updateScheduleItem(authContext.accessToken, scheduleId, scheduleItemPatchPayload(payload)),
+      nextResourceId: taskId
+    };
+  }
+
+  if (action === "delete") {
+    if (!scheduleId) {
+      throw new LocalClientStoreError(400, "SYNC_TASK_SCHEDULE_ITEM_ID_REQUIRED", "Task schedule item delete requires scheduleId.");
+    }
+    await tasksClient.deleteScheduleItem(authContext.accessToken, scheduleId);
+    return {
+      result: { id: scheduleId, taskId, deleted: true },
+      nextResourceId: taskId
+    };
+  }
+
+  throw new LocalClientStoreError(400, "SYNC_TASK_SCHEDULE_ITEM_ACTION_NOT_SUPPORTED", "Unsupported task schedule item sync push action.");
+}
+
 async function applySyncPushOperation(
   authContext: SyncAccessContext,
   op: Record<string, unknown>,
@@ -1284,9 +1586,11 @@ async function applySyncPushOperation(
   }
 
   const relation = asNonEmptyString(op.relation) ?? asNonEmptyString(payload.relation);
-  const versionResourceId = domain === "tasks" && relation === "attachment"
-    ? asNonEmptyString(op.resourceId) ?? asNonEmptyString(payload.taskId)
-    : resourceId;
+  const versionResourceId = domain === "tasks" && relation
+    ? taskRelationTaskId(op, payload) ?? (relation === "pin" ? resourceId : undefined)
+    : domain === "projects" && relation === "default"
+      ? asNonEmptyString(op.resourceId) ?? asNonEmptyString(payload.projectId) ?? asNonEmptyString(payload.id)
+      : resourceId;
   await assertSyncBaseVersion(authContext, domain, versionResourceId, op);
 
   if (domain === "notes") {
@@ -1335,7 +1639,19 @@ async function applySyncPushOperation(
   if (domain === "projects") {
     let result: unknown;
     let nextResourceId = resourceId;
-    if (action === "create") {
+    if (relation === "default") {
+      if (action !== "update" && action !== "upsert") {
+        throw new LocalClientStoreError(400, "SYNC_PROJECT_DEFAULT_ACTION_NOT_SUPPORTED", "Project default sync push requires update or upsert action.");
+      }
+      const projectId = asNonEmptyString(payload.projectId) ?? asNonEmptyString(op.resourceId) ?? asNonEmptyString(payload.id);
+      if (!projectId) {
+        throw new LocalClientStoreError(400, "SYNC_PROJECT_DEFAULT_PAYLOAD_INVALID", "Project default sync push requires projectId.");
+      }
+      result = await projectsClient.setDefault(authContext.accessToken, { projectId });
+      nextResourceId = projectId;
+    } else if (relation) {
+      throw new LocalClientStoreError(400, "SYNC_PROJECT_RELATION_NOT_SUPPORTED", "Only project default relation sync push is supported.");
+    } else if (action === "create") {
       result = await projectsClient.create(authContext.accessToken, payload);
       nextResourceId = objectId(result);
     } else if (action === "update" || action === "upsert") {
@@ -1361,7 +1677,8 @@ async function applySyncPushOperation(
     const event = await recordSyncEvent(authContext.userId, "projects", nextResourceId, action === "upsert" ? "update" : action, {
       source: "sync-push",
       clientOpId,
-      localClientId: authContext.localClient?.id
+      localClientId: authContext.localClient?.id,
+      relation
     });
     return {
       index,
@@ -1378,20 +1695,22 @@ async function applySyncPushOperation(
   if (domain === "tasks") {
     let result: unknown;
     let nextResourceId = resourceId;
+    const eventAction: SyncAction = relation ? "update" : action === "upsert" ? "update" : action;
 
     if (relation === "pin") {
       if (action !== "update" && action !== "upsert") {
         throw new LocalClientStoreError(400, "SYNC_TASK_RELATION_ACTION_NOT_SUPPORTED", "Task pin sync push requires update or upsert action.");
       }
-      if (!resourceId) {
+      const taskId = resourceId ?? asNonEmptyString(payload.taskId);
+      if (!taskId) {
         throw new LocalClientStoreError(400, "SYNC_RESOURCE_ID_REQUIRED", "Task pin update requires resourceId.");
       }
       const pinned = asBoolean(payload.pinned);
       if (pinned === undefined) {
         throw new LocalClientStoreError(400, "SYNC_TASK_PIN_PAYLOAD_INVALID", "Task pin update requires pinned(boolean).");
       }
-      result = await tasksClient.setPin(authContext.accessToken, resourceId, pinned);
-      nextResourceId = resourceId;
+      result = await tasksClient.setPin(authContext.accessToken, taskId, pinned);
+      nextResourceId = taskId;
     } else if (relation === "attachment") {
       const taskId = asNonEmptyString(op.resourceId) ?? asNonEmptyString(payload.taskId);
       if (!taskId) {
@@ -1443,8 +1762,16 @@ async function applySyncPushOperation(
         await tasksClient.deleteAttachment(authContext.accessToken, taskId, attachmentId);
         result = { id: attachmentId, taskId, deleted: true };
       }
+    } else if (relation === "occurrence") {
+      ({ result, nextResourceId } = await applyTaskOccurrenceSyncPush(authContext, op, payload, action));
+    } else if (relation === "subtask") {
+      ({ result, nextResourceId } = await applyTaskSubtaskSyncPush(authContext, op, payload, action));
+    } else if (relation === "today") {
+      ({ result, nextResourceId } = await applyTaskTodaySyncPush(authContext, op, payload, action));
+    } else if (relation === "scheduleItem") {
+      ({ result, nextResourceId } = await applyTaskScheduleItemSyncPush(authContext, op, payload, action));
     } else if (relation) {
-      throw new LocalClientStoreError(400, "SYNC_TASK_RELATION_NOT_SUPPORTED", "Only task pin and attachment relation sync push are supported in this phase.");
+      throw new LocalClientStoreError(400, "SYNC_TASK_RELATION_NOT_SUPPORTED", "Supported task sync push relations are pin, attachment, occurrence, subtask, today, and scheduleItem.");
     } else if (action === "create") {
       result = await tasksClient.create(authContext.accessToken, payload);
       nextResourceId = objectId(result);
@@ -1468,7 +1795,7 @@ async function applySyncPushOperation(
     if (!nextResourceId) {
       throw new LocalClientStoreError(502, "SYNC_RESOURCE_ID_MISSING", "Applied operation did not return a resource id.");
     }
-    const event = await recordSyncEvent(authContext.userId, "tasks", nextResourceId, action === "upsert" ? "update" : action, {
+    const event = await recordSyncEvent(authContext.userId, "tasks", nextResourceId, eventAction, {
       source: "sync-push",
       clientOpId,
       localClientId: authContext.localClient?.id,

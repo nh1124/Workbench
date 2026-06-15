@@ -700,6 +700,30 @@
   color: #fca5a5;
 }
 
+.account-local-mode-control {
+  border: 1px solid rgba(51, 65, 85, 0.68);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.58);
+  padding: 0.66rem 0.72rem;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.account-local-mode-control strong {
+  display: block;
+  color: #e5eefb;
+  font-size: 0.88rem;
+}
+
+.account-local-mode-control small {
+  display: block;
+  margin-top: 0.12rem;
+  color: #94a3b8;
+  font-size: 0.72rem;
+}
+
 .account-local-daemon-url {
   display: flex;
   gap: 0.5rem;
@@ -718,11 +742,18 @@
 }
 
 .account-local-daemon-url button,
+.account-local-native-actions button,
 .account-local-conflict-actions button {
   min-height: 2.1rem;
   border-radius: 10px;
   font-size: 0.75rem;
   padding: 0.42rem 0.66rem;
+}
+
+.account-local-native-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.42rem;
 }
 
 .account-local-daemon-status {
@@ -839,6 +870,7 @@
   .account-local-client-card,
   .account-local-job-row,
   .account-local-conflict-row,
+  .account-local-mode-control,
   .account-local-clients-header {
     flex-direction: column;
   }
@@ -853,6 +885,10 @@
   .account-local-daemon-url {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .account-local-native-actions {
+    width: 100%;
   }
 }
 

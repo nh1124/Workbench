@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { hostname, homedir, platform } from "node:os";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { promises as fs, watch, type FSWatcher } from "node:fs";
 import { config as loadEnv } from "dotenv";
@@ -442,6 +443,24 @@ async function walkSyncFiles(config: DaemonConfig, current = config.syncRoot, fi
   return files;
 }
 
+async function walkSyncDirectories(
+  config: DaemonConfig,
+  current = config.syncRoot,
+  directories: string[] = []
+): Promise<string[]> {
+  const entries = await fs.readdir(current, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.name === ".workbench") continue;
+    if (!entry.isDirectory()) continue;
+    const absolutePath = join(current, entry.name);
+    const relativePath = relativeSyncPath(config, absolutePath);
+    if (!relativePath || isIgnoredSyncRelativePath(relativePath)) continue;
+    directories.push(relativePath);
+    await walkSyncDirectories(config, absolutePath, directories);
+  }
+  return directories;
+}
+
 async function hashFile(absolutePath: string): Promise<string> {
   const buffer = await fs.readFile(absolutePath);
   return createHash("sha256").update(buffer).digest("hex");
@@ -492,12 +511,22 @@ function normalizeArtifactRelativePath(raw: string, fallbackLeaf = "untitled.md"
   return normalizeRelativePath(segments.join("/"));
 }
 
+function normalizeArtifactFolderPath(raw: string): string {
+  const normalized = normalizeRelativePath(raw).replace(/^\/+|\/+$/g, "");
+  const segments = normalized
+    .split("/")
+    .map((segment) => sanitizePathSegment(segment, "folder"))
+    .filter((segment) => segment.length > 0);
+  return normalizeRelativePath(segments.join("/"));
+}
+
 async function uniqueRelativePath(
   config: DaemonConfig,
   requestedRelativePath: string,
-  excludeRelativePath?: string
+  excludeRelativePath?: string,
+  fallbackLeaf = "untitled.md"
 ): Promise<string> {
-  const normalized = normalizeArtifactRelativePath(requestedRelativePath);
+  const normalized = normalizeArtifactRelativePath(requestedRelativePath, fallbackLeaf);
   const parent = directoryPathFor(normalized);
   const leaf = basename(normalized);
   const parsed = leaf.match(/^(.*?)(\.[^.]+)?$/);
@@ -638,6 +667,21 @@ export async function listLocalArtifactItems(
     }
   }
 
+  for (const folderPath of await walkSyncDirectories(state.config)) {
+    const absolutePath = resolveSyncRootRelativePath(state.config, folderPath);
+    if (!absolutePath) continue;
+    let updatedAt = new Date().toISOString();
+    try {
+      updatedAt = (await fs.stat(absolutePath)).mtime.toISOString();
+    } catch {
+      // Best-effort metadata for folders discovered from the sync root.
+    }
+    const current = folderUpdatedAt.get(folderPath);
+    if (!current || current < updatedAt) {
+      folderUpdatedAt.set(folderPath, updatedAt);
+    }
+  }
+
   const folders = [...folderUpdatedAt.entries()].map(([folderPath, updatedAt]) => buildLocalFolderItem(state, folderPath, updatedAt));
   const items = await Promise.all(resources.map((resource) => buildLocalArtifactItem(state, resource, options)));
   return [...folders, ...items].sort((a, b) => a.path.localeCompare(b.path) || a.kind.localeCompare(b.kind));
@@ -675,6 +719,286 @@ async function readLocalNoteContent(state: DaemonState, relativePath: string): P
   } catch {
     return "";
   }
+}
+
+function assertExpectedLocalVersion(value: unknown): void {
+  if (value === undefined) return;
+  if (!Number.isInteger(value) || Number(value) <= 0) {
+    throw new Error("expectedVersion must be a positive integer");
+  }
+  if (value !== 1) {
+    throw new Error(`Version conflict: expected ${value}, current 1`);
+  }
+}
+
+function decodeContentBase64(value: string): Buffer {
+  const compact = value.replace(/\s+/g, "");
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(compact)) {
+    throw new Error("contentBase64 must be valid base64");
+  }
+  return Buffer.from(compact, "base64");
+}
+
+function readRequiredString(record: Record<string, unknown>, key: string): string {
+  const value = record[key];
+  if (typeof value !== "string") {
+    throw new Error(`${key} must be a string`);
+  }
+  return value;
+}
+
+function readRequiredInteger(record: Record<string, unknown>, key: string): number {
+  const value = record[key];
+  if (!Number.isInteger(value)) {
+    throw new Error(`${key} must be an integer`);
+  }
+  return Number(value);
+}
+
+function applyLocalNotePatchOperation(content: string, operation: unknown): string {
+  if (!operation || typeof operation !== "object" || Array.isArray(operation)) {
+    throw new Error("Patch operation must be an object");
+  }
+  const record = operation as Record<string, unknown>;
+  const type = record.type;
+  if (type === "insert") {
+    const index = readRequiredInteger(record, "index");
+    if (index < 0 || index > content.length) {
+      throw new Error("Insert index is out of range");
+    }
+    return `${content.slice(0, index)}${readRequiredString(record, "text")}${content.slice(index)}`;
+  }
+
+  if (type !== "delete" && type !== "replace") {
+    throw new Error("Patch operation type must be insert, delete, or replace");
+  }
+
+  const start = readRequiredInteger(record, "start");
+  const end = readRequiredInteger(record, "end");
+  if (start < 0 || end < start || end > content.length) {
+    throw new Error("Patch range is out of range");
+  }
+
+  if (type === "delete") {
+    return `${content.slice(0, start)}${content.slice(end)}`;
+  }
+  return `${content.slice(0, start)}${readRequiredString(record, "text")}${content.slice(end)}`;
+}
+
+function applyLocalNotePatchOperations(content: string, operations: unknown): string {
+  if (!Array.isArray(operations) || operations.length === 0) {
+    throw new Error("At least one patch operation is required");
+  }
+  if (operations.length > 100) {
+    throw new Error("Too many patch operations");
+  }
+  return operations.reduce((nextContent, operation) => applyLocalNotePatchOperation(nextContent, operation), content);
+}
+
+function ensureTrailingNewline(value: string): string {
+  return value.endsWith("\n") ? value : `${value}\n`;
+}
+
+function findMarkdownSection(
+  content: string,
+  heading: string,
+  level?: number
+): { bodyStart: number; sectionEnd: number; level: number } | undefined {
+  const normalizedHeading = heading.trim().replace(/\s+/g, " ").toLowerCase();
+  if (!normalizedHeading) {
+    throw new Error("heading is required");
+  }
+
+  const headingPattern = /^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$/gm;
+  let match: RegExpExecArray | null;
+  while ((match = headingPattern.exec(content)) !== null) {
+    const headingLevel = match[1].length;
+    if (level !== undefined && headingLevel !== level) {
+      continue;
+    }
+
+    const text = match[2].trim().replace(/\s+/g, " ").toLowerCase();
+    if (text !== normalizedHeading) {
+      continue;
+    }
+
+    const lineEnd = content.indexOf("\n", match.index);
+    const bodyStart = lineEnd === -1 ? content.length : lineEnd + 1;
+    const restPattern = /^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$/gm;
+    restPattern.lastIndex = bodyStart;
+
+    let sectionEnd = content.length;
+    let nextMatch: RegExpExecArray | null;
+    while ((nextMatch = restPattern.exec(content)) !== null) {
+      if (nextMatch[1].length <= headingLevel) {
+        sectionEnd = nextMatch.index;
+        break;
+      }
+    }
+
+    return { bodyStart, sectionEnd, level: headingLevel };
+  }
+
+  return undefined;
+}
+
+function applyLocalNoteSectionUpdate(content: string, input: Record<string, unknown>): string {
+  const heading = readRequiredString(input, "heading");
+  const rawLevel = input.level;
+  const level = rawLevel === undefined ? undefined : readRequiredInteger(input, "level");
+  if (level !== undefined && (level < 1 || level > 6)) {
+    throw new Error("level must be between 1 and 6");
+  }
+  const rawMode = input.mode;
+  const mode = rawMode === undefined ? "replaceBody" : rawMode;
+  if (mode !== "replaceBody" && mode !== "appendBody" && mode !== "prependBody") {
+    throw new Error("mode must be replaceBody, appendBody, or prependBody");
+  }
+  const nextBody = ensureTrailingNewline(readRequiredString(input, "contentMarkdown"));
+  const section = findMarkdownSection(content, heading, level);
+
+  if (!section) {
+    if (input.createIfMissing !== true) {
+      throw new Error("Heading not found");
+    }
+    const nextLevel = level ?? 2;
+    const separator = content.trim().length === 0 ? "" : "\n\n";
+    return `${content}${separator}${"#".repeat(nextLevel)} ${heading.trim()}\n${nextBody}`;
+  }
+
+  const currentBody = content.slice(section.bodyStart, section.sectionEnd);
+  let replacementBody = nextBody;
+  if (mode === "appendBody") {
+    const separator = currentBody.endsWith("\n") || currentBody.length === 0 ? "" : "\n";
+    replacementBody = `${currentBody}${separator}${nextBody}`;
+  } else if (mode === "prependBody") {
+    const separator = nextBody.endsWith("\n") || currentBody.length === 0 ? "" : "\n";
+    replacementBody = `${nextBody}${separator}${currentBody}`;
+  }
+
+  return `${content.slice(0, section.bodyStart)}${replacementBody}${content.slice(section.sectionEnd)}`;
+}
+
+export async function createLocalArtifactFolder(
+  state: DaemonState,
+  input: Record<string, unknown>
+): Promise<LocalArtifactItem> {
+  const rawPath = typeof input.path === "string" && input.path.trim()
+    ? input.path.trim()
+    : typeof input.title === "string" && input.title.trim()
+      ? input.title.trim()
+      : "";
+  const requestedPath = normalizeArtifactFolderPath(rawPath);
+  if (!requestedPath || !resolveSyncRootRelativePath(state.config, requestedPath)) {
+    throw new Error("Invalid artifact folder path");
+  }
+
+  const relativePath = await uniqueRelativePath(state.config, requestedPath, undefined, "folder");
+  const absolutePath = resolveSyncRootRelativePath(state.config, relativePath);
+  if (!absolutePath) {
+    throw new Error("Invalid artifact folder path");
+  }
+
+  await fs.mkdir(absolutePath, { recursive: true });
+  const stat = await fs.stat(absolutePath);
+  const updatedAt = stat.mtime.toISOString();
+  setMeta(state.manifestStore, "lastScanAt", new Date().toISOString());
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
+  await refreshManifestStats(state);
+  return buildLocalFolderItem(state, relativePath, updatedAt);
+}
+
+export async function createLocalArtifactFile(
+  state: DaemonState,
+  input: Record<string, unknown>
+): Promise<LocalArtifactItem> {
+  const rawFilename = typeof input.originalFilename === "string" && input.originalFilename.trim()
+    ? input.originalFilename.trim()
+    : typeof input.filename === "string" && input.filename.trim()
+      ? input.filename.trim()
+      : "file";
+  const filename = sanitizePathSegment(rawFilename, "file");
+  const directoryPath = typeof input.directoryPath === "string" && input.directoryPath.trim()
+    ? normalizeArtifactFolderPath(input.directoryPath)
+    : undefined;
+  const requestedPath = directoryPath ? `${directoryPath}/${filename}` : filename;
+  const relativePath = await uniqueRelativePath(state.config, requestedPath, undefined, filename);
+  const absolutePath = resolveSyncRootRelativePath(state.config, relativePath);
+  if (!absolutePath) {
+    throw new Error("Invalid artifact file path");
+  }
+  if (typeof input.contentBase64 !== "string") {
+    throw new Error("contentBase64 is required");
+  }
+
+  const buffer = decodeContentBase64(input.contentBase64);
+  if (buffer.byteLength > state.config.maxSyncFileBytes) {
+    throw new Error(`File exceeds max sync size of ${state.config.maxSyncFileBytes} bytes`);
+  }
+
+  const now = new Date().toISOString();
+  supersedeOpenOutboxForPath(
+    state,
+    relativePath,
+    () => true,
+    "Local file was changed through daemon upload facade; stale operation was superseded.",
+    now
+  );
+
+  await fs.mkdir(dirname(absolutePath), { recursive: true });
+  await fs.writeFile(absolutePath, buffer);
+  const stat = await fs.stat(absolutePath);
+  const checksum = createHash("sha256").update(buffer).digest("hex");
+  const mimeType = typeof input.mimeType === "string" && input.mimeType.trim()
+    ? input.mimeType.trim()
+    : mimeTypeForPath(relativePath);
+
+  enqueueManifestOutbox(state.manifestStore, {
+    relativePath,
+    domain: "artifacts",
+    action: "create",
+    payload: {
+      kind: "file",
+      filename: basename(relativePath),
+      directoryPath: directoryPathFor(relativePath),
+      mimeType,
+      contentBase64: buffer.toString("base64"),
+      maxSyncFileBytes: state.config.maxSyncFileBytes
+    }
+  });
+  upsertManifestResource(state.manifestStore, {
+    relativePath,
+    domain: "artifacts",
+    kind: "file",
+    checksum,
+    sizeBytes: stat.size,
+    dirty: true,
+    lastSeenAt: now,
+    localUpdatedAt: stat.mtime.toISOString()
+  });
+  setMeta(state.manifestStore, "lastScanAt", now);
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
+  await refreshManifestStats(state);
+
+  const resource = getResource(state.manifestStore, relativePath);
+  return resource
+    ? buildLocalArtifactItem(state, resource)
+    : {
+        id: localItemId("file", relativePath),
+        projectId: localProjectId(state),
+        projectName: localProjectName(state),
+        kind: "file",
+        title: titleFor(relativePath),
+        path: relativePath,
+        parentPath: directoryPathFor(relativePath) ?? "",
+        scope: "private",
+        tags: [],
+        mimeType,
+        sizeBytes: stat.size,
+        version: 1,
+        createdAt: now,
+        updatedAt: now
+      };
 }
 
 async function writeLocalNoteAndQueue(
@@ -811,6 +1135,50 @@ export async function updateLocalArtifactItem(
   return writeLocalNoteAndQueue(state, {
     relativePath: nextRelativePath,
     previousRelativePath: resource.relativePath,
+    contentMarkdown,
+    resourceId: resource.resourceId,
+    action: resource.resourceId ? "update" : "create"
+  });
+}
+
+export async function patchLocalArtifactNoteContent(
+  state: DaemonState,
+  id: string,
+  input: Record<string, unknown>
+): Promise<LocalArtifactItem | undefined> {
+  const resource = getLocalArtifactResourceById(state, id);
+  if (!resource) return undefined;
+  if (resource.kind !== "note") {
+    throw new Error("Only local note items support markdown content patches");
+  }
+
+  assertExpectedLocalVersion(input.expectedVersion);
+  const currentContent = await readLocalNoteContent(state, resource.relativePath);
+  const contentMarkdown = applyLocalNotePatchOperations(currentContent, input.operations);
+  return writeLocalNoteAndQueue(state, {
+    relativePath: resource.relativePath,
+    contentMarkdown,
+    resourceId: resource.resourceId,
+    action: resource.resourceId ? "update" : "create"
+  });
+}
+
+export async function updateLocalArtifactNoteSection(
+  state: DaemonState,
+  id: string,
+  input: Record<string, unknown>
+): Promise<LocalArtifactItem | undefined> {
+  const resource = getLocalArtifactResourceById(state, id);
+  if (!resource) return undefined;
+  if (resource.kind !== "note") {
+    throw new Error("Only local note items support markdown section updates");
+  }
+
+  assertExpectedLocalVersion(input.expectedVersion);
+  const currentContent = await readLocalNoteContent(state, resource.relativePath);
+  const contentMarkdown = applyLocalNoteSectionUpdate(currentContent, input);
+  return writeLocalNoteAndQueue(state, {
+    relativePath: resource.relativePath,
     contentMarkdown,
     resourceId: resource.resourceId,
     action: resource.resourceId ? "update" : "create"
@@ -1310,15 +1678,74 @@ function startSyncWatcher(state: DaemonState): void {
   }
 }
 
-async function readRequestJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+async function readRequestBuffer(req: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
-  const text = Buffer.concat(chunks).toString("utf8");
+  return Buffer.concat(chunks);
+}
+
+async function readRequestJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+  const text = (await readRequestBuffer(req)).toString("utf8");
   if (!text.trim()) return {};
   const parsed = JSON.parse(text) as unknown;
   return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+}
+
+async function readRequestFormData(req: IncomingMessage): Promise<FormData> {
+  const headers = new Headers();
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (Array.isArray(value)) {
+      headers.set(key, value.join(", "));
+    } else if (value !== undefined) {
+      headers.set(key, value);
+    }
+  }
+  const request = new Request("http://127.0.0.1", {
+    method: req.method ?? "POST",
+    headers,
+    body: Readable.toWeb(req) as unknown as BodyInit,
+    duplex: "half"
+  } as RequestInit & { duplex: "half" });
+  return request.formData();
+}
+
+function getFormDataString(formData: FormData, key: string): string | undefined {
+  const value = formData.get(key);
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+async function createLocalArtifactUploadFromRequest(
+  state: DaemonState,
+  req: IncomingMessage
+): Promise<LocalArtifactItem> {
+  const contentType = req.headers["content-type"]?.toString().toLowerCase() ?? "";
+  if (contentType.startsWith("multipart/form-data")) {
+    const formData = await readRequestFormData(req);
+    const fileValue = formData.get("file");
+    if (!fileValue || typeof fileValue === "string") {
+      throw new Error("File is required");
+    }
+    const file = fileValue as unknown as {
+      arrayBuffer?: () => Promise<ArrayBuffer>;
+      name?: string;
+      type?: string;
+    };
+    if (typeof file.arrayBuffer !== "function") {
+      throw new Error("File is required");
+    }
+    const buffer = Buffer.from(await file.arrayBuffer());
+    return createLocalArtifactFile(state, {
+      directoryPath: getFormDataString(formData, "directoryPath"),
+      originalFilename: file.name || "file",
+      mimeType: file.type || getFormDataString(formData, "mimeType"),
+      contentBase64: buffer.toString("base64")
+    });
+  }
+
+  const body = await readRequestJson(req);
+  return createLocalArtifactFile(state, body);
 }
 
 function parseConflictStatus(value: string | null): ConflictStatus | "all" | undefined {
@@ -1449,6 +1876,40 @@ function startStatusServer(state: DaemonState): void {
       return;
     }
 
+    const artifactContentPatchMatch = url.pathname.match(/^\/api\/artifacts\/items\/([^/]+)\/content-patch$/);
+    if (artifactContentPatchMatch && req.method === "PATCH") {
+      try {
+        const body = await readRequestJson(req);
+        const item = await patchLocalArtifactNoteContent(state, decodeURIComponent(artifactContentPatchMatch[1]), body);
+        if (!item) {
+          writeJson(res, { message: "Local artifact note not found" }, 404);
+          return;
+        }
+        scheduleTick(state, 0);
+        writeJson(res, item);
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+      }
+      return;
+    }
+
+    const artifactSectionMatch = url.pathname.match(/^\/api\/artifacts\/items\/([^/]+)\/section$/);
+    if (artifactSectionMatch && req.method === "PATCH") {
+      try {
+        const body = await readRequestJson(req);
+        const item = await updateLocalArtifactNoteSection(state, decodeURIComponent(artifactSectionMatch[1]), body);
+        if (!item) {
+          writeJson(res, { message: "Local artifact note not found" }, 404);
+          return;
+        }
+        scheduleTick(state, 0);
+        writeJson(res, item);
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+      }
+      return;
+    }
+
     const artifactItemMatch = url.pathname.match(/^\/api\/artifacts\/items\/([^/]+)$/);
     if (artifactItemMatch && req.method === "GET") {
       const item = await getLocalArtifactItemById(state, decodeURIComponent(artifactItemMatch[1]), { includeContent: true });
@@ -1457,6 +1918,29 @@ function startStatusServer(state: DaemonState): void {
         return;
       }
       writeJson(res, item);
+      return;
+    }
+
+    if (url.pathname === "/api/artifacts/folders" && req.method === "POST") {
+      try {
+        const body = await readRequestJson(req);
+        const item = await createLocalArtifactFolder(state, body);
+        scheduleTick(state, 0);
+        writeJson(res, item, 201);
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/artifacts/upload" && req.method === "POST") {
+      try {
+        const item = await createLocalArtifactUploadFromRequest(state, req);
+        scheduleTick(state, 0);
+        writeJson(res, item, 201);
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+      }
       return;
     }
 

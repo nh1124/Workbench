@@ -1,6 +1,8 @@
 const CORE_URL_STORAGE_KEY = "workbench-core-url";
 const LOCAL_DAEMON_URL_STORAGE_KEY = "workbench-local-daemon-url";
+const LOCAL_MODE_ENABLED_STORAGE_KEY = "workbench-local-mode-enabled";
 export const WORKBENCH_LOCAL_DAEMON_URL_CHANGED_EVENT = "workbench-local-daemon-url-changed";
+export const WORKBENCH_LOCAL_MODE_CHANGED_EVENT = "workbench-local-mode-changed";
 
 function readViteEnv(name: "VITE_WORKBENCH_CORE_URL" | "VITE_WORKBENCH_LOCAL_DAEMON_URL"): string {
   const value = import.meta.env[name];
@@ -60,6 +62,7 @@ const envWorkbenchLocalDaemonUrl = (() => {
 
 let workbenchCoreUrlCache: string | undefined;
 let workbenchLocalDaemonUrlCache: string | undefined;
+let workbenchLocalModeEnabledCache: boolean | undefined;
 
 function isServedByWorkbenchCore(): boolean {
   if (typeof window === "undefined") return false;
@@ -125,6 +128,16 @@ function persistWorkbenchLocalDaemonUrl(value: string): void {
   window.localStorage.setItem(LOCAL_DAEMON_URL_STORAGE_KEY, value);
 }
 
+function readStoredWorkbenchLocalModeEnabled(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem(LOCAL_MODE_ENABLED_STORAGE_KEY) === "true";
+}
+
+function persistWorkbenchLocalModeEnabled(enabled: boolean): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(LOCAL_MODE_ENABLED_STORAGE_KEY, enabled ? "true" : "false");
+}
+
 export function getWorkbenchCoreUrl(): string {
   if (workbenchCoreUrlCache !== undefined) return workbenchCoreUrlCache;
   workbenchCoreUrlCache = isServedByWorkbenchCore()
@@ -137,6 +150,12 @@ export function getWorkbenchLocalDaemonUrl(): string {
   if (workbenchLocalDaemonUrlCache !== undefined) return workbenchLocalDaemonUrlCache;
   workbenchLocalDaemonUrlCache = readStoredWorkbenchLocalDaemonUrl() ?? envWorkbenchLocalDaemonUrl;
   return workbenchLocalDaemonUrlCache;
+}
+
+export function getWorkbenchLocalModeEnabled(): boolean {
+  if (workbenchLocalModeEnabledCache !== undefined) return workbenchLocalModeEnabledCache;
+  workbenchLocalModeEnabledCache = readStoredWorkbenchLocalModeEnabled();
+  return workbenchLocalModeEnabledCache;
 }
 
 export function setWorkbenchCoreUrl(raw: string): string {
@@ -154,6 +173,15 @@ export function setWorkbenchLocalDaemonUrl(raw: string): string {
     window.dispatchEvent(new Event(WORKBENCH_LOCAL_DAEMON_URL_CHANGED_EVENT));
   }
   return normalized;
+}
+
+export function setWorkbenchLocalModeEnabled(enabled: boolean): boolean {
+  workbenchLocalModeEnabledCache = enabled;
+  persistWorkbenchLocalModeEnabled(enabled);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(WORKBENCH_LOCAL_MODE_CHANGED_EVENT));
+  }
+  return enabled;
 }
 
 export function getWorkbenchCoreUrlInitialValue(): string {

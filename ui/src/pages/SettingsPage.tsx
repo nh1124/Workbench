@@ -4,11 +4,15 @@ import {
   coreApi,
   clearWorkbenchSession,
   fetchAllServiceManifests,
+  isTauriNativeRuntime,
   localDaemonApi,
+  nativeDaemonApi,
   readWorkbenchSession
 } from "../lib/api";
 import {
+  getWorkbenchLocalModeEnabled,
   getWorkbenchLocalDaemonUrlInitialValue,
+  setWorkbenchLocalModeEnabled,
   setWorkbenchLocalDaemonUrl
 } from "../config/services";
 import {
@@ -142,6 +146,7 @@ function toStateMapFromDb(configs: StoredIntegrationConfig[]): Record<string, In
 export function SettingsPage() {
   const location = useLocation();
   const localDaemonSectionRef = useRef<HTMLElement>(null);
+  const nativeRuntimeAvailable = isTauriNativeRuntime();
   const [activeTab, setActiveTab] = useState<SettingsTab>(() => parseSettingsTab(location.search) ?? "services");
   const [settings, setSettings] = useState<UiSettings>(() => loadUiSettings());
   const [manifests, setManifests] = useState<IntegrationManifest[]>([]);
@@ -165,6 +170,7 @@ export function SettingsPage() {
   const [localJobs, setLocalJobs] = useState<LocalJobRecord[]>([]);
   const [localClientsMessage, setLocalClientsMessage] = useState("");
   const [localClientsLoading, setLocalClientsLoading] = useState(false);
+  const [localModeEnabled, setLocalModeEnabled] = useState(getWorkbenchLocalModeEnabled());
   const [localDaemonUrlInput, setLocalDaemonUrlInput] = useState(getWorkbenchLocalDaemonUrlInitialValue());
   const [localDaemonStatus, setLocalDaemonStatus] = useState<LocalDaemonStatus | undefined>(undefined);
   const [localDaemonConflicts, setLocalDaemonConflicts] = useState<LocalDaemonConflictRecord[]>([]);
@@ -361,10 +367,104 @@ export function SettingsPage() {
     try {
       const normalized = setWorkbenchLocalDaemonUrl(localDaemonUrlInput);
       setLocalDaemonUrlInput(normalized);
-      setLocalDaemonMessage("Local daemon URL saved.");
+      setLocalDaemonMessage(localModeEnabled ? "Local daemon URL saved. Local mode is active." : "Local daemon URL saved.");
       void refreshLocalDaemon(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Invalid local daemon URL";
+      setLocalDaemonMessage(message);
+    }
+  };
+
+  const toggleLocalMode = (enabled: boolean) => {
+    try {
+      if (enabled) {
+        const normalized = setWorkbenchLocalDaemonUrl(localDaemonUrlInput);
+        setLocalDaemonUrlInput(normalized);
+      }
+      const persisted = setWorkbenchLocalModeEnabled(enabled);
+      setLocalModeEnabled(persisted);
+      setLocalDaemonMessage(
+        persisted
+          ? "Local mode enabled for supported artifact routes."
+          : "Local mode disabled. Core API is active."
+      );
+      if (persisted) {
+        void refreshLocalDaemon(false);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invalid local daemon URL";
+      setLocalDaemonMessage(message);
+    }
+  };
+
+  const chooseNativeSyncFolder = async () => {
+    setLocalDaemonMessage("");
+    try {
+      const path = await nativeDaemonApi.chooseSyncFolder();
+      setLocalDaemonMessage(path ? `Selected sync folder: ${path}` : "Sync folder selection cancelled.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to choose sync folder";
+      setLocalDaemonMessage(message);
+    }
+  };
+
+  const openNativeSyncFolder = async () => {
+    setLocalDaemonMessage("");
+    try {
+      await nativeDaemonApi.openSyncFolder();
+      setLocalDaemonMessage("Sync folder opened.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to open sync folder";
+      setLocalDaemonMessage(message);
+    }
+  };
+
+  const openNativeDownloadsFolder = async () => {
+    setLocalDaemonMessage("");
+    try {
+      await nativeDaemonApi.openDownloadsFolder();
+      setLocalDaemonMessage("Downloads folder opened.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to open downloads folder";
+      setLocalDaemonMessage(message);
+    }
+  };
+
+  const readNativeDaemonStatus = async () => {
+    setLocalDaemonLoading(true);
+    setLocalDaemonMessage("");
+    try {
+      const status = await nativeDaemonApi.readStatus();
+      setLocalDaemonStatus(status);
+      setLocalDaemonMessage("Native daemon status loaded.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to read native daemon status";
+      setLocalDaemonMessage(message);
+    } finally {
+      setLocalDaemonLoading(false);
+    }
+  };
+
+  const startNativeDaemon = async () => {
+    setLocalDaemonMessage("");
+    try {
+      await nativeDaemonApi.start();
+      setLocalDaemonMessage("Daemon start requested.");
+      void refreshLocalDaemon(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to start daemon";
+      setLocalDaemonMessage(message);
+    }
+  };
+
+  const stopNativeDaemon = async () => {
+    setLocalDaemonMessage("");
+    try {
+      await nativeDaemonApi.stop();
+      setLocalDaemonMessage("Daemon stop requested.");
+      void refreshLocalDaemon(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to stop daemon";
       setLocalDaemonMessage(message);
     }
   };
@@ -1075,6 +1175,22 @@ export function SettingsPage() {
                 </button>
               </div>
 
+              <div className="account-local-mode-control">
+                <div>
+                  <strong>Local Mode</strong>
+                  <small>{localModeEnabled ? "Supported artifacts use daemon" : "Core API active"}</small>
+                </div>
+                <label className="integration-switch">
+                  <input
+                    type="checkbox"
+                    checked={localModeEnabled}
+                    onChange={(event) => toggleLocalMode(event.target.checked)}
+                  />
+                  <span className="integration-switch-slider" aria-hidden="true" />
+                  <span className="sr-only">{localModeEnabled ? "Disable local mode" : "Enable local mode"}</span>
+                </label>
+              </div>
+
               <div className="account-local-daemon-url">
                 <input
                   value={localDaemonUrlInput}
@@ -1082,6 +1198,31 @@ export function SettingsPage() {
                   placeholder="http://127.0.0.1:35780"
                 />
                 <button type="button" onClick={saveLocalDaemonUrl}>Save URL</button>
+              </div>
+
+              <div className="account-local-native-actions">
+                <button type="button" onClick={() => void chooseNativeSyncFolder()} disabled={!nativeRuntimeAvailable}>
+                  Choose Folder
+                </button>
+                <button type="button" onClick={() => void openNativeSyncFolder()} disabled={!nativeRuntimeAvailable}>
+                  Open Sync
+                </button>
+                <button type="button" onClick={() => void openNativeDownloadsFolder()} disabled={!nativeRuntimeAvailable}>
+                  Open Downloads
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void readNativeDaemonStatus()}
+                  disabled={!nativeRuntimeAvailable || localDaemonLoading}
+                >
+                  Native Status
+                </button>
+                <button type="button" onClick={() => void startNativeDaemon()} disabled={!nativeRuntimeAvailable}>
+                  Start
+                </button>
+                <button type="button" onClick={() => void stopNativeDaemon()} disabled={!nativeRuntimeAvailable}>
+                  Stop
+                </button>
               </div>
 
               {localDaemonStatus ? (

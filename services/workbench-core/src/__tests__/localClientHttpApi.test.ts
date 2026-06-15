@@ -402,17 +402,74 @@ describe("local client HTTP APIs", () => {
       assert.equal(rejected[0].clientOpId, "project-conflict-op");
       assert.equal(rejected[0].code, "SYNC_VERSION_CONFLICT");
 
-      const unsupportedTaskPushResponse = await requestJson(server.baseUrl, "POST", "/api/sync/push", {
+      const relationValidationResponse = await requestJson(server.baseUrl, "POST", "/api/sync/push", {
         headers: daemonHeaders,
         body: {
           ops: [
             {
-              clientOpId: "task-subtask-op",
+              clientOpId: "project-default-invalid",
+              domain: "projects",
+              action: "update",
+              relation: "default",
+              payload: {}
+            },
+            {
+              clientOpId: "task-occurrence-invalid",
+              domain: "tasks",
+              action: "update",
+              resourceId: "task-http-sync",
+              relation: "occurrence",
+              payload: { targetDate: "2026-06-15" }
+            },
+            {
+              clientOpId: "task-subtask-invalid",
               domain: "tasks",
               action: "update",
               resourceId: "task-http-sync",
               relation: "subtask",
               payload: { occurrenceDate: "2026-06-15" }
+            },
+            {
+              clientOpId: "task-today-invalid",
+              domain: "tasks",
+              action: "create",
+              resourceId: "task-http-sync",
+              relation: "today",
+              payload: {}
+            },
+            {
+              clientOpId: "task-schedule-item-invalid",
+              domain: "tasks",
+              action: "update",
+              resourceId: "task-http-sync",
+              relation: "scheduleItem",
+              payload: { scheduleId: 1 }
+            }
+          ]
+        }
+      });
+      assert.equal(relationValidationResponse.status, 409);
+      assert.deepEqual(relationValidationResponse.body.applied, []);
+      const relationRejected = relationValidationResponse.body.rejected as Array<Record<string, unknown>>;
+      assert.equal(relationRejected.length, 5);
+      const rejectionCodes = new Map(relationRejected.map((entry) => [entry.clientOpId, entry.code]));
+      assert.equal(rejectionCodes.get("project-default-invalid"), "SYNC_PROJECT_DEFAULT_PAYLOAD_INVALID");
+      assert.equal(rejectionCodes.get("task-occurrence-invalid"), "SYNC_TASK_OCCURRENCE_PAYLOAD_INVALID");
+      assert.equal(rejectionCodes.get("task-subtask-invalid"), "SYNC_TASK_SUBTASK_ID_REQUIRED");
+      assert.equal(rejectionCodes.get("task-today-invalid"), "SYNC_TASK_TODAY_PAYLOAD_INVALID");
+      assert.equal(rejectionCodes.get("task-schedule-item-invalid"), "SYNC_TASK_SCHEDULE_ITEM_PAYLOAD_INVALID");
+
+      const unsupportedTaskPushResponse = await requestJson(server.baseUrl, "POST", "/api/sync/push", {
+        headers: daemonHeaders,
+        body: {
+          ops: [
+            {
+              clientOpId: "task-unsupported-relation-op",
+              domain: "tasks",
+              action: "update",
+              resourceId: "task-http-sync",
+              relation: "reminder",
+              payload: {}
             }
           ]
         }
@@ -421,7 +478,7 @@ describe("local client HTTP APIs", () => {
       assert.deepEqual(unsupportedTaskPushResponse.body.applied, []);
       const taskRejected = unsupportedTaskPushResponse.body.rejected as Array<Record<string, unknown>>;
       assert.equal(taskRejected.length, 1);
-      assert.equal(taskRejected[0].clientOpId, "task-subtask-op");
+      assert.equal(taskRejected[0].clientOpId, "task-unsupported-relation-op");
       assert.equal(taskRejected[0].code, "SYNC_TASK_RELATION_NOT_SUPPORTED");
 
       const attachmentPushResponse = await requestJson(server.baseUrl, "POST", "/api/sync/push", {

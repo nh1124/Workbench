@@ -104,6 +104,12 @@ pub fn run() {
       commands::secure_session_clear,
       commands::open_quick_note_window,
       commands::close_quick_note_window,
+      commands::choose_sync_folder,
+      commands::open_sync_folder,
+      commands::open_downloads_folder,
+      commands::read_daemon_status,
+      commands::start_daemon,
+      commands::stop_daemon,
       commands::save_file_with_dialog,
       commands::open_file_in_os_app,
     ])

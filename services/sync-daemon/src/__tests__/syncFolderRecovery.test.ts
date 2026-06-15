@@ -14,11 +14,15 @@ import {
   type ManifestStore
 } from "../manifestStore.js";
 import {
+  createLocalArtifactFile,
+  createLocalArtifactFolder,
   createLocalArtifactNote,
   deleteLocalArtifactItem,
   getLocalArtifactItemById,
   listLocalArtifactItems,
+  patchLocalArtifactNoteContent,
   scanSyncFolder,
+  updateLocalArtifactNoteSection,
   updateLocalArtifactItem,
   type DaemonConfig,
   type DaemonState
@@ -174,6 +178,108 @@ describe("sync folder recovery", () => {
         "create:superseded",
         "create:superseded"
       ]);
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("creates local artifact folders as sync-root directories", async () => {
+    const { store, state } = await createState();
+    try {
+      const created = await createLocalArtifactFolder(state, {
+        path: "docs/Empty Folder",
+        title: "Empty Folder"
+      });
+
+      assert.equal(created.kind, "folder");
+      assert.equal(created.path, "docs/Empty Folder");
+      assert.equal(created.parentPath, "docs");
+
+      const items = await listLocalArtifactItems(state);
+      assert.ok(items.some((item) => item.kind === "folder" && item.path === "docs"));
+      assert.ok(items.some((item) => item.kind === "folder" && item.path === "docs/Empty Folder"));
+
+      const manifest = readManifestFromStore(store);
+      assert.equal(manifest.resources?.length, 0);
+      assert.equal(manifest.outbox?.length, 0);
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("queues local file uploads into the outbox", async () => {
+    const { root, store, state } = await createState();
+    try {
+      const uploaded = await createLocalArtifactFile(state, {
+        directoryPath: "uploads",
+        filename: "asset.txt",
+        mimeType: "text/plain",
+        contentBase64: Buffer.from("uploaded", "utf8").toString("base64")
+      });
+
+      assert.equal(uploaded.kind, "file");
+      assert.equal(uploaded.path, "uploads/asset.txt");
+      assert.equal(await readFile(join(root, "uploads", "asset.txt"), "utf8"), "uploaded");
+
+      const manifest = readManifestFromStore(store);
+      assert.equal(manifest.resources?.length, 1);
+      assert.equal(manifest.resources?.[0].kind, "file");
+      assert.equal(manifest.resources?.[0].dirty, true);
+      assert.equal(manifest.outbox?.length, 1);
+      assert.equal(manifest.outbox?.[0].action, "create");
+      assert.equal(manifest.outbox?.[0].payload.kind, "file");
+      assert.equal(manifest.outbox?.[0].payload.filename, "asset.txt");
+      assert.equal(manifest.outbox?.[0].payload.directoryPath, "uploads");
+      assert.equal(manifest.outbox?.[0].payload.contentBase64, Buffer.from("uploaded", "utf8").toString("base64"));
+
+      const items = await listLocalArtifactItems(state);
+      assert.ok(items.some((item) => item.kind === "folder" && item.path === "uploads"));
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("applies local markdown content patches and section updates", async () => {
+    const { root, store, state } = await createState();
+    try {
+      const initial = "# Title\nold body\n\n## Details\nfirst line\n\n## Other\nkeep\n";
+      const created = await createLocalArtifactNote(state, {
+        title: "Patch Target",
+        contentMarkdown: initial
+      });
+
+      const start = initial.indexOf("old body");
+      const patched = await patchLocalArtifactNoteContent(state, created.id, {
+        expectedVersion: 1,
+        operations: [
+          { type: "replace", start, end: start + "old body".length, text: "new body" }
+        ]
+      });
+      assert.equal(patched?.contentMarkdown?.includes("new body"), true);
+
+      const sectioned = await updateLocalArtifactNoteSection(state, created.id, {
+        heading: "Details",
+        level: 2,
+        mode: "appendBody",
+        contentMarkdown: "second line"
+      });
+      assert.equal(
+        await readFile(join(root, "Patch Target.md"), "utf8"),
+        "# Title\nnew body\n\n## Details\nfirst line\n\nsecond line\n## Other\nkeep\n"
+      );
+      assert.equal(sectioned?.contentMarkdown?.includes("second line"), true);
+
+      const manifest = readManifestFromStore(store);
+      assert.deepEqual(manifest.outbox?.map((item) => `${item.action}:${item.status}`).sort(), [
+        "create:pending",
+        "create:superseded",
+        "create:superseded"
+      ]);
+      const pending = manifest.outbox?.find((item) => item.status === "pending");
+      assert.equal(
+        pending?.payload.contentMarkdown,
+        "# Title\nnew body\n\n## Details\nfirst line\n\nsecond line\n## Other\nkeep\n"
+      );
     } finally {
       closeManifestStore(store);
     }

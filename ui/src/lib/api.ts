@@ -1,4 +1,4 @@
-import { getWorkbenchCoreUrl, getWorkbenchLocalDaemonUrl } from "../config/services";
+import { getWorkbenchCoreUrl, getWorkbenchLocalDaemonUrl, getWorkbenchLocalModeEnabled } from "../config/services";
 import { pushErrorNotification } from "./notificationService";
 import type {
   Artifact,
@@ -139,6 +139,16 @@ export async function openFileWithDefaultApp(blob: Blob, defaultName: string): P
 }
 
 export { isTauriNativeRuntime };
+
+export const nativeDaemonApi = {
+  chooseSyncFolder: (): Promise<string | null> => invokeNative<string | null>("choose_sync_folder"),
+  openSyncFolder: (): Promise<boolean> => invokeNative<boolean>("open_sync_folder"),
+  openDownloadsFolder: (): Promise<boolean> => invokeNative<boolean>("open_downloads_folder"),
+  readStatus: (port?: number): Promise<LocalDaemonStatus> =>
+    invokeNative<LocalDaemonStatus>("read_daemon_status", { port: port ?? null }),
+  start: (): Promise<void> => invokeNative<void>("start_daemon"),
+  stop: (): Promise<void> => invokeNative<void>("stop_daemon")
+};
 
 async function loadSessionFromStorage(): Promise<StoredAuthSession | undefined> {
   if (isTauriNativeRuntime()) {
@@ -333,9 +343,9 @@ async function requestJson<T>(url: string, options?: RequestInit, withSessionAut
   }
 }
 
-async function requestLocalDaemonJson<T>(path: string, options?: RequestInit): Promise<T> {
+async function requestLocalDaemon(path: string, options?: RequestInit): Promise<Response> {
   const url = `${localDaemonBaseUrl()}${path}`;
-  const { signal: upstreamSignal, headers, ...requestOptions } = options ?? {};
+  const { signal: upstreamSignal, ...requestOptions } = options ?? {};
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), LOCAL_DAEMON_REQUEST_TIMEOUT_MS);
   const onUpstreamAbort = () => controller.abort();
@@ -349,11 +359,7 @@ async function requestLocalDaemonJson<T>(path: string, options?: RequestInit): P
   try {
     response = await fetch(url, {
       ...requestOptions,
-      signal: controller.signal,
-      headers: {
-        "Content-Type": "application/json",
-        ...(headers ?? {})
-      }
+      signal: controller.signal
     });
   } catch (error) {
     const detail = controller.signal.aborted
@@ -367,6 +373,17 @@ async function requestLocalDaemonJson<T>(path: string, options?: RequestInit): P
     upstreamSignal?.removeEventListener("abort", onUpstreamAbort);
   }
 
+  return response;
+}
+
+async function requestLocalDaemonJson<T>(path: string, options?: RequestInit): Promise<T> {
+  const response = await requestLocalDaemon(path, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(options?.headers ?? {})
+    }
+  });
   const text = await response.text();
   if (!response.ok) {
     let parsed: { message?: string } | undefined;
@@ -381,6 +398,35 @@ async function requestLocalDaemonJson<T>(path: string, options?: RequestInit): P
     return undefined as T;
   }
   return JSON.parse(text) as T;
+}
+
+async function fetchArtifactFacadeBlob(path: string): Promise<Blob> {
+  const response = artifactsFacadeEnabled()
+    ? await requestLocalDaemon(path)
+    : await fetchWithSessionAuth(coreArtifactPath(path));
+
+  if (!response.ok) {
+    const message = `Download failed: ${response.status}`;
+    pushErrorNotification(message, "Artifacts Download Error");
+    throw new Error(message);
+  }
+
+  return response.blob();
+}
+
+function artifactsFacadeEnabled(): boolean {
+  return getWorkbenchLocalModeEnabled();
+}
+
+function coreArtifactPath(path: string): string {
+  return `${coreBaseUrl()}${path}`;
+}
+
+async function fetchArtifactFacadeJson<T>(path: string, options?: RequestInit): Promise<T> {
+  if (artifactsFacadeEnabled()) {
+    return requestLocalDaemonJson<T>(path, options);
+  }
+  return fetchJson<T>(coreArtifactPath(path), options);
 }
 
 async function refreshAccessToken(refreshToken: string): Promise<void> {
@@ -517,10 +563,11 @@ export const artifactsApi = {
   tree: (projectId?: string): Promise<ArtifactItem[]> => {
     const params = new URLSearchParams();
     if (projectId) params.set("projectId", projectId);
-    return fetchJson<ArtifactItem[]>(`${coreBaseUrl()}/api/artifacts/tree?${params.toString()}`);
+    const query = params.toString();
+    return fetchArtifactFacadeJson<ArtifactItem[]>(`/api/artifacts/tree${query ? `?${query}` : ""}`);
   },
   getItem: (id: string): Promise<ArtifactItem> =>
-    fetchJson<ArtifactItem>(`${coreBaseUrl()}/api/artifacts/items/${encodeURIComponent(id)}`),
+    fetchArtifactFacadeJson<ArtifactItem>(`/api/artifacts/items/${encodeURIComponent(id)}`),
   createFolder: (payload: {
     projectId: string;
     projectName?: string;
@@ -528,7 +575,7 @@ export const artifactsApi = {
     title?: string;
     scope?: "private" | "org" | "project";
   }): Promise<ArtifactItem> =>
-    fetchJson<ArtifactItem>(`${coreBaseUrl()}/api/artifacts/folders`, {
+    fetchArtifactFacadeJson<ArtifactItem>("/api/artifacts/folders", {
       method: "POST",
       body: JSON.stringify(payload)
     }),
@@ -541,7 +588,7 @@ export const artifactsApi = {
     tags?: string[];
     contentMarkdown?: string;
   }): Promise<ArtifactItem> =>
-    fetchJson<ArtifactItem>(`${coreBaseUrl()}/api/artifacts/notes`, {
+    fetchArtifactFacadeJson<ArtifactItem>("/api/artifacts/notes", {
       method: "POST",
       body: JSON.stringify(payload)
     }),
@@ -561,10 +608,15 @@ export const artifactsApi = {
     if (payload.tags?.length) formData.append("tags", JSON.stringify(payload.tags));
     formData.append("file", payload.file);
 
-    const response = await fetchWithSessionAuth(`${coreBaseUrl()}/api/artifacts/upload`, {
-      method: "POST",
-      body: formData
-    });
+    const response = artifactsFacadeEnabled()
+      ? await requestLocalDaemon("/api/artifacts/upload", {
+          method: "POST",
+          body: formData
+        })
+      : await fetchWithSessionAuth(`${coreBaseUrl()}/api/artifacts/upload`, {
+          method: "POST",
+          body: formData
+        });
 
     const text = await response.text();
     if (!response.ok) {
@@ -587,30 +639,19 @@ export const artifactsApi = {
       projectName?: string;
     }
   ): Promise<ArtifactItem> =>
-    fetchJson<ArtifactItem>(`${coreBaseUrl()}/api/artifacts/items/${encodeURIComponent(id)}`, {
+    fetchArtifactFacadeJson<ArtifactItem>(`/api/artifacts/items/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(payload)
     }),
   removeItem: (id: string): Promise<void> =>
-    fetchJson<void>(`${coreBaseUrl()}/api/artifacts/items/${encodeURIComponent(id)}`, {
+    fetchArtifactFacadeJson<void>(`/api/artifacts/items/${encodeURIComponent(id)}`, {
       method: "DELETE"
     }),
   downloadFile: async (id: string, asAttachment = false): Promise<Blob> => {
     const params = new URLSearchParams();
     if (asAttachment) params.set("download", "1");
     const suffix = params.toString() ? `?${params.toString()}` : "";
-
-    const response = await fetchWithSessionAuth(
-      `${coreBaseUrl()}/api/artifacts/items/${encodeURIComponent(id)}/download${suffix}`
-    );
-
-    if (!response.ok) {
-      const message = `Download failed: ${response.status}`;
-      pushErrorNotification(message, "Artifacts Download Error");
-      throw new Error(message);
-    }
-
-    return response.blob();
+    return fetchArtifactFacadeBlob(`/api/artifacts/items/${encodeURIComponent(id)}/download${suffix}`);
   },
   downloadPreviewPdf: async (id: string): Promise<Blob> => {
     const response = await fetchWithSessionAuth(
