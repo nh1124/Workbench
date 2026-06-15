@@ -112,6 +112,66 @@ export async function createAttachment(
   return toAttachment(result.rows[0]);
 }
 
+export async function replaceAttachment(
+  attachmentId: string,
+  taskId: string,
+  ownerCoreUserId: string,
+  file: { originalname?: string; buffer: Buffer; mimetype: string; size: number }
+): Promise<TaskAttachment | undefined> {
+  await ensureTasksSchema();
+  const pool = getTasksPool();
+  const owner = normalizeOwner(ownerCoreUserId);
+
+  const existingResult = await pool.query<AttachmentRow>(
+    `
+      SELECT id, task_id, owner_username, filename, mime_type, size_bytes, storage_path, created_at
+      FROM task_attachments
+      WHERE id = $1 AND task_id = $2 AND owner_username = $3
+      LIMIT 1
+    `,
+    [attachmentId, taskId, owner]
+  );
+  const existing = existingResult.rows[0];
+  if (!existing) return undefined;
+
+  const nextFilename = file.originalname?.trim() || existing.filename;
+  const nextStoragePath = buildStoragePath(owner, taskId, attachmentId, nextFilename);
+  const absolutePath = resolveAbsolutePath(nextStoragePath);
+  await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+  await fs.writeFile(absolutePath, file.buffer);
+
+  const result = await pool.query<AttachmentRow>(
+    `
+      UPDATE task_attachments
+      SET filename = $4,
+          mime_type = $5,
+          size_bytes = $6,
+          storage_path = $7
+      WHERE id = $1 AND task_id = $2 AND owner_username = $3
+      RETURNING id, task_id, owner_username, filename, mime_type, size_bytes, storage_path, created_at
+    `,
+    [
+      attachmentId,
+      taskId,
+      owner,
+      nextFilename,
+      file.mimetype || existing.mime_type || null,
+      file.size,
+      nextStoragePath
+    ]
+  );
+
+  if (existing.storage_path !== nextStoragePath) {
+    try {
+      await fs.rm(resolveAbsolutePath(existing.storage_path), { force: true });
+    } catch {
+      // Best-effort cleanup after extension changes.
+    }
+  }
+
+  return result.rows[0] ? toAttachment(result.rows[0]) : undefined;
+}
+
 export async function readAttachmentData(
   attachmentId: string,
   taskId: string,

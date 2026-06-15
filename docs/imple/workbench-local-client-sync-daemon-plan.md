@@ -225,6 +225,7 @@ npm run build
   - Artifacts item delete by resource id.
   - Tasks create/update/delete/upsert.
   - Tasks pin update/upsert.
+  - Tasks attachment create/update/delete through relation `attachment`.
 - `[pending]` Extend `POST /api/sync/push` to:
   - Projects default selection.
   - Tasks occurrence/subtask/schedule operations.
@@ -239,11 +240,11 @@ npm run build
 - `[partial]` Blob download exists for artifact and task attachment ids.
 - `[partial]` Implement `PUT /api/sync/blobs/:blobId`.
   - Artifact file blobs are supported via `artifact:<id>`.
-  - Task attachment blob upload is still pending.
+  - Task attachment replacement blobs are supported via `task-attachment:<taskId>:<attachmentId>`.
 - `[implemented]` Add artifact file replacement endpoint with expected version.
-- `[pending]` Add task attachment upload/update operation through sync push.
+- `[implemented]` Add task attachment upload/update/delete operation through sync push.
 - `[partial]` Add checksum validation on upload and download completion.
-  - Artifact blob PUT and artifact file sync push validate optional `sha256:<hex>` checksums.
+  - Artifact and task attachment blob PUT / sync push validate optional `sha256:<hex>` checksums.
   - Download completion checksum reporting remains job/daemon-side only.
 
 ### Local UI Through Daemon
@@ -279,9 +280,9 @@ npm run build
 ## Recommended Next Implementation Order
 
 1. Extend `POST /api/sync/push` to task occurrence/subtask/schedule operations and project default selection.
-2. Add task attachment upload/update operation through sync push and blob PUT.
-3. Add daemon local API facade for offline UI reads/writes.
-4. Add Tauri integration for sync folder selection, open folder, and daemon lifecycle.
+2. Add daemon local API facade for offline UI reads/writes.
+3. Add Tauri integration for sync folder selection, open folder, and daemon lifecycle.
+4. Add project default selection sync push support.
 
 ## Current Daemon Usage
 

@@ -424,6 +424,32 @@ describe("local client HTTP APIs", () => {
       assert.equal(taskRejected[0].clientOpId, "task-subtask-op");
       assert.equal(taskRejected[0].code, "SYNC_TASK_RELATION_NOT_SUPPORTED");
 
+      const attachmentPushResponse = await requestJson(server.baseUrl, "POST", "/api/sync/push", {
+        headers: daemonHeaders,
+        body: {
+          ops: [
+            {
+              clientOpId: "task-attachment-op",
+              domain: "tasks",
+              action: "create",
+              resourceId: "task-http-sync",
+              relation: "attachment",
+              payload: {
+                filename: "attachment.bin",
+                contentBase64: "AA==",
+                checksum: "sha256:not-the-actual-digest"
+              }
+            }
+          ]
+        }
+      });
+      assert.equal(attachmentPushResponse.status, 409);
+      assert.deepEqual(attachmentPushResponse.body.applied, []);
+      const attachmentRejected = attachmentPushResponse.body.rejected as Array<Record<string, unknown>>;
+      assert.equal(attachmentRejected.length, 1);
+      assert.equal(attachmentRejected[0].clientOpId, "task-attachment-op");
+      assert.equal(attachmentRejected[0].code, "SYNC_BLOB_CHECKSUM_MISMATCH");
+
       const unsupportedBlobUploadResponse = await requestJson(server.baseUrl, "PUT", "/api/sync/blobs/test-blob", {
         headers: daemonHeaders,
         body: { contentBase64: "AA==" }
@@ -439,6 +465,21 @@ describe("local client HTTP APIs", () => {
       });
       assert.equal(checksumBlobUploadResponse.status, 400);
       assert.equal(checksumBlobUploadResponse.body.code, "SYNC_BLOB_CHECKSUM_MISMATCH");
+
+      const taskChecksumBlobUploadResponse = await requestJson(
+        server.baseUrl,
+        "PUT",
+        "/api/sync/blobs/task-attachment:task-http-sync:attachment-http-sync",
+        {
+          headers: daemonHeaders,
+          body: {
+            contentBase64: "AA==",
+            checksum: "sha256:not-the-actual-digest"
+          }
+        }
+      );
+      assert.equal(taskChecksumBlobUploadResponse.status, 400);
+      assert.equal(taskChecksumBlobUploadResponse.body.code, "SYNC_BLOB_CHECKSUM_MISMATCH");
     } finally {
       await server.close();
       await cleanupTestUser(pool, userId);

@@ -517,6 +517,38 @@ export const tasksClient = {
     }
     return JSON.parse(text) as unknown;
   },
+  replaceAttachment: async (
+    token: string,
+    taskId: string,
+    attachmentId: string,
+    payload: { filename?: string; mimeType?: string; contentBase64: string }
+  ) => {
+    const fileBuffer = Buffer.from(payload.contentBase64, "base64");
+    const formData = new FormData();
+    if (payload.filename) {
+      formData.append("filename", payload.filename);
+    }
+    formData.append(
+      "file",
+      new Blob([fileBuffer], { type: payload.mimeType || "application/octet-stream" }),
+      payload.filename || attachmentId
+    );
+
+    const response = await fetch(
+      `${tasksService.baseUrl}/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}`,
+      {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData
+      }
+    );
+
+    const text = await response.text();
+    if (!response.ok) {
+      throw new InternalServiceError(tasksService.id, response.status, text || `HTTP ${response.status}`);
+    }
+    return JSON.parse(text) as unknown;
+  },
 
   downloadAttachment: async (token: string, taskId: string, attachmentId: string, asAttachment = true) => {
     const suffix = asAttachment ? "?download=1" : "";

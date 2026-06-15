@@ -1163,6 +1163,14 @@ function asJsonRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
+function jsonRecordFromBuffer(buffer: Buffer): Record<string, unknown> {
+  try {
+    return asJsonRecord(JSON.parse(buffer.toString("utf8")));
+  } catch {
+    return {};
+  }
+}
+
 function asNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
@@ -1275,7 +1283,11 @@ async function applySyncPushOperation(
     throw new LocalClientStoreError(400, "SYNC_ACTION_NOT_SUPPORTED", "Unsupported sync push action.");
   }
 
-  await assertSyncBaseVersion(authContext, domain, resourceId, op);
+  const relation = asNonEmptyString(op.relation) ?? asNonEmptyString(payload.relation);
+  const versionResourceId = domain === "tasks" && relation === "attachment"
+    ? asNonEmptyString(op.resourceId) ?? asNonEmptyString(payload.taskId)
+    : resourceId;
+  await assertSyncBaseVersion(authContext, domain, versionResourceId, op);
 
   if (domain === "notes") {
     let result: unknown;
@@ -1366,7 +1378,6 @@ async function applySyncPushOperation(
   if (domain === "tasks") {
     let result: unknown;
     let nextResourceId = resourceId;
-    const relation = asNonEmptyString(op.relation) ?? asNonEmptyString(payload.relation);
 
     if (relation === "pin") {
       if (action !== "update" && action !== "upsert") {
@@ -1381,8 +1392,59 @@ async function applySyncPushOperation(
       }
       result = await tasksClient.setPin(authContext.accessToken, resourceId, pinned);
       nextResourceId = resourceId;
+    } else if (relation === "attachment") {
+      const taskId = asNonEmptyString(op.resourceId) ?? asNonEmptyString(payload.taskId);
+      if (!taskId) {
+        throw new LocalClientStoreError(400, "SYNC_RESOURCE_ID_REQUIRED", "Task attachment sync push requires task resourceId.");
+      }
+      const attachmentId = asNonEmptyString(payload.attachmentId) ?? asNonEmptyString(payload.id);
+      nextResourceId = taskId;
+
+      if (action === "create" || (action === "upsert" && !attachmentId)) {
+        const filename = asNonEmptyString(payload.filename) ?? asNonEmptyString(payload.originalFilename);
+        const contentBase64 = asNonEmptyString(payload.contentBase64);
+        if (!filename || !contentBase64) {
+          throw new LocalClientStoreError(400, "SYNC_TASK_ATTACHMENT_PAYLOAD_INVALID", "Task attachment create requires filename and contentBase64.");
+        }
+        const { compactBase64, buffer } = decodeContentBase64(contentBase64);
+        const checksum = sha256Checksum(buffer);
+        const expectedChecksum = asNonEmptyString(payload.checksum);
+        if (expectedChecksum && expectedChecksum !== checksum) {
+          throw new LocalClientStoreError(400, "SYNC_BLOB_CHECKSUM_MISMATCH", "Task attachment checksum mismatch.");
+        }
+        result = await tasksClient.uploadAttachment(authContext.accessToken, taskId, {
+          filename,
+          mimeType: asNonEmptyString(payload.mimeType),
+          contentBase64: compactBase64
+        });
+      } else if (action === "update" || action === "upsert") {
+        if (!attachmentId) {
+          throw new LocalClientStoreError(400, "SYNC_TASK_ATTACHMENT_ID_REQUIRED", "Task attachment update requires attachmentId.");
+        }
+        const contentBase64 = asNonEmptyString(payload.contentBase64);
+        if (!contentBase64) {
+          throw new LocalClientStoreError(400, "SYNC_TASK_ATTACHMENT_PAYLOAD_INVALID", "Task attachment update requires contentBase64.");
+        }
+        const { compactBase64, buffer } = decodeContentBase64(contentBase64);
+        const checksum = sha256Checksum(buffer);
+        const expectedChecksum = asNonEmptyString(payload.checksum);
+        if (expectedChecksum && expectedChecksum !== checksum) {
+          throw new LocalClientStoreError(400, "SYNC_BLOB_CHECKSUM_MISMATCH", "Task attachment checksum mismatch.");
+        }
+        result = await tasksClient.replaceAttachment(authContext.accessToken, taskId, attachmentId, {
+          filename: asNonEmptyString(payload.filename) ?? asNonEmptyString(payload.originalFilename),
+          mimeType: asNonEmptyString(payload.mimeType),
+          contentBase64: compactBase64
+        });
+      } else {
+        if (!attachmentId) {
+          throw new LocalClientStoreError(400, "SYNC_TASK_ATTACHMENT_ID_REQUIRED", "Task attachment delete requires attachmentId.");
+        }
+        await tasksClient.deleteAttachment(authContext.accessToken, taskId, attachmentId);
+        result = { id: attachmentId, taskId, deleted: true };
+      }
     } else if (relation) {
-      throw new LocalClientStoreError(400, "SYNC_TASK_RELATION_NOT_SUPPORTED", "Only task pin relation sync push is supported in this phase.");
+      throw new LocalClientStoreError(400, "SYNC_TASK_RELATION_NOT_SUPPORTED", "Only task pin and attachment relation sync push are supported in this phase.");
     } else if (action === "create") {
       result = await tasksClient.create(authContext.accessToken, payload);
       nextResourceId = objectId(result);
@@ -3193,21 +3255,61 @@ app.put("/api/sync/blobs/:blobId", async (req, res) => {
   }
 
   const blobId = String(req.params.blobId);
-  if (blobId.startsWith("task-attachment:")) {
-    return res.status(501).json({
-      message: "Task attachment blob upload is not enabled yet; use task attachment APIs until sync attachment push is implemented."
-    });
-  }
-  if (!blobId.startsWith("artifact:")) {
-    return res.status(404).json({ message: "Unsupported sync blob id" });
-  }
-
-  const resourceId = blobId.slice("artifact:".length).trim();
-  if (!resourceId) {
-    return res.status(400).json({ message: "Artifact blob id is missing a resource id" });
-  }
-
   try {
+    if (blobId.startsWith("task-attachment:")) {
+      const [, taskId, attachmentId] = blobId.split(":");
+      if (!taskId || !attachmentId) {
+        return res.status(400).json({ message: "Task attachment blob id must be task-attachment:<taskId>:<attachmentId>" });
+      }
+      await assertSyncBaseVersion(authContext, "tasks", taskId, { baseVersion: parsed.data.baseVersion });
+      const { compactBase64, buffer } = decodeContentBase64(parsed.data.contentBase64);
+      const checksum = sha256Checksum(buffer);
+      if (parsed.data.checksum && parsed.data.checksum !== checksum) {
+        return res.status(400).json({
+          message: "Blob checksum mismatch",
+          code: "SYNC_BLOB_CHECKSUM_MISMATCH",
+          expected: parsed.data.checksum,
+          actual: checksum
+        });
+      }
+
+      const result = await tasksClient.replaceAttachment(authContext.accessToken, taskId, attachmentId, {
+        filename: parsed.data.filename,
+        mimeType: parsed.data.mimeType,
+        contentBase64: compactBase64
+      });
+      const event = await recordSyncEvent(authContext.userId, "tasks", taskId, "update", {
+        source: "sync-blob-put",
+        blobId,
+        localClientId: authContext.localClient?.id,
+        relation: "attachment",
+        attachmentId,
+        checksum,
+        sizeBytes: buffer.length
+      });
+
+      return res.json({
+        blobId,
+        domain: "tasks",
+        resourceId: taskId,
+        attachmentId,
+        sizeBytes: buffer.length,
+        checksum,
+        version: event.version,
+        cursor: event.cursor,
+        result
+      });
+    }
+
+    if (!blobId.startsWith("artifact:")) {
+      return res.status(404).json({ message: "Unsupported sync blob id" });
+    }
+
+    const resourceId = blobId.slice("artifact:".length).trim();
+    if (!resourceId) {
+      return res.status(400).json({ message: "Artifact blob id is missing a resource id" });
+    }
+
     await assertSyncBaseVersion(authContext, "artifacts", resourceId, { baseVersion: parsed.data.baseVersion });
     const { compactBase64, buffer } = decodeContentBase64(parsed.data.contentBase64);
     const checksum = sha256Checksum(buffer);
@@ -4139,9 +4241,62 @@ app.post("/api/tasks/:id/attachments", async (req, res) => {
     const buffer = Buffer.from(await upstream.arrayBuffer());
     const responseContentType = upstream.headers.get("content-type");
     if (responseContentType) res.setHeader("Content-Type", responseContentType);
+    if (upstream.ok) {
+      const attachment = responseContentType?.includes("application/json")
+        ? jsonRecordFromBuffer(buffer)
+        : {};
+      recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
+        source: "core-api",
+        relation: "attachment",
+        action: "create",
+        attachment
+      });
+    }
     return res.status(upstream.status).send(buffer);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Upload proxy failed";
+    return res.status(502).json({ message });
+  }
+});
+
+app.put("/api/tasks/:id/attachments/:attachmentId", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const taskId = encodeURIComponent(String(req.params.id));
+  const attachmentId = encodeURIComponent(String(req.params.attachmentId));
+  const target = `${serviceBaseUrls.tasks}/tasks/${taskId}/attachments/${attachmentId}`;
+  const contentType = req.header("content-type");
+
+  try {
+    const upstream = await fetch(target, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${authContext.accessToken}`,
+        ...(contentType ? { "Content-Type": contentType } : {})
+      },
+      body: req as any,
+      duplex: "half"
+    } as RequestInit & { duplex: "half" });
+
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    const responseContentType = upstream.headers.get("content-type");
+    if (responseContentType) res.setHeader("Content-Type", responseContentType);
+    if (upstream.ok) {
+      const attachment = responseContentType?.includes("application/json")
+        ? jsonRecordFromBuffer(buffer)
+        : {};
+      recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
+        source: "core-api",
+        relation: "attachment",
+        action: "update",
+        attachmentId: String(req.params.attachmentId),
+        attachment
+      });
+    }
+    return res.status(upstream.status).send(buffer);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Attachment replacement proxy failed";
     return res.status(502).json({ message });
   }
 });
@@ -4183,6 +4338,12 @@ app.delete("/api/tasks/:id/attachments/:attachmentId", async (req, res) => {
   if (!authContext) return;
   try {
     await tasksClient.deleteAttachment(authContext.accessToken, String(req.params.id), String(req.params.attachmentId));
+    recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
+      source: "core-api",
+      relation: "attachment",
+      action: "delete",
+      attachmentId: String(req.params.attachmentId)
+    });
     return res.status(204).send();
   } catch (error) {
     return respondInternalError(res, error);

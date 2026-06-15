@@ -11,7 +11,8 @@ import {
   deleteAttachment,
   deleteAttachmentsForTask,
   listAttachments,
-  readAttachmentData
+  readAttachmentData,
+  replaceAttachment
 } from "./attachmentsStore.js";
 import { ensureTasksSchema, findServiceAccountByCoreUserId } from "./db.js";
 import {
@@ -655,6 +656,29 @@ app.post("/tasks/:id/attachments", requireUserAuth, upload.single("file"), async
     if (!req.file) return res.status(400).json({ message: "File is required" });
     const created = await createAttachment(String(req.params.id), owner, req.file);
     return res.status(201).json(created);
+  } catch (error) {
+    return handleError(res, error);
+  }
+});
+
+app.put("/tasks/:id/attachments/:attachmentId", requireUserAuth, upload.single("file"), async (req, res) => {
+  try {
+    const owner = req.authUser?.coreUserId;
+    if (!owner) return res.status(401).json({ message: "Missing auth context" });
+    if (!req.file) return res.status(400).json({ message: "File is required" });
+    const updated = await replaceAttachment(
+      String(req.params.attachmentId),
+      String(req.params.id),
+      owner,
+      {
+        originalname: typeof req.body.filename === "string" ? req.body.filename : undefined,
+        buffer: req.file.buffer,
+        mimetype: req.file.mimetype,
+        size: req.file.size
+      }
+    );
+    if (!updated) return res.status(404).json({ message: "Attachment not found" });
+    return res.json(updated);
   } catch (error) {
     return handleError(res, error);
   }
