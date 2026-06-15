@@ -56,6 +56,7 @@ server.registerTool(
   },
   async () => {
     const manifestPath = join(syncRoot, ".workbench", "manifest.json");
+    const manifestDbPath = join(syncRoot, ".workbench", "manifest.sqlite");
     let manifest: unknown = {};
     try {
       manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
@@ -66,6 +67,8 @@ server.registerTool(
       coreUrl,
       syncRoot,
       downloadsDir,
+      manifestDbPath,
+      manifestSnapshotPath: manifestPath,
       manifest
     });
   }

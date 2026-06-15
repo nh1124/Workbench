@@ -91,9 +91,10 @@ Last updated: 2026-06-15
   - download job blobs through Core,
   - save files only into configured `downloads` or `sync-folder`,
   - complete/fail jobs,
-  - write a lightweight `.workbench/manifest.json`,
+  - persist local sync state under `.workbench/manifest.sqlite`,
+  - write `.workbench/manifest.json` as a compatibility/debug snapshot,
   - scan the sync folder for local file create/update/delete,
-  - keep manifest resource mappings and JSON outbox entries,
+  - keep manifest resource mappings and SQLite outbox entries,
   - push local outbox changes to Core through `POST /api/sync/push`,
   - expose local status at `http://127.0.0.1:<port>/status`.
 - `[implemented]` Daemon MCP tools were added in `services/sync-daemon/src/mcpServer.ts`.
@@ -148,17 +149,17 @@ npm run build
 
 ### Sync Daemon Persistence
 
-- `[partial]` The daemon currently uses `.workbench/manifest.json`.
-- `[partial]` JSON manifest now stores resource path mapping, checksum, resource id, dirty state, sync timestamps, and outbox entries.
-- `[pending]` Replace lightweight JSON manifest with SQLite.
+- `[implemented]` The daemon now uses `.workbench/manifest.sqlite` as the primary local manifest.
+- `[implemented]` `.workbench/manifest.json` remains as a compatibility/debug snapshot.
+- `[implemented]` SQLite manifest tables exist for:
   - `resources`
   - `outbox`
-  - `sync_state`
-  - `conflicts`
   - `local_jobs`
-  - `client_identity`
-- `[partial]` Store checksum, resource id, local path, domain, dirty state, and last sync error in JSON manifest/outbox.
-- `[partial]` Add durable JSON outbox for offline local changes.
+- `[implemented]` `sync_state` is represented by the `meta` table.
+- `[pending]` Add dedicated `conflicts` table.
+- `[implemented]` Store checksum, resource id, local path, domain, dirty state, and last sync error in SQLite resources/outbox.
+- `[implemented]` Add durable SQLite outbox for offline local changes.
+- `[implemented]` Migrate legacy `.workbench/manifest.json` into SQLite when the DB is empty.
 - `[pending]` Add recovery behavior when manifest and files disagree.
 
 ### Sync Folder Watcher
@@ -231,8 +232,8 @@ npm run build
 
 1. Add tests for local client registration, heartbeat, token verification, disable/re-enable, and job claim/complete/fail.
 2. Add focused tests for local job list/revoke/delete and daemon-authenticated sync endpoints.
-3. Implement daemon SQLite manifest and move `.workbench/manifest.json` to a compatibility/debug artifact.
-4. Replace polling scan with watcher + debounce + conflict handling.
+3. Replace polling scan with watcher + debounce + conflict handling.
+4. Add manifest recovery behavior when local files and SQLite disagree.
 5. Extend `POST /api/sync/push` to Projects and Tasks, and add baseVersion checks.
 6. Implement artifact file replacement and `PUT /api/sync/blobs/:blobId`.
 7. Add daemon local API facade for offline UI reads/writes.

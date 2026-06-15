@@ -5,6 +5,25 @@ import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promises as fs } from "node:fs";
 import { config as loadEnv } from "dotenv";
+import {
+  enqueueOutbox as enqueueManifestOutbox,
+  getResource,
+  hasOpenOutboxForPath,
+  listPendingOutbox,
+  listResources,
+  markOutboxApplied,
+  markOutboxFailed,
+  migrateLegacyManifestJson,
+  openManifestStore,
+  readManifestStats,
+  recordLocalJob,
+  removeResource,
+  setMeta,
+  upsertResource as upsertManifestResource,
+  writeManifestDebugSnapshot,
+  type ManifestStore,
+  type OutboxItem
+} from "./manifestStore.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -41,6 +60,7 @@ type DaemonConfig = {
 
 type DaemonState = {
   config: DaemonConfig;
+  manifestStore: ManifestStore;
   identity?: ClientIdentity;
   lastHeartbeatAt?: string;
   lastClaimAt?: string;
@@ -50,43 +70,6 @@ type DaemonState = {
   processedJobs: number;
   outboxPending: number;
   outboxFailed: number;
-};
-
-type ManifestResource = {
-  relativePath: string;
-  domain: "artifacts";
-  kind: "note" | "file";
-  resourceId?: string;
-  checksum?: string;
-  sizeBytes?: number;
-  dirty?: boolean;
-  lastSeenAt?: string;
-  lastSyncedAt?: string;
-  localUpdatedAt?: string;
-};
-
-type OutboxItem = {
-  id: string;
-  clientOpId: string;
-  relativePath: string;
-  domain: "artifacts";
-  action: "create" | "update" | "delete";
-  resourceId?: string;
-  payload: Record<string, unknown>;
-  status: "pending" | "applied" | "failed";
-  attempts: number;
-  lastError?: string;
-  createdAt: string;
-  updatedAt: string;
-  appliedAt?: string;
-};
-
-type Manifest = {
-  jobs?: unknown[];
-  resources?: ManifestResource[];
-  outbox?: OutboxItem[];
-  lastScanAt?: string;
-  lastPushAt?: string;
 };
 
 function env(name: string): string | undefined {
@@ -126,10 +109,6 @@ function identityPath(config: DaemonConfig): string {
   return join(config.syncRoot, ".workbench", "client-identity.json");
 }
 
-function manifestPath(config: DaemonConfig): string {
-  return join(config.syncRoot, ".workbench", "manifest.json");
-}
-
 async function readJsonFile<T>(pathValue: string): Promise<T | undefined> {
   try {
     return JSON.parse(await fs.readFile(pathValue, "utf8")) as T;
@@ -141,24 +120,6 @@ async function readJsonFile<T>(pathValue: string): Promise<T | undefined> {
 async function writeJsonFile(pathValue: string, value: unknown): Promise<void> {
   await fs.mkdir(dirname(pathValue), { recursive: true });
   await fs.writeFile(pathValue, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
-async function readManifest(config: DaemonConfig): Promise<Manifest> {
-  const manifest = (await readJsonFile<Manifest>(manifestPath(config))) ?? {};
-  return {
-    ...manifest,
-    jobs: Array.isArray(manifest.jobs) ? manifest.jobs : [],
-    resources: Array.isArray(manifest.resources) ? manifest.resources : [],
-    outbox: Array.isArray(manifest.outbox) ? manifest.outbox : []
-  };
-}
-
-async function writeManifest(config: DaemonConfig, manifest: Manifest): Promise<void> {
-  await writeJsonFile(manifestPath(config), {
-    ...manifest,
-    resources: (manifest.resources ?? []).sort((a, b) => a.relativePath.localeCompare(b.relativePath)),
-    outbox: manifest.outbox ?? []
-  });
 }
 
 async function readIdentity(config: DaemonConfig): Promise<ClientIdentity | undefined> {
@@ -242,12 +203,11 @@ async function registerIfNeeded(config: DaemonConfig): Promise<ClientIdentity> {
 }
 
 async function refreshManifestStats(state: DaemonState): Promise<void> {
-  const manifest = await readManifest(state.config);
-  const outbox = manifest.outbox ?? [];
-  state.outboxPending = outbox.filter((item) => item.status === "pending").length;
-  state.outboxFailed = outbox.filter((item) => item.status === "failed").length;
-  state.lastScanAt = manifest.lastScanAt ?? state.lastScanAt;
-  state.lastPushAt = manifest.lastPushAt ?? state.lastPushAt;
+  const stats = readManifestStats(state.manifestStore);
+  state.outboxPending = stats.outboxPending;
+  state.outboxFailed = stats.outboxFailed;
+  state.lastScanAt = stats.lastScanAt ?? state.lastScanAt;
+  state.lastPushAt = stats.lastPushAt ?? state.lastPushAt;
 }
 
 async function heartbeat(state: DaemonState): Promise<void> {
@@ -420,40 +380,6 @@ function titleFor(relativePath: string): string {
   return ext ? name.slice(0, -ext.length) : name;
 }
 
-function findResource(manifest: Manifest, relativePath: string): ManifestResource | undefined {
-  return (manifest.resources ?? []).find((resource) => resource.relativePath === relativePath);
-}
-
-function upsertResource(manifest: Manifest, resource: ManifestResource): void {
-  const resources = manifest.resources ?? [];
-  const index = resources.findIndex((item) => item.relativePath === resource.relativePath);
-  if (index >= 0) {
-    resources[index] = { ...resources[index], ...resource };
-  } else {
-    resources.push(resource);
-  }
-  manifest.resources = resources;
-}
-
-function hasPendingOutbox(manifest: Manifest, relativePath: string): boolean {
-  return (manifest.outbox ?? []).some((item) => item.relativePath === relativePath && item.status !== "applied");
-}
-
-function enqueueOutbox(manifest: Manifest, item: Omit<OutboxItem, "id" | "clientOpId" | "status" | "attempts" | "createdAt" | "updatedAt">): void {
-  const now = new Date().toISOString();
-  const id = randomUUID();
-  const outboxItem: OutboxItem = {
-    ...item,
-    id,
-    clientOpId: `daemon-${id}`,
-    status: "pending",
-    attempts: 0,
-    createdAt: now,
-    updatedAt: now
-  };
-  manifest.outbox = [...(manifest.outbox ?? []), outboxItem].slice(-1000);
-}
-
 async function buildOutboxPayloadForFile(
   config: DaemonConfig,
   absolutePath: string,
@@ -481,7 +407,6 @@ async function buildOutboxPayloadForFile(
 }
 
 async function scanSyncFolder(state: DaemonState): Promise<void> {
-  const manifest = await readManifest(state.config);
   const currentPaths = new Set<string>();
   const files = await walkSyncFiles(state.config.syncRoot);
   const now = new Date().toISOString();
@@ -492,9 +417,9 @@ async function scanSyncFolder(state: DaemonState): Promise<void> {
     currentPaths.add(relativePath);
     const stat = await fs.stat(absolutePath);
     const kind = artifactKindForPath(relativePath);
-    const existing = findResource(manifest, relativePath);
+    const existing = getResource(state.manifestStore, relativePath);
     if (stat.size > state.config.maxSyncFileBytes) {
-      upsertResource(manifest, {
+      upsertManifestResource(state.manifestStore, {
         ...(existing ?? { relativePath, domain: "artifacts", kind }),
         checksum: existing?.checksum,
         sizeBytes: stat.size,
@@ -507,25 +432,25 @@ async function scanSyncFolder(state: DaemonState): Promise<void> {
 
     const checksum = await hashFile(absolutePath);
     if (existing?.checksum === checksum && !existing.dirty) {
-      upsertResource(manifest, {
+      upsertManifestResource(state.manifestStore, {
         ...existing,
         lastSeenAt: now,
         localUpdatedAt: stat.mtime.toISOString()
       });
       continue;
     }
-    if (hasPendingOutbox(manifest, relativePath)) continue;
+    if (hasOpenOutboxForPath(state.manifestStore, relativePath)) continue;
 
     const payload = await buildOutboxPayloadForFile(state.config, absolutePath, relativePath, kind);
     const action = kind === "note" && existing?.resourceId ? "update" : "create";
-    enqueueOutbox(manifest, {
+    enqueueManifestOutbox(state.manifestStore, {
       relativePath,
       domain: "artifacts",
       action,
       resourceId: action === "update" ? existing?.resourceId : undefined,
       payload
     });
-    upsertResource(manifest, {
+    upsertManifestResource(state.manifestStore, {
       ...(existing ?? { relativePath, domain: "artifacts", kind }),
       kind,
       checksum,
@@ -536,25 +461,25 @@ async function scanSyncFolder(state: DaemonState): Promise<void> {
     });
   }
 
-  for (const resource of manifest.resources ?? []) {
-    if (currentPaths.has(resource.relativePath) || hasPendingOutbox(manifest, resource.relativePath)) continue;
+  for (const resource of listResources(state.manifestStore)) {
+    if (currentPaths.has(resource.relativePath) || hasOpenOutboxForPath(state.manifestStore, resource.relativePath)) continue;
     if (!resource.resourceId) continue;
-    enqueueOutbox(manifest, {
+    enqueueManifestOutbox(state.manifestStore, {
       relativePath: resource.relativePath,
       domain: "artifacts",
       action: "delete",
       resourceId: resource.resourceId,
       payload: {}
     });
-    upsertResource(manifest, {
+    upsertManifestResource(state.manifestStore, {
       ...resource,
       dirty: true,
       lastSeenAt: now
     });
   }
 
-  manifest.lastScanAt = now;
-  await writeManifest(state.config, manifest);
+  setMeta(state.manifestStore, "lastScanAt", now);
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
   await refreshManifestStats(state);
 }
 
@@ -613,8 +538,7 @@ function extractResourceId(value: unknown): string | undefined {
 
 async function pushOutbox(state: DaemonState): Promise<void> {
   if (!state.identity) return;
-  const manifest = await readManifest(state.config);
-  const pending = (manifest.outbox ?? []).filter((item) => item.status === "pending").slice(0, 20);
+  const pending = listPendingOutbox(state.manifestStore, 20);
   if (pending.length === 0) {
     await refreshManifestStats(state);
     return;
@@ -627,16 +551,13 @@ async function pushOutbox(state: DaemonState): Promise<void> {
   for (const appliedItem of applied) {
     const item = pending[appliedItem.index];
     if (!item) continue;
-    item.status = "applied";
-    item.appliedAt = now;
-    item.updatedAt = now;
-    item.attempts += 1;
+    markOutboxApplied(state.manifestStore, item.id, now);
     const resourceId = appliedItem.resourceId ?? extractResourceId(appliedItem.result);
-    const existing = findResource(manifest, item.relativePath);
+    const existing = getResource(state.manifestStore, item.relativePath);
     if (item.action === "delete") {
-      manifest.resources = (manifest.resources ?? []).filter((resource) => resource.relativePath !== item.relativePath);
+      removeResource(state.manifestStore, item.relativePath);
     } else {
-      upsertResource(manifest, {
+      upsertManifestResource(state.manifestStore, {
         ...(existing ?? { relativePath: item.relativePath, domain: "artifacts", kind: artifactKindForPath(item.relativePath) }),
         resourceId: resourceId ?? existing?.resourceId,
         dirty: false,
@@ -647,13 +568,10 @@ async function pushOutbox(state: DaemonState): Promise<void> {
   for (const rejectedItem of rejected) {
     const item = pending[rejectedItem.index];
     if (!item) continue;
-    item.status = "failed";
-    item.lastError = rejectedItem.message ?? rejectedItem.code ?? "Sync push rejected";
-    item.updatedAt = now;
-    item.attempts += 1;
+    markOutboxFailed(state.manifestStore, item.id, rejectedItem.message ?? rejectedItem.code ?? "Sync push rejected", now);
   }
-  manifest.lastPushAt = now;
-  await writeManifest(state.config, manifest);
+  setMeta(state.manifestStore, "lastPushAt", now);
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
   await refreshManifestStats(state);
 }
 
@@ -678,22 +596,20 @@ async function failJob(state: DaemonState, job: LocalJob, error: unknown): Promi
   });
 }
 
-async function recordManifestJob(config: DaemonConfig, job: LocalJob, result: Record<string, unknown>): Promise<void> {
-  const manifest = await readManifest(config);
-  const jobs = Array.isArray(manifest.jobs) ? manifest.jobs : [];
-  jobs.push({
+async function recordManifestJob(state: DaemonState, job: LocalJob, result: Record<string, unknown>): Promise<void> {
+  const completedAt = new Date().toISOString();
+  recordLocalJob(state.manifestStore, {
     jobId: job.id,
     kind: job.kind,
     target: job.target,
     result,
-    completedAt: new Date().toISOString()
+    completedAt
   });
-  manifest.jobs = jobs.slice(-500);
 
   const localPath = typeof result.localPath === "string" ? result.localPath : undefined;
-  const relativePath = localPath && job.target === "sync-folder" ? relativeSyncPath(config, localPath) : undefined;
+  const relativePath = localPath && job.target === "sync-folder" ? relativeSyncPath(state.config, localPath) : undefined;
   if (relativePath) {
-    upsertResource(manifest, {
+    upsertManifestResource(state.manifestStore, {
       relativePath,
       domain: "artifacts",
       kind: artifactKindForPath(relativePath),
@@ -705,12 +621,12 @@ async function recordManifestJob(config: DaemonConfig, job: LocalJob, result: Re
       checksum: typeof result.checksum === "string" ? result.checksum : undefined,
       sizeBytes: typeof result.sizeBytes === "number" ? result.sizeBytes : undefined,
       dirty: false,
-      lastSeenAt: new Date().toISOString(),
-      lastSyncedAt: new Date().toISOString()
+      lastSeenAt: completedAt,
+      lastSyncedAt: completedAt
     });
   }
 
-  await writeManifest(config, manifest);
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
 }
 
 async function processJob(state: DaemonState, job: LocalJob): Promise<void> {
@@ -719,7 +635,7 @@ async function processJob(state: DaemonState, job: LocalJob): Promise<void> {
       throw new Error(`Unsupported local job kind: ${job.kind}`);
     }
     const result = await downloadJobFile(state, job);
-    await recordManifestJob(state.config, job, result);
+    await recordManifestJob(state, job, result);
     await completeJob(state, job, result);
     state.processedJobs += 1;
   } catch (error) {
@@ -755,6 +671,7 @@ function startStatusServer(state: DaemonState): void {
         status: "ok",
         coreUrl: state.config.coreUrl,
         syncRoot: state.config.syncRoot,
+        manifestDbPath: state.manifestStore.path,
         downloadsDir: state.config.downloadsDir,
         localClientId: state.identity?.localClientId,
         lastHeartbeatAt: state.lastHeartbeatAt,
@@ -779,8 +696,12 @@ function startStatusServer(state: DaemonState): void {
 async function main(): Promise<void> {
   const config = readConfig();
   await ensureDirs(config);
+  const manifestStore = openManifestStore(config.syncRoot);
+  await migrateLegacyManifestJson(config.syncRoot, manifestStore);
+  await writeManifestDebugSnapshot(config.syncRoot, manifestStore);
   const state: DaemonState = {
     config,
+    manifestStore,
     identity: await readIdentity(config),
     processedJobs: 0,
     outboxPending: 0,
