@@ -11,8 +11,10 @@ import {
 } from "../lib/api";
 import {
   getWorkbenchLocalModeEnabled,
+  getWorkbenchLocalDaemonTokenInitialValue,
   getWorkbenchLocalDaemonUrlInitialValue,
   setWorkbenchLocalModeEnabled,
+  setWorkbenchLocalDaemonToken,
   setWorkbenchLocalDaemonUrl
 } from "../config/services";
 import {
@@ -172,6 +174,7 @@ export function SettingsPage() {
   const [localClientsLoading, setLocalClientsLoading] = useState(false);
   const [localModeEnabled, setLocalModeEnabled] = useState(getWorkbenchLocalModeEnabled());
   const [localDaemonUrlInput, setLocalDaemonUrlInput] = useState(getWorkbenchLocalDaemonUrlInitialValue());
+  const [localDaemonTokenInput, setLocalDaemonTokenInput] = useState(getWorkbenchLocalDaemonTokenInitialValue());
   const [localDaemonStatus, setLocalDaemonStatus] = useState<LocalDaemonStatus | undefined>(undefined);
   const [localDaemonConflicts, setLocalDaemonConflicts] = useState<LocalDaemonConflictRecord[]>([]);
   const [localDaemonMessage, setLocalDaemonMessage] = useState("");
@@ -373,6 +376,17 @@ export function SettingsPage() {
       const message = error instanceof Error ? error.message : "Invalid local daemon URL";
       setLocalDaemonMessage(message);
     }
+  };
+
+  const saveLocalDaemonToken = () => {
+    const normalized = setWorkbenchLocalDaemonToken(localDaemonTokenInput);
+    setLocalDaemonTokenInput(normalized);
+    setLocalDaemonMessage(
+      normalized
+        ? "Local daemon token saved."
+        : "Local daemon token cleared. Unauthenticated dev mode is active when the daemon has no token."
+    );
+    void refreshLocalDaemon(false);
   };
 
   const toggleLocalMode = (enabled: boolean) => {
@@ -1198,6 +1212,18 @@ export function SettingsPage() {
                   placeholder="http://127.0.0.1:35780"
                 />
                 <button type="button" onClick={saveLocalDaemonUrl}>Save URL</button>
+              </div>
+
+              <div className="account-local-daemon-token">
+                <input
+                  type="password"
+                  value={localDaemonTokenInput}
+                  onChange={(event) => setLocalDaemonTokenInput(event.target.value)}
+                  placeholder="Local daemon API token"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <button type="button" onClick={saveLocalDaemonToken}>Save Token</button>
               </div>
 
               <div className="account-local-native-actions">

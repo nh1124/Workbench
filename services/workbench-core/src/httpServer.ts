@@ -30,6 +30,7 @@ import {
   failLocalJobForClient,
   getLocalJob,
   getLocalJobForClient,
+  listLocalJobEventsForUser,
   listLocalClients,
   listLocalJobsForUser,
   LocalClientStoreError,
@@ -985,6 +986,7 @@ const localJobStatusSchema = z.enum(["pending", "running", "completed", "failed"
 
 const localJobCreateSchema = z.object({
   localClientId: z.string().min(1).optional(),
+  idempotencyKey: z.string().min(1).max(256).optional(),
   kind: localJobKindSchema,
   target: localJobTargetSchema,
   payload: jsonRecordSchema.optional(),
@@ -1000,7 +1002,9 @@ const localJobCompleteSchema = z.object({
 });
 
 const localJobFailSchema = z.object({
-  error: z.string().min(1)
+  error: z.string().min(1),
+  retryable: z.boolean().optional(),
+  retryAfterSeconds: z.number().int().nonnegative().max(86400).optional()
 });
 
 const syncPushSchema = z.object({
@@ -3337,12 +3341,35 @@ app.post("/api/local-jobs", async (req, res) => {
   try {
     const job = await createLocalJob(authContext.userId, {
       localClientId: parsed.data.localClientId,
+      idempotencyKey: parsed.data.idempotencyKey,
       kind: parsed.data.kind as LocalJobKind,
       target: parsed.data.target as LocalJobTarget,
       payload: parsed.data.payload,
       ttlSeconds: parsed.data.ttlSeconds
     });
     return res.status(201).json(job);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.get("/api/local-jobs/:jobId/events", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
+
+  try {
+    const job = await getLocalJob(authContext.userId, String(req.params.jobId));
+    if (!job) {
+      return res.status(404).json({ message: "Local job not found" });
+    }
+    const events = await listLocalJobEventsForUser(
+      authContext.userId,
+      String(req.params.jobId),
+      Number.isFinite(limit) ? limit : undefined
+    );
+    return res.json({ items: events });
   } catch (error) {
     return respondInternalError(res, error);
   }
@@ -3413,7 +3440,10 @@ app.post("/api/local-jobs/:jobId/fail", async (req, res) => {
   }
 
   try {
-    const job = await failLocalJobForClient(localContext.client.id, String(req.params.jobId), parsed.data.error);
+    const job = await failLocalJobForClient(localContext.client.id, String(req.params.jobId), parsed.data.error, {
+      retryable: parsed.data.retryable,
+      retryAfterSeconds: parsed.data.retryAfterSeconds
+    });
     if (!job) {
       return res.status(404).json({ message: "Local job not found or already terminal" });
     }

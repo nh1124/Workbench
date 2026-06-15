@@ -724,13 +724,15 @@
   font-size: 0.72rem;
 }
 
-.account-local-daemon-url {
+.account-local-daemon-url,
+.account-local-daemon-token {
   display: flex;
   gap: 0.5rem;
   align-items: center;
 }
 
-.account-local-daemon-url input {
+.account-local-daemon-url input,
+.account-local-daemon-token input {
   flex: 1;
   min-width: 0;
   height: 2.2rem;
@@ -742,6 +744,7 @@
 }
 
 .account-local-daemon-url button,
+.account-local-daemon-token button,
 .account-local-native-actions button,
 .account-local-conflict-actions button {
   min-height: 2.1rem;
@@ -882,7 +885,8 @@
     justify-items: start;
   }
 
-  .account-local-daemon-url {
+  .account-local-daemon-url,
+  .account-local-daemon-token {
     flex-direction: column;
     align-items: stretch;
   }

@@ -187,11 +187,13 @@ npm run build
 
 ### Local Job Robustness
 
-- `[partial]` Claim/complete/fail exists, but retry policy is minimal.
-- `[pending]` Add retry scheduling with `next_attempt_at`.
-- `[pending]` Add expired job cleanup and terminal status handling.
-- `[pending]` Add idempotency keys for job creation from MCP calls.
-- `[pending]` Add job event log/history table.
+- `[implemented]` Claim/complete/fail exists.
+- `[implemented]` Add retry scheduling with `next_attempt_at`.
+- `[implemented]` Add expired job cleanup and terminal status handling.
+- `[implemented]` Add idempotency keys for job creation from MCP calls and HTTP job creation.
+- `[implemented]` Add job event log/history table.
+  - `local_job_events` records create, claim, complete, fail, retry schedule, and expiry.
+  - `GET /api/local-jobs/:jobId/events` exposes owner-visible event history.
 - `[pending]` Add task attachment MCP convenience tool, for example `tasks.attachment.download.to_client`.
 - `[implemented]` Local job list/filter API exists for recent UI history.
 - `[implemented]` UI job history and result path display exists.
@@ -303,10 +305,13 @@ npm run build
   - open downloads folder,
   - start/stop daemon,
   - read daemon status.
-- `[partial]` The UI can invoke the native daemon commands from Settings.
+- `[implemented]` The UI can invoke the native daemon commands from Settings.
   - Folder open/status commands are functional in Tauri.
-  - Start/stop currently return explicit sidecar-not-configured errors.
-- `[pending]` Package daemon as Tauri sidecar or managed background process.
+  - Start/stop now manage a background daemon process.
+  - `WORKBENCH_DAEMON_COMMAND` and `WORKBENCH_DAEMON_ARGS` can override the default command.
+  - Default development command is `npm run dev --workspace services/sync-daemon` from the inferred repo root.
+- `[implemented]` Add managed background process support for development/desktop.
+- `[pending]` Package daemon as a production Tauri sidecar binary.
 - `[pending]` Add optional auto-start.
 - `[pending]` Store local client token in OS secure storage instead of plain `.workbench/client-identity.json`.
 
@@ -314,18 +319,22 @@ npm run build
 
 - `[partial]` Daemon writes only to configured downloads or sync folder.
 - `[partial]` Daemon loopback API allows browser UI access with permissive local CORS.
+  - Auth headers are allowed for local daemon token use.
 - `[pending]` Add path allowlist tests for Windows/macOS/Linux edge cases.
-- `[pending]` Add local daemon loopback token for status/API endpoints.
+- `[implemented]` Add optional local daemon loopback token for status/API endpoints.
+  - `WORKBENCH_DAEMON_API_TOKEN` or `WORKBENCH_LOCAL_DAEMON_TOKEN` enables token enforcement.
+  - UI stores/sends the token via `x-workbench-daemon-token`.
+  - `/health` remains unauthenticated and returns only a minimal `{ status: "ok" }` payload.
 - `[pending]` Avoid returning sensitive local paths to non-local callers unless explicitly requested and authorized.
 - `[pending]` Add per-job user confirmation policy for downloads outside sync folder if that behavior is later allowed.
 
 ## Recommended Next Implementation Order
 
-1. Package `services/sync-daemon` as a Tauri sidecar or managed background process, then replace the current start/stop error skeletons.
-2. Add loopback API authentication for daemon HTTP endpoints and wire the token into the desktop UI.
-3. Add local job retry scheduling, expiry cleanup, idempotency keys, and job event history/audit rows.
-4. Add remote snapshot reconciliation so daemon startup can merge cloud changes made while the PC was offline.
-5. Add tombstone semantics and consistent sync event recording for all remaining Core mutation paths.
+1. Add remote snapshot reconciliation so daemon startup can merge cloud changes made while the PC was offline.
+2. Add tombstone semantics and consistent sync event recording for all remaining Core mutation paths.
+3. Package `services/sync-daemon` as a production Tauri sidecar binary and add optional auto-start.
+4. Add path allowlist tests for Windows/macOS/Linux edge cases and tighten local-path disclosure policy.
+5. Add scoped local client capabilities enforcement and broader audit trail for registration/default/disable changes.
 6. Decide whether empty local folders should become first-class cloud folder resources immediately or remain local until they contain synced files.
 
 ## Current Daemon Usage
@@ -336,7 +345,16 @@ First registration requires a normal Workbench access token.
 $env:WORKBENCH_CORE_URL="http://localhost:4100"
 $env:WORKBENCH_ACCESS_TOKEN="<access token>"
 $env:WORKBENCH_SYNC_ROOT="$HOME\WorkbenchSync"
+$env:WORKBENCH_DAEMON_API_TOKEN="<optional loopback token>"
 npm run dev --workspace services/sync-daemon
 ```
 
 After registration, the daemon reuses `.workbench/client-identity.json` unless `WORKBENCH_LOCAL_CLIENT_ID` and `WORKBENCH_LOCAL_CLIENT_TOKEN` are provided.
+
+Desktop `start_daemon` now launches a managed background process. By default it runs:
+
+```powershell
+npm run dev --workspace services/sync-daemon
+```
+
+Override with `WORKBENCH_DAEMON_COMMAND` and optional `WORKBENCH_DAEMON_ARGS` when using a packaged daemon.

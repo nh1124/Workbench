@@ -1,9 +1,11 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import type { Pool, PoolClient } from "pg";
 import { ensureCoreSchema, getCorePool } from "./db.js";
 
 export type LocalJobKind = "download_artifact" | "download_task_attachment" | "materialize_resource";
 export type LocalJobTarget = "downloads" | "sync-folder";
 export type LocalJobStatus = "pending" | "running" | "completed" | "failed";
+export type LocalJobEventType = "created" | "claimed" | "completed" | "failed" | "retry_scheduled" | "expired";
 
 export class LocalClientStoreError extends Error {
   status: number;
@@ -41,6 +43,7 @@ export interface LocalJob {
   id: string;
   userId: string;
   localClientId: string;
+  idempotencyKey?: string;
   kind: LocalJobKind;
   target: LocalJobTarget;
   payload: Record<string, unknown>;
@@ -49,11 +52,22 @@ export interface LocalJob {
   claimedAt?: string;
   completedAt?: string;
   failedAt?: string;
+  nextAttemptAt?: string;
   expiresAt?: string;
   result: Record<string, unknown>;
   errorMessage?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface LocalJobEvent {
+  id: string;
+  jobId: string;
+  userId: string;
+  localClientId: string;
+  eventType: LocalJobEventType;
+  detail: Record<string, unknown>;
+  createdAt: string;
 }
 
 type LocalClientRow = {
@@ -78,6 +92,7 @@ type LocalJobRow = {
   id: string;
   user_id: string;
   local_client_id: string;
+  idempotency_key: string | null;
   kind: string;
   target: string;
   payload_json: unknown;
@@ -86,6 +101,7 @@ type LocalJobRow = {
   claimed_at: string | null;
   completed_at: string | null;
   failed_at: string | null;
+  next_attempt_at: string | null;
   expires_at: string | null;
   result_json: unknown;
   error_message: string | null;
@@ -93,7 +109,18 @@ type LocalJobRow = {
   updated_at: string;
 };
 
+type LocalJobEventRow = {
+  id: string;
+  job_id: string;
+  user_id: string;
+  local_client_id: string;
+  event_type: string;
+  detail_json: unknown;
+  created_at: string;
+};
+
 const ONLINE_WINDOW_MS = 5 * 60 * 1000;
+const ACTIVE_IDEMPOTENCY_STATUSES = ["pending", "running", "completed"] as const;
 
 function jsonObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
@@ -142,6 +169,7 @@ function toJob(row: LocalJobRow): LocalJob {
     id: row.id,
     userId: row.user_id,
     localClientId: row.local_client_id,
+    idempotencyKey: row.idempotency_key ?? undefined,
     kind: row.kind as LocalJobKind,
     target: row.target as LocalJobTarget,
     payload: jsonObject(row.payload_json),
@@ -150,12 +178,92 @@ function toJob(row: LocalJobRow): LocalJob {
     claimedAt: toIso(row.claimed_at),
     completedAt: toIso(row.completed_at),
     failedAt: toIso(row.failed_at),
+    nextAttemptAt: toIso(row.next_attempt_at),
     expiresAt: toIso(row.expires_at),
     result: jsonObject(row.result_json),
     errorMessage: row.error_message ?? undefined,
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString()
   };
+}
+
+function toJobEvent(row: LocalJobEventRow): LocalJobEvent {
+  return {
+    id: row.id,
+    jobId: row.job_id,
+    userId: row.user_id,
+    localClientId: row.local_client_id,
+    eventType: row.event_type as LocalJobEventType,
+    detail: jsonObject(row.detail_json),
+    createdAt: new Date(row.created_at).toISOString()
+  };
+}
+
+async function recordLocalJobEvent(
+  pool: Pool | PoolClient,
+  job: { id: string; userId: string; localClientId: string },
+  eventType: LocalJobEventType,
+  detail: Record<string, unknown> = {}
+): Promise<void> {
+  await pool.query(
+    `
+      INSERT INTO local_job_events (job_id, user_id, local_client_id, event_type, detail_json)
+      VALUES ($1, $2, $3, $4, $5::jsonb)
+    `,
+    [job.id, job.userId, job.localClientId, eventType, JSON.stringify(detail)]
+  );
+}
+
+async function markExpiredLocalJobsForUser(userId: string): Promise<void> {
+  const pool = getCorePool();
+  await pool.query(
+    `
+      WITH expired AS (
+        UPDATE local_jobs
+        SET
+          status = 'failed',
+          failed_at = NOW(),
+          next_attempt_at = NULL,
+          error_message = COALESCE(error_message, 'expired'),
+          updated_at = NOW()
+        WHERE user_id = $1
+          AND status IN ('pending', 'running')
+          AND expires_at IS NOT NULL
+          AND expires_at <= NOW()
+        RETURNING id, user_id, local_client_id
+      )
+      INSERT INTO local_job_events (job_id, user_id, local_client_id, event_type, detail_json)
+      SELECT id, user_id, local_client_id, 'expired', jsonb_build_object('reason', 'expired')
+      FROM expired
+    `,
+    [userId]
+  );
+}
+
+async function markExpiredLocalJobsForClient(localClientId: string): Promise<void> {
+  const pool = getCorePool();
+  await pool.query(
+    `
+      WITH expired AS (
+        UPDATE local_jobs
+        SET
+          status = 'failed',
+          failed_at = NOW(),
+          next_attempt_at = NULL,
+          error_message = COALESCE(error_message, 'expired'),
+          updated_at = NOW()
+        WHERE local_client_id = $1
+          AND status IN ('pending', 'running')
+          AND expires_at IS NOT NULL
+          AND expires_at <= NOW()
+        RETURNING id, user_id, local_client_id
+      )
+      INSERT INTO local_job_events (job_id, user_id, local_client_id, event_type, detail_json)
+      SELECT id, user_id, local_client_id, 'expired', jsonb_build_object('reason', 'expired')
+      FROM expired
+    `,
+    [localClientId]
+  );
 }
 
 async function readClientById(userId: string, id: string): Promise<LocalClient | undefined> {
@@ -450,6 +558,7 @@ export async function createLocalJob(
   userId: string,
   input: {
     localClientId?: string;
+    idempotencyKey?: string;
     kind: LocalJobKind;
     target: LocalJobTarget;
     payload?: Record<string, unknown>;
@@ -457,34 +566,96 @@ export async function createLocalJob(
   }
 ): Promise<LocalJob> {
   await ensureCoreSchema();
+  await markExpiredLocalJobsForUser(userId);
   const pool = getCorePool();
   const client = await selectLocalClientForJob(userId, input.localClientId);
   const id = randomUUID();
   const ttlSeconds = Number.isFinite(input.ttlSeconds) ? Math.max(60, Math.min(86400, Math.floor(input.ttlSeconds ?? 86400))) : 86400;
+  const idempotencyKey = input.idempotencyKey?.trim() || undefined;
+  const dbClient = await pool.connect();
 
-  const result = await pool.query<LocalJobRow>(
-    `
-      INSERT INTO local_jobs (
-        id, user_id, local_client_id, kind, target, payload_json, expires_at
-      )
-      VALUES ($1, $2, $3, $4, $5, $6::jsonb, NOW() + ($7::text || ' seconds')::interval)
-      RETURNING
-        id, user_id, local_client_id, kind, target, payload_json, status, attempts,
-        claimed_at, completed_at, failed_at, expires_at, result_json, error_message, created_at, updated_at
-    `,
-    [id, userId, client.id, input.kind, input.target, JSON.stringify(input.payload ?? {}), ttlSeconds]
-  );
-  return toJob(result.rows[0]);
+  try {
+    await dbClient.query("BEGIN");
+
+    if (idempotencyKey) {
+      const inserted = await dbClient.query<LocalJobRow>(
+        `
+          INSERT INTO local_jobs (
+            id, user_id, local_client_id, idempotency_key, kind, target, payload_json, expires_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, NOW() + ($8::text || ' seconds')::interval)
+          ON CONFLICT (user_id, local_client_id, idempotency_key)
+            WHERE idempotency_key IS NOT NULL
+              AND status IN ('pending', 'running', 'completed')
+          DO NOTHING
+          RETURNING
+            id, user_id, local_client_id, idempotency_key, kind, target, payload_json, status, attempts,
+            claimed_at, completed_at, failed_at, next_attempt_at, expires_at, result_json, error_message, created_at, updated_at
+        `,
+        [id, userId, client.id, idempotencyKey, input.kind, input.target, JSON.stringify(input.payload ?? {}), ttlSeconds]
+      );
+      if (inserted.rows[0]) {
+        const job = toJob(inserted.rows[0]);
+        await recordLocalJobEvent(dbClient, job, "created", { idempotencyKey });
+        await dbClient.query("COMMIT");
+        return job;
+      }
+
+      const existing = await dbClient.query<LocalJobRow>(
+        `
+          SELECT
+            id, user_id, local_client_id, idempotency_key, kind, target, payload_json, status, attempts,
+            claimed_at, completed_at, failed_at, next_attempt_at, expires_at, result_json, error_message, created_at, updated_at
+          FROM local_jobs
+          WHERE user_id = $1
+            AND local_client_id = $2
+            AND idempotency_key = $3
+            AND status = ANY($4::text[])
+          ORDER BY created_at ASC
+          LIMIT 1
+        `,
+        [userId, client.id, idempotencyKey, ACTIVE_IDEMPOTENCY_STATUSES]
+      );
+      if (existing.rows[0]) {
+        await dbClient.query("COMMIT");
+        return toJob(existing.rows[0]);
+      }
+      throw new LocalClientStoreError(409, "LOCAL_JOB_IDEMPOTENCY_CONFLICT", "Local job idempotency key is temporarily unavailable.");
+    }
+
+    const result = await dbClient.query<LocalJobRow>(
+      `
+        INSERT INTO local_jobs (
+          id, user_id, local_client_id, kind, target, payload_json, expires_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb, NOW() + ($7::text || ' seconds')::interval)
+        RETURNING
+          id, user_id, local_client_id, idempotency_key, kind, target, payload_json, status, attempts,
+          claimed_at, completed_at, failed_at, next_attempt_at, expires_at, result_json, error_message, created_at, updated_at
+      `,
+      [id, userId, client.id, input.kind, input.target, JSON.stringify(input.payload ?? {}), ttlSeconds]
+    );
+    const job = toJob(result.rows[0]);
+    await recordLocalJobEvent(dbClient, job, "created");
+    await dbClient.query("COMMIT");
+    return job;
+  } catch (error) {
+    await dbClient.query("ROLLBACK");
+    throw error;
+  } finally {
+    dbClient.release();
+  }
 }
 
 export async function getLocalJob(userId: string, jobId: string): Promise<LocalJob | undefined> {
   await ensureCoreSchema();
+  await markExpiredLocalJobsForUser(userId);
   const pool = getCorePool();
   const result = await pool.query<LocalJobRow>(
     `
       SELECT
-        id, user_id, local_client_id, kind, target, payload_json, status, attempts,
-        claimed_at, completed_at, failed_at, expires_at, result_json, error_message, created_at, updated_at
+        id, user_id, local_client_id, idempotency_key, kind, target, payload_json, status, attempts,
+        claimed_at, completed_at, failed_at, next_attempt_at, expires_at, result_json, error_message, created_at, updated_at
       FROM local_jobs
       WHERE user_id = $1 AND id = $2
       LIMIT 1
@@ -492,6 +663,27 @@ export async function getLocalJob(userId: string, jobId: string): Promise<LocalJ
     [userId, jobId]
   );
   return result.rows[0] ? toJob(result.rows[0]) : undefined;
+}
+
+export async function listLocalJobEventsForUser(userId: string, jobId: string, limit = 100): Promise<LocalJobEvent[]> {
+  await ensureCoreSchema();
+  await markExpiredLocalJobsForUser(userId);
+  const pool = getCorePool();
+  const safeLimit = Math.max(1, Math.min(200, Math.floor(limit)));
+  const result = await pool.query<LocalJobEventRow>(
+    `
+      SELECT e.id, e.job_id, e.user_id, e.local_client_id, e.event_type, e.detail_json, e.created_at
+      FROM local_job_events e
+      JOIN local_jobs j ON j.id = e.job_id
+      WHERE e.user_id = $1
+        AND e.job_id = $2
+        AND j.user_id = $1
+      ORDER BY e.created_at ASC, e.id ASC
+      LIMIT $3
+    `,
+    [userId, jobId, safeLimit]
+  );
+  return result.rows.map(toJobEvent);
 }
 
 export async function listLocalJobsForUser(
@@ -503,6 +695,7 @@ export async function listLocalJobsForUser(
   } = {}
 ): Promise<LocalJob[]> {
   await ensureCoreSchema();
+  await markExpiredLocalJobsForUser(userId);
   const pool = getCorePool();
   const values: unknown[] = [userId];
   const where = ["user_id = $1"];
@@ -519,8 +712,8 @@ export async function listLocalJobsForUser(
   const result = await pool.query<LocalJobRow>(
     `
       SELECT
-        id, user_id, local_client_id, kind, target, payload_json, status, attempts,
-        claimed_at, completed_at, failed_at, expires_at, result_json, error_message, created_at, updated_at
+        id, user_id, local_client_id, idempotency_key, kind, target, payload_json, status, attempts,
+        claimed_at, completed_at, failed_at, next_attempt_at, expires_at, result_json, error_message, created_at, updated_at
       FROM local_jobs
       WHERE ${where.join(" AND ")}
       ORDER BY created_at DESC
@@ -533,12 +726,13 @@ export async function listLocalJobsForUser(
 
 export async function getLocalJobForClient(localClientId: string, jobId: string): Promise<LocalJob | undefined> {
   await ensureCoreSchema();
+  await markExpiredLocalJobsForClient(localClientId);
   const pool = getCorePool();
   const result = await pool.query<LocalJobRow>(
     `
       SELECT
-        id, user_id, local_client_id, kind, target, payload_json, status, attempts,
-        claimed_at, completed_at, failed_at, expires_at, result_json, error_message, created_at, updated_at
+        id, user_id, local_client_id, idempotency_key, kind, target, payload_json, status, attempts,
+        claimed_at, completed_at, failed_at, next_attempt_at, expires_at, result_json, error_message, created_at, updated_at
       FROM local_jobs
       WHERE local_client_id = $1 AND id = $2
       LIMIT 1
@@ -550,6 +744,7 @@ export async function getLocalJobForClient(localClientId: string, jobId: string)
 
 export async function claimLocalJobsForClient(localClientId: string, limit: number): Promise<LocalJob[]> {
   await ensureCoreSchema();
+  await markExpiredLocalJobsForClient(localClientId);
   const pool = getCorePool();
   const safeLimit = Math.max(1, Math.min(25, Math.floor(limit)));
   const result = await pool.query<LocalJobRow>(
@@ -560,21 +755,35 @@ export async function claimLocalJobsForClient(localClientId: string, limit: numb
         WHERE local_client_id = $1
           AND status = 'pending'
           AND (expires_at IS NULL OR expires_at > NOW())
+          AND (next_attempt_at IS NULL OR next_attempt_at <= NOW())
         ORDER BY created_at ASC
         LIMIT $2
         FOR UPDATE SKIP LOCKED
+      ),
+      claimed AS (
+        UPDATE local_jobs j
+        SET
+          status = 'running',
+          attempts = j.attempts + 1,
+          claimed_at = NOW(),
+          next_attempt_at = NULL,
+          updated_at = NOW()
+        FROM selected
+        WHERE j.id = selected.id
+        RETURNING
+          j.id, j.user_id, j.local_client_id, j.idempotency_key, j.kind, j.target, j.payload_json, j.status, j.attempts,
+          j.claimed_at, j.completed_at, j.failed_at, j.next_attempt_at, j.expires_at, j.result_json, j.error_message, j.created_at, j.updated_at
+      ),
+      events AS (
+        INSERT INTO local_job_events (job_id, user_id, local_client_id, event_type, detail_json)
+        SELECT id, user_id, local_client_id, 'claimed', jsonb_build_object('attempts', attempts)
+        FROM claimed
+        RETURNING id
       )
-      UPDATE local_jobs j
-      SET
-        status = 'running',
-        attempts = j.attempts + 1,
-        claimed_at = NOW(),
-        updated_at = NOW()
-      FROM selected
-      WHERE j.id = selected.id
-      RETURNING
-        j.id, j.user_id, j.local_client_id, j.kind, j.target, j.payload_json, j.status, j.attempts,
-        j.claimed_at, j.completed_at, j.failed_at, j.expires_at, j.result_json, j.error_message, j.created_at, j.updated_at
+      SELECT
+        id, user_id, local_client_id, idempotency_key, kind, target, payload_json, status, attempts,
+        claimed_at, completed_at, failed_at, next_attempt_at, expires_at, result_json, error_message, created_at, updated_at
+      FROM claimed
     `,
     [localClientId, safeLimit]
   );
@@ -590,18 +799,31 @@ export async function completeLocalJobForClient(
   const pool = getCorePool();
   const result = await pool.query<LocalJobRow>(
     `
-      UPDATE local_jobs
-      SET
-        status = 'completed',
-        result_json = $3::jsonb,
-        completed_at = NOW(),
-        failed_at = NULL,
-        error_message = NULL,
-        updated_at = NOW()
-      WHERE local_client_id = $1 AND id = $2 AND status IN ('pending', 'running')
-      RETURNING
-        id, user_id, local_client_id, kind, target, payload_json, status, attempts,
-        claimed_at, completed_at, failed_at, expires_at, result_json, error_message, created_at, updated_at
+      WITH updated AS (
+        UPDATE local_jobs
+        SET
+          status = 'completed',
+          result_json = $3::jsonb,
+          completed_at = NOW(),
+          failed_at = NULL,
+          next_attempt_at = NULL,
+          error_message = NULL,
+          updated_at = NOW()
+        WHERE local_client_id = $1 AND id = $2 AND status IN ('pending', 'running')
+        RETURNING
+          id, user_id, local_client_id, idempotency_key, kind, target, payload_json, status, attempts,
+          claimed_at, completed_at, failed_at, next_attempt_at, expires_at, result_json, error_message, created_at, updated_at
+      ),
+      events AS (
+        INSERT INTO local_job_events (job_id, user_id, local_client_id, event_type, detail_json)
+        SELECT id, user_id, local_client_id, 'completed', jsonb_build_object()
+        FROM updated
+        RETURNING id
+      )
+      SELECT
+        id, user_id, local_client_id, idempotency_key, kind, target, payload_json, status, attempts,
+        claimed_at, completed_at, failed_at, next_attempt_at, expires_at, result_json, error_message, created_at, updated_at
+      FROM updated
     `,
     [localClientId, jobId, JSON.stringify(resultPayload)]
   );
@@ -611,24 +833,58 @@ export async function completeLocalJobForClient(
 export async function failLocalJobForClient(
   localClientId: string,
   jobId: string,
-  errorMessage: string
+  errorMessage: string,
+  options: {
+    retryable?: boolean;
+    retryAfterSeconds?: number;
+  } = {}
 ): Promise<LocalJob | undefined> {
   await ensureCoreSchema();
   const pool = getCorePool();
+  const retryable = options.retryable === false ? false : options.retryable === true || options.retryAfterSeconds !== undefined;
+  const retryAfterSeconds =
+    options.retryAfterSeconds === undefined ? undefined : Math.max(0, Math.min(86400, Math.floor(options.retryAfterSeconds)));
   const result = await pool.query<LocalJobRow>(
     `
-      UPDATE local_jobs
-      SET
-        status = 'failed',
-        failed_at = NOW(),
-        error_message = $3,
-        updated_at = NOW()
-      WHERE local_client_id = $1 AND id = $2 AND status IN ('pending', 'running')
-      RETURNING
-        id, user_id, local_client_id, kind, target, payload_json, status, attempts,
-        claimed_at, completed_at, failed_at, expires_at, result_json, error_message, created_at, updated_at
+      WITH updated AS (
+        UPDATE local_jobs
+        SET
+          status = CASE WHEN $4::boolean THEN 'pending' ELSE 'failed' END,
+          claimed_at = CASE WHEN $4::boolean THEN NULL ELSE claimed_at END,
+          failed_at = CASE WHEN $4::boolean THEN NULL ELSE NOW() END,
+          next_attempt_at = CASE
+            WHEN $4::boolean AND $5::integer IS NOT NULL THEN NOW() + ($5::text || ' seconds')::interval
+            WHEN $4::boolean THEN NULL
+            ELSE NULL
+          END,
+          error_message = $3,
+          updated_at = NOW()
+        WHERE local_client_id = $1 AND id = $2 AND status IN ('pending', 'running')
+        RETURNING
+          id, user_id, local_client_id, idempotency_key, kind, target, payload_json, status, attempts,
+          claimed_at, completed_at, failed_at, next_attempt_at, expires_at, result_json, error_message, created_at, updated_at
+      ),
+      events AS (
+        INSERT INTO local_job_events (job_id, user_id, local_client_id, event_type, detail_json)
+        SELECT
+          id,
+          user_id,
+          local_client_id,
+          CASE WHEN $4::boolean THEN 'retry_scheduled' ELSE 'failed' END,
+          jsonb_build_object(
+            'error', $3::text,
+            'retryable', $4::boolean,
+            'retryAfterSeconds', $5::integer
+          )
+        FROM updated
+        RETURNING id
+      )
+      SELECT
+        id, user_id, local_client_id, idempotency_key, kind, target, payload_json, status, attempts,
+        claimed_at, completed_at, failed_at, next_attempt_at, expires_at, result_json, error_message, created_at, updated_at
+      FROM updated
     `,
-    [localClientId, jobId, errorMessage.slice(0, 2000)]
+    [localClientId, jobId, errorMessage.slice(0, 2000), retryable, retryAfterSeconds ?? null]
   );
   return result.rows[0] ? toJob(result.rows[0]) : undefined;
 }

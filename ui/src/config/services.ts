@@ -1,10 +1,13 @@
 const CORE_URL_STORAGE_KEY = "workbench-core-url";
 const LOCAL_DAEMON_URL_STORAGE_KEY = "workbench-local-daemon-url";
+const LOCAL_DAEMON_TOKEN_STORAGE_KEY = "workbench-local-daemon-token";
 const LOCAL_MODE_ENABLED_STORAGE_KEY = "workbench-local-mode-enabled";
 export const WORKBENCH_LOCAL_DAEMON_URL_CHANGED_EVENT = "workbench-local-daemon-url-changed";
 export const WORKBENCH_LOCAL_MODE_CHANGED_EVENT = "workbench-local-mode-changed";
 
-function readViteEnv(name: "VITE_WORKBENCH_CORE_URL" | "VITE_WORKBENCH_LOCAL_DAEMON_URL"): string {
+function readViteEnv(
+  name: "VITE_WORKBENCH_CORE_URL" | "VITE_WORKBENCH_LOCAL_DAEMON_URL" | "VITE_WORKBENCH_LOCAL_DAEMON_TOKEN"
+): string {
   const value = import.meta.env[name];
   return typeof value === "string" ? value.trim() : "";
 }
@@ -39,6 +42,7 @@ function normalizeWorkbenchLocalDaemonUrl(raw: string): string {
 
 const envWorkbenchCoreUrlFallback = readViteEnv("VITE_WORKBENCH_CORE_URL");
 const envWorkbenchLocalDaemonUrlFallback = readViteEnv("VITE_WORKBENCH_LOCAL_DAEMON_URL") || "http://127.0.0.1:35780";
+const envWorkbenchLocalDaemonTokenFallback = readViteEnv("VITE_WORKBENCH_LOCAL_DAEMON_TOKEN");
 
 const envWorkbenchCoreUrl = (() => {
   if (!envWorkbenchCoreUrlFallback) return "";
@@ -62,6 +66,7 @@ const envWorkbenchLocalDaemonUrl = (() => {
 
 let workbenchCoreUrlCache: string | undefined;
 let workbenchLocalDaemonUrlCache: string | undefined;
+let workbenchLocalDaemonTokenCache: string | undefined;
 let workbenchLocalModeEnabledCache: boolean | undefined;
 
 function isServedByWorkbenchCore(): boolean {
@@ -128,6 +133,24 @@ function persistWorkbenchLocalDaemonUrl(value: string): void {
   window.localStorage.setItem(LOCAL_DAEMON_URL_STORAGE_KEY, value);
 }
 
+function readStoredWorkbenchLocalDaemonTokenRaw(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  const raw = window.localStorage.getItem(LOCAL_DAEMON_TOKEN_STORAGE_KEY);
+  if (!raw) return undefined;
+
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function persistWorkbenchLocalDaemonToken(value: string): void {
+  if (typeof window === "undefined") return;
+  if (value) {
+    window.localStorage.setItem(LOCAL_DAEMON_TOKEN_STORAGE_KEY, value);
+  } else {
+    window.localStorage.removeItem(LOCAL_DAEMON_TOKEN_STORAGE_KEY);
+  }
+}
+
 function readStoredWorkbenchLocalModeEnabled(): boolean {
   if (typeof window === "undefined") return false;
   return window.localStorage.getItem(LOCAL_MODE_ENABLED_STORAGE_KEY) === "true";
@@ -150,6 +173,12 @@ export function getWorkbenchLocalDaemonUrl(): string {
   if (workbenchLocalDaemonUrlCache !== undefined) return workbenchLocalDaemonUrlCache;
   workbenchLocalDaemonUrlCache = readStoredWorkbenchLocalDaemonUrl() ?? envWorkbenchLocalDaemonUrl;
   return workbenchLocalDaemonUrlCache;
+}
+
+export function getWorkbenchLocalDaemonToken(): string {
+  if (workbenchLocalDaemonTokenCache !== undefined) return workbenchLocalDaemonTokenCache;
+  workbenchLocalDaemonTokenCache = readStoredWorkbenchLocalDaemonTokenRaw() ?? envWorkbenchLocalDaemonTokenFallback;
+  return workbenchLocalDaemonTokenCache;
 }
 
 export function getWorkbenchLocalModeEnabled(): boolean {
@@ -175,6 +204,13 @@ export function setWorkbenchLocalDaemonUrl(raw: string): string {
   return normalized;
 }
 
+export function setWorkbenchLocalDaemonToken(raw: string): string {
+  const normalized = raw.trim();
+  workbenchLocalDaemonTokenCache = normalized;
+  persistWorkbenchLocalDaemonToken(normalized);
+  return normalized;
+}
+
 export function setWorkbenchLocalModeEnabled(enabled: boolean): boolean {
   workbenchLocalModeEnabledCache = enabled;
   persistWorkbenchLocalModeEnabled(enabled);
@@ -192,6 +228,10 @@ export function getWorkbenchCoreUrlInitialValue(): string {
 
 export function getWorkbenchLocalDaemonUrlInitialValue(): string {
   return readStoredWorkbenchLocalDaemonUrlRaw() ?? envWorkbenchLocalDaemonUrlFallback;
+}
+
+export function getWorkbenchLocalDaemonTokenInitialValue(): string {
+  return readStoredWorkbenchLocalDaemonTokenRaw() ?? envWorkbenchLocalDaemonTokenFallback;
 }
 
 export const navItems = [

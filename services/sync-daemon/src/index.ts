@@ -74,6 +74,7 @@ type ClientIdentity = {
 export type DaemonConfig = {
   coreUrl: string;
   accessToken?: string;
+  apiToken?: string;
   syncRoot: string;
   downloadsDir: string;
   deviceId: string;
@@ -123,6 +124,7 @@ function readConfig(): DaemonConfig {
   return {
     coreUrl: (env("WORKBENCH_CORE_URL") ?? "http://localhost:3000").replace(/\/+$/, ""),
     accessToken: env("WORKBENCH_ACCESS_TOKEN"),
+    apiToken: env("WORKBENCH_DAEMON_API_TOKEN") ?? env("WORKBENCH_LOCAL_DAEMON_TOKEN"),
     syncRoot,
     downloadsDir,
     deviceId: env("WORKBENCH_DEVICE_ID") ?? `${hostname()}-${randomUUID()}`,
@@ -1765,8 +1767,37 @@ function parseBooleanQuery(value: string | null): boolean {
 function setLoopbackCorsHeaders(res: ServerResponse): void {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, x-workbench-daemon-token");
   res.setHeader("Access-Control-Max-Age", "600");
+}
+
+export const LOOPBACK_AUTH_ERROR_CODE = "WORKBENCH_DAEMON_UNAUTHORIZED";
+export const LOOPBACK_AUTH_ERROR_MESSAGE = "Local daemon API token is required.";
+
+export function loopbackAuthBypassed(pathname: string, method?: string): boolean {
+  return method === "OPTIONS" || pathname === "/health";
+}
+
+export function requestHasValidLoopbackToken(req: IncomingMessage, expectedToken?: string): boolean {
+  if (!expectedToken) return true;
+  const headerToken = req.headers["x-workbench-daemon-token"];
+  const token = Array.isArray(headerToken) ? headerToken[0] : headerToken;
+  if (token === expectedToken) return true;
+
+  const authorization = req.headers.authorization;
+  const bearerMatch = authorization?.match(/^Bearer\s+(.+)$/i);
+  return bearerMatch?.[1] === expectedToken;
+}
+
+function requireLoopbackAuth(state: DaemonState, req: IncomingMessage, res: ServerResponse, pathname: string): boolean {
+  if (loopbackAuthBypassed(pathname, req.method)) return true;
+  if (requestHasValidLoopbackToken(req, state.config.apiToken)) return true;
+
+  writeJson(res, {
+    code: LOOPBACK_AUTH_ERROR_CODE,
+    message: LOOPBACK_AUTH_ERROR_MESSAGE
+  }, 401);
+  return false;
 }
 
 function daemonStatusPayload(state: DaemonState): Record<string, unknown> {
@@ -1832,7 +1863,15 @@ function startStatusServer(state: DaemonState): void {
       return;
     }
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
-    if (url.pathname === "/health" || url.pathname === "/status" || url.pathname === "/api/sync/status") {
+    if (!requireLoopbackAuth(state, req, res, url.pathname)) {
+      return;
+    }
+    if (url.pathname === "/health") {
+      writeJson(res, { status: "ok" });
+      return;
+    }
+
+    if (url.pathname === "/status" || url.pathname === "/api/sync/status") {
       writeJson(res, daemonStatusPayload(state));
       return;
     }

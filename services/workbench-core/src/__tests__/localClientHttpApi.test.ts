@@ -249,6 +249,7 @@ describe("local client HTTP APIs", () => {
         headers: bearerHeaders(accessToken),
         body: {
           localClientId,
+          idempotencyKey: "http-download-report",
           kind: "download_artifact",
           target: "downloads",
           payload: { blobId: "artifact:test-download", filename: "report.md" }
@@ -257,6 +258,24 @@ describe("local client HTTP APIs", () => {
       assert.equal(createJobResponse.status, 201);
       const jobId = String(createJobResponse.body.id);
       assert.equal(createJobResponse.body.status, "pending");
+      assert.equal(createJobResponse.body.idempotencyKey, "http-download-report");
+
+      const duplicateCreateJobResponse = await requestJson(server.baseUrl, "POST", "/api/local-jobs", {
+        headers: bearerHeaders(accessToken),
+        body: {
+          localClientId,
+          idempotencyKey: "http-download-report",
+          kind: "download_artifact",
+          target: "downloads",
+          payload: { blobId: "artifact:duplicate", filename: "duplicate.md" }
+        }
+      });
+      assert.equal(duplicateCreateJobResponse.status, 201);
+      assert.equal(duplicateCreateJobResponse.body.id, jobId);
+      assert.deepEqual(duplicateCreateJobResponse.body.payload, {
+        blobId: "artifact:test-download",
+        filename: "report.md"
+      });
 
       const claimResponse = await requestJson(server.baseUrl, "POST", "/api/local-jobs/claim", {
         headers: localClientHeaders(localClientId, clientToken),
@@ -290,6 +309,57 @@ describe("local client HTTP APIs", () => {
       );
       assert.equal(completeResponse.status, 200);
       assert.equal(completeResponse.body.status, "completed");
+
+      const eventsResponse = await requestJson(
+        server.baseUrl,
+        "GET",
+        `/api/local-jobs/${encodeURIComponent(jobId)}/events`,
+        { headers: bearerHeaders(accessToken) }
+      );
+      assert.equal(eventsResponse.status, 200);
+      const jobEvents = eventsResponse.body.items as Array<Record<string, unknown>>;
+      assert.deepEqual(jobEvents.map((event) => event.eventType), ["created", "claimed", "completed"]);
+
+      const retryCreateResponse = await requestJson(server.baseUrl, "POST", "/api/local-jobs", {
+        headers: bearerHeaders(accessToken),
+        body: {
+          localClientId,
+          kind: "materialize_resource",
+          target: "sync-folder",
+          payload: { resourceId: "notes:http-retry" }
+        }
+      });
+      assert.equal(retryCreateResponse.status, 201);
+      const retryJobId = String(retryCreateResponse.body.id);
+
+      const retryClaimResponse = await requestJson(server.baseUrl, "POST", "/api/local-jobs/claim", {
+        headers: localClientHeaders(localClientId, clientToken),
+        body: { limit: 1 }
+      });
+      assert.equal(retryClaimResponse.status, 200);
+      const retryClaimed = retryClaimResponse.body.items as Array<Record<string, unknown>>;
+      assert.equal(retryClaimed.length, 1);
+      assert.equal(retryClaimed[0].id, retryJobId);
+
+      const retryFailResponse = await requestJson(
+        server.baseUrl,
+        "POST",
+        `/api/local-jobs/${encodeURIComponent(retryJobId)}/fail`,
+        {
+          headers: localClientHeaders(localClientId, clientToken),
+          body: { error: "temporary unavailable", retryable: true, retryAfterSeconds: 3600 }
+        }
+      );
+      assert.equal(retryFailResponse.status, 200);
+      assert.equal(retryFailResponse.body.status, "pending");
+      assert.equal(typeof retryFailResponse.body.nextAttemptAt, "string");
+
+      const retryTooEarlyClaimResponse = await requestJson(server.baseUrl, "POST", "/api/local-jobs/claim", {
+        headers: localClientHeaders(localClientId, clientToken),
+        body: { limit: 1 }
+      });
+      assert.equal(retryTooEarlyClaimResponse.status, 200);
+      assert.deepEqual(retryTooEarlyClaimResponse.body.items, []);
 
       const revokeResponse = await requestJson(
         server.baseUrl,

@@ -338,4 +338,124 @@ describe("localClientsStore", () => {
       await cleanupTestUser(pool, userB);
     }
   });
+
+  it("deduplicates idempotent jobs and records local job events", async (t) => {
+    const harness = await requireHarness(t);
+    if (!harness) return;
+
+    const pool = harness.db.getCorePool();
+    const userId = await createTestUser(pool, "idempotency");
+    try {
+      const registered = await harness.localClients.registerLocalClient(userId, {
+        deviceId: "device-idempotent",
+        clientName: "Idempotent Laptop",
+        platform: "win32",
+        syncRootId: "main"
+      });
+
+      const first = await harness.localClients.createLocalJob(userId, {
+        localClientId: registered.client.id,
+        idempotencyKey: "download-report-1",
+        kind: "download_artifact",
+        target: "downloads",
+        payload: { blobId: "artifact:one" }
+      });
+      const duplicate = await harness.localClients.createLocalJob(userId, {
+        localClientId: registered.client.id,
+        idempotencyKey: "download-report-1",
+        kind: "download_artifact",
+        target: "downloads",
+        payload: { blobId: "artifact:two" }
+      });
+      assert.equal(duplicate.id, first.id);
+      assert.equal(duplicate.idempotencyKey, "download-report-1");
+      assert.deepEqual(duplicate.payload, { blobId: "artifact:one" });
+
+      const claimed = await harness.localClients.claimLocalJobsForClient(registered.client.id, 1);
+      assert.equal(claimed[0].id, first.id);
+      const completed = await harness.localClients.completeLocalJobForClient(registered.client.id, first.id, {
+        localPath: "C:/Downloads/one.md"
+      });
+      assert.equal(completed?.status, "completed");
+
+      const duplicateCompleted = await harness.localClients.createLocalJob(userId, {
+        localClientId: registered.client.id,
+        idempotencyKey: "download-report-1",
+        kind: "download_artifact",
+        target: "downloads",
+        payload: { blobId: "artifact:three" }
+      });
+      assert.equal(duplicateCompleted.id, first.id);
+      assert.equal(duplicateCompleted.status, "completed");
+
+      const events = await harness.localClients.listLocalJobEventsForUser(userId, first.id);
+      assert.deepEqual(events.map((event) => event.eventType), ["created", "claimed", "completed"]);
+      assert.equal(events[0].detail.idempotencyKey, "download-report-1");
+      assert.equal(events[1].detail.attempts, 1);
+    } finally {
+      await cleanupTestUser(pool, userId);
+    }
+  });
+
+  it("schedules retry attempts and marks expired jobs failed", async (t) => {
+    const harness = await requireHarness(t);
+    if (!harness) return;
+
+    const pool = harness.db.getCorePool();
+    const userId = await createTestUser(pool, "retry-expiry");
+    try {
+      const registered = await harness.localClients.registerLocalClient(userId, {
+        deviceId: "device-retry",
+        clientName: "Retry Laptop",
+        platform: "linux",
+        syncRootId: "main"
+      });
+
+      const retryJob = await harness.localClients.createLocalJob(userId, {
+        localClientId: registered.client.id,
+        kind: "materialize_resource",
+        target: "sync-folder",
+        payload: { resourceId: "notes:retry" }
+      });
+      await harness.localClients.claimLocalJobsForClient(registered.client.id, 1);
+      const retryScheduled = await harness.localClients.failLocalJobForClient(
+        registered.client.id,
+        retryJob.id,
+        "temporary offline",
+        { retryable: true, retryAfterSeconds: 3600 }
+      );
+      assert.equal(retryScheduled?.status, "pending");
+      assert.equal(retryScheduled?.failedAt, undefined);
+      assert.ok(retryScheduled?.nextAttemptAt);
+
+      const tooEarlyClaims = await harness.localClients.claimLocalJobsForClient(registered.client.id, 1);
+      assert.deepEqual(tooEarlyClaims, []);
+
+      await pool.query("UPDATE local_jobs SET next_attempt_at = NOW() - INTERVAL '1 second' WHERE id = $1", [retryJob.id]);
+      const retryClaims = await harness.localClients.claimLocalJobsForClient(registered.client.id, 1);
+      assert.equal(retryClaims.length, 1);
+      assert.equal(retryClaims[0].id, retryJob.id);
+      assert.equal(retryClaims[0].attempts, 2);
+
+      const retryEvents = await harness.localClients.listLocalJobEventsForUser(userId, retryJob.id);
+      assert.deepEqual(retryEvents.map((event) => event.eventType), ["created", "claimed", "retry_scheduled", "claimed"]);
+
+      const expiredJob = await harness.localClients.createLocalJob(userId, {
+        localClientId: registered.client.id,
+        kind: "download_artifact",
+        target: "downloads",
+        payload: { blobId: "artifact:expired" }
+      });
+      await pool.query("UPDATE local_jobs SET expires_at = NOW() - INTERVAL '1 second' WHERE id = $1", [expiredJob.id]);
+      const expired = await harness.localClients.getLocalJob(userId, expiredJob.id);
+      assert.equal(expired?.status, "failed");
+      assert.equal(expired?.errorMessage, "expired");
+      assert.ok(expired?.failedAt);
+
+      const expiredEvents = await harness.localClients.listLocalJobEventsForUser(userId, expiredJob.id);
+      assert.deepEqual(expiredEvents.map((event) => event.eventType), ["created", "expired"]);
+    } finally {
+      await cleanupTestUser(pool, userId);
+    }
+  });
 });

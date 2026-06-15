@@ -337,15 +337,31 @@ export interface LocalJobRecord {
   id: string;
   userId: string;
   localClientId: string;
+  idempotencyKey?: string;
   kind: "download_artifact" | "download_task_attachment" | "materialize_resource";
   target: "downloads" | "sync-folder";
   payload: Record<string, unknown>;
   status: "pending" | "running" | "completed" | "failed";
   attempts: number;
+  claimedAt?: string;
+  completedAt?: string;
+  failedAt?: string;
+  nextAttemptAt?: string;
+  expiresAt?: string;
   result: Record<string, unknown>;
   errorMessage?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface LocalJobEventRecord {
+  id: string;
+  jobId: string;
+  userId: string;
+  localClientId: string;
+  eventType: "created" | "claimed" | "completed" | "failed" | "retry_scheduled" | "expired";
+  detail: Record<string, unknown>;
+  createdAt: string;
 }
 
 export interface LocalDaemonStatus {

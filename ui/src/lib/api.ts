@@ -1,4 +1,9 @@
-import { getWorkbenchCoreUrl, getWorkbenchLocalDaemonUrl, getWorkbenchLocalModeEnabled } from "../config/services";
+import {
+  getWorkbenchCoreUrl,
+  getWorkbenchLocalDaemonToken,
+  getWorkbenchLocalDaemonUrl,
+  getWorkbenchLocalModeEnabled
+} from "../config/services";
 import { pushErrorNotification } from "./notificationService";
 import type {
   Artifact,
@@ -216,6 +221,15 @@ function authHeaders(extra?: HeadersInit): HeadersInit {
   };
 }
 
+function localDaemonHeaders(extra?: HeadersInit): HeadersInit {
+  const headers = new Headers(extra);
+  const token = getWorkbenchLocalDaemonToken();
+  if (token) {
+    headers.set("x-workbench-daemon-token", token);
+  }
+  return headers;
+}
+
 class ApiError extends Error {
   status: number;
   code?: string;
@@ -359,6 +373,7 @@ async function requestLocalDaemon(path: string, options?: RequestInit): Promise<
   try {
     response = await fetch(url, {
       ...requestOptions,
+      headers: localDaemonHeaders(requestOptions.headers),
       signal: controller.signal
     });
   } catch (error) {
@@ -386,13 +401,17 @@ async function requestLocalDaemonJson<T>(path: string, options?: RequestInit): P
   });
   const text = await response.text();
   if (!response.ok) {
-    let parsed: { message?: string } | undefined;
+    let parsed: { message?: string; code?: string } | undefined;
     try {
-      parsed = JSON.parse(text) as { message?: string };
+      parsed = JSON.parse(text) as { message?: string; code?: string };
     } catch {
       parsed = undefined;
     }
-    throw new ApiError(parsed?.message ?? (text || `Local daemon request failed: ${response.status}`), response.status);
+    throw new ApiError(
+      parsed?.message ?? (text || `Local daemon request failed: ${response.status}`),
+      response.status,
+      parsed?.code
+    );
   }
   if (!text.trim()) {
     return undefined as T;

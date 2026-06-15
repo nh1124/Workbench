@@ -3,7 +3,9 @@
 use std::{
   io::{Read, Write},
   net::{SocketAddr, TcpStream},
-  path::PathBuf,
+  path::{Path, PathBuf},
+  process::{Child, Command, Stdio},
+  sync::{Mutex, OnceLock},
   time::Duration,
 };
 
@@ -15,6 +17,22 @@ use crate::{secure_storage, window};
 const DEFAULT_DAEMON_HTTP_PORT: u16 = 35780;
 const DAEMON_STATUS_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_DAEMON_STATUS_RESPONSE_BYTES: usize = 1024 * 1024;
+
+struct ManagedDaemon {
+  child: Child,
+}
+
+struct DaemonCommand {
+  program: String,
+  args: Vec<String>,
+  cwd: PathBuf,
+}
+
+static MANAGED_DAEMON: OnceLock<Mutex<Option<ManagedDaemon>>> = OnceLock::new();
+
+fn managed_daemon() -> &'static Mutex<Option<ManagedDaemon>> {
+  MANAGED_DAEMON.get_or_init(|| Mutex::new(None))
+}
 
 fn sanitize_temp_filename(default_name: &str) -> String {
   let trimmed = default_name.trim();
@@ -204,6 +222,154 @@ fn read_loopback_status(port: u16) -> Result<serde_json::Value, String> {
     .map_err(|error| format!("failed to parse sync daemon status JSON: {error}"))
 }
 
+fn split_daemon_args(args: &str) -> Vec<String> {
+  args.split_whitespace().map(ToString::to_string).collect()
+}
+
+fn has_package_json(path: &Path) -> bool {
+  path.join("package.json").is_file()
+}
+
+fn has_sync_daemon_workspace(path: &Path) -> bool {
+  path
+    .join("services")
+    .join("sync-daemon")
+    .join("package.json")
+    .is_file()
+}
+
+fn current_exe_parent() -> Option<PathBuf> {
+  std::env::current_exe()
+    .ok()
+    .and_then(|path| path.parent().map(Path::to_path_buf))
+}
+
+fn repo_root_candidates() -> Vec<PathBuf> {
+  let mut candidates = Vec::new();
+  if let Ok(current_dir) = std::env::current_dir() {
+    candidates.push(current_dir);
+  }
+  if let Some(exe_parent) = current_exe_parent() {
+    candidates.push(exe_parent);
+  }
+  candidates
+}
+
+fn infer_repo_root() -> PathBuf {
+  let candidates = repo_root_candidates();
+
+  for candidate in &candidates {
+    for ancestor in candidate.ancestors() {
+      if has_package_json(ancestor) && has_sync_daemon_workspace(ancestor) {
+        return ancestor.to_path_buf();
+      }
+    }
+  }
+
+  for candidate in &candidates {
+    for ancestor in candidate.ancestors() {
+      if has_package_json(ancestor) {
+        return ancestor.to_path_buf();
+      }
+    }
+  }
+
+  std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+fn resolve_daemon_command() -> Result<DaemonCommand, String> {
+  if let Ok(command) = std::env::var("WORKBENCH_DAEMON_COMMAND") {
+    let program = command.trim();
+    if program.is_empty() {
+      return Err("WORKBENCH_DAEMON_COMMAND was set but empty".to_string());
+    }
+
+    let args = std::env::var("WORKBENCH_DAEMON_ARGS")
+      .ok()
+      .map(|value| split_daemon_args(&value))
+      .unwrap_or_default();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+    return Ok(DaemonCommand {
+      program: program.to_string(),
+      args,
+      cwd,
+    });
+  }
+
+  let cwd = infer_repo_root();
+  let program = if cfg!(target_os = "windows") {
+    "npm.cmd"
+  } else {
+    "npm"
+  };
+
+  Ok(DaemonCommand {
+    program: program.to_string(),
+    args: vec![
+      "run".to_string(),
+      "dev".to_string(),
+      "--workspace".to_string(),
+      "services/sync-daemon".to_string(),
+    ],
+    cwd,
+  })
+}
+
+fn configure_daemon_env(command: &mut Command) {
+  if std::env::var_os("WORKBENCH_DAEMON_HTTP_PORT").is_none() {
+    command.env(
+      "WORKBENCH_DAEMON_HTTP_PORT",
+      DEFAULT_DAEMON_HTTP_PORT.to_string(),
+    );
+  }
+}
+
+fn spawn_daemon() -> Result<Child, String> {
+  let daemon_command = resolve_daemon_command()?;
+  let mut command = Command::new(&daemon_command.program);
+  command
+    .args(&daemon_command.args)
+    .current_dir(&daemon_command.cwd)
+    .stdin(Stdio::null());
+  configure_daemon_env(&mut command);
+
+  command.spawn().map_err(|error| {
+    format!(
+      "failed to start sync daemon with `{}` from {}: {error}",
+      daemon_command.program,
+      daemon_command.cwd.display()
+    )
+  })
+}
+
+#[cfg(target_os = "windows")]
+fn kill_child_process_tree(child: &mut Child) -> Result<(), String> {
+  let pid = child.id().to_string();
+  let status = Command::new("taskkill")
+    .args(["/PID", &pid, "/T", "/F"])
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .status()
+    .map_err(|error| format!("failed to invoke taskkill for sync daemon process {pid}: {error}"))?;
+
+  if status.success() {
+    return Ok(());
+  }
+
+  child
+    .kill()
+    .map_err(|error| format!("failed to kill sync daemon process {pid}: {error}"))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn kill_child_process_tree(child: &mut Child) -> Result<(), String> {
+  child
+    .kill()
+    .map_err(|error| format!("failed to kill sync daemon process {}: {error}", child.id()))
+}
+
 #[tauri::command]
 pub fn secure_session_save(session_json: String) -> Result<(), String> {
   secure_storage::save(&session_json)
@@ -261,19 +427,51 @@ pub fn read_daemon_status(port: Option<u16>) -> Result<serde_json::Value, String
 }
 
 #[tauri::command]
-pub fn start_daemon() -> Result<(), String> {
-  Err(
-    "sync-daemon sidecar is not configured for this Tauri app yet; start it with npm run dev --workspace services/sync-daemon for now"
-      .to_string(),
-  )
+pub fn start_daemon() -> Result<bool, String> {
+  let mut managed = managed_daemon()
+    .lock()
+    .map_err(|_| "sync daemon process lock was poisoned".to_string())?;
+
+  if let Some(daemon) = managed.as_mut() {
+    match daemon.child.try_wait() {
+      Ok(None) => return Ok(false),
+      Ok(Some(_status)) => {
+        *managed = None;
+      }
+      Err(error) => return Err(format!("failed to inspect sync daemon process: {error}")),
+    }
+  }
+
+  let child = spawn_daemon()?;
+  *managed = Some(ManagedDaemon { child });
+  Ok(true)
 }
 
 #[tauri::command]
-pub fn stop_daemon() -> Result<(), String> {
-  Err(
-    "sync-daemon sidecar/process management is not configured for this Tauri app yet; stop the external daemon process manually"
-      .to_string(),
-  )
+pub fn stop_daemon() -> Result<bool, String> {
+  let mut managed = managed_daemon()
+    .lock()
+    .map_err(|_| "sync daemon process lock was poisoned".to_string())?;
+
+  let Some(mut daemon) = managed.take() else {
+    return Ok(false);
+  };
+
+  if daemon
+    .child
+    .try_wait()
+    .map_err(|error| format!("failed to inspect sync daemon process: {error}"))?
+    .is_some()
+  {
+    return Ok(true);
+  }
+
+  kill_child_process_tree(&mut daemon.child)?;
+  daemon
+    .child
+    .wait()
+    .map_err(|error| format!("failed to wait for sync daemon shutdown: {error}"))?;
+  Ok(true)
 }
 
 /// Open a native Save-As dialog and write `bytes` to the chosen path.

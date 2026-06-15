@@ -186,6 +186,7 @@ export async function ensureCoreSchema(): Promise<void> {
             id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL REFERENCES workbench_users(id) ON DELETE CASCADE,
             local_client_id TEXT NOT NULL REFERENCES local_clients(id) ON DELETE CASCADE,
+            idempotency_key TEXT,
             kind TEXT NOT NULL,
             target TEXT NOT NULL,
             payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -194,6 +195,7 @@ export async function ensureCoreSchema(): Promise<void> {
             claimed_at TIMESTAMPTZ,
             completed_at TIMESTAMPTZ,
             failed_at TIMESTAMPTZ,
+            next_attempt_at TIMESTAMPTZ,
             expires_at TIMESTAMPTZ,
             result_json JSONB NOT NULL DEFAULT '{}'::jsonb,
             error_message TEXT,
@@ -203,13 +205,54 @@ export async function ensureCoreSchema(): Promise<void> {
         `);
 
         await pool.query(`
+          ALTER TABLE local_jobs
+            ADD COLUMN IF NOT EXISTS idempotency_key TEXT,
+            ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ;
+        `);
+
+        await pool.query(`
           CREATE INDEX IF NOT EXISTS idx_local_jobs_client_status_created
             ON local_jobs (local_client_id, status, created_at ASC);
         `);
 
         await pool.query(`
+          CREATE INDEX IF NOT EXISTS idx_local_jobs_client_claimable
+            ON local_jobs (local_client_id, status, next_attempt_at, created_at ASC)
+            WHERE status = 'pending';
+        `);
+
+        await pool.query(`
           CREATE INDEX IF NOT EXISTS idx_local_jobs_user_created
             ON local_jobs (user_id, created_at DESC);
+        `);
+
+        await pool.query(`
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_local_jobs_idempotency_active
+            ON local_jobs (user_id, local_client_id, idempotency_key)
+            WHERE idempotency_key IS NOT NULL
+              AND status IN ('pending', 'running', 'completed');
+        `);
+
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS local_job_events (
+            id BIGSERIAL PRIMARY KEY,
+            job_id TEXT NOT NULL REFERENCES local_jobs(id) ON DELETE CASCADE,
+            user_id TEXT NOT NULL REFERENCES workbench_users(id) ON DELETE CASCADE,
+            local_client_id TEXT NOT NULL REFERENCES local_clients(id) ON DELETE CASCADE,
+            event_type TEXT NOT NULL,
+            detail_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          );
+        `);
+
+        await pool.query(`
+          CREATE INDEX IF NOT EXISTS idx_local_job_events_job_created
+            ON local_job_events (job_id, created_at ASC, id ASC);
+        `);
+
+        await pool.query(`
+          CREATE INDEX IF NOT EXISTS idx_local_job_events_user_created
+            ON local_job_events (user_id, created_at DESC, id DESC);
         `);
 
         await pool.query(`
