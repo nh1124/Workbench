@@ -6,8 +6,10 @@ import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import {
   closeManifestStore,
+  markOutboxFailed,
   openManifestStore,
   readManifestFromStore,
+  recordConflict,
   upsertResource,
   type ManifestStore
 } from "../manifestStore.js";
@@ -122,6 +124,55 @@ describe("sync folder recovery", () => {
       assert.equal(resource?.dirty, true);
       assert.equal(resource?.checksum, checksum("# Restored\n"));
       assert.equal(state.outboxPending, 1);
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("auto-resolves a conflict when its failed outbox item is superseded", async () => {
+    const { root, store, state } = await createState();
+    try {
+      upsertResource(store, {
+        relativePath: "conflicted.md",
+        domain: "artifacts",
+        kind: "note",
+        resourceId: "artifact-note-conflict",
+        checksum: checksum("# Remote\n"),
+        sizeBytes: 9,
+        dirty: false
+      });
+
+      await scanSyncFolder(state);
+      let manifest = readManifestFromStore(store);
+      const deleteItem = manifest.outbox?.[0];
+      assert.equal(deleteItem?.action, "delete");
+      assert.equal(deleteItem?.status, "pending");
+
+      markOutboxFailed(store, deleteItem.id, "Cloud rejected delete", new Date().toISOString());
+      recordConflict(store, {
+        outboxId: deleteItem.id,
+        clientOpId: deleteItem.clientOpId,
+        relativePath: deleteItem.relativePath,
+        domain: deleteItem.domain,
+        action: deleteItem.action,
+        resourceId: deleteItem.resourceId,
+        payload: deleteItem.payload,
+        errorMessage: "Cloud rejected delete"
+      });
+
+      manifest = readManifestFromStore(store);
+      assert.equal(manifest.conflicts?.[0].status, "open");
+
+      await writeFile(join(root, "conflicted.md"), "# Local restored\n", "utf8");
+      await scanSyncFolder(state);
+
+      manifest = readManifestFromStore(store);
+      const supersededDelete = manifest.outbox?.find((item) => item.id === deleteItem.id);
+      assert.equal(supersededDelete?.status, "superseded");
+      assert.equal(manifest.conflicts?.[0].status, "resolved");
+      assert.equal(manifest.conflicts?.[0].resolution, "close");
+      assert.match(manifest.conflicts?.[0].resolutionNote ?? "", /pending delete was superseded/);
+      assert.equal(state.conflictsOpen, 0);
     } finally {
       closeManifestStore(store);
     }

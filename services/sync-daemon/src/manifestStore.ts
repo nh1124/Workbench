@@ -626,13 +626,28 @@ export function markOutboxFailed(store: ManifestStore, id: string, errorMessage:
 }
 
 export function markOutboxSuperseded(store: ManifestStore, id: string, reason: string, updatedAt: string): void {
-  store.db.prepare(`
-    UPDATE outbox
-    SET status = 'superseded',
-        last_error = ?,
-        updated_at = ?
-    WHERE id = ? AND status IN ('pending', 'failed')
-  `).run(reason.slice(0, 2000), updatedAt, id);
+  store.db.exec("BEGIN IMMEDIATE");
+  try {
+    store.db.prepare(`
+      UPDATE outbox
+      SET status = 'superseded',
+          last_error = ?,
+          updated_at = ?
+      WHERE id = ? AND status IN ('pending', 'failed')
+    `).run(reason.slice(0, 2000), updatedAt, id);
+    store.db.prepare(`
+      UPDATE conflicts
+      SET status = 'resolved',
+          resolved_at = ?,
+          resolution = 'close',
+          resolution_note = ?
+      WHERE outbox_id = ? AND status = 'open'
+    `).run(updatedAt, reason.slice(0, 4000), id);
+    store.db.exec("COMMIT");
+  } catch (error) {
+    store.db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 export function recordLocalJob(

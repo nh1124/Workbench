@@ -154,6 +154,7 @@ npm run build
   - Covers cancelling ghost creates when local files disappear before push.
   - Covers superseding pending deletes when local files reappear.
   - Covers replacing stale pending updates when files are edited again before push.
+  - Covers auto-resolving open conflicts when their failed outbox items are superseded.
 
 ## Pending / Partial Work
 
@@ -196,7 +197,7 @@ npm run build
   - Supersedes stale pending create/update outbox entries when files are removed before push.
   - Supersedes pending delete outbox entries when files reappear before push.
   - Supersedes stale pending create/update outbox entries when files change again before push.
-  - Still needs conflict-record auto-resolution for conflicts tied to superseded outbox entries.
+  - Auto-resolves open conflict records tied to superseded outbox entries.
   - Still needs remote snapshot reconciliation when the cloud changed while the daemon was offline.
 
 ### Sync Folder Watcher
@@ -270,11 +271,10 @@ npm run build
 
 ## Recommended Next Implementation Order
 
-1. Add conflict-record auto-resolution for conflicts tied to superseded local outbox entries.
-2. Extend `POST /api/sync/push` to Projects and Tasks, and add baseVersion checks.
-3. Implement artifact file replacement and `PUT /api/sync/blobs/:blobId`.
-4. Add daemon local API facade for offline UI reads/writes.
-5. Add Tauri integration for sync folder selection, open folder, and daemon lifecycle.
+1. Extend `POST /api/sync/push` to Projects and Tasks, and add baseVersion checks.
+2. Implement artifact file replacement and `PUT /api/sync/blobs/:blobId`.
+3. Add daemon local API facade for offline UI reads/writes.
+4. Add Tauri integration for sync folder selection, open folder, and daemon lifecycle.
 
 ## Current Daemon Usage
 
