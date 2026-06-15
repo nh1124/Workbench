@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
 import { hostname, homedir, platform } from "node:os";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,7 @@ import {
   enqueueOutbox as enqueueManifestOutbox,
   getResource,
   hasOpenOutboxForPath,
+  listConflicts,
   listPendingOutbox,
   listResources,
   markOutboxApplied,
@@ -16,11 +17,15 @@ import {
   migrateLegacyManifestJson,
   openManifestStore,
   readManifestStats,
+  recordConflict,
   recordLocalJob,
   removeResource,
+  resolveConflict,
   setMeta,
   upsertResource as upsertManifestResource,
   writeManifestDebugSnapshot,
+  type ConflictResolution,
+  type ConflictStatus,
   type ManifestStore,
   type OutboxItem
 } from "./manifestStore.js";
@@ -72,6 +77,7 @@ type DaemonState = {
   processedJobs: number;
   outboxPending: number;
   outboxFailed: number;
+  conflictsOpen: number;
   watcherActive: boolean;
   tickRunning: boolean;
   tickQueued: boolean;
@@ -217,6 +223,7 @@ async function refreshManifestStats(state: DaemonState): Promise<void> {
   const stats = readManifestStats(state.manifestStore);
   state.outboxPending = stats.outboxPending;
   state.outboxFailed = stats.outboxFailed;
+  state.conflictsOpen = stats.conflictsOpen;
   state.lastScanAt = stats.lastScanAt ?? state.lastScanAt;
   state.lastPushAt = stats.lastPushAt ?? state.lastPushAt;
 }
@@ -236,6 +243,7 @@ async function heartbeat(state: DaemonState): Promise<void> {
         processedJobs: state.processedJobs,
         outboxPending: state.outboxPending,
         outboxFailed: state.outboxFailed,
+        conflictsOpen: state.conflictsOpen,
         watcherActive: state.watcherActive,
         lastScanAt: state.lastScanAt,
         lastPushAt: state.lastPushAt
@@ -611,11 +619,27 @@ async function writeConflictRecord(
   errorMessage: string,
   createdAt: string
 ): Promise<void> {
+  const conflictId = randomUUID();
   const conflictBaseName = sanitizeFileName(item.relativePath.replace(/[\\/]/g, "__")) || "conflict";
   const timestamp = createdAt.replace(/[:.]/g, "-");
-  const conflictPath = join(state.config.syncRoot, ".workbench", "conflicts", `${timestamp}-${conflictBaseName}.json`);
+  const conflictPath = join(state.config.syncRoot, ".workbench", "conflicts", `${timestamp}-${conflictId}-${conflictBaseName}.json`);
+  const conflict = recordConflict(state.manifestStore, {
+    id: conflictId,
+    outboxId: item.id,
+    clientOpId: item.clientOpId,
+    relativePath: item.relativePath,
+    domain: item.domain,
+    action: item.action,
+    resourceId: item.resourceId,
+    payload: item.payload,
+    errorMessage,
+    conflictPath,
+    status: "open",
+    createdAt
+  });
   await fs.mkdir(dirname(conflictPath), { recursive: true });
   await fs.writeFile(conflictPath, `${JSON.stringify({
+    conflictId: conflict.id,
     relativePath: item.relativePath,
     action: item.action,
     resourceId: item.resourceId,
@@ -633,6 +657,7 @@ async function writeConflictRecord(
       lastError: errorMessage
     });
   }
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
 }
 
 async function pushOutbox(state: DaemonState): Promise<void> {
@@ -811,11 +836,31 @@ function startSyncWatcher(state: DaemonState): void {
   }
 }
 
+async function readRequestJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  const text = Buffer.concat(chunks).toString("utf8");
+  if (!text.trim()) return {};
+  const parsed = JSON.parse(text) as unknown;
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+}
+
+function parseConflictStatus(value: string | null): ConflictStatus | "all" | undefined {
+  if (value === "open" || value === "resolved" || value === "ignored" || value === "all") return value;
+  return undefined;
+}
+
+function parseConflictResolution(value: unknown): ConflictResolution | undefined {
+  return value === "retry" || value === "ignore" || value === "close" ? value : undefined;
+}
+
 function startStatusServer(state: DaemonState): void {
   if (state.config.httpPort === 0) return;
-  const server = createServer((req, res) => {
-    const url = req.url ?? "/";
-    if (url === "/health" || url === "/status") {
+  const server = createServer(async (req, res) => {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    if (url.pathname === "/health" || url.pathname === "/status") {
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({
         status: "ok",
@@ -834,10 +879,60 @@ function startStatusServer(state: DaemonState): void {
         lastError: state.lastError,
         processedJobs: state.processedJobs,
         outboxPending: state.outboxPending,
-        outboxFailed: state.outboxFailed
+        outboxFailed: state.outboxFailed,
+        conflictsOpen: state.conflictsOpen
       }, null, 2));
       return;
     }
+
+    if (url.pathname === "/conflicts" && req.method === "GET") {
+      const status = parseConflictStatus(url.searchParams.get("status")) ?? "open";
+      const limit = Number(url.searchParams.get("limit") ?? "50");
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({
+        items: listConflicts(state.manifestStore, {
+          status,
+          limit: Number.isFinite(limit) ? limit : 50
+        })
+      }, null, 2));
+      return;
+    }
+
+    const resolveMatch = url.pathname.match(/^\/conflicts\/([^/]+)\/resolve$/);
+    if (resolveMatch && req.method === "POST") {
+      try {
+        const body = await readRequestJson(req);
+        const resolution = parseConflictResolution(body.resolution);
+        if (!resolution) {
+          res.statusCode = 400;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ message: "resolution must be retry, ignore, or close" }));
+          return;
+        }
+        const note = typeof body.note === "string" ? body.note : undefined;
+        const conflict = resolveConflict(state.manifestStore, decodeURIComponent(resolveMatch[1]), resolution, note);
+        if (!conflict) {
+          res.statusCode = 404;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ message: "Conflict not found" }));
+          return;
+        }
+        await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
+        await refreshManifestStats(state);
+        if (resolution === "retry") {
+          scheduleTick(state, 0);
+        }
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify(conflict, null, 2));
+        return;
+      } catch (error) {
+        res.statusCode = 400;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ message: error instanceof Error ? error.message : String(error) }));
+        return;
+      }
+    }
+
     res.statusCode = 404;
     res.end("not found");
   });
@@ -859,6 +954,7 @@ async function main(): Promise<void> {
     processedJobs: 0,
     outboxPending: 0,
     outboxFailed: 0,
+    conflictsOpen: 0,
     watcherActive: false,
     tickRunning: false,
     tickQueued: false

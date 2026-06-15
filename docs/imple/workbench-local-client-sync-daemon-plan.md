@@ -97,8 +97,10 @@ Last updated: 2026-06-15
   - watch the sync folder and debounce local changes before scanning,
   - keep manifest resource mappings and SQLite outbox entries,
   - write sync rejection records under `.workbench/conflicts`,
+  - track conflict lifecycle in `.workbench/manifest.sqlite`,
   - push local outbox changes to Core through `POST /api/sync/push`,
   - expose local status at `http://127.0.0.1:<port>/status`.
+  - expose local conflict list/resolve endpoints under `http://127.0.0.1:<port>/conflicts`.
 - `[implemented]` Daemon MCP tools were added in `services/sync-daemon/src/mcpServer.ts`.
   - `workbench.local.clients.current`
   - `workbench.local.path.resolve`
@@ -106,6 +108,8 @@ Last updated: 2026-06-15
   - `workbench.local.import`
   - `workbench.local.job.claim`
   - `workbench.sync.status`
+  - `workbench.sync.conflicts.list`
+  - `workbench.sync.conflicts.resolve`
 
 ### Settings UI
 
@@ -157,8 +161,9 @@ npm run build
   - `resources`
   - `outbox`
   - `local_jobs`
+  - `conflicts`
 - `[implemented]` `sync_state` is represented by the `meta` table.
-- `[pending]` Add dedicated `conflicts` table.
+- `[implemented]` Add dedicated `conflicts` table.
 - `[implemented]` Store checksum, resource id, local path, domain, dirty state, and last sync error in SQLite resources/outbox.
 - `[implemented]` Add durable SQLite outbox for offline local changes.
 - `[implemented]` Migrate legacy `.workbench/manifest.json` into SQLite when the DB is empty.
@@ -176,6 +181,7 @@ npm run build
 - `[pending]` Detect local rename as rename instead of delete/create.
 - `[partial]` Map local files back to domain resources through manifest entries.
 - `[implemented]` Add conflict/rejection JSON file creation under `.workbench/conflicts`.
+- `[implemented]` Add daemon MCP and loopback HTTP flows to list conflicts and mark them retry/ignore/close.
 
 ### Unified Sync Push / Pull
 
@@ -236,7 +242,7 @@ npm run build
 
 1. Add tests for local client registration, heartbeat, token verification, disable/re-enable, and job claim/complete/fail.
 2. Add focused tests for local job list/revoke/delete and daemon-authenticated sync endpoints.
-3. Add robust conflict resolution UI/flows for `.workbench/conflicts`.
+3. Add Settings/main-shell UI for conflict status and conflict actions.
 4. Add full manifest recovery behavior when local files and SQLite disagree.
 5. Extend `POST /api/sync/push` to Projects and Tasks, and add baseVersion checks.
 6. Implement artifact file replacement and `PUT /api/sync/blobs/:blobId`.

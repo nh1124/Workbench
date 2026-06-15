@@ -4,6 +4,15 @@ import { hostname, homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { promises as fs } from "node:fs";
 import { z } from "zod";
+import {
+  listConflicts,
+  openManifestStore,
+  readManifestFromStore,
+  resolveConflict,
+  writeManifestDebugSnapshot,
+  type ConflictResolution,
+  type ConflictStatus
+} from "./manifestStore.js";
 
 function env(name: string): string | undefined {
   const value = process.env[name]?.trim();
@@ -13,6 +22,7 @@ function env(name: string): string | undefined {
 const syncRoot = resolve(env("WORKBENCH_SYNC_ROOT") ?? join(homedir(), "WorkbenchSync"));
 const downloadsDir = resolve(env("WORKBENCH_DOWNLOADS_DIR") ?? join(homedir(), "Downloads"));
 const coreUrl = (env("WORKBENCH_CORE_URL") ?? "http://localhost:3000").replace(/\/+$/, "");
+const manifestStore = openManifestStore(syncRoot);
 
 function asText(value: unknown): { content: Array<{ type: "text"; text: string }> } {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
@@ -57,19 +67,59 @@ server.registerTool(
   async () => {
     const manifestPath = join(syncRoot, ".workbench", "manifest.json");
     const manifestDbPath = join(syncRoot, ".workbench", "manifest.sqlite");
-    let manifest: unknown = {};
-    try {
-      manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
-    } catch {
-      manifest = {};
-    }
     return asText({
       coreUrl,
       syncRoot,
       downloadsDir,
       manifestDbPath,
       manifestSnapshotPath: manifestPath,
-      manifest
+      manifest: readManifestFromStore(manifestStore)
+    });
+  }
+);
+
+server.registerTool(
+  "workbench.sync.conflicts.list",
+  {
+    title: "List Workbench Sync Conflicts",
+    description: "List local sync conflicts recorded by the daemon manifest database.",
+    inputSchema: {
+      status: z.enum(["open", "resolved", "ignored", "all"]).optional(),
+      limit: z.number().int().positive().max(200).optional()
+    }
+  },
+  async ({ status, limit }) => asText({
+    syncRoot,
+    manifestDbPath: join(syncRoot, ".workbench", "manifest.sqlite"),
+    items: listConflicts(manifestStore, {
+      status: (status ?? "open") as ConflictStatus | "all",
+      limit: limit ?? 50
+    })
+  })
+);
+
+server.registerTool(
+  "workbench.sync.conflicts.resolve",
+  {
+    title: "Resolve Workbench Sync Conflict",
+    description: "Resolve a local sync conflict. retry requeues the failed outbox item, ignore clears it, and close only closes the conflict record.",
+    inputSchema: {
+      id: z.string().min(1),
+      resolution: z.enum(["retry", "ignore", "close"]),
+      note: z.string().optional()
+    }
+  },
+  async ({ id, resolution, note }) => {
+    const conflict = resolveConflict(manifestStore, id, resolution as ConflictResolution, note);
+    if (!conflict) {
+      throw new Error("Conflict not found.");
+    }
+    await writeManifestDebugSnapshot(syncRoot, manifestStore);
+    return asText({
+      status: "resolved",
+      resolution,
+      conflict,
+      nextStep: resolution === "retry" ? "The running daemon will retry this outbox item on its next tick." : undefined
     });
   }
 );

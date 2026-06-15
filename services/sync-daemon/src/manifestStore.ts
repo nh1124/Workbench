@@ -33,10 +33,33 @@ export type OutboxItem = {
   appliedAt?: string;
 };
 
+export type ConflictStatus = "open" | "resolved" | "ignored";
+
+export type ConflictResolution = "retry" | "ignore" | "close";
+
+export type ConflictRecord = {
+  id: string;
+  outboxId?: string;
+  clientOpId?: string;
+  relativePath: string;
+  domain: "artifacts";
+  action: "create" | "update" | "delete";
+  resourceId?: string;
+  payload: Record<string, unknown>;
+  errorMessage: string;
+  conflictPath?: string;
+  status: ConflictStatus;
+  createdAt: string;
+  resolvedAt?: string;
+  resolution?: ConflictResolution;
+  resolutionNote?: string;
+};
+
 export type Manifest = {
   jobs?: unknown[];
   resources?: ManifestResource[];
   outbox?: OutboxItem[];
+  conflicts?: ConflictRecord[];
   lastScanAt?: string;
   lastPushAt?: string;
 };
@@ -84,6 +107,24 @@ type JobRow = {
   completed_at: string;
 };
 
+type ConflictRow = {
+  id: string;
+  outbox_id: string | null;
+  client_op_id: string | null;
+  relative_path: string;
+  domain: string;
+  action: string;
+  resource_id: string | null;
+  payload_json: string;
+  error_message: string;
+  conflict_path: string | null;
+  status: string;
+  created_at: string;
+  resolved_at: string | null;
+  resolution: string | null;
+  resolution_note: string | null;
+};
+
 type MetaRow = {
   key: string;
   value: string;
@@ -93,6 +134,7 @@ type NormalizedManifest = {
   jobs: unknown[];
   resources: ManifestResource[];
   outbox: OutboxItem[];
+  conflicts: ConflictRecord[];
   lastScanAt?: string;
   lastPushAt?: string;
 };
@@ -171,11 +213,32 @@ function toJob(row: JobRow): unknown {
   };
 }
 
+function toConflict(row: ConflictRow): ConflictRecord {
+  return {
+    id: row.id,
+    outboxId: row.outbox_id ?? undefined,
+    clientOpId: row.client_op_id ?? undefined,
+    relativePath: row.relative_path,
+    domain: row.domain === "artifacts" ? "artifacts" : "artifacts",
+    action: row.action === "delete" ? "delete" : row.action === "update" ? "update" : "create",
+    resourceId: row.resource_id ?? undefined,
+    payload: parseJsonRecord(row.payload_json),
+    errorMessage: row.error_message,
+    conflictPath: row.conflict_path ?? undefined,
+    status: row.status === "resolved" ? "resolved" : row.status === "ignored" ? "ignored" : "open",
+    createdAt: row.created_at,
+    resolvedAt: row.resolved_at ?? undefined,
+    resolution: row.resolution === "retry" ? "retry" : row.resolution === "ignore" ? "ignore" : row.resolution === "close" ? "close" : undefined,
+    resolutionNote: row.resolution_note ?? undefined
+  };
+}
+
 function normalizeManifest(manifest: Manifest): NormalizedManifest {
   return {
     jobs: Array.isArray(manifest.jobs) ? manifest.jobs : [],
     resources: Array.isArray(manifest.resources) ? manifest.resources : [],
     outbox: Array.isArray(manifest.outbox) ? manifest.outbox : [],
+    conflicts: Array.isArray(manifest.conflicts) ? manifest.conflicts : [],
     lastScanAt: manifest.lastScanAt,
     lastPushAt: manifest.lastPushAt
   };
@@ -233,6 +296,30 @@ export function openManifestStore(syncRoot: string): ManifestStore {
       result_json TEXT NOT NULL,
       completed_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS conflicts (
+      id TEXT PRIMARY KEY,
+      outbox_id TEXT,
+      client_op_id TEXT,
+      relative_path TEXT NOT NULL,
+      domain TEXT NOT NULL,
+      action TEXT NOT NULL,
+      resource_id TEXT,
+      payload_json TEXT NOT NULL,
+      error_message TEXT NOT NULL,
+      conflict_path TEXT,
+      status TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      resolved_at TEXT,
+      resolution TEXT,
+      resolution_note TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_conflicts_status_created
+      ON conflicts (status, created_at);
+
+    CREATE INDEX IF NOT EXISTS idx_conflicts_outbox_id
+      ON conflicts (outbox_id);
   `);
   return { db, path: manifestDbPath(syncRoot) };
 }
@@ -260,12 +347,21 @@ export function readManifestFromStore(store: ManifestStore): Manifest {
     ORDER BY completed_at DESC
     LIMIT 500
   `).all() as JobRow[];
+  const conflicts = store.db.prepare(`
+    SELECT id, outbox_id, client_op_id, relative_path, domain, action, resource_id,
+           payload_json, error_message, conflict_path, status, created_at, resolved_at,
+           resolution, resolution_note
+    FROM conflicts
+    ORDER BY created_at DESC
+    LIMIT 200
+  `).all() as ConflictRow[];
   const meta = store.db.prepare("SELECT key, value FROM meta").all() as MetaRow[];
   const metaMap = new Map(meta.map((row) => [row.key, row.value]));
   return {
     jobs: jobs.map(toJob),
     resources: resources.map(toResource),
     outbox: outbox.map(toOutbox),
+    conflicts: conflicts.map(toConflict),
     lastScanAt: metaMap.get("lastScanAt"),
     lastPushAt: metaMap.get("lastPushAt")
   };
@@ -327,6 +423,9 @@ export function replaceManifestInStore(store: ManifestStore, manifest: Manifest)
         completedAt: typeof record.completedAt === "string" ? record.completedAt : new Date().toISOString()
       });
     }
+    for (const conflict of normalized.conflicts) {
+      recordConflict(store, conflict);
+    }
     setMeta(store, "lastScanAt", normalized.lastScanAt);
     setMeta(store, "lastPushAt", normalized.lastPushAt);
     store.db.exec("COMMIT");
@@ -352,16 +451,19 @@ export function setMeta(store: ManifestStore, key: string, value: string | undef
 export function readManifestStats(store: ManifestStore): {
   outboxPending: number;
   outboxFailed: number;
+  conflictsOpen: number;
   lastScanAt?: string;
   lastPushAt?: string;
 } {
   const pending = store.db.prepare("SELECT COUNT(*) AS count FROM outbox WHERE status = 'pending'").get() as { count: number };
   const failed = store.db.prepare("SELECT COUNT(*) AS count FROM outbox WHERE status = 'failed'").get() as { count: number };
+  const conflictsOpen = store.db.prepare("SELECT COUNT(*) AS count FROM conflicts WHERE status = 'open'").get() as { count: number };
   const meta = store.db.prepare("SELECT key, value FROM meta WHERE key IN ('lastScanAt', 'lastPushAt')").all() as MetaRow[];
   const metaMap = new Map(meta.map((row) => [row.key, row.value]));
   return {
     outboxPending: Number(pending.count ?? 0),
     outboxFailed: Number(failed.count ?? 0),
+    conflictsOpen: Number(conflictsOpen.count ?? 0),
     lastScanAt: metaMap.get("lastScanAt"),
     lastPushAt: metaMap.get("lastPushAt")
   };
@@ -530,6 +632,159 @@ export function recordLocalJob(
       LIMIT 500
     )
   `).run();
+}
+
+export function recordConflict(
+  store: ManifestStore,
+  input: Partial<ConflictRecord> & {
+    relativePath: string;
+    domain: "artifacts";
+    action: "create" | "update" | "delete";
+    payload: Record<string, unknown>;
+    errorMessage: string;
+  }
+): ConflictRecord {
+  const now = input.createdAt ?? new Date().toISOString();
+  const id = input.id ?? randomUUID();
+  store.db.prepare(`
+    INSERT INTO conflicts (
+      id, outbox_id, client_op_id, relative_path, domain, action, resource_id,
+      payload_json, error_message, conflict_path, status, created_at, resolved_at,
+      resolution, resolution_note
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id)
+    DO UPDATE SET
+      outbox_id = excluded.outbox_id,
+      client_op_id = excluded.client_op_id,
+      relative_path = excluded.relative_path,
+      domain = excluded.domain,
+      action = excluded.action,
+      resource_id = excluded.resource_id,
+      payload_json = excluded.payload_json,
+      error_message = excluded.error_message,
+      conflict_path = excluded.conflict_path,
+      status = excluded.status,
+      resolved_at = excluded.resolved_at,
+      resolution = excluded.resolution,
+      resolution_note = excluded.resolution_note
+  `).run(
+    id,
+    input.outboxId ?? null,
+    input.clientOpId ?? null,
+    input.relativePath,
+    input.domain,
+    input.action,
+    input.resourceId ?? null,
+    JSON.stringify(input.payload ?? {}),
+    input.errorMessage.slice(0, 4000),
+    input.conflictPath ?? null,
+    input.status ?? "open",
+    now,
+    input.resolvedAt ?? null,
+    input.resolution ?? null,
+    input.resolutionNote ?? null
+  );
+  const stored = getConflict(store, id);
+  if (!stored) {
+    throw new Error("Conflict was not stored.");
+  }
+  return stored;
+}
+
+export function getConflict(store: ManifestStore, id: string): ConflictRecord | undefined {
+  const row = store.db.prepare(`
+    SELECT id, outbox_id, client_op_id, relative_path, domain, action, resource_id,
+           payload_json, error_message, conflict_path, status, created_at, resolved_at,
+           resolution, resolution_note
+    FROM conflicts
+    WHERE id = ?
+  `).get(id) as ConflictRow | undefined;
+  return row ? toConflict(row) : undefined;
+}
+
+export function listConflicts(
+  store: ManifestStore,
+  options: { status?: ConflictStatus | "all"; limit?: number } = {}
+): ConflictRecord[] {
+  const limit = Math.max(1, Math.min(200, Math.floor(options.limit ?? 50)));
+  if (options.status && options.status !== "all") {
+    return (store.db.prepare(`
+      SELECT id, outbox_id, client_op_id, relative_path, domain, action, resource_id,
+             payload_json, error_message, conflict_path, status, created_at, resolved_at,
+             resolution, resolution_note
+      FROM conflicts
+      WHERE status = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(options.status, limit) as ConflictRow[]).map(toConflict);
+  }
+  return (store.db.prepare(`
+    SELECT id, outbox_id, client_op_id, relative_path, domain, action, resource_id,
+           payload_json, error_message, conflict_path, status, created_at, resolved_at,
+           resolution, resolution_note
+    FROM conflicts
+    ORDER BY created_at DESC
+    LIMIT ?
+  `).all(limit) as ConflictRow[]).map(toConflict);
+}
+
+export function resolveConflict(
+  store: ManifestStore,
+  id: string,
+  resolution: ConflictResolution,
+  note?: string
+): ConflictRecord | undefined {
+  const conflict = getConflict(store, id);
+  if (!conflict) return undefined;
+  const now = new Date().toISOString();
+
+  store.db.exec("BEGIN IMMEDIATE");
+  try {
+    if (resolution === "retry" && conflict.outboxId) {
+      store.db.prepare(`
+        UPDATE outbox
+        SET status = 'pending',
+            last_error = NULL,
+            updated_at = ?
+        WHERE id = ?
+      `).run(now, conflict.outboxId);
+    }
+
+    if (resolution === "ignore" && conflict.outboxId) {
+      store.db.prepare(`
+        UPDATE outbox
+        SET status = 'applied',
+            last_error = NULL,
+            applied_at = ?,
+            updated_at = ?
+        WHERE id = ?
+      `).run(now, now, conflict.outboxId);
+      const resource = getResource(store, conflict.relativePath);
+      if (resource) {
+        upsertResource(store, {
+          ...resource,
+          dirty: false,
+          lastError: undefined
+        });
+      }
+    }
+
+    store.db.prepare(`
+      UPDATE conflicts
+      SET status = ?,
+          resolved_at = ?,
+          resolution = ?,
+          resolution_note = ?
+      WHERE id = ?
+    `).run(resolution === "ignore" ? "ignored" : "resolved", now, resolution, note ?? null, id);
+    store.db.exec("COMMIT");
+  } catch (error) {
+    store.db.exec("ROLLBACK");
+    throw error;
+  }
+
+  return getConflict(store, id);
 }
 
 export async function migrateLegacyManifestJson(syncRoot: string, store: ManifestStore): Promise<void> {
