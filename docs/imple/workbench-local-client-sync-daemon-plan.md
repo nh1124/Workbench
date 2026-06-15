@@ -141,6 +141,10 @@ Last updated: 2026-06-15
 npm run build
 ```
 
+- `[implemented]` Core local client/job store tests were added in `services/workbench-core/src/__tests__/localClientsStore.test.ts`.
+  - Covers registration, token verification, heartbeat, disable/re-enable, revoke/re-register, default online selection, ambiguous client rejection, claim idempotency, completion, failure, and cross-client job isolation.
+  - Tests run against the configured Core DB when reachable, and skip quickly when the local DB is offline.
+
 ## Pending / Partial Work
 
 ### Production-Grade Local Client Management
@@ -252,13 +256,12 @@ npm run build
 
 ## Recommended Next Implementation Order
 
-1. Add tests for local client registration, heartbeat, token verification, disable/re-enable, and job claim/complete/fail.
-2. Add focused tests for local job list/revoke/delete and daemon-authenticated sync endpoints.
-3. Add full manifest recovery behavior when local files and SQLite disagree.
-4. Extend `POST /api/sync/push` to Projects and Tasks, and add baseVersion checks.
-5. Implement artifact file replacement and `PUT /api/sync/blobs/:blobId`.
-6. Add daemon local API facade for offline UI reads/writes.
-7. Add Tauri integration for sync folder selection, open folder, and daemon lifecycle.
+1. Add focused HTTP/API tests for local job list/revoke/delete and daemon-authenticated sync endpoints.
+2. Add full manifest recovery behavior when local files and SQLite disagree.
+3. Extend `POST /api/sync/push` to Projects and Tasks, and add baseVersion checks.
+4. Implement artifact file replacement and `PUT /api/sync/blobs/:blobId`.
+5. Add daemon local API facade for offline UI reads/writes.
+6. Add Tauri integration for sync folder selection, open folder, and daemon lifecycle.
 
 ## Current Daemon Usage
 

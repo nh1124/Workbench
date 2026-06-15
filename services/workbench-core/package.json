@@ -7,6 +7,7 @@
     "dev:http": "tsx src/httpServer.ts",
     "dev:mcp": "tsx src/mcpServer.ts",
     "build": "tsc -p tsconfig.json",
+    "test": "tsx --test src/__tests__/**/*.test.ts",
     "start": "node dist/httpServer.js",
     "mcp": "node dist/mcpServer.js"
   },
