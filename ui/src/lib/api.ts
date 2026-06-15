@@ -47,6 +47,7 @@ import type {
 } from "../types/models";
 
 const SESSION_KEY = "workbench-session";
+const LOCAL_DAEMON_REQUEST_TIMEOUT_MS = 2500;
 const NATIVE_SESSION_COMMANDS = {
   save: "secure_session_save",
   read: "secure_session_read",
@@ -334,18 +335,36 @@ async function requestJson<T>(url: string, options?: RequestInit, withSessionAut
 
 async function requestLocalDaemonJson<T>(path: string, options?: RequestInit): Promise<T> {
   const url = `${localDaemonBaseUrl()}${path}`;
+  const { signal: upstreamSignal, headers, ...requestOptions } = options ?? {};
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), LOCAL_DAEMON_REQUEST_TIMEOUT_MS);
+  const onUpstreamAbort = () => controller.abort();
+  if (upstreamSignal?.aborted) {
+    controller.abort();
+  } else {
+    upstreamSignal?.addEventListener("abort", onUpstreamAbort, { once: true });
+  }
+
   let response: Response;
   try {
     response = await fetch(url, {
-      ...options,
+      ...requestOptions,
+      signal: controller.signal,
       headers: {
         "Content-Type": "application/json",
-        ...(options?.headers ?? {})
+        ...(headers ?? {})
       }
     });
   } catch (error) {
-    const detail = error instanceof Error ? error.message : "network error";
+    const detail = controller.signal.aborted
+      ? `timeout after ${LOCAL_DAEMON_REQUEST_TIMEOUT_MS}ms`
+      : error instanceof Error
+        ? error.message
+        : "network error";
     throw new Error(`Local daemon connection failed for ${url}: ${detail}`);
+  } finally {
+    clearTimeout(timeoutId);
+    upstreamSignal?.removeEventListener("abort", onUpstreamAbort);
   }
 
   const text = await response.text();

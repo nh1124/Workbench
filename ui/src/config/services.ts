@@ -1,5 +1,6 @@
 const CORE_URL_STORAGE_KEY = "workbench-core-url";
 const LOCAL_DAEMON_URL_STORAGE_KEY = "workbench-local-daemon-url";
+export const WORKBENCH_LOCAL_DAEMON_URL_CHANGED_EVENT = "workbench-local-daemon-url-changed";
 
 function readViteEnv(name: "VITE_WORKBENCH_CORE_URL" | "VITE_WORKBENCH_LOCAL_DAEMON_URL"): string {
   const value = import.meta.env[name];
@@ -149,6 +150,9 @@ export function setWorkbenchLocalDaemonUrl(raw: string): string {
   const normalized = normalizeWorkbenchLocalDaemonUrl(raw);
   workbenchLocalDaemonUrlCache = normalized;
   persistWorkbenchLocalDaemonUrl(normalized);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(WORKBENCH_LOCAL_DAEMON_URL_CHANGED_EVENT));
+  }
   return normalized;
 }
 

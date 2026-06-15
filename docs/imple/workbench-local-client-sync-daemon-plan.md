@@ -124,6 +124,14 @@ Last updated: 2026-06-15
 - `[implemented]` Settings account page displays recent local job history and result paths.
 - `[implemented]` Settings account page displays local daemon status and open sync conflicts.
 - `[implemented]` Settings account page can resolve local conflicts with retry, ignore, or close.
+- `[implemented]` Settings can open the Account tab and Sync Daemon section from `/settings?tab=account&section=sync-daemon`.
+
+### Main App Shell
+
+- `[implemented]` The topbar displays local sync status from the daemon loopback API.
+  - Shows checking, offline, watcher off, synced, pending, failed, or conflict state.
+  - Polls periodically and refreshes when the configured daemon URL changes.
+  - Clicking the indicator opens the Sync Daemon section in Settings.
 
 ### Verification
 
@@ -219,7 +227,7 @@ npm run build
 - `[pending]` Queue local UI writes into daemon outbox.
 - `[pending]` Make desktop UI point to daemon loopback URL when local mode is enabled.
 - `[implemented]` Add Settings UI display/actions for daemon status and open conflicts.
-- `[pending]` Add offline/sync/conflict status display in the main app shell.
+- `[implemented]` Add offline/sync/conflict status display in the main app shell.
 
 ### Desktop / OS Integration
 
@@ -246,12 +254,11 @@ npm run build
 
 1. Add tests for local client registration, heartbeat, token verification, disable/re-enable, and job claim/complete/fail.
 2. Add focused tests for local job list/revoke/delete and daemon-authenticated sync endpoints.
-3. Add main-shell sync indicator for offline/sync/conflict status.
-4. Add full manifest recovery behavior when local files and SQLite disagree.
-5. Extend `POST /api/sync/push` to Projects and Tasks, and add baseVersion checks.
-6. Implement artifact file replacement and `PUT /api/sync/blobs/:blobId`.
-7. Add daemon local API facade for offline UI reads/writes.
-8. Add Tauri integration for sync folder selection, open folder, and daemon lifecycle.
+3. Add full manifest recovery behavior when local files and SQLite disagree.
+4. Extend `POST /api/sync/push` to Projects and Tasks, and add baseVersion checks.
+5. Implement artifact file replacement and `PUT /api/sync/blobs/:blobId`.
+6. Add daemon local API facade for offline UI reads/writes.
+7. Add Tauri integration for sync folder selection, open folder, and daemon lifecycle.
 
 ## Current Daemon Usage
 

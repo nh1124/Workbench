@@ -231,6 +231,70 @@ button, input, select, textarea { font: inherit; }
   align-items: center;
   gap: 0.52rem;
 }
+.sync-status-button {
+  all: unset;
+  box-sizing: border-box;
+  min-width: 6.2rem;
+  height: 2.05rem;
+  border: 1px solid rgba(71, 85, 105, 0.68);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.8);
+  color: #cbd5e1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.44rem;
+  padding: 0 0.72rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+.sync-status-button:hover,
+.sync-status-button:focus-visible {
+  border-color: rgba(103, 232, 249, 0.56);
+  background: rgba(8, 145, 178, 0.12);
+  color: #e6f8ff;
+  outline: none;
+}
+.sync-status-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: #94a3b8;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.12);
+}
+.sync-status-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sync-status-button.ok .sync-status-dot {
+  background: #34d399;
+  box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.14);
+}
+.sync-status-button.syncing .sync-status-dot,
+.sync-status-button.checking .sync-status-dot {
+  background: #38bdf8;
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.14);
+}
+.sync-status-button.issue {
+  border-color: rgba(251, 191, 36, 0.52);
+  color: #fde68a;
+}
+.sync-status-button.issue .sync-status-dot {
+  background: #fbbf24;
+  box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.16);
+}
+.sync-status-button.offline {
+  color: #c7d2e3;
+}
+.sync-status-button.offline .sync-status-dot {
+  background: #64748b;
+  box-shadow: 0 0 0 3px rgba(100, 116, 139, 0.16);
+}
 .icon-button {
   width: 2.4rem; height: 2.4rem; border-radius: 10px;
   border: 1px solid var(--line); background: #0f172a; color: #cbd5e1;
@@ -751,6 +815,17 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
   /* Show hamburger button */
   .mobile-hamburger {
     display: inline-flex;
+  }
+
+  .sync-status-button {
+    min-width: 2.05rem;
+    width: 2.05rem;
+    padding: 0;
+    gap: 0;
+  }
+
+  .sync-status-label {
+    display: none;
   }
 
   /* Force sidebar to full height; not collapsed on mobile */

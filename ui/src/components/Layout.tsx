@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { NavLink, Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { navItems } from "../config/services";
-import { clearWorkbenchSession, readWorkbenchSession } from "../lib/api";
+import { WORKBENCH_LOCAL_DAEMON_URL_CHANGED_EVENT, navItems } from "../config/services";
+import { clearWorkbenchSession, localDaemonApi, readWorkbenchSession } from "../lib/api";
 import { useNotifications } from "../lib/notificationService";
+import type { LocalDaemonStatus } from "../types/models";
 import { QuickNoteModal } from "./QuickNoteModal";
 import { ShortcutsModal } from "./ShortcutsModal";
 
@@ -76,6 +77,9 @@ export function Layout() {
   const [isQuickNoteOpen, setIsQuickNoteOpen] = useState(false);
   const [isNotificationOpen, setIsNotificationOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [daemonStatus, setDaemonStatus] = useState<LocalDaemonStatus | undefined>(undefined);
+  const [daemonStatusChecked, setDaemonStatusChecked] = useState(false);
+  const [daemonStatusError, setDaemonStatusError] = useState(false);
   const [isCompactSidebarMode, setIsCompactSidebarMode] = useState(() =>
     typeof window !== "undefined" ? window.innerWidth <= COMPACT_SIDEBAR_BREAKPOINT : false
   );
@@ -87,6 +91,62 @@ export function Layout() {
     clearNotifications
   } = useNotifications();
   const isNativeRuntime = typeof window !== "undefined" && typeof window.__TAURI_INTERNALS__?.invoke === "function";
+
+  const daemonSignal = useMemo(() => {
+    if (!daemonStatusChecked) {
+      return {
+        className: "checking",
+        label: "Checking",
+        title: "Checking local daemon status"
+      };
+    }
+
+    if (daemonStatusError || !daemonStatus) {
+      return {
+        className: "offline",
+        label: "Local off",
+        title: "Local daemon is not reachable"
+      };
+    }
+
+    const conflictsOpen = daemonStatus.conflictsOpen ?? 0;
+    const outboxFailed = daemonStatus.outboxFailed ?? 0;
+    const outboxPending = daemonStatus.outboxPending ?? 0;
+    if (conflictsOpen > 0) {
+      return {
+        className: "issue",
+        label: `${conflictsOpen} conflict${conflictsOpen === 1 ? "" : "s"}`,
+        title: `Local daemon has ${conflictsOpen} open conflict${conflictsOpen === 1 ? "" : "s"}`
+      };
+    }
+    if (outboxFailed > 0) {
+      return {
+        className: "issue",
+        label: `${outboxFailed} failed`,
+        title: `Local daemon has ${outboxFailed} failed outbox item${outboxFailed === 1 ? "" : "s"}`
+      };
+    }
+    if (!daemonStatus.watcherActive) {
+      return {
+        className: "offline",
+        label: "Watcher off",
+        title: daemonStatus.lastError ? `Local watcher is off: ${daemonStatus.lastError}` : "Local watcher is off"
+      };
+    }
+    if (outboxPending > 0) {
+      return {
+        className: "syncing",
+        label: `${outboxPending} pending`,
+        title: `Local daemon has ${outboxPending} pending outbox item${outboxPending === 1 ? "" : "s"}`
+      };
+    }
+
+    return {
+      className: "ok",
+      label: "Synced",
+      title: "Local daemon is online and synced"
+    };
+  }, [daemonStatus, daemonStatusChecked, daemonStatusError]);
 
   useEffect(() => {
     setIsUserMenuOpen(false);
@@ -102,6 +162,46 @@ export function Layout() {
     onResize();
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const refreshDaemonStatus = async () => {
+      try {
+        const status = await localDaemonApi.status();
+        if (cancelled) return;
+        setDaemonStatus(status);
+        setDaemonStatusError(false);
+      } catch {
+        if (cancelled) return;
+        setDaemonStatus(undefined);
+        setDaemonStatusError(true);
+      } finally {
+        if (!cancelled) {
+          setDaemonStatusChecked(true);
+        }
+      }
+    };
+
+    void refreshDaemonStatus();
+    const intervalId = window.setInterval(() => void refreshDaemonStatus(), 30000);
+    const onDaemonUrlChanged = () => void refreshDaemonStatus();
+    const onVisibilityChange = () => {
+      if (!document.hidden) {
+        void refreshDaemonStatus();
+      }
+    };
+
+    window.addEventListener(WORKBENCH_LOCAL_DAEMON_URL_CHANGED_EVENT, onDaemonUrlChanged);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+      window.removeEventListener(WORKBENCH_LOCAL_DAEMON_URL_CHANGED_EVENT, onDaemonUrlChanged);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, []);
 
   useEffect(() => {
@@ -314,6 +414,16 @@ export function Layout() {
             </p>
           </div>
           <div className="topbar-actions">
+            <button
+              type="button"
+              className={`sync-status-button ${daemonSignal.className}`}
+              title={daemonSignal.title}
+              aria-label={`Local sync status: ${daemonSignal.label}`}
+              onClick={() => navigate("/settings?tab=account&section=sync-daemon")}
+            >
+              <span className="sync-status-dot" aria-hidden="true" />
+              <span className="sync-status-label">{daemonSignal.label}</span>
+            </button>
             <div className="notification-menu-wrap" ref={notificationMenuRef}>
               <button
                 type="button"

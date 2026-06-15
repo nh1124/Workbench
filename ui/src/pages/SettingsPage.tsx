@@ -1,4 +1,5 @@
-﻿import { useEffect, useMemo, useState, type ReactNode } from "react";
+﻿import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useLocation } from "react-router-dom";
 import {
   coreApi,
   clearWorkbenchSession,
@@ -34,6 +35,12 @@ import "./SettingsPage.css";
 type SettingsTab = "general" | "services" | "account";
 type CategoryChip = "all" | string;
 const LOCAL_INTEGRATIONS_KEY = "workbench-integration-configs";
+const SETTINGS_TABS: SettingsTab[] = ["general", "services", "account"];
+
+function parseSettingsTab(search: string): SettingsTab | undefined {
+  const value = new URLSearchParams(search).get("tab");
+  return SETTINGS_TABS.includes(value as SettingsTab) ? (value as SettingsTab) : undefined;
+}
 
 function formatCategoryLabel(category: string): string {
   if (category.toLowerCase() === "integration") return "Developer";
@@ -133,7 +140,9 @@ function toStateMapFromDb(configs: StoredIntegrationConfig[]): Record<string, In
 }
 
 export function SettingsPage() {
-  const [activeTab, setActiveTab] = useState<SettingsTab>("services");
+  const location = useLocation();
+  const localDaemonSectionRef = useRef<HTMLElement>(null);
+  const [activeTab, setActiveTab] = useState<SettingsTab>(() => parseSettingsTab(location.search) ?? "services");
   const [settings, setSettings] = useState<UiSettings>(() => loadUiSettings());
   const [manifests, setManifests] = useState<IntegrationManifest[]>([]);
   const [integrationConfigs, setIntegrationConfigs] = useState<Record<string, IntegrationConfigState>>({});
@@ -181,6 +190,24 @@ export function SettingsPage() {
   useEffect(() => {
     localStorage.setItem(LOCAL_INTEGRATIONS_KEY, JSON.stringify(integrationConfigs));
   }, [integrationConfigs]);
+
+  useEffect(() => {
+    const nextTab = parseSettingsTab(location.search);
+    if (nextTab) {
+      setActiveTab(nextTab);
+    }
+  }, [location.search]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (activeTab !== "account" || params.get("section") !== "sync-daemon") {
+      return;
+    }
+
+    window.setTimeout(() => {
+      localDaemonSectionRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+    }, 0);
+  }, [activeTab, location.search]);
 
   const refreshManifests = async () => {
     const loaded = await fetchAllServiceManifests();
@@ -1037,7 +1064,7 @@ export function SettingsPage() {
               )}
             </section>
 
-            <section className="account-local-daemon">
+            <section className="account-local-daemon" ref={localDaemonSectionRef}>
               <div className="account-local-clients-header">
                 <div>
                   <h3>Sync Daemon</h3>
