@@ -144,6 +144,11 @@ npm run build
 - `[implemented]` Core local client/job store tests were added in `services/workbench-core/src/__tests__/localClientsStore.test.ts`.
   - Covers registration, token verification, heartbeat, disable/re-enable, revoke/re-register, default online selection, ambiguous client rejection, claim idempotency, completion, failure, and cross-client job isolation.
   - Tests run against the configured Core DB when reachable, and skip quickly when the local DB is offline.
+- `[implemented]` Core local client/job HTTP API tests were added in `services/workbench-core/src/__tests__/localClientHttpApi.test.ts`.
+  - Covers bearer-authenticated local client register/list/patch/revoke/delete.
+  - Covers daemon-authenticated heartbeat, job claim, job completion, and revoked-token rejection.
+  - Covers daemon-authenticated sync pull/snapshot/push/blob-upload-placeholder endpoints and unauthenticated sync rejection.
+  - `httpServer.ts` now exports the Express app and starts listening only when executed directly, so HTTP routes can be tested on an ephemeral port.
 
 ## Pending / Partial Work
 
@@ -256,12 +261,11 @@ npm run build
 
 ## Recommended Next Implementation Order
 
-1. Add focused HTTP/API tests for local job list/revoke/delete and daemon-authenticated sync endpoints.
-2. Add full manifest recovery behavior when local files and SQLite disagree.
-3. Extend `POST /api/sync/push` to Projects and Tasks, and add baseVersion checks.
-4. Implement artifact file replacement and `PUT /api/sync/blobs/:blobId`.
-5. Add daemon local API facade for offline UI reads/writes.
-6. Add Tauri integration for sync folder selection, open folder, and daemon lifecycle.
+1. Add full manifest recovery behavior when local files and SQLite disagree.
+2. Extend `POST /api/sync/push` to Projects and Tasks, and add baseVersion checks.
+3. Implement artifact file replacement and `PUT /api/sync/blobs/:blobId`.
+4. Add daemon local API facade for offline UI reads/writes.
+5. Add Tauri integration for sync folder selection, open folder, and daemon lifecycle.
 
 ## Current Daemon Usage
 

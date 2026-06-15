@@ -828,7 +828,7 @@ function renderAuthorizeLoginForm(params: AuthorizeRequestParams, errorMessage?:
 </html>`;
 }
 
-const app = express();
+export const app = express();
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
 
@@ -4261,13 +4261,14 @@ if (existsSync(uiIndexHtmlPath)) {
 
 // ---------------------------------------------------------------------------
 
-const port = Number(requireEnv("CORE_SERVICE_PORT"));
-const host = requireEnv("CORE_SERVICE_HOST");
-if (!Number.isFinite(port)) {
-  throw new Error(`Invalid CORE_SERVICE_PORT value: ${process.env.CORE_SERVICE_PORT}`);
-}
+export async function startHttpServer(): Promise<void> {
+  const port = Number(requireEnv("CORE_SERVICE_PORT"));
+  const host = requireEnv("CORE_SERVICE_HOST");
+  if (!Number.isFinite(port)) {
+    throw new Error(`Invalid CORE_SERVICE_PORT value: ${process.env.CORE_SERVICE_PORT}`);
+  }
 
-void ensureCoreSchema().then(() => {
+  await ensureCoreSchema();
   app.listen(port, host, () => {
     console.log(`Workbench Core HTTP listening on ${host}:${port}`);
     console.log(`MCP HTTP endpoint available at POST http://${host}:${port}/mcp`);
@@ -4275,4 +4276,8 @@ void ensureCoreSchema().then(() => {
       console.log(`Canonical external OAuth base configured as ${canonicalBaseConfig.issuer}`);
     }
   });
-});
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
+  void startHttpServer();
+}
