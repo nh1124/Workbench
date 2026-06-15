@@ -534,7 +534,8 @@
 }
 
 .account-local-clients,
-.account-local-jobs {
+.account-local-jobs,
+.account-local-daemon {
   margin-top: 0.9rem;
   border: 1px solid rgba(51, 65, 85, 0.78);
   border-radius: 14px;
@@ -699,6 +700,124 @@
   color: #fca5a5;
 }
 
+.account-local-daemon-url {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.account-local-daemon-url input {
+  flex: 1;
+  min-width: 0;
+  height: 2.2rem;
+  border-radius: 10px;
+  border: 1px solid #334155;
+  background: #1f2a41;
+  color: #e5eefb;
+  padding: 0 0.72rem;
+}
+
+.account-local-daemon-url button,
+.account-local-conflict-actions button {
+  min-height: 2.1rem;
+  border-radius: 10px;
+  font-size: 0.75rem;
+  padding: 0.42rem 0.66rem;
+}
+
+.account-local-daemon-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.42rem;
+}
+
+.account-local-daemon-status span {
+  border: 1px solid #334155;
+  border-radius: 999px;
+  padding: 0.16rem 0.5rem;
+  color: #cbd5e1;
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.account-local-daemon-status .online {
+  border-color: rgba(74, 222, 128, 0.45);
+  color: #86efac;
+}
+
+.account-local-daemon-status .offline {
+  border-color: rgba(248, 113, 113, 0.5);
+  color: #fca5a5;
+}
+
+.account-local-daemon-status small {
+  color: #fca5a5;
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.account-local-conflicts {
+  display: grid;
+  gap: 0.48rem;
+}
+
+.account-local-conflicts-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  color: #cbd5e1;
+}
+
+.account-local-conflicts-head small {
+  color: #64748b;
+}
+
+.account-local-conflict-list {
+  display: grid;
+  gap: 0.48rem;
+}
+
+.account-local-conflict-row {
+  border: 1px solid rgba(248, 113, 113, 0.32);
+  border-radius: 10px;
+  background: rgba(69, 10, 10, 0.16);
+  padding: 0.66rem 0.72rem;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.account-local-conflict-row strong {
+  color: #fee2e2;
+  font-size: 0.84rem;
+  overflow-wrap: anywhere;
+}
+
+.account-local-conflict-row p {
+  margin: 0.2rem 0 0;
+  color: #fca5a5;
+  font-size: 0.74rem;
+}
+
+.account-local-conflict-row small {
+  display: block;
+  margin-top: 0.16rem;
+  color: #cbd5e1;
+  font-size: 0.68rem;
+  overflow-wrap: anywhere;
+}
+
+.account-local-conflict-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.34rem;
+  flex-shrink: 0;
+}
+
 @media (max-width: 980px) {
   .settings-shell {
     grid-template-columns: 1fr;
@@ -719,14 +838,21 @@
 
   .account-local-client-card,
   .account-local-job-row,
+  .account-local-conflict-row,
   .account-local-clients-header {
     flex-direction: column;
   }
 
   .account-local-client-actions,
-  .account-local-job-status {
+  .account-local-job-status,
+  .account-local-conflict-actions {
     justify-content: flex-start;
     justify-items: start;
+  }
+
+  .account-local-daemon-url {
+    flex-direction: column;
+    align-items: stretch;
   }
 }
 

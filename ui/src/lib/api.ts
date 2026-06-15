@@ -1,4 +1,4 @@
-import { getWorkbenchCoreUrl } from "../config/services";
+import { getWorkbenchCoreUrl, getWorkbenchLocalDaemonUrl } from "../config/services";
 import { pushErrorNotification } from "./notificationService";
 import type {
   Artifact,
@@ -20,6 +20,8 @@ import type {
   ArtifactProjectSummary,
   IntegrationManifest,
   LocalClientRecord,
+  LocalDaemonConflictRecord,
+  LocalDaemonStatus,
   LocalJobRecord,
   Note,
   NoteProjectSummary,
@@ -187,6 +189,14 @@ function coreBaseUrl(): string {
   return configuredUrl;
 }
 
+function localDaemonBaseUrl(): string {
+  const configuredUrl = getWorkbenchLocalDaemonUrl();
+  if (!configuredUrl) {
+    throw new Error("Workbench local daemon URL is not configured.");
+  }
+  return configuredUrl;
+}
+
 function authHeaders(extra?: HeadersInit): HeadersInit {
   const session = readStoredSession();
   return {
@@ -320,6 +330,38 @@ async function requestJson<T>(url: string, options?: RequestInit, withSessionAut
     pushErrorNotification(message, "Service Error");
     throw new Error(message);
   }
+}
+
+async function requestLocalDaemonJson<T>(path: string, options?: RequestInit): Promise<T> {
+  const url = `${localDaemonBaseUrl()}${path}`;
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...(options?.headers ?? {})
+      }
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "network error";
+    throw new Error(`Local daemon connection failed for ${url}: ${detail}`);
+  }
+
+  const text = await response.text();
+  if (!response.ok) {
+    let parsed: { message?: string } | undefined;
+    try {
+      parsed = JSON.parse(text) as { message?: string };
+    } catch {
+      parsed = undefined;
+    }
+    throw new ApiError(parsed?.message ?? (text || `Local daemon request failed: ${response.status}`), response.status);
+  }
+  if (!text.trim()) {
+    return undefined as T;
+  }
+  return JSON.parse(text) as T;
 }
 
 async function refreshAccessToken(refreshToken: string): Promise<void> {
@@ -1146,6 +1188,28 @@ export const coreApi = {
   },
   getLocalJob: (id: string): Promise<LocalJobRecord> =>
     fetchJson(`${coreBaseUrl()}/api/local-jobs/${encodeURIComponent(id)}`)
+};
+
+export const localDaemonApi = {
+  status: (): Promise<LocalDaemonStatus> =>
+    requestLocalDaemonJson<LocalDaemonStatus>("/status"),
+  listConflicts: (
+    options: { status?: LocalDaemonConflictRecord["status"] | "all"; limit?: number } = {}
+  ): Promise<{ items: LocalDaemonConflictRecord[] }> => {
+    const params = new URLSearchParams();
+    if (options.status) params.set("status", options.status);
+    if (options.limit) params.set("limit", String(options.limit));
+    const query = params.toString();
+    return requestLocalDaemonJson<{ items: LocalDaemonConflictRecord[] }>(`/conflicts${query ? `?${query}` : ""}`);
+  },
+  resolveConflict: (
+    id: string,
+    payload: { resolution: "retry" | "ignore" | "close"; note?: string }
+  ): Promise<LocalDaemonConflictRecord> =>
+    requestLocalDaemonJson<LocalDaemonConflictRecord>(`/conflicts/${encodeURIComponent(id)}/resolve`, {
+      method: "POST",
+      body: JSON.stringify(payload)
+    })
 };
 
 export async function saveWorkbenchSession(session: WorkbenchAuthResponse | WorkbenchRefreshResponse): Promise<void> {

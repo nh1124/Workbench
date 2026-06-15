@@ -3,8 +3,13 @@ import {
   coreApi,
   clearWorkbenchSession,
   fetchAllServiceManifests,
+  localDaemonApi,
   readWorkbenchSession
 } from "../lib/api";
+import {
+  getWorkbenchLocalDaemonUrlInitialValue,
+  setWorkbenchLocalDaemonUrl
+} from "../config/services";
 import {
   getDefaultLocationPreset,
   getLocationPresetsForTimezone,
@@ -18,6 +23,8 @@ import type {
   IntegrationConfigState,
   IntegrationManifest,
   LocalClientRecord,
+  LocalDaemonConflictRecord,
+  LocalDaemonStatus,
   LocalJobRecord,
   StoredIntegrationConfig,
   WorkbenchUserSession
@@ -149,6 +156,12 @@ export function SettingsPage() {
   const [localJobs, setLocalJobs] = useState<LocalJobRecord[]>([]);
   const [localClientsMessage, setLocalClientsMessage] = useState("");
   const [localClientsLoading, setLocalClientsLoading] = useState(false);
+  const [localDaemonUrlInput, setLocalDaemonUrlInput] = useState(getWorkbenchLocalDaemonUrlInitialValue());
+  const [localDaemonStatus, setLocalDaemonStatus] = useState<LocalDaemonStatus | undefined>(undefined);
+  const [localDaemonConflicts, setLocalDaemonConflicts] = useState<LocalDaemonConflictRecord[]>([]);
+  const [localDaemonMessage, setLocalDaemonMessage] = useState("");
+  const [localDaemonLoading, setLocalDaemonLoading] = useState(false);
+  const [localDaemonResolving, setLocalDaemonResolving] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     setSettings(loadUiSettings());
@@ -191,6 +204,7 @@ export function SettingsPage() {
       );
       setLocalClients(clientsResult.items);
       setLocalJobs(jobsResult.items);
+      void refreshLocalDaemon(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to load account data";
       setAccountMessage(message);
@@ -290,6 +304,64 @@ export function SettingsPage() {
       setLocalClientsMessage(message);
     } finally {
       setLocalClientsLoading(false);
+    }
+  };
+
+  const refreshLocalDaemon = async (showSuccess = true) => {
+    setLocalDaemonLoading(true);
+    setLocalDaemonMessage("");
+    try {
+      const [status, conflicts] = await Promise.all([
+        localDaemonApi.status(),
+        localDaemonApi.listConflicts({ status: "open", limit: 25 })
+      ]);
+      setLocalDaemonStatus(status);
+      setLocalDaemonConflicts(conflicts.items);
+      if (showSuccess) {
+        setLocalDaemonMessage("Local daemon refreshed.");
+      }
+    } catch (error) {
+      setLocalDaemonStatus(undefined);
+      setLocalDaemonConflicts([]);
+      const message = error instanceof Error ? error.message : "Failed to reach local daemon";
+      setLocalDaemonMessage(message);
+    } finally {
+      setLocalDaemonLoading(false);
+    }
+  };
+
+  const saveLocalDaemonUrl = () => {
+    try {
+      const normalized = setWorkbenchLocalDaemonUrl(localDaemonUrlInput);
+      setLocalDaemonUrlInput(normalized);
+      setLocalDaemonMessage("Local daemon URL saved.");
+      void refreshLocalDaemon(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invalid local daemon URL";
+      setLocalDaemonMessage(message);
+    }
+  };
+
+  const resolveLocalDaemonConflict = async (
+    conflict: LocalDaemonConflictRecord,
+    resolution: "retry" | "ignore" | "close"
+  ) => {
+    setLocalDaemonResolving((current) => ({ ...current, [conflict.id]: true }));
+    setLocalDaemonMessage("");
+    try {
+      await localDaemonApi.resolveConflict(conflict.id, { resolution });
+      const [status, conflicts] = await Promise.all([
+        localDaemonApi.status(),
+        localDaemonApi.listConflicts({ status: "open", limit: 25 })
+      ]);
+      setLocalDaemonStatus(status);
+      setLocalDaemonConflicts(conflicts.items);
+      setLocalDaemonMessage(resolution === "retry" ? "Conflict requeued." : "Conflict updated.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to update conflict";
+      setLocalDaemonMessage(message);
+    } finally {
+      setLocalDaemonResolving((current) => ({ ...current, [conflict.id]: false }));
     }
   };
 
@@ -963,6 +1035,87 @@ export function SettingsPage() {
                   })}
                 </div>
               )}
+            </section>
+
+            <section className="account-local-daemon">
+              <div className="account-local-clients-header">
+                <div>
+                  <h3>Sync Daemon</h3>
+                  <p className="muted">Loopback status and local sync conflict handling.</p>
+                </div>
+                <button type="button" onClick={() => void refreshLocalDaemon()} disabled={localDaemonLoading}>
+                  {localDaemonLoading ? "Refreshing..." : "Refresh"}
+                </button>
+              </div>
+
+              <div className="account-local-daemon-url">
+                <input
+                  value={localDaemonUrlInput}
+                  onChange={(event) => setLocalDaemonUrlInput(event.target.value)}
+                  placeholder="http://127.0.0.1:35780"
+                />
+                <button type="button" onClick={saveLocalDaemonUrl}>Save URL</button>
+              </div>
+
+              {localDaemonStatus ? (
+                <div className="account-local-daemon-status">
+                  <span className={localDaemonStatus.watcherActive ? "online" : "offline"}>
+                    {localDaemonStatus.watcherActive ? "Watcher On" : "Watcher Off"}
+                  </span>
+                  <span>{localDaemonStatus.outboxPending ?? 0} pending</span>
+                  <span>{localDaemonStatus.outboxFailed ?? 0} failed</span>
+                  <span>{localDaemonStatus.conflictsOpen ?? 0} conflicts</span>
+                  {localDaemonStatus.lastError ? <small>{localDaemonStatus.lastError}</small> : null}
+                </div>
+              ) : (
+                <p className="info">Local daemon status is not loaded.</p>
+              )}
+
+              <div className="account-local-conflicts">
+                <div className="account-local-conflicts-head">
+                  <strong>Open Conflicts</strong>
+                  <small>{localDaemonConflicts.length} items</small>
+                </div>
+                {localDaemonConflicts.length === 0 ? (
+                  <p className="info">No open local sync conflicts.</p>
+                ) : (
+                  <div className="account-local-conflict-list">
+                    {localDaemonConflicts.map((conflict) => (
+                      <article key={conflict.id} className="account-local-conflict-row">
+                        <div>
+                          <strong>{conflict.relativePath}</strong>
+                          <p>{conflict.action} / {conflict.domain}</p>
+                          <small>{conflict.errorMessage}</small>
+                        </div>
+                        <div className="account-local-conflict-actions">
+                          <button
+                            type="button"
+                            disabled={localDaemonResolving[conflict.id]}
+                            onClick={() => void resolveLocalDaemonConflict(conflict, "retry")}
+                          >
+                            Retry
+                          </button>
+                          <button
+                            type="button"
+                            disabled={localDaemonResolving[conflict.id]}
+                            onClick={() => void resolveLocalDaemonConflict(conflict, "ignore")}
+                          >
+                            Ignore
+                          </button>
+                          <button
+                            type="button"
+                            disabled={localDaemonResolving[conflict.id]}
+                            onClick={() => void resolveLocalDaemonConflict(conflict, "close")}
+                          >
+                            Close
+                          </button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {localDaemonMessage ? <p className="info">{localDaemonMessage}</p> : null}
             </section>
 
             {session ? <p className="info">Signed in as {session.username}</p> : null}

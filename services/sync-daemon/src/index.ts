@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { createServer, type IncomingMessage } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { hostname, homedir, platform } from "node:os";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -856,9 +856,22 @@ function parseConflictResolution(value: unknown): ConflictResolution | undefined
   return value === "retry" || value === "ignore" || value === "close" ? value : undefined;
 }
 
+function setLoopbackCorsHeaders(res: ServerResponse): void {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Max-Age", "600");
+}
+
 function startStatusServer(state: DaemonState): void {
   if (state.config.httpPort === 0) return;
   const server = createServer(async (req, res) => {
+    setLoopbackCorsHeaders(res);
+    if (req.method === "OPTIONS") {
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     if (url.pathname === "/health" || url.pathname === "/status") {
       res.setHeader("Content-Type", "application/json");

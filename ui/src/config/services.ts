@@ -1,31 +1,41 @@
 const CORE_URL_STORAGE_KEY = "workbench-core-url";
+const LOCAL_DAEMON_URL_STORAGE_KEY = "workbench-local-daemon-url";
 
-function readViteEnv(name: "VITE_WORKBENCH_CORE_URL"): string {
+function readViteEnv(name: "VITE_WORKBENCH_CORE_URL" | "VITE_WORKBENCH_LOCAL_DAEMON_URL"): string {
   const value = import.meta.env[name];
   return typeof value === "string" ? value.trim() : "";
 }
 
-function normalizeWorkbenchCoreUrl(raw: string): string {
+function normalizeHttpUrl(raw: string, label: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
-    throw new Error("Server URL is required.");
+    throw new Error(`${label} URL is required.`);
   }
 
   let parsed: URL;
   try {
     parsed = new URL(trimmed);
   } catch {
-    throw new Error("Server URL must be a valid URL (e.g. http://localhost:3000).");
+    throw new Error(`${label} URL must be a valid URL.`);
   }
 
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error("Server URL must start with http:// or https://.");
+    throw new Error(`${label} URL must start with http:// or https://.`);
   }
 
   return parsed.toString().replace(/\/+$/, "");
 }
 
+function normalizeWorkbenchCoreUrl(raw: string): string {
+  return normalizeHttpUrl(raw, "Server");
+}
+
+function normalizeWorkbenchLocalDaemonUrl(raw: string): string {
+  return normalizeHttpUrl(raw, "Local daemon");
+}
+
 const envWorkbenchCoreUrlFallback = readViteEnv("VITE_WORKBENCH_CORE_URL");
+const envWorkbenchLocalDaemonUrlFallback = readViteEnv("VITE_WORKBENCH_LOCAL_DAEMON_URL") || "http://127.0.0.1:35780";
 
 const envWorkbenchCoreUrl = (() => {
   if (!envWorkbenchCoreUrlFallback) return "";
@@ -37,7 +47,18 @@ const envWorkbenchCoreUrl = (() => {
   }
 })();
 
+const envWorkbenchLocalDaemonUrl = (() => {
+  if (!envWorkbenchLocalDaemonUrlFallback) return "";
+
+  try {
+    return normalizeWorkbenchLocalDaemonUrl(envWorkbenchLocalDaemonUrlFallback);
+  } catch {
+    return "http://127.0.0.1:35780";
+  }
+})();
+
 let workbenchCoreUrlCache: string | undefined;
+let workbenchLocalDaemonUrlCache: string | undefined;
 
 function isServedByWorkbenchCore(): boolean {
   if (typeof window === "undefined") return false;
@@ -79,12 +100,42 @@ function persistWorkbenchCoreUrl(value: string): void {
   window.localStorage.setItem(CORE_URL_STORAGE_KEY, value);
 }
 
+function readStoredWorkbenchLocalDaemonUrlRaw(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  const raw = window.localStorage.getItem(LOCAL_DAEMON_URL_STORAGE_KEY);
+  if (!raw) return undefined;
+
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function readStoredWorkbenchLocalDaemonUrl(): string | undefined {
+  try {
+    const raw = readStoredWorkbenchLocalDaemonUrlRaw();
+    if (!raw) return undefined;
+    return normalizeWorkbenchLocalDaemonUrl(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+function persistWorkbenchLocalDaemonUrl(value: string): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(LOCAL_DAEMON_URL_STORAGE_KEY, value);
+}
+
 export function getWorkbenchCoreUrl(): string {
   if (workbenchCoreUrlCache !== undefined) return workbenchCoreUrlCache;
   workbenchCoreUrlCache = isServedByWorkbenchCore()
     ? currentOriginWorkbenchCoreUrl() || readStoredWorkbenchCoreUrl() || envWorkbenchCoreUrl
     : readStoredWorkbenchCoreUrl() ?? envWorkbenchCoreUrl;
   return workbenchCoreUrlCache;
+}
+
+export function getWorkbenchLocalDaemonUrl(): string {
+  if (workbenchLocalDaemonUrlCache !== undefined) return workbenchLocalDaemonUrlCache;
+  workbenchLocalDaemonUrlCache = readStoredWorkbenchLocalDaemonUrl() ?? envWorkbenchLocalDaemonUrl;
+  return workbenchLocalDaemonUrlCache;
 }
 
 export function setWorkbenchCoreUrl(raw: string): string {
@@ -94,10 +145,21 @@ export function setWorkbenchCoreUrl(raw: string): string {
   return normalized;
 }
 
+export function setWorkbenchLocalDaemonUrl(raw: string): string {
+  const normalized = normalizeWorkbenchLocalDaemonUrl(raw);
+  workbenchLocalDaemonUrlCache = normalized;
+  persistWorkbenchLocalDaemonUrl(normalized);
+  return normalized;
+}
+
 export function getWorkbenchCoreUrlInitialValue(): string {
   return isServedByWorkbenchCore()
     ? currentOriginWorkbenchCoreUrl() || readStoredWorkbenchCoreUrlRaw() || envWorkbenchCoreUrlFallback
     : readStoredWorkbenchCoreUrlRaw() ?? envWorkbenchCoreUrlFallback;
+}
+
+export function getWorkbenchLocalDaemonUrlInitialValue(): string {
+  return readStoredWorkbenchLocalDaemonUrlRaw() ?? envWorkbenchLocalDaemonUrlFallback;
 }
 
 export const navItems = [

@@ -122,6 +122,8 @@ Last updated: 2026-06-15
   - delete local client,
   - online/offline/default display.
 - `[implemented]` Settings account page displays recent local job history and result paths.
+- `[implemented]` Settings account page displays local daemon status and open sync conflicts.
+- `[implemented]` Settings account page can resolve local conflicts with retry, ignore, or close.
 
 ### Verification
 
@@ -216,6 +218,7 @@ npm run build
 - `[pending]` Serve local-first reads from daemon SQLite when offline.
 - `[pending]` Queue local UI writes into daemon outbox.
 - `[pending]` Make desktop UI point to daemon loopback URL when local mode is enabled.
+- `[implemented]` Add Settings UI display/actions for daemon status and open conflicts.
 - `[pending]` Add offline/sync/conflict status display in the main app shell.
 
 ### Desktop / OS Integration
@@ -233,6 +236,7 @@ npm run build
 ### Security Hardening
 
 - `[partial]` Daemon writes only to configured downloads or sync folder.
+- `[partial]` Daemon loopback API allows browser UI access with permissive local CORS.
 - `[pending]` Add path allowlist tests for Windows/macOS/Linux edge cases.
 - `[pending]` Add local daemon loopback token for status/API endpoints.
 - `[pending]` Avoid returning sensitive local paths to non-local callers unless explicitly requested and authorized.
@@ -242,7 +246,7 @@ npm run build
 
 1. Add tests for local client registration, heartbeat, token verification, disable/re-enable, and job claim/complete/fail.
 2. Add focused tests for local job list/revoke/delete and daemon-authenticated sync endpoints.
-3. Add Settings/main-shell UI for conflict status and conflict actions.
+3. Add main-shell sync indicator for offline/sync/conflict status.
 4. Add full manifest recovery behavior when local files and SQLite disagree.
 5. Extend `POST /api/sync/push` to Projects and Tasks, and add baseVersion checks.
 6. Implement artifact file replacement and `PUT /api/sync/blobs/:blobId`.

@@ -348,6 +348,45 @@ export interface LocalJobRecord {
   updatedAt: string;
 }
 
+export interface LocalDaemonStatus {
+  status: string;
+  coreUrl: string;
+  syncRoot: string;
+  manifestDbPath?: string;
+  downloadsDir: string;
+  watchEnabled?: boolean;
+  watcherActive?: boolean;
+  watchDebounceMs?: number;
+  localClientId?: string;
+  lastHeartbeatAt?: string;
+  lastClaimAt?: string;
+  lastScanAt?: string;
+  lastPushAt?: string;
+  lastError?: string;
+  processedJobs?: number;
+  outboxPending?: number;
+  outboxFailed?: number;
+  conflictsOpen?: number;
+}
+
+export interface LocalDaemonConflictRecord {
+  id: string;
+  outboxId?: string;
+  clientOpId?: string;
+  relativePath: string;
+  domain: "artifacts";
+  action: "create" | "update" | "delete";
+  resourceId?: string;
+  payload: Record<string, unknown>;
+  errorMessage: string;
+  conflictPath?: string;
+  status: "open" | "resolved" | "ignored";
+  createdAt: string;
+  resolvedAt?: string;
+  resolution?: "retry" | "ignore" | "close";
+  resolutionNote?: string;
+}
+
 export type ImageProvider = "auto" | "mock" | "openai" | "nanobanana";
 export type ImageIntent = "create" | "refine" | "edit" | "context_update";
 export type ImageJobStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
