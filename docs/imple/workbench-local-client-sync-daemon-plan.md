@@ -197,9 +197,16 @@ npm run build
 - `[implemented]` Explicit token revoke endpoint exists.
 - `[implemented]` Local client deletion endpoint exists.
 - `[pending]` Add archival/soft-delete option if hard deletion is too aggressive for audit requirements.
-- `[pending]` Add audit trail for local client registration, disable, default change, job claim, and job completion.
+- `[implemented]` Add audit trail for local client registration, update, enable/disable, default change, token revoke, delete, job lifecycle, expiry, and capability denial.
+  - `local_client_audit_events` stores user/client/actor/detail metadata.
+  - `GET /api/local-clients/audit-events` exposes owner-visible audit history.
+  - Settings displays recent local client audit events.
 - `[pending]` Persist OAuth dynamic client registration if HTTPS MCP client continuity is needed across Core restarts.
-- `[pending]` Add scoped local client capabilities enforcement beyond simple enabled/disabled checks.
+- `[implemented]` Add scoped local client capabilities enforcement beyond simple enabled/disabled checks.
+  - Capabilities normalize to explicit `scopes`.
+  - Supported scopes are `local_jobs.claim`, `local_jobs.download`, `sync.pull`, `sync.push`, `sync.blobs.read`, and `sync.blobs.write`.
+  - Existing daemon-style `localJobs`, `downloads`, `sync`, and `syncFolder` booleans are accepted as compatibility aliases.
+  - Daemon-authenticated local job and sync routes enforce the relevant scope.
 
 ### Local Job Robustness
 
@@ -363,13 +370,13 @@ npm run build
 
 ## Recommended Next Implementation Order
 
-1. Add scoped local client capabilities enforcement and broader audit trail for registration/default/disable/job lifecycle changes.
-2. Tighten local-path disclosure policy for non-local callers and job result visibility.
-3. Add a repeatable production daemon executable build pipeline for Tauri sidecar packaging.
-4. Extend daemon remote reconciliation beyond Artifacts to Projects, Notes, and Tasks.
-5. Decide whether empty local folders should become first-class cloud folder resources immediately or remain local until they contain synced files.
-6. Detect local rename as rename instead of delete/create.
-7. Decide and implement the policy for direct internal service mutations outside Core.
+1. Tighten local-path disclosure policy for non-local callers and job result visibility.
+2. Add a repeatable production daemon executable build pipeline for Tauri sidecar packaging.
+3. Extend daemon remote reconciliation beyond Artifacts to Projects, Notes, and Tasks.
+4. Decide whether empty local folders should become first-class cloud folder resources immediately or remain local until they contain synced files.
+5. Detect local rename as rename instead of delete/create.
+6. Decide and implement the policy for direct internal service mutations outside Core.
+7. Persist OAuth dynamic client registration if HTTPS MCP client continuity is needed across Core restarts.
 
 ## Current Daemon Usage
 

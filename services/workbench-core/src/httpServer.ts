@@ -23,6 +23,7 @@ import { registerTasksTools } from "./mcp/registerTasksTools.js";
 import { ensureIntegrationLinked } from "./integrationLinking.js";
 import { artifactsClient, imagesClient, InternalServiceError, notesClient, projectsClient, serviceBaseUrls, tasksClient } from "./internalClients.js";
 import {
+  assertLocalClientCapability,
   claimLocalJobsForClient,
   completeLocalJobForClient,
   createLocalJob,
@@ -30,16 +31,19 @@ import {
   failLocalJobForClient,
   getLocalJob,
   getLocalJobForClient,
+  listLocalClientAuditEventsForUser,
   listLocalJobEventsForUser,
   listLocalClients,
   listLocalJobsForUser,
   LocalClientStoreError,
+  recordLocalClientCapabilityDenied,
   recordLocalClientHeartbeat,
   registerLocalClient,
   revokeLocalClientTokens,
   updateLocalClient,
   verifyLocalClientToken,
   type LocalClient,
+  type LocalClientCapability,
   type LocalJobKind,
   type LocalJobStatus,
   type LocalJobTarget
@@ -1097,15 +1101,48 @@ async function requireLocalClientContext(
   }
 }
 
+async function requireLocalClientCapability(
+  req: express.Request,
+  res: express.Response,
+  capability: LocalClientCapability
+): Promise<{ client: LocalClient } | undefined> {
+  const localContext = await requireLocalClientContext(req, res);
+  if (!localContext) return undefined;
+  try {
+    assertLocalClientCapability(localContext.client, capability);
+    return localContext;
+  } catch (error) {
+    if (error instanceof LocalClientStoreError) {
+      await recordLocalClientCapabilityDenied(localContext.client, capability, {
+        method: req.method,
+        path: req.path
+      }).catch((auditError) => {
+        const message = auditError instanceof Error ? auditError.message : String(auditError);
+        console.warn("[local-client] failed to record capability denial", {
+          localClientId: localContext.client.id,
+          capability,
+          message
+        });
+      });
+      res.status(error.status).json({ message: error.message, code: error.code, capability });
+      return undefined;
+    }
+    throw error;
+  }
+}
+
 async function requireSyncAccessContext(
   req: express.Request,
-  res: express.Response
+  res: express.Response,
+  localClientCapability?: LocalClientCapability
 ): Promise<SyncAccessContext | undefined> {
   if (readBearerToken(req)) {
     return requireAuthenticatedContext(req, res);
   }
 
-  const localContext = await requireLocalClientContext(req, res);
+  const localContext = localClientCapability
+    ? await requireLocalClientCapability(req, res, localClientCapability)
+    : await requireLocalClientContext(req, res);
   if (!localContext) return undefined;
   const user = await findUserById(localContext.client.userId);
   if (!user) {
@@ -3243,6 +3280,24 @@ app.get("/api/local-clients", async (req, res) => {
   }
 });
 
+app.get("/api/local-clients/audit-events", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
+  const localClientId = typeof req.query.localClientId === "string" ? req.query.localClientId : undefined;
+
+  try {
+    const events = await listLocalClientAuditEventsForUser(authContext.userId, {
+      localClientId,
+      limit: Number.isFinite(limit) ? limit : undefined
+    });
+    return res.json({ items: events });
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
 app.patch("/api/local-clients/:id", async (req, res) => {
   const authContext = await requireAuthenticatedContext(req, res);
   if (!authContext) return;
@@ -3400,7 +3455,7 @@ app.get("/api/local-jobs/:jobId", async (req, res) => {
 });
 
 app.post("/api/local-jobs/claim", async (req, res) => {
-  const localContext = await requireLocalClientContext(req, res);
+  const localContext = await requireLocalClientCapability(req, res, "local_jobs.claim");
   if (!localContext) return;
 
   const parsed = localJobClaimSchema.safeParse(req.body ?? {});
@@ -3420,7 +3475,7 @@ app.post("/api/local-jobs/claim", async (req, res) => {
 });
 
 app.post("/api/local-jobs/:jobId/complete", async (req, res) => {
-  const localContext = await requireLocalClientContext(req, res);
+  const localContext = await requireLocalClientCapability(req, res, "local_jobs.claim");
   if (!localContext) return;
 
   const parsed = localJobCompleteSchema.safeParse(req.body ?? {});
@@ -3440,7 +3495,7 @@ app.post("/api/local-jobs/:jobId/complete", async (req, res) => {
 });
 
 app.post("/api/local-jobs/:jobId/fail", async (req, res) => {
-  const localContext = await requireLocalClientContext(req, res);
+  const localContext = await requireLocalClientCapability(req, res, "local_jobs.claim");
   if (!localContext) return;
 
   const parsed = localJobFailSchema.safeParse(req.body ?? {});
@@ -3463,7 +3518,7 @@ app.post("/api/local-jobs/:jobId/fail", async (req, res) => {
 });
 
 app.get("/api/local-jobs/:jobId/download", async (req, res) => {
-  const localContext = await requireLocalClientContext(req, res);
+  const localContext = await requireLocalClientCapability(req, res, "local_jobs.download");
   if (!localContext) return;
 
   try {
@@ -3526,7 +3581,7 @@ app.get("/api/local-jobs/:jobId/download", async (req, res) => {
 });
 
 app.get("/api/sync/snapshot", async (req, res) => {
-  const authContext = await requireSyncAccessContext(req, res);
+  const authContext = await requireSyncAccessContext(req, res, "sync.pull");
   if (!authContext) return;
 
   const requestedDomains = typeof req.query.domains === "string"
@@ -3558,7 +3613,7 @@ app.get("/api/sync/snapshot", async (req, res) => {
 });
 
 app.get("/api/sync/pull", async (req, res) => {
-  const authContext = await requireSyncAccessContext(req, res);
+  const authContext = await requireSyncAccessContext(req, res, "sync.pull");
   if (!authContext) return;
 
   const cursor = typeof req.query.cursor === "string" ? req.query.cursor : undefined;
@@ -3573,7 +3628,7 @@ app.get("/api/sync/pull", async (req, res) => {
 });
 
 app.get("/api/sync/blobs/:blobId", async (req, res) => {
-  const authContext = await requireSyncAccessContext(req, res);
+  const authContext = await requireSyncAccessContext(req, res, "sync.blobs.read");
   if (!authContext) return;
 
   const blobId = String(req.params.blobId);
@@ -3612,7 +3667,7 @@ app.get("/api/sync/blobs/:blobId", async (req, res) => {
 });
 
 app.put("/api/sync/blobs/:blobId", async (req, res) => {
-  const authContext = await requireSyncAccessContext(req, res);
+  const authContext = await requireSyncAccessContext(req, res, "sync.blobs.write");
   if (!authContext) return;
 
   const parsed = syncBlobPutSchema.safeParse(req.body ?? {});
@@ -3718,7 +3773,7 @@ app.put("/api/sync/blobs/:blobId", async (req, res) => {
 });
 
 app.post("/api/sync/push", async (req, res) => {
-  const authContext = await requireSyncAccessContext(req, res);
+  const authContext = await requireSyncAccessContext(req, res, "sync.push");
   if (!authContext) return;
 
   const parsed = syncPushSchema.safeParse(req.body ?? {});

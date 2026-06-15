@@ -24,6 +24,7 @@ import type {
   ArtifactItem,
   ArtifactProjectSummary,
   IntegrationManifest,
+  LocalClientAuditEventRecord,
   LocalClientRecord,
   LocalDaemonConflictRecord,
   LocalDaemonPreferences,
@@ -1245,6 +1246,15 @@ export const coreApi = {
     }),
   listLocalClients: (): Promise<{ items: LocalClientRecord[] }> =>
     fetchJson(`${coreBaseUrl()}/api/local-clients`),
+  listLocalClientAuditEvents: (
+    options: { localClientId?: string; limit?: number } = {}
+  ): Promise<{ items: LocalClientAuditEventRecord[] }> => {
+    const params = new URLSearchParams();
+    if (options.localClientId) params.set("localClientId", options.localClientId);
+    if (options.limit) params.set("limit", String(options.limit));
+    const query = params.toString();
+    return fetchJson(`${coreBaseUrl()}/api/local-clients/audit-events${query ? `?${query}` : ""}`);
+  },
   updateLocalClient: (
     id: string,
     payload: { clientName?: string; enabled?: boolean; capabilities?: Record<string, unknown>; syncRootLabel?: string; default?: boolean }

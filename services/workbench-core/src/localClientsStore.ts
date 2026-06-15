@@ -6,6 +6,30 @@ export type LocalJobKind = "download_artifact" | "download_task_attachment" | "m
 export type LocalJobTarget = "downloads" | "sync-folder";
 export type LocalJobStatus = "pending" | "running" | "completed" | "failed";
 export type LocalJobEventType = "created" | "claimed" | "completed" | "failed" | "retry_scheduled" | "expired";
+export type LocalClientCapability =
+  | "local_jobs.claim"
+  | "local_jobs.download"
+  | "sync.pull"
+  | "sync.push"
+  | "sync.blobs.read"
+  | "sync.blobs.write";
+export type LocalClientAuditEventType =
+  | "registered"
+  | "updated"
+  | "enabled"
+  | "disabled"
+  | "default_changed"
+  | "token_revoked"
+  | "deleted"
+  | "heartbeat"
+  | "job_created"
+  | "job_claimed"
+  | "job_completed"
+  | "job_failed"
+  | "job_retry_scheduled"
+  | "job_expired"
+  | "capability_denied";
+export type LocalClientAuditActorType = "user" | "local_client" | "system";
 
 export class LocalClientStoreError extends Error {
   status: number;
@@ -70,6 +94,17 @@ export interface LocalJobEvent {
   createdAt: string;
 }
 
+export interface LocalClientAuditEvent {
+  id: string;
+  userId: string;
+  localClientId?: string;
+  eventType: LocalClientAuditEventType;
+  actorType: LocalClientAuditActorType;
+  actorId?: string;
+  detail: Record<string, unknown>;
+  createdAt: string;
+}
+
 type LocalClientRow = {
   id: string;
   user_id: string;
@@ -119,11 +154,133 @@ type LocalJobEventRow = {
   created_at: string;
 };
 
+type LocalClientAuditEventRow = {
+  id: string;
+  user_id: string;
+  local_client_id: string | null;
+  event_type: string;
+  actor_type: string;
+  actor_id: string | null;
+  detail_json: unknown;
+  created_at: string;
+};
+
 const ONLINE_WINDOW_MS = 5 * 60 * 1000;
 const ACTIVE_IDEMPOTENCY_STATUSES = ["pending", "running", "completed"] as const;
+const ALL_LOCAL_CLIENT_CAPABILITIES: LocalClientCapability[] = [
+  "local_jobs.claim",
+  "local_jobs.download",
+  "sync.pull",
+  "sync.push",
+  "sync.blobs.read",
+  "sync.blobs.write"
+];
 
 function jsonObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean)
+    : [];
+}
+
+function uniqueCapabilities(values: string[]): LocalClientCapability[] {
+  const allowed = new Set<string>(ALL_LOCAL_CLIENT_CAPABILITIES);
+  return [...new Set(values.filter((value) => allowed.has(value)))] as LocalClientCapability[];
+}
+
+function booleanCapability(record: Record<string, unknown>, key: string): boolean | undefined {
+  const value = record[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+export function normalizeLocalClientCapabilities(input: Record<string, unknown> | undefined): Record<string, unknown> {
+  const source = jsonObject(input);
+  const requestedScopes = uniqueCapabilities([
+    ...stringArray(source.scopes),
+    ...stringArray(source.allowed),
+    ...stringArray(source.permissions)
+  ]);
+  const hasExplicitScopes = requestedScopes.length > 0;
+  const syncEnabled = booleanCapability(source, "sync") ?? booleanCapability(source, "syncFolder");
+  const downloadsEnabled = booleanCapability(source, "downloads");
+  const localJobsEnabled = booleanCapability(source, "localJobs");
+
+  const scopes = new Set<LocalClientCapability>();
+  const add = (capability: LocalClientCapability) => scopes.add(capability);
+
+  if (hasExplicitScopes) {
+    requestedScopes.forEach(add);
+  } else {
+    for (const capability of ALL_LOCAL_CLIENT_CAPABILITIES) {
+      add(capability);
+    }
+  }
+
+  if (syncEnabled === true) {
+    add("sync.pull");
+    add("sync.push");
+    add("sync.blobs.read");
+    add("sync.blobs.write");
+  } else if (syncEnabled === false) {
+    scopes.delete("sync.pull");
+    scopes.delete("sync.push");
+    scopes.delete("sync.blobs.read");
+    scopes.delete("sync.blobs.write");
+  }
+
+  if (downloadsEnabled === true) {
+    add("local_jobs.download");
+  } else if (downloadsEnabled === false) {
+    scopes.delete("local_jobs.download");
+  }
+
+  if (localJobsEnabled === true) {
+    add("local_jobs.claim");
+  } else if (localJobsEnabled === false) {
+    scopes.delete("local_jobs.claim");
+  }
+
+  return {
+    ...source,
+    scopes: ALL_LOCAL_CLIENT_CAPABILITIES.filter((capability) => scopes.has(capability))
+  };
+}
+
+export function localClientHasCapability(client: LocalClient, capability: LocalClientCapability): boolean {
+  const capabilities = normalizeLocalClientCapabilities(client.capabilities);
+  return stringArray(capabilities.scopes).includes(capability);
+}
+
+export function assertLocalClientCapability(client: LocalClient, capability: LocalClientCapability): void {
+  if (!localClientHasCapability(client, capability)) {
+    throw new LocalClientStoreError(
+      403,
+      "LOCAL_CLIENT_CAPABILITY_DENIED",
+      `Local client is missing required capability: ${capability}`
+    );
+  }
+}
+
+export async function recordLocalClientCapabilityDenied(
+  client: LocalClient,
+  capability: LocalClientCapability,
+  detail: Record<string, unknown> = {}
+): Promise<void> {
+  await ensureCoreSchema();
+  await recordLocalClientAuditEvent(getCorePool(), {
+    userId: client.userId,
+    localClientId: client.id,
+    eventType: "capability_denied",
+    actorType: "local_client",
+    actorId: client.id,
+    detail: {
+      ...detail,
+      capability
+    }
+  });
 }
 
 function toIso(value: string | null | undefined): string | undefined {
@@ -146,7 +303,7 @@ function toClient(row: LocalClientRow): LocalClient {
     deviceId: row.device_id,
     clientName: row.client_name,
     platform: row.platform,
-    capabilities: jsonObject(row.capabilities_json),
+    capabilities: normalizeLocalClientCapabilities(jsonObject(row.capabilities_json)),
     syncRootId: row.sync_root_id,
     syncRootLabel: row.sync_root_label,
     enabled: row.is_enabled,
@@ -199,6 +356,19 @@ function toJobEvent(row: LocalJobEventRow): LocalJobEvent {
   };
 }
 
+function toAuditEvent(row: LocalClientAuditEventRow): LocalClientAuditEvent {
+  return {
+    id: String(row.id),
+    userId: row.user_id,
+    localClientId: row.local_client_id ?? undefined,
+    eventType: row.event_type as LocalClientAuditEventType,
+    actorType: row.actor_type as LocalClientAuditActorType,
+    actorId: row.actor_id ?? undefined,
+    detail: jsonObject(row.detail_json),
+    createdAt: new Date(row.created_at).toISOString()
+  };
+}
+
 async function recordLocalJobEvent(
   pool: Pool | PoolClient,
   job: { id: string; userId: string; localClientId: string },
@@ -211,6 +381,35 @@ async function recordLocalJobEvent(
       VALUES ($1, $2, $3, $4, $5::jsonb)
     `,
     [job.id, job.userId, job.localClientId, eventType, JSON.stringify(detail)]
+  );
+}
+
+async function recordLocalClientAuditEvent(
+  pool: Pool | PoolClient,
+  input: {
+    userId: string;
+    localClientId?: string;
+    eventType: LocalClientAuditEventType;
+    actorType: LocalClientAuditActorType;
+    actorId?: string;
+    detail?: Record<string, unknown>;
+  }
+): Promise<void> {
+  await pool.query(
+    `
+      INSERT INTO local_client_audit_events (
+        user_id, local_client_id, event_type, actor_type, actor_id, detail_json
+      )
+      VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+    `,
+    [
+      input.userId,
+      input.localClientId ?? null,
+      input.eventType,
+      input.actorType,
+      input.actorId ?? null,
+      JSON.stringify(input.detail ?? {})
+    ]
   );
 }
 
@@ -231,10 +430,22 @@ async function markExpiredLocalJobsForUser(userId: string): Promise<void> {
           AND expires_at IS NOT NULL
           AND expires_at <= NOW()
         RETURNING id, user_id, local_client_id
+      ),
+      events AS (
+        INSERT INTO local_job_events (job_id, user_id, local_client_id, event_type, detail_json)
+        SELECT id, user_id, local_client_id, 'expired', jsonb_build_object('reason', 'expired')
+        FROM expired
+        RETURNING job_id, user_id, local_client_id
       )
-      INSERT INTO local_job_events (job_id, user_id, local_client_id, event_type, detail_json)
-      SELECT id, user_id, local_client_id, 'expired', jsonb_build_object('reason', 'expired')
-      FROM expired
+      INSERT INTO local_client_audit_events (user_id, local_client_id, event_type, actor_type, actor_id, detail_json)
+      SELECT
+        user_id,
+        local_client_id,
+        'job_expired',
+        'system',
+        NULL,
+        jsonb_build_object('jobId', job_id, 'reason', 'expired')
+      FROM events
     `,
     [userId]
   );
@@ -257,10 +468,22 @@ async function markExpiredLocalJobsForClient(localClientId: string): Promise<voi
           AND expires_at IS NOT NULL
           AND expires_at <= NOW()
         RETURNING id, user_id, local_client_id
+      ),
+      events AS (
+        INSERT INTO local_job_events (job_id, user_id, local_client_id, event_type, detail_json)
+        SELECT id, user_id, local_client_id, 'expired', jsonb_build_object('reason', 'expired')
+        FROM expired
+        RETURNING job_id, user_id, local_client_id
       )
-      INSERT INTO local_job_events (job_id, user_id, local_client_id, event_type, detail_json)
-      SELECT id, user_id, local_client_id, 'expired', jsonb_build_object('reason', 'expired')
-      FROM expired
+      INSERT INTO local_client_audit_events (user_id, local_client_id, event_type, actor_type, actor_id, detail_json)
+      SELECT
+        user_id,
+        local_client_id,
+        'job_expired',
+        'system',
+        NULL,
+        jsonb_build_object('jobId', job_id, 'reason', 'expired')
+      FROM events
     `,
     [localClientId]
   );
@@ -285,6 +508,32 @@ async function readClientById(userId: string, id: string): Promise<LocalClient |
   return result.rows[0] ? toClient(result.rows[0]) : undefined;
 }
 
+async function readClientByLocalClientId(id: string): Promise<LocalClient | undefined> {
+  await ensureCoreSchema();
+  const pool = getCorePool();
+  const result = await pool.query<LocalClientRow>(
+    `
+      SELECT
+        c.id, c.user_id, c.device_id, c.client_name, c.platform, c.capabilities_json,
+        c.sync_root_id, c.sync_root_label, c.is_enabled, c.is_default, c.created_at, c.updated_at,
+        h.daemon_version, h.sync_root_state_json, h.last_seen_at
+      FROM local_clients c
+      LEFT JOIN local_client_heartbeats h ON h.local_client_id = c.id
+      WHERE c.id = $1
+      LIMIT 1
+    `,
+    [id]
+  );
+  return result.rows[0] ? toClient(result.rows[0]) : undefined;
+}
+
+function assertLocalClientCanRunJob(client: LocalClient, kind: LocalJobKind): void {
+  assertLocalClientCapability(client, "local_jobs.claim");
+  if (kind === "download_artifact" || kind === "download_task_attachment" || kind === "materialize_resource") {
+    assertLocalClientCapability(client, "local_jobs.download");
+  }
+}
+
 export async function registerLocalClient(
   userId: string,
   input: {
@@ -305,6 +554,7 @@ export async function registerLocalClient(
   const syncRootId = input.syncRootId?.trim() || "default";
   const syncRootLabel = input.syncRootLabel?.trim() || "Workbench Sync";
   const makeDefault = input.default === true;
+  const capabilities = normalizeLocalClientCapabilities(input.capabilities);
 
   await pool.query("BEGIN");
   try {
@@ -336,7 +586,7 @@ export async function registerLocalClient(
         input.deviceId.trim(),
         input.clientName.trim(),
         input.platform.trim(),
-        JSON.stringify(input.capabilities ?? {}),
+        JSON.stringify(capabilities),
         syncRootId,
         syncRootLabel,
         makeDefault
@@ -359,6 +609,31 @@ export async function registerLocalClient(
       `,
       [tokenId, clientId, hashToken(clientToken)]
     );
+    await recordLocalClientAuditEvent(pool, {
+      userId,
+      localClientId: clientId,
+      eventType: "registered",
+      actorType: "user",
+      actorId: userId,
+      detail: {
+        deviceId: input.deviceId.trim(),
+        platform: input.platform.trim(),
+        syncRootId,
+        syncRootLabel,
+        default: makeDefault,
+        capabilities
+      }
+    });
+    if (makeDefault) {
+      await recordLocalClientAuditEvent(pool, {
+        userId,
+        localClientId: clientId,
+        eventType: "default_changed",
+        actorType: "user",
+        actorId: userId,
+        detail: { default: true }
+      });
+    }
     await pool.query("COMMIT");
 
     const client = await readClientById(userId, clientId);
@@ -406,12 +681,39 @@ export async function revokeLocalClientTokens(userId: string, id: string): Promi
     `,
     [userId, id]
   );
-  return (result.rowCount ?? 0) > 0;
+  const revoked = (result.rowCount ?? 0) > 0;
+  if (revoked) {
+    await recordLocalClientAuditEvent(pool, {
+      userId,
+      localClientId: id,
+      eventType: "token_revoked",
+      actorType: "user",
+      actorId: userId,
+      detail: { revokedTokens: result.rowCount ?? 0 }
+    });
+  }
+  return revoked;
 }
 
 export async function deleteLocalClient(userId: string, id: string): Promise<boolean> {
   await ensureCoreSchema();
   const pool = getCorePool();
+  const existing = await readClientById(userId, id);
+  if (!existing) {
+    return false;
+  }
+  await recordLocalClientAuditEvent(pool, {
+    userId,
+    localClientId: id,
+    eventType: "deleted",
+    actorType: "user",
+    actorId: userId,
+    detail: {
+      clientId: id,
+      deviceId: existing.deviceId,
+      syncRootId: existing.syncRootId
+    }
+  });
   const result = await pool.query(
     `
       DELETE FROM local_clients
@@ -448,6 +750,12 @@ export async function updateLocalClient(
       return undefined;
     }
 
+    const nextClientName = updates.clientName?.trim() || existing.clientName;
+    const nextEnabled = updates.enabled ?? existing.enabled;
+    const nextCapabilities = normalizeLocalClientCapabilities(updates.capabilities ?? existing.capabilities);
+    const nextSyncRootLabel = updates.syncRootLabel?.trim() || existing.syncRootLabel;
+    const nextDefault = updates.default ?? existing.default;
+
     await pool.query(
       `
         UPDATE local_clients
@@ -463,13 +771,51 @@ export async function updateLocalClient(
       [
         userId,
         id,
-        updates.clientName?.trim() || existing.clientName,
-        updates.enabled ?? existing.enabled,
-        JSON.stringify(updates.capabilities ?? existing.capabilities),
-        updates.syncRootLabel?.trim() || existing.syncRootLabel,
-        updates.default ?? existing.default
+        nextClientName,
+        nextEnabled,
+        JSON.stringify(nextCapabilities),
+        nextSyncRootLabel,
+        nextDefault
       ]
     );
+
+    const changedFields: string[] = [];
+    if (nextClientName !== existing.clientName) changedFields.push("clientName");
+    if (nextEnabled !== existing.enabled) changedFields.push("enabled");
+    if (JSON.stringify(nextCapabilities) !== JSON.stringify(existing.capabilities)) changedFields.push("capabilities");
+    if (nextSyncRootLabel !== existing.syncRootLabel) changedFields.push("syncRootLabel");
+    if (nextDefault !== existing.default) changedFields.push("default");
+
+    if (changedFields.length > 0) {
+      await recordLocalClientAuditEvent(pool, {
+        userId,
+        localClientId: id,
+        eventType: "updated",
+        actorType: "user",
+        actorId: userId,
+        detail: { changedFields }
+      });
+    }
+    if (nextEnabled !== existing.enabled) {
+      await recordLocalClientAuditEvent(pool, {
+        userId,
+        localClientId: id,
+        eventType: nextEnabled ? "enabled" : "disabled",
+        actorType: "user",
+        actorId: userId,
+        detail: { enabled: nextEnabled }
+      });
+    }
+    if (nextDefault !== existing.default) {
+      await recordLocalClientAuditEvent(pool, {
+        userId,
+        localClientId: id,
+        eventType: "default_changed",
+        actorType: "user",
+        actorId: userId,
+        detail: { default: nextDefault }
+      });
+    }
 
     await pool.query("COMMIT");
     return readClientById(userId, id);
@@ -569,6 +915,7 @@ export async function createLocalJob(
   await markExpiredLocalJobsForUser(userId);
   const pool = getCorePool();
   const client = await selectLocalClientForJob(userId, input.localClientId);
+  assertLocalClientCanRunJob(client, input.kind);
   const id = randomUUID();
   const ttlSeconds = Number.isFinite(input.ttlSeconds) ? Math.max(60, Math.min(86400, Math.floor(input.ttlSeconds ?? 86400))) : 86400;
   const idempotencyKey = input.idempotencyKey?.trim() || undefined;
@@ -597,6 +944,19 @@ export async function createLocalJob(
       if (inserted.rows[0]) {
         const job = toJob(inserted.rows[0]);
         await recordLocalJobEvent(dbClient, job, "created", { idempotencyKey });
+        await recordLocalClientAuditEvent(dbClient, {
+          userId,
+          localClientId: client.id,
+          eventType: "job_created",
+          actorType: "user",
+          actorId: userId,
+          detail: {
+            jobId: job.id,
+            kind: job.kind,
+            target: job.target,
+            idempotencyKey
+          }
+        });
         await dbClient.query("COMMIT");
         return job;
       }
@@ -637,6 +997,18 @@ export async function createLocalJob(
     );
     const job = toJob(result.rows[0]);
     await recordLocalJobEvent(dbClient, job, "created");
+    await recordLocalClientAuditEvent(dbClient, {
+      userId,
+      localClientId: client.id,
+      eventType: "job_created",
+      actorType: "user",
+      actorId: userId,
+      detail: {
+        jobId: job.id,
+        kind: job.kind,
+        target: job.target
+      }
+    });
     await dbClient.query("COMMIT");
     return job;
   } catch (error) {
@@ -684,6 +1056,36 @@ export async function listLocalJobEventsForUser(userId: string, jobId: string, l
     [userId, jobId, safeLimit]
   );
   return result.rows.map(toJobEvent);
+}
+
+export async function listLocalClientAuditEventsForUser(
+  userId: string,
+  options: {
+    localClientId?: string;
+    limit?: number;
+  } = {}
+): Promise<LocalClientAuditEvent[]> {
+  await ensureCoreSchema();
+  const pool = getCorePool();
+  const values: unknown[] = [userId];
+  const where = ["user_id = $1"];
+  if (options.localClientId) {
+    values.push(options.localClientId);
+    where.push(`local_client_id = $${values.length}`);
+  }
+  const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 100)));
+  values.push(limit);
+  const result = await pool.query<LocalClientAuditEventRow>(
+    `
+      SELECT id, user_id, local_client_id, event_type, actor_type, actor_id, detail_json, created_at
+      FROM local_client_audit_events
+      WHERE ${where.join(" AND ")}
+      ORDER BY created_at DESC, id DESC
+      LIMIT $${values.length}
+    `,
+    values
+  );
+  return result.rows.map(toAuditEvent);
 }
 
 export async function listLocalJobsForUser(
@@ -745,6 +1147,11 @@ export async function getLocalJobForClient(localClientId: string, jobId: string)
 export async function claimLocalJobsForClient(localClientId: string, limit: number): Promise<LocalJob[]> {
   await ensureCoreSchema();
   await markExpiredLocalJobsForClient(localClientId);
+  const client = await readClientByLocalClientId(localClientId);
+  if (!client || !client.enabled) {
+    throw new LocalClientStoreError(401, "INVALID_LOCAL_CLIENT_TOKEN", "Invalid or disabled local client token.");
+  }
+  assertLocalClientCapability(client, "local_jobs.claim");
   const pool = getCorePool();
   const safeLimit = Math.max(1, Math.min(25, Math.floor(limit)));
   const result = await pool.query<LocalJobRow>(
@@ -778,6 +1185,18 @@ export async function claimLocalJobsForClient(localClientId: string, limit: numb
         INSERT INTO local_job_events (job_id, user_id, local_client_id, event_type, detail_json)
         SELECT id, user_id, local_client_id, 'claimed', jsonb_build_object('attempts', attempts)
         FROM claimed
+        RETURNING job_id, user_id, local_client_id, detail_json
+      ),
+      audit AS (
+        INSERT INTO local_client_audit_events (user_id, local_client_id, event_type, actor_type, actor_id, detail_json)
+        SELECT
+          user_id,
+          local_client_id,
+          'job_claimed',
+          'local_client',
+          local_client_id,
+          jsonb_build_object('jobId', job_id, 'attempts', detail_json->'attempts')
+        FROM events
         RETURNING id
       )
       SELECT
@@ -796,6 +1215,11 @@ export async function completeLocalJobForClient(
   resultPayload: Record<string, unknown>
 ): Promise<LocalJob | undefined> {
   await ensureCoreSchema();
+  const client = await readClientByLocalClientId(localClientId);
+  if (!client || !client.enabled) {
+    throw new LocalClientStoreError(401, "INVALID_LOCAL_CLIENT_TOKEN", "Invalid or disabled local client token.");
+  }
+  assertLocalClientCapability(client, "local_jobs.claim");
   const pool = getCorePool();
   const result = await pool.query<LocalJobRow>(
     `
@@ -818,6 +1242,18 @@ export async function completeLocalJobForClient(
         INSERT INTO local_job_events (job_id, user_id, local_client_id, event_type, detail_json)
         SELECT id, user_id, local_client_id, 'completed', jsonb_build_object()
         FROM updated
+        RETURNING job_id, user_id, local_client_id
+      ),
+      audit AS (
+        INSERT INTO local_client_audit_events (user_id, local_client_id, event_type, actor_type, actor_id, detail_json)
+        SELECT
+          user_id,
+          local_client_id,
+          'job_completed',
+          'local_client',
+          local_client_id,
+          jsonb_build_object('jobId', job_id)
+        FROM events
         RETURNING id
       )
       SELECT
@@ -840,6 +1276,11 @@ export async function failLocalJobForClient(
   } = {}
 ): Promise<LocalJob | undefined> {
   await ensureCoreSchema();
+  const client = await readClientByLocalClientId(localClientId);
+  if (!client || !client.enabled) {
+    throw new LocalClientStoreError(401, "INVALID_LOCAL_CLIENT_TOKEN", "Invalid or disabled local client token.");
+  }
+  assertLocalClientCapability(client, "local_jobs.claim");
   const pool = getCorePool();
   const retryable = options.retryable === false ? false : options.retryable === true || options.retryAfterSeconds !== undefined;
   const retryAfterSeconds =
@@ -877,6 +1318,23 @@ export async function failLocalJobForClient(
             'retryAfterSeconds', $5::integer
           )
         FROM updated
+        RETURNING job_id, user_id, local_client_id, event_type, detail_json
+      ),
+      audit AS (
+        INSERT INTO local_client_audit_events (user_id, local_client_id, event_type, actor_type, actor_id, detail_json)
+        SELECT
+          user_id,
+          local_client_id,
+          CASE WHEN event_type = 'retry_scheduled' THEN 'job_retry_scheduled' ELSE 'job_failed' END,
+          'local_client',
+          local_client_id,
+          jsonb_build_object(
+            'jobId', job_id,
+            'error', detail_json->>'error',
+            'retryable', detail_json->'retryable',
+            'retryAfterSeconds', detail_json->'retryAfterSeconds'
+          )
+        FROM events
         RETURNING id
       )
       SELECT

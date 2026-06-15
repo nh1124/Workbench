@@ -626,4 +626,61 @@ describe("local client HTTP APIs", () => {
       await cleanupTestUser(pool, userId);
     }
   });
+
+  it("enforces local client capabilities and exposes audit events", async (t) => {
+    const harness = await requireHarness(t);
+    if (!harness) return;
+
+    const pool = harness.db.getCorePool();
+    const { userId, username } = await createTestUser(pool, "capabilities");
+    const { accessToken } = harness.auth.issueTokenBundle({ userId, username });
+    const server = await startTestServer(harness);
+    try {
+      const registerResponse = await requestJson(server.baseUrl, "POST", "/api/local-clients/register", {
+        headers: bearerHeaders(accessToken),
+        body: {
+          deviceId: "device-capability-http",
+          clientName: "Read Only Sync Daemon",
+          platform: "linux",
+          capabilities: { scopes: ["sync.pull"] },
+          syncRootId: "main"
+        }
+      });
+      assert.equal(registerResponse.status, 201);
+      const registeredClient = registerResponse.body.client as Record<string, unknown>;
+      const localClientId = String(registeredClient.id);
+      const clientToken = String(registerResponse.body.clientToken);
+      const daemonHeaders = localClientHeaders(localClientId, clientToken);
+      assert.deepEqual((registeredClient.capabilities as Record<string, unknown>).scopes, ["sync.pull"]);
+
+      const pullResponse = await requestJson(server.baseUrl, "GET", "/api/sync/pull", {
+        headers: daemonHeaders
+      });
+      assert.equal(pullResponse.status, 200);
+
+      const pushResponse = await requestJson(server.baseUrl, "POST", "/api/sync/push", {
+        headers: daemonHeaders,
+        body: { ops: [] }
+      });
+      assert.equal(pushResponse.status, 403);
+      assert.equal(pushResponse.body.code, "LOCAL_CLIENT_CAPABILITY_DENIED");
+      assert.equal(pushResponse.body.capability, "sync.push");
+
+      const auditResponse = await requestJson(
+        server.baseUrl,
+        "GET",
+        `/api/local-clients/audit-events?localClientId=${encodeURIComponent(localClientId)}&limit=10`,
+        { headers: bearerHeaders(accessToken) }
+      );
+      assert.equal(auditResponse.status, 200);
+      const auditEvents = auditResponse.body.items as Array<Record<string, unknown>>;
+      assert.ok(auditEvents.some((event) => event.eventType === "registered"));
+      const denied = auditEvents.find((event) => event.eventType === "capability_denied");
+      assert.ok(denied);
+      assert.equal((denied.detail as Record<string, unknown>).capability, "sync.push");
+    } finally {
+      await server.close();
+      await cleanupTestUser(pool, userId);
+    }
+  });
 });

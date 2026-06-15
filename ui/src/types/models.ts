@@ -333,6 +333,17 @@ export interface LocalClientRecord {
   };
 }
 
+export interface LocalClientAuditEventRecord {
+  id: string;
+  userId: string;
+  localClientId?: string;
+  eventType: string;
+  actorType: "user" | "local_client" | "system";
+  actorId?: string;
+  detail: Record<string, unknown>;
+  createdAt: string;
+}
+
 export interface LocalJobRecord {
   id: string;
   userId: string;

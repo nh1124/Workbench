@@ -141,6 +141,14 @@ describe("localClientsStore", () => {
       assert.equal(registered.client.userId, userId);
       assert.equal(registered.client.deviceId, "device-a");
       assert.equal(registered.client.default, true);
+      assert.deepEqual(registered.client.capabilities.scopes, [
+        "local_jobs.claim",
+        "local_jobs.download",
+        "sync.pull",
+        "sync.push",
+        "sync.blobs.read",
+        "sync.blobs.write"
+      ]);
       assert.match(registered.clientToken, /^wblc_/);
 
       const verified = await harness.localClients.verifyLocalClientToken(
@@ -191,6 +199,59 @@ describe("localClientsStore", () => {
       assert.notEqual(reRegistered.clientToken, registered.clientToken);
       assert.equal(reRegistered.client.clientName, "Studio Laptop Renamed");
       await harness.localClients.verifyLocalClientToken(reRegistered.client.id, reRegistered.clientToken);
+
+      const auditEvents = await harness.localClients.listLocalClientAuditEventsForUser(userId, {
+        localClientId: registered.client.id,
+        limit: 20
+      });
+      const auditTypes = auditEvents.map((event) => event.eventType);
+      assert.ok(auditTypes.includes("registered"));
+      assert.ok(auditTypes.includes("default_changed"));
+      assert.ok(auditTypes.includes("disabled"));
+      assert.ok(auditTypes.includes("token_revoked"));
+    } finally {
+      await cleanupTestUser(pool, userId);
+    }
+  });
+
+  it("normalizes and enforces scoped local client capabilities", async (t) => {
+    const harness = await requireHarness(t);
+    if (!harness) return;
+
+    const pool = harness.db.getCorePool();
+    const userId = await createTestUser(pool, "capabilities");
+    try {
+      const registered = await harness.localClients.registerLocalClient(userId, {
+        deviceId: "device-capability",
+        clientName: "Read Only Daemon",
+        platform: "linux",
+        capabilities: { scopes: ["sync.pull"] },
+        syncRootId: "main"
+      });
+
+      assert.deepEqual(registered.client.capabilities.scopes, ["sync.pull"]);
+      await assert.rejects(
+        () =>
+          harness.localClients.createLocalJob(userId, {
+            localClientId: registered.client.id,
+            kind: "download_artifact",
+            target: "downloads",
+            payload: { blobId: "artifact:denied" }
+          }),
+        { name: "Error", code: "LOCAL_CLIENT_CAPABILITY_DENIED" }
+      );
+
+      const updated = await harness.localClients.updateLocalClient(userId, registered.client.id, {
+        capabilities: { localJobs: true, downloads: true, sync: false }
+      });
+      assert.deepEqual(updated?.capabilities.scopes, ["local_jobs.claim", "local_jobs.download"]);
+      const job = await harness.localClients.createLocalJob(userId, {
+        localClientId: registered.client.id,
+        kind: "download_artifact",
+        target: "downloads",
+        payload: { blobId: "artifact:allowed" }
+      });
+      assert.equal(job.status, "pending");
     } finally {
       await cleanupTestUser(pool, userId);
     }

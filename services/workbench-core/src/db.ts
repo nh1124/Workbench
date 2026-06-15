@@ -256,6 +256,29 @@ export async function ensureCoreSchema(): Promise<void> {
         `);
 
         await pool.query(`
+          CREATE TABLE IF NOT EXISTS local_client_audit_events (
+            id BIGSERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES workbench_users(id) ON DELETE CASCADE,
+            local_client_id TEXT REFERENCES local_clients(id) ON DELETE SET NULL,
+            event_type TEXT NOT NULL,
+            actor_type TEXT NOT NULL,
+            actor_id TEXT,
+            detail_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          );
+        `);
+
+        await pool.query(`
+          CREATE INDEX IF NOT EXISTS idx_local_client_audit_events_user_created
+            ON local_client_audit_events (user_id, created_at DESC, id DESC);
+        `);
+
+        await pool.query(`
+          CREATE INDEX IF NOT EXISTS idx_local_client_audit_events_client_created
+            ON local_client_audit_events (local_client_id, created_at DESC, id DESC);
+        `);
+
+        await pool.query(`
           CREATE TABLE IF NOT EXISTS sync_resource_versions (
             user_id TEXT NOT NULL REFERENCES workbench_users(id) ON DELETE CASCADE,
             domain TEXT NOT NULL,

@@ -29,6 +29,7 @@ import {
 import type {
   IntegrationConfigState,
   IntegrationManifest,
+  LocalClientAuditEventRecord,
   LocalClientRecord,
   LocalDaemonConflictRecord,
   LocalDaemonStatus,
@@ -169,6 +170,7 @@ export function SettingsPage() {
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [accountMessage, setAccountMessage] = useState("");
   const [localClients, setLocalClients] = useState<LocalClientRecord[]>([]);
+  const [localClientAuditEvents, setLocalClientAuditEvents] = useState<LocalClientAuditEventRecord[]>([]);
   const [localJobs, setLocalJobs] = useState<LocalJobRecord[]>([]);
   const [localClientsMessage, setLocalClientsMessage] = useState("");
   const [localClientsLoading, setLocalClientsLoading] = useState(false);
@@ -252,11 +254,12 @@ export function SettingsPage() {
 
   const loadAccountScopedData = async () => {
     try {
-      const [, configRows, clientsResult, jobsResult] = await Promise.all([
+      const [, configRows, clientsResult, jobsResult, auditResult] = await Promise.all([
         coreApi.me(),
         coreApi.listIntegrationConfigs(),
         coreApi.listLocalClients(),
-        coreApi.listLocalJobs({ limit: 25 })
+        coreApi.listLocalJobs({ limit: 25 }),
+        coreApi.listLocalClientAuditEvents({ limit: 25 })
       ]);
       setIntegrationConfigs((current) =>
         normalizeManifestConfigs(manifests, {
@@ -266,6 +269,7 @@ export function SettingsPage() {
       );
       setLocalClients(clientsResult.items);
       setLocalJobs(jobsResult.items);
+      setLocalClientAuditEvents(auditResult.items);
       void refreshLocalDaemon(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to load account data";
@@ -348,18 +352,21 @@ export function SettingsPage() {
   const refreshLocalClients = async () => {
     if (!session) {
       setLocalClients([]);
+      setLocalClientAuditEvents([]);
       setLocalJobs([]);
       return;
     }
     setLocalClientsLoading(true);
     setLocalClientsMessage("");
     try {
-      const [clientsResult, jobsResult] = await Promise.all([
+      const [clientsResult, jobsResult, auditResult] = await Promise.all([
         coreApi.listLocalClients(),
-        coreApi.listLocalJobs({ limit: 25 })
+        coreApi.listLocalJobs({ limit: 25 }),
+        coreApi.listLocalClientAuditEvents({ limit: 25 })
       ]);
       setLocalClients(clientsResult.items);
       setLocalJobs(jobsResult.items);
+      setLocalClientAuditEvents(auditResult.items);
       setLocalClientsMessage("Local clients refreshed.");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to load local clients";
@@ -1182,6 +1189,40 @@ export function SettingsPage() {
                 </div>
               )}
               {localClientsMessage ? <p className="info">{localClientsMessage}</p> : null}
+            </section>
+
+            <section className="account-local-audit">
+              <div className="account-local-clients-header">
+                <div>
+                  <h3>Local Client Audit</h3>
+                  <p className="muted">Recent local client and daemon job lifecycle events.</p>
+                </div>
+              </div>
+              {localClientAuditEvents.length === 0 ? (
+                <p className="info">No local client audit events recorded yet.</p>
+              ) : (
+                <div className="account-local-audit-list">
+                  {localClientAuditEvents.map((event) => {
+                    const client = event.localClientId
+                      ? localClients.find((item) => item.id === event.localClientId)
+                      : undefined;
+                    const changedFields = Array.isArray(event.detail.changedFields)
+                      ? event.detail.changedFields.filter((item): item is string => typeof item === "string")
+                      : [];
+                    const jobId = typeof event.detail.jobId === "string" ? event.detail.jobId : "";
+                    return (
+                      <article key={event.id} className="account-local-audit-row">
+                        <div>
+                          <strong>{event.eventType.replaceAll("_", " ")}</strong>
+                          <p>{client?.clientName ?? event.localClientId ?? "Deleted client"} / {event.actorType}</p>
+                          {changedFields.length > 0 ? <small>{changedFields.join(", ")}</small> : jobId ? <small>{jobId}</small> : null}
+                        </div>
+                        <time>{new Date(event.createdAt).toLocaleString()}</time>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
             </section>
 
             <section className="account-local-jobs">
