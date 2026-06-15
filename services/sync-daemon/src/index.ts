@@ -28,6 +28,7 @@ import {
   writeManifestDebugSnapshot,
   type ConflictResolution,
   type ConflictStatus,
+  type ManifestResource,
   type ManifestStore,
   type OutboxItem
 } from "./manifestStore.js";
@@ -42,6 +43,24 @@ type LocalJob = {
   target: "downloads" | "sync-folder";
   payload: Record<string, unknown>;
   status: string;
+};
+
+type LocalArtifactItem = {
+  id: string;
+  projectId: string;
+  projectName?: string;
+  kind: "folder" | "note" | "file";
+  title: string;
+  path: string;
+  parentPath: string;
+  scope: "private";
+  tags: string[];
+  mimeType?: string;
+  sizeBytes?: number;
+  version: number;
+  contentMarkdown?: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 type ClientIdentity = {
@@ -448,6 +467,146 @@ function titleFor(relativePath: string): string {
   const name = basename(relativePath);
   const ext = extname(name);
   return ext ? name.slice(0, -ext.length) : name;
+}
+
+function localProjectId(state: DaemonState): string {
+  return `local:${state.config.syncRootId}`;
+}
+
+function localProjectName(state: DaemonState): string {
+  return state.config.syncRootLabel;
+}
+
+function localItemId(kind: "folder" | "note" | "file", relativePath: string): string {
+  return `local-${kind}:${Buffer.from(normalizeRelativePath(relativePath), "utf8").toString("base64url")}`;
+}
+
+function decodeLocalItemId(id: string): { kind: "folder" | "note" | "file"; relativePath: string } | undefined {
+  const match = id.match(/^local-(folder|note|file):(.+)$/);
+  if (!match) return undefined;
+  try {
+    return {
+      kind: match[1] as "folder" | "note" | "file",
+      relativePath: normalizeRelativePath(Buffer.from(match[2], "base64url").toString("utf8"))
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveSyncRootRelativePath(config: DaemonConfig, relativePath: string): string | undefined {
+  const normalized = normalizeRelativePath(relativePath).replace(/^\/+/, "");
+  if (!normalized || isIgnoredSyncRelativePath(normalized)) return undefined;
+  const absolutePath = resolve(config.syncRoot, normalized);
+  const relativeToRoot = relative(config.syncRoot, absolutePath);
+  if (!relativeToRoot || relativeToRoot.startsWith("..") || resolve(config.syncRoot, relativeToRoot) === resolve(config.syncRoot, ".workbench")) {
+    return undefined;
+  }
+  return absolutePath;
+}
+
+function itemUpdatedAt(resource: ManifestResource): string {
+  return resource.localUpdatedAt ?? resource.lastSeenAt ?? resource.lastSyncedAt ?? new Date(0).toISOString();
+}
+
+function buildLocalFolderItem(state: DaemonState, folderPath: string, updatedAt: string): LocalArtifactItem {
+  return {
+    id: localItemId("folder", folderPath),
+    projectId: localProjectId(state),
+    projectName: localProjectName(state),
+    kind: "folder",
+    title: basename(folderPath),
+    path: folderPath,
+    parentPath: directoryPathFor(folderPath) ?? "",
+    scope: "private",
+    tags: [],
+    version: 1,
+    createdAt: updatedAt,
+    updatedAt
+  };
+}
+
+async function buildLocalArtifactItem(
+  state: DaemonState,
+  resource: ManifestResource,
+  options: { includeContent?: boolean } = {}
+): Promise<LocalArtifactItem> {
+  const updatedAt = itemUpdatedAt(resource);
+  const item: LocalArtifactItem = {
+    id: resource.resourceId ?? localItemId(resource.kind, resource.relativePath),
+    projectId: localProjectId(state),
+    projectName: localProjectName(state),
+    kind: resource.kind,
+    title: titleFor(resource.relativePath),
+    path: resource.relativePath,
+    parentPath: directoryPathFor(resource.relativePath) ?? "",
+    scope: "private",
+    tags: [],
+    mimeType: resource.kind === "note" ? "text/markdown" : mimeTypeForPath(resource.relativePath),
+    sizeBytes: resource.sizeBytes,
+    version: 1,
+    createdAt: updatedAt,
+    updatedAt
+  };
+
+  if (resource.kind === "note" && options.includeContent) {
+    const absolutePath = resolveSyncRootRelativePath(state.config, resource.relativePath);
+    if (absolutePath) {
+      try {
+        item.contentMarkdown = await fs.readFile(absolutePath, "utf8");
+      } catch {
+        item.contentMarkdown = "";
+      }
+    }
+  }
+
+  return item;
+}
+
+export async function listLocalArtifactItems(
+  state: DaemonState,
+  options: { includeContent?: boolean; projectId?: string } = {}
+): Promise<LocalArtifactItem[]> {
+  if (options.projectId && options.projectId !== localProjectId(state)) {
+    return [];
+  }
+
+  const resources = listResources(state.manifestStore)
+    .filter((resource) => resource.domain === "artifacts" && !isIgnoredSyncRelativePath(resource.relativePath));
+  const folderUpdatedAt = new Map<string, string>();
+
+  for (const resource of resources) {
+    const updatedAt = itemUpdatedAt(resource);
+    let folderPath = directoryPathFor(resource.relativePath);
+    while (folderPath) {
+      const current = folderUpdatedAt.get(folderPath);
+      if (!current || current < updatedAt) {
+        folderUpdatedAt.set(folderPath, updatedAt);
+      }
+      folderPath = directoryPathFor(folderPath);
+    }
+  }
+
+  const folders = [...folderUpdatedAt.entries()].map(([folderPath, updatedAt]) => buildLocalFolderItem(state, folderPath, updatedAt));
+  const items = await Promise.all(resources.map((resource) => buildLocalArtifactItem(state, resource, options)));
+  return [...folders, ...items].sort((a, b) => a.path.localeCompare(b.path) || a.kind.localeCompare(b.kind));
+}
+
+export async function getLocalArtifactItemById(
+  state: DaemonState,
+  id: string,
+  options: { includeContent?: boolean } = {}
+): Promise<LocalArtifactItem | undefined> {
+  const local = decodeLocalItemId(id);
+  if (local?.kind === "folder") {
+    const items = await listLocalArtifactItems(state);
+    return items.find((item) => item.id === id && item.kind === "folder");
+  }
+
+  const resources = listResources(state.manifestStore);
+  const resource = resources.find((item) => item.resourceId === id)
+    ?? (local ? resources.find((item) => item.kind === local.kind && item.relativePath === local.relativePath) : undefined);
+  return resource ? buildLocalArtifactItem(state, resource, options) : undefined;
 }
 
 async function buildOutboxPayloadForFile(
@@ -921,11 +1080,69 @@ function parseConflictResolution(value: unknown): ConflictResolution | undefined
   return value === "retry" || value === "ignore" || value === "close" ? value : undefined;
 }
 
+function parseBooleanQuery(value: string | null): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
 function setLoopbackCorsHeaders(res: ServerResponse): void {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   res.setHeader("Access-Control-Max-Age", "600");
+}
+
+function daemonStatusPayload(state: DaemonState): Record<string, unknown> {
+  return {
+    status: "ok",
+    mode: "local-daemon",
+    coreUrl: state.config.coreUrl,
+    syncRoot: state.config.syncRoot,
+    manifestDbPath: state.manifestStore.path,
+    downloadsDir: state.config.downloadsDir,
+    watchEnabled: state.config.watchEnabled,
+    watcherActive: state.watcherActive,
+    watchDebounceMs: state.config.watchDebounceMs,
+    localClientId: state.identity?.localClientId,
+    lastHeartbeatAt: state.lastHeartbeatAt,
+    lastClaimAt: state.lastClaimAt,
+    lastScanAt: state.lastScanAt,
+    lastPushAt: state.lastPushAt,
+    lastError: state.lastError,
+    processedJobs: state.processedJobs,
+    outboxPending: state.outboxPending,
+    outboxFailed: state.outboxFailed,
+    conflictsOpen: state.conflictsOpen
+  };
+}
+
+function writeJson(res: ServerResponse, value: unknown, statusCode = 200): void {
+  res.statusCode = statusCode;
+  res.setHeader("Content-Type", "application/json");
+  res.end(JSON.stringify(value, null, 2));
+}
+
+async function sendLocalArtifactDownload(state: DaemonState, item: LocalArtifactItem, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (item.kind === "folder") {
+    writeJson(res, { message: "Folder items cannot be downloaded" }, 400);
+    return;
+  }
+  const absolutePath = resolveSyncRootRelativePath(state.config, item.path);
+  if (!absolutePath) {
+    writeJson(res, { message: "Invalid local artifact path" }, 400);
+    return;
+  }
+  try {
+    const buffer = await fs.readFile(absolutePath);
+    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    const disposition = url.searchParams.get("download") === "1" ? "attachment" : "inline";
+    res.setHeader("Content-Type", item.mimeType ?? mimeTypeForPath(item.path));
+    res.setHeader("Content-Length", String(buffer.length));
+    res.setHeader("Content-Disposition", `${disposition}; filename*=UTF-8''${encodeURIComponent(basename(item.path))}`);
+    res.end(buffer);
+  } catch {
+    writeJson(res, { message: "Local artifact file not found" }, 404);
+  }
 }
 
 function startStatusServer(state: DaemonState): void {
@@ -938,28 +1155,58 @@ function startStatusServer(state: DaemonState): void {
       return;
     }
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
-    if (url.pathname === "/health" || url.pathname === "/status") {
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({
-        status: "ok",
-        coreUrl: state.config.coreUrl,
-        syncRoot: state.config.syncRoot,
-        manifestDbPath: state.manifestStore.path,
-        downloadsDir: state.config.downloadsDir,
-        watchEnabled: state.config.watchEnabled,
-        watcherActive: state.watcherActive,
-        watchDebounceMs: state.config.watchDebounceMs,
-        localClientId: state.identity?.localClientId,
-        lastHeartbeatAt: state.lastHeartbeatAt,
-        lastClaimAt: state.lastClaimAt,
-        lastScanAt: state.lastScanAt,
-        lastPushAt: state.lastPushAt,
-        lastError: state.lastError,
-        processedJobs: state.processedJobs,
-        outboxPending: state.outboxPending,
-        outboxFailed: state.outboxFailed,
-        conflictsOpen: state.conflictsOpen
-      }, null, 2));
+    if (url.pathname === "/health" || url.pathname === "/status" || url.pathname === "/api/sync/status") {
+      writeJson(res, daemonStatusPayload(state));
+      return;
+    }
+
+    if (url.pathname === "/api/sync/snapshot" && req.method === "GET") {
+      const requestedDomains = typeof url.searchParams.get("domains") === "string"
+        ? (url.searchParams.get("domains") ?? "").split(",").map((value) => value.trim()).filter(Boolean)
+        : ["artifacts"];
+      const domainSet = new Set(requestedDomains);
+      const domains: Record<string, unknown> = {};
+      if (domainSet.has("artifacts")) {
+        domains.artifacts = await listLocalArtifactItems(state, {
+          includeContent: parseBooleanQuery(url.searchParams.get("includeContent"))
+        });
+      }
+      writeJson(res, {
+        generatedAt: new Date().toISOString(),
+        source: "local-daemon",
+        domains
+      });
+      return;
+    }
+
+    if ((url.pathname === "/api/artifacts/tree" || url.pathname === "/api/artifacts/tree/list") && req.method === "GET") {
+      const items = await listLocalArtifactItems(state, {
+        includeContent: parseBooleanQuery(url.searchParams.get("includeContent")),
+        projectId: url.searchParams.get("projectId") ?? undefined
+      });
+      writeJson(res, items);
+      return;
+    }
+
+    const artifactDownloadMatch = url.pathname.match(/^\/api\/artifacts\/items\/([^/]+)\/download$/);
+    if (artifactDownloadMatch && req.method === "GET") {
+      const item = await getLocalArtifactItemById(state, decodeURIComponent(artifactDownloadMatch[1]), { includeContent: true });
+      if (!item) {
+        writeJson(res, { message: "Local artifact item not found" }, 404);
+        return;
+      }
+      await sendLocalArtifactDownload(state, item, req, res);
+      return;
+    }
+
+    const artifactItemMatch = url.pathname.match(/^\/api\/artifacts\/items\/([^/]+)$/);
+    if (artifactItemMatch && req.method === "GET") {
+      const item = await getLocalArtifactItemById(state, decodeURIComponent(artifactItemMatch[1]), { includeContent: true });
+      if (!item) {
+        writeJson(res, { message: "Local artifact item not found" }, 404);
+        return;
+      }
+      writeJson(res, item);
       return;
     }
 

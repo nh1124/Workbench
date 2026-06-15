@@ -13,7 +13,7 @@ import {
   upsertResource,
   type ManifestStore
 } from "../manifestStore.js";
-import { scanSyncFolder, type DaemonConfig, type DaemonState } from "../index.js";
+import { getLocalArtifactItemById, listLocalArtifactItems, scanSyncFolder, type DaemonConfig, type DaemonState } from "../index.js";
 
 const tempRoots: string[] = [];
 
@@ -89,6 +89,36 @@ describe("sync folder recovery", () => {
       assert.equal(manifest.outbox?.[0].status, "superseded");
       assert.match(manifest.outbox?.[0].lastError ?? "", /removed before sync completed/);
       assert.equal(state.outboxPending, 0);
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("builds local artifact facade items from manifest resources", async () => {
+    const { root, store, state } = await createState();
+    try {
+      const notePath = join(root, "docs", "brief.md");
+      const filePath = join(root, "docs", "asset.txt");
+      await mkdir(join(root, "docs"), { recursive: true });
+      await writeFile(notePath, "# Brief\nLocal note\n", "utf8");
+      await writeFile(filePath, "asset", "utf8");
+
+      await scanSyncFolder(state);
+
+      const items = await listLocalArtifactItems(state, { includeContent: true });
+      const folder = items.find((item) => item.kind === "folder" && item.path === "docs");
+      const note = items.find((item) => item.kind === "note" && item.path === "docs/brief.md");
+      const file = items.find((item) => item.kind === "file" && item.path === "docs/asset.txt");
+
+      assert.equal(folder?.title, "docs");
+      assert.equal(note?.title, "brief");
+      assert.equal(note?.contentMarkdown, "# Brief\nLocal note\n");
+      assert.equal(file?.mimeType, "text/plain");
+
+      assert.ok(note?.id);
+      const loaded = await getLocalArtifactItemById(state, note.id, { includeContent: true });
+      assert.equal(loaded?.path, "docs/brief.md");
+      assert.equal(loaded?.contentMarkdown, "# Brief\nLocal note\n");
     } finally {
       closeManifestStore(store);
     }
