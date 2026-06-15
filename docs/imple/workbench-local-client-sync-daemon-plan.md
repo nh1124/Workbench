@@ -94,7 +94,9 @@ Last updated: 2026-06-15
   - persist local sync state under `.workbench/manifest.sqlite`,
   - write `.workbench/manifest.json` as a compatibility/debug snapshot,
   - scan the sync folder for local file create/update/delete,
+  - watch the sync folder and debounce local changes before scanning,
   - keep manifest resource mappings and SQLite outbox entries,
+  - write sync rejection records under `.workbench/conflicts`,
   - push local outbox changes to Core through `POST /api/sync/push`,
   - expose local status at `http://127.0.0.1:<port>/status`.
 - `[implemented]` Daemon MCP tools were added in `services/sync-daemon/src/mcpServer.ts`.
@@ -160,18 +162,20 @@ npm run build
 - `[implemented]` Store checksum, resource id, local path, domain, dirty state, and last sync error in SQLite resources/outbox.
 - `[implemented]` Add durable SQLite outbox for offline local changes.
 - `[implemented]` Migrate legacy `.workbench/manifest.json` into SQLite when the DB is empty.
-- `[pending]` Add recovery behavior when manifest and files disagree.
+- `[partial]` Add recovery behavior when manifest and files disagree.
+  - Removes ignored or ID-less resource entries when their local file no longer exists.
+  - Still needs full remote/local conflict recovery.
 
 ### Sync Folder Watcher
 
 - `[partial]` Polling scanner detects local create/update/delete.
 - `[implemented]` Scanner ignores `.workbench`.
-- `[pending]` Add native file watcher for sync folder changes.
-- `[pending]` Ignore temp files, lock files, and partial writes.
-- `[pending]` Debounce and wait for file size/checksum stability before enqueueing changes.
+- `[implemented]` Add native file watcher for sync folder changes with interval-scan fallback.
+- `[partial]` Ignore temp files, lock files, and partial writes.
+- `[implemented]` Debounce and wait for file size/checksum stability before enqueueing changes.
 - `[pending]` Detect local rename as rename instead of delete/create.
 - `[partial]` Map local files back to domain resources through manifest entries.
-- `[pending]` Add conflict file creation under `.workbench/conflicts`.
+- `[implemented]` Add conflict/rejection JSON file creation under `.workbench/conflicts`.
 
 ### Unified Sync Push / Pull
 
@@ -232,8 +236,8 @@ npm run build
 
 1. Add tests for local client registration, heartbeat, token verification, disable/re-enable, and job claim/complete/fail.
 2. Add focused tests for local job list/revoke/delete and daemon-authenticated sync endpoints.
-3. Replace polling scan with watcher + debounce + conflict handling.
-4. Add manifest recovery behavior when local files and SQLite disagree.
+3. Add robust conflict resolution UI/flows for `.workbench/conflicts`.
+4. Add full manifest recovery behavior when local files and SQLite disagree.
 5. Extend `POST /api/sync/push` to Projects and Tasks, and add baseVersion checks.
 6. Implement artifact file replacement and `PUT /api/sync/blobs/:blobId`.
 7. Add daemon local API facade for offline UI reads/writes.

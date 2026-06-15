@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { hostname, homedir, platform } from "node:os";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { promises as fs } from "node:fs";
+import { promises as fs, watch, type FSWatcher } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import {
   enqueueOutbox as enqueueManifestOutbox,
@@ -56,6 +56,8 @@ type DaemonConfig = {
   intervalMs: number;
   httpPort: number;
   maxSyncFileBytes: number;
+  watchEnabled: boolean;
+  watchDebounceMs: number;
 };
 
 type DaemonState = {
@@ -70,6 +72,11 @@ type DaemonState = {
   processedJobs: number;
   outboxPending: number;
   outboxFailed: number;
+  watcherActive: boolean;
+  tickRunning: boolean;
+  tickQueued: boolean;
+  tickTimer?: ReturnType<typeof setTimeout>;
+  watcher?: FSWatcher;
 };
 
 function env(name: string): string | undefined {
@@ -83,6 +90,8 @@ function readConfig(): DaemonConfig {
   const intervalRaw = Number(env("WORKBENCH_DAEMON_INTERVAL_MS") ?? "5000");
   const httpPortRaw = Number(env("WORKBENCH_DAEMON_HTTP_PORT") ?? "35780");
   const maxSyncFileBytesRaw = Number(env("WORKBENCH_MAX_SYNC_FILE_BYTES") ?? String(10 * 1024 * 1024));
+  const watchDebounceRaw = Number(env("WORKBENCH_SYNC_WATCH_DEBOUNCE_MS") ?? "800");
+  const watchEnabledRaw = env("WORKBENCH_SYNC_WATCH")?.toLowerCase();
   return {
     coreUrl: (env("WORKBENCH_CORE_URL") ?? "http://localhost:3000").replace(/\/+$/, ""),
     accessToken: env("WORKBENCH_ACCESS_TOKEN"),
@@ -94,7 +103,9 @@ function readConfig(): DaemonConfig {
     syncRootLabel: env("WORKBENCH_SYNC_ROOT_LABEL") ?? "Workbench Sync",
     intervalMs: Number.isFinite(intervalRaw) ? Math.max(1000, intervalRaw) : 5000,
     httpPort: Number.isFinite(httpPortRaw) ? Math.max(0, httpPortRaw) : 35780,
-    maxSyncFileBytes: Number.isFinite(maxSyncFileBytesRaw) ? Math.max(1024, maxSyncFileBytesRaw) : 10 * 1024 * 1024
+    maxSyncFileBytes: Number.isFinite(maxSyncFileBytesRaw) ? Math.max(1024, maxSyncFileBytesRaw) : 10 * 1024 * 1024,
+    watchEnabled: watchEnabledRaw !== "0" && watchEnabledRaw !== "false" && watchEnabledRaw !== "off",
+    watchDebounceMs: Number.isFinite(watchDebounceRaw) ? Math.max(100, watchDebounceRaw) : 800
   };
 }
 
@@ -225,6 +236,7 @@ async function heartbeat(state: DaemonState): Promise<void> {
         processedJobs: state.processedJobs,
         outboxPending: state.outboxPending,
         outboxFailed: state.outboxFailed,
+        watcherActive: state.watcherActive,
         lastScanAt: state.lastScanAt,
         lastPushAt: state.lastPushAt
       }
@@ -330,14 +342,62 @@ function relativeSyncPath(config: DaemonConfig, absolutePath: string): string | 
   return normalizeRelativePath(rel);
 }
 
-async function walkSyncFiles(root: string, current = root, files: string[] = []): Promise<string[]> {
+function isIgnoredSyncRelativePath(relativePath: string): boolean {
+  const normalized = normalizeRelativePath(relativePath).replace(/^\/+/, "");
+  const fileName = basename(normalized).toLowerCase();
+  if (!normalized || normalized === ".workbench" || normalized.startsWith(".workbench/")) return true;
+  if (fileName === "thumbs.db" || fileName === ".ds_store") return true;
+  if (fileName.startsWith("~$") || fileName.startsWith(".~")) return true;
+  if (fileName.endsWith("~") || fileName.endsWith(".tmp") || fileName.endsWith(".temp")) return true;
+  if (fileName.endsWith(".swp") || fileName.endsWith(".swo") || fileName.endsWith(".part")) return true;
+  if (fileName.endsWith(".crdownload") || fileName.endsWith(".download")) return true;
+  return false;
+}
+
+function isIgnoredSyncPath(config: DaemonConfig, absolutePath: string): boolean {
+  const relativePath = relativeSyncPath(config, absolutePath);
+  return !relativePath || isIgnoredSyncRelativePath(relativePath);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+}
+
+async function waitForStableFile(absolutePath: string): Promise<{
+  size: number;
+  mtime: Date;
+  mtimeMs: number;
+} | undefined> {
+  let previous: { size: number; mtimeMs: number; mtime: Date } | undefined;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    let stat;
+    try {
+      stat = await fs.stat(absolutePath);
+    } catch {
+      return undefined;
+    }
+    if (!stat.isFile()) return undefined;
+    if (previous && previous.size === stat.size && previous.mtimeMs === stat.mtimeMs) {
+      return {
+        size: stat.size,
+        mtime: stat.mtime,
+        mtimeMs: stat.mtimeMs
+      };
+    }
+    previous = { size: stat.size, mtimeMs: stat.mtimeMs, mtime: stat.mtime };
+    await sleep(180);
+  }
+  return previous;
+}
+
+async function walkSyncFiles(config: DaemonConfig, current = config.syncRoot, files: string[] = []): Promise<string[]> {
   const entries = await fs.readdir(current, { withFileTypes: true });
   for (const entry of entries) {
     if (entry.name === ".workbench") continue;
     const absolutePath = join(current, entry.name);
     if (entry.isDirectory()) {
-      await walkSyncFiles(root, absolutePath, files);
-    } else if (entry.isFile()) {
+      await walkSyncFiles(config, absolutePath, files);
+    } else if (entry.isFile() && !isIgnoredSyncPath(config, absolutePath)) {
       files.push(absolutePath);
     }
   }
@@ -408,14 +468,16 @@ async function buildOutboxPayloadForFile(
 
 async function scanSyncFolder(state: DaemonState): Promise<void> {
   const currentPaths = new Set<string>();
-  const files = await walkSyncFiles(state.config.syncRoot);
+  const files = await walkSyncFiles(state.config);
   const now = new Date().toISOString();
 
   for (const absolutePath of files) {
     const relativePath = relativeSyncPath(state.config, absolutePath);
     if (!relativePath) continue;
+    if (isIgnoredSyncRelativePath(relativePath)) continue;
     currentPaths.add(relativePath);
-    const stat = await fs.stat(absolutePath);
+    const stat = await waitForStableFile(absolutePath);
+    if (!stat) continue;
     const kind = artifactKindForPath(relativePath);
     const existing = getResource(state.manifestStore, relativePath);
     if (stat.size > state.config.maxSyncFileBytes) {
@@ -462,8 +524,15 @@ async function scanSyncFolder(state: DaemonState): Promise<void> {
   }
 
   for (const resource of listResources(state.manifestStore)) {
+    if (isIgnoredSyncRelativePath(resource.relativePath)) {
+      removeResource(state.manifestStore, resource.relativePath);
+      continue;
+    }
     if (currentPaths.has(resource.relativePath) || hasOpenOutboxForPath(state.manifestStore, resource.relativePath)) continue;
-    if (!resource.resourceId) continue;
+    if (!resource.resourceId) {
+      removeResource(state.manifestStore, resource.relativePath);
+      continue;
+    }
     enqueueManifestOutbox(state.manifestStore, {
       relativePath: resource.relativePath,
       domain: "artifacts",
@@ -536,6 +605,36 @@ function extractResourceId(value: unknown): string | undefined {
   return undefined;
 }
 
+async function writeConflictRecord(
+  state: DaemonState,
+  item: OutboxItem,
+  errorMessage: string,
+  createdAt: string
+): Promise<void> {
+  const conflictBaseName = sanitizeFileName(item.relativePath.replace(/[\\/]/g, "__")) || "conflict";
+  const timestamp = createdAt.replace(/[:.]/g, "-");
+  const conflictPath = join(state.config.syncRoot, ".workbench", "conflicts", `${timestamp}-${conflictBaseName}.json`);
+  await fs.mkdir(dirname(conflictPath), { recursive: true });
+  await fs.writeFile(conflictPath, `${JSON.stringify({
+    relativePath: item.relativePath,
+    action: item.action,
+    resourceId: item.resourceId,
+    clientOpId: item.clientOpId,
+    errorMessage,
+    payload: item.payload,
+    createdAt
+  }, null, 2)}\n`, "utf8");
+
+  const resource = getResource(state.manifestStore, item.relativePath);
+  if (resource) {
+    upsertManifestResource(state.manifestStore, {
+      ...resource,
+      dirty: true,
+      lastError: errorMessage
+    });
+  }
+}
+
 async function pushOutbox(state: DaemonState): Promise<void> {
   if (!state.identity) return;
   const pending = listPendingOutbox(state.manifestStore, 20);
@@ -568,7 +667,9 @@ async function pushOutbox(state: DaemonState): Promise<void> {
   for (const rejectedItem of rejected) {
     const item = pending[rejectedItem.index];
     if (!item) continue;
-    markOutboxFailed(state.manifestStore, item.id, rejectedItem.message ?? rejectedItem.code ?? "Sync push rejected", now);
+    const message = rejectedItem.message ?? rejectedItem.code ?? "Sync push rejected";
+    markOutboxFailed(state.manifestStore, item.id, message, now);
+    await writeConflictRecord(state, item, message, now);
   }
   setMeta(state.manifestStore, "lastPushAt", now);
   await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
@@ -644,7 +745,7 @@ async function processJob(state: DaemonState, job: LocalJob): Promise<void> {
   }
 }
 
-async function tick(state: DaemonState): Promise<void> {
+async function performTick(state: DaemonState): Promise<void> {
   try {
     state.identity = await registerIfNeeded(state.config);
     const jobs = await claimJobs(state);
@@ -661,6 +762,55 @@ async function tick(state: DaemonState): Promise<void> {
   }
 }
 
+async function tick(state: DaemonState): Promise<void> {
+  if (state.tickRunning) {
+    state.tickQueued = true;
+    return;
+  }
+  state.tickRunning = true;
+  try {
+    do {
+      state.tickQueued = false;
+      await performTick(state);
+    } while (state.tickQueued);
+  } finally {
+    state.tickRunning = false;
+  }
+}
+
+function scheduleTick(state: DaemonState, delayMs = state.config.watchDebounceMs): void {
+  if (state.tickTimer) {
+    clearTimeout(state.tickTimer);
+  }
+  state.tickTimer = setTimeout(() => {
+    state.tickTimer = undefined;
+    void tick(state);
+  }, delayMs);
+}
+
+function startSyncWatcher(state: DaemonState): void {
+  if (!state.config.watchEnabled) return;
+  try {
+    const watcher = watch(state.config.syncRoot, { recursive: true }, (_eventType, filename) => {
+      const relativePath = filename ? normalizeRelativePath(String(filename)) : undefined;
+      if (relativePath && isIgnoredSyncRelativePath(relativePath)) return;
+      scheduleTick(state);
+    });
+    watcher.on("error", (error) => {
+      state.watcherActive = false;
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[sync-daemon] sync folder watcher disabled: ${message}`);
+    });
+    state.watcher = watcher;
+    state.watcherActive = true;
+    console.log(`[sync-daemon] watching sync folder ${state.config.syncRoot}`);
+  } catch (error) {
+    state.watcherActive = false;
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[sync-daemon] sync folder watcher unavailable; interval scan remains active: ${message}`);
+  }
+}
+
 function startStatusServer(state: DaemonState): void {
   if (state.config.httpPort === 0) return;
   const server = createServer((req, res) => {
@@ -673,6 +823,9 @@ function startStatusServer(state: DaemonState): void {
         syncRoot: state.config.syncRoot,
         manifestDbPath: state.manifestStore.path,
         downloadsDir: state.config.downloadsDir,
+        watchEnabled: state.config.watchEnabled,
+        watcherActive: state.watcherActive,
+        watchDebounceMs: state.config.watchDebounceMs,
         localClientId: state.identity?.localClientId,
         lastHeartbeatAt: state.lastHeartbeatAt,
         lastClaimAt: state.lastClaimAt,
@@ -705,9 +858,13 @@ async function main(): Promise<void> {
     identity: await readIdentity(config),
     processedJobs: 0,
     outboxPending: 0,
-    outboxFailed: 0
+    outboxFailed: 0,
+    watcherActive: false,
+    tickRunning: false,
+    tickQueued: false
   };
   startStatusServer(state);
+  startSyncWatcher(state);
   await tick(state);
   setInterval(() => {
     void tick(state);
