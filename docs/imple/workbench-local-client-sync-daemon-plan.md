@@ -362,26 +362,29 @@ npm run build
 ### Security Hardening
 
 - `[implemented]` Daemon writes only to configured downloads or sync folder.
-- `[partial]` Daemon loopback API allows browser UI access with permissive local CORS.
+- `[implemented]` Daemon loopback API restricts CORS to local browser origins by default.
   - Auth headers are allowed for local daemon token use.
+  - `WORKBENCH_DAEMON_ALLOWED_ORIGINS` or `WORKBENCH_LOCAL_DAEMON_ALLOWED_ORIGINS` can override the allowlist.
+  - Explicit `*` is still supported for development, but is no longer the default.
 - `[implemented]` Add path allowlist tests for Windows/macOS/Linux edge cases covered by Node path handling.
   - Rejects absolute paths, drive-prefixed paths, UNC-style roots, `..` traversal, `.workbench`, temp/partial files, and reserved Windows device names.
 - `[implemented]` Add optional local daemon loopback token for status/API endpoints.
   - `WORKBENCH_DAEMON_API_TOKEN` or `WORKBENCH_LOCAL_DAEMON_TOKEN` enables token enforcement.
   - UI stores/sends the token via `x-workbench-daemon-token`.
   - `/health` remains unauthenticated and returns only a minimal `{ status: "ok" }` payload.
-- `[pending]` Avoid returning sensitive local paths to non-local callers unless explicitly requested and authorized.
+- `[implemented]` Avoid returning sensitive local paths to non-local callers unless explicitly requested and authorized.
+  - Owner-facing local job HTTP APIs redact `result.localPath` unless `includeLocalPaths=true`.
+  - MCP local job status tools redact `result.localPath` unless `includeLocalPath: true`.
 - `[pending]` Add per-job user confirmation policy for downloads outside sync folder if that behavior is later allowed.
 
 ## Recommended Next Implementation Order
 
-1. Tighten local-path disclosure policy for non-local callers and job result visibility.
-2. Add a repeatable production daemon executable build pipeline for Tauri sidecar packaging.
-3. Extend daemon remote reconciliation beyond Artifacts to Projects, Notes, and Tasks.
-4. Decide whether empty local folders should become first-class cloud folder resources immediately or remain local until they contain synced files.
-5. Detect local rename as rename instead of delete/create.
-6. Decide and implement the policy for direct internal service mutations outside Core.
-7. Persist OAuth dynamic client registration if HTTPS MCP client continuity is needed across Core restarts.
+1. Add a repeatable production daemon executable build pipeline for Tauri sidecar packaging.
+2. Extend daemon remote reconciliation beyond Artifacts to Projects, Notes, and Tasks.
+3. Decide whether empty local folders should become first-class cloud folder resources immediately or remain local until they contain synced files.
+4. Detect local rename as rename instead of delete/create.
+5. Decide and implement the policy for direct internal service mutations outside Core.
+6. Persist OAuth dynamic client registration if HTTPS MCP client continuity is needed across Core restarts.
 
 ## Current Daemon Usage
 

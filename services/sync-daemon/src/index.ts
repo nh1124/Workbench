@@ -86,6 +86,7 @@ export type DaemonConfig = {
   syncRootLabel: string;
   intervalMs: number;
   httpPort: number;
+  apiAllowedOrigins?: string[];
   maxSyncFileBytes: number;
   watchEnabled: boolean;
   watchDebounceMs: number;
@@ -138,6 +139,9 @@ function readConfig(): DaemonConfig {
     syncRootLabel: env("WORKBENCH_SYNC_ROOT_LABEL") ?? "Workbench Sync",
     intervalMs: Number.isFinite(intervalRaw) ? Math.max(1000, intervalRaw) : 5000,
     httpPort: Number.isFinite(httpPortRaw) ? Math.max(0, httpPortRaw) : 35780,
+    apiAllowedOrigins: parseLoopbackAllowedOrigins(
+      env("WORKBENCH_DAEMON_ALLOWED_ORIGINS") ?? env("WORKBENCH_LOCAL_DAEMON_ALLOWED_ORIGINS")
+    ),
     maxSyncFileBytes: Number.isFinite(maxSyncFileBytesRaw) ? Math.max(1024, maxSyncFileBytesRaw) : 10 * 1024 * 1024,
     watchEnabled: watchEnabledRaw !== "0" && watchEnabledRaw !== "false" && watchEnabledRaw !== "off",
     watchDebounceMs: Number.isFinite(watchDebounceRaw) ? Math.max(100, watchDebounceRaw) : 800
@@ -2489,11 +2493,79 @@ function parseBooleanQuery(value: string | null): boolean {
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
-function setLoopbackCorsHeaders(res: ServerResponse): void {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+function normalizeConfiguredOrigin(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (trimmed === "*" || trimmed === "null") return trimmed;
+  try {
+    const url = new URL(trimmed);
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return trimmed.replace(/\/+$/, "");
+  }
+}
+
+export function parseLoopbackAllowedOrigins(raw: string | undefined): string[] | undefined {
+  const values = raw
+    ?.split(",")
+    .map((value) => normalizeConfiguredOrigin(value))
+    .filter((value): value is string => Boolean(value));
+  return values && values.length > 0 ? [...new Set(values)] : undefined;
+}
+
+function requestOrigin(req: IncomingMessage): string | undefined {
+  const origin = req.headers.origin;
+  return Array.isArray(origin) ? origin[0] : origin;
+}
+
+function isDefaultLoopbackOrigin(origin: string): boolean {
+  if (origin === "null") return false;
+  try {
+    const url = new URL(origin);
+    const protocol = url.protocol.toLowerCase();
+    if (protocol !== "http:" && protocol !== "https:" && protocol !== "tauri:") {
+      return false;
+    }
+    const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    return (
+      hostname === "localhost" ||
+      hostname === "127.0.0.1" ||
+      hostname === "::1" ||
+      hostname === "tauri.localhost" ||
+      hostname.endsWith(".localhost")
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function isLoopbackOriginAllowed(origin: string | undefined, allowedOrigins?: string[]): boolean {
+  if (!origin) return true;
+  const normalizedOrigin = normalizeConfiguredOrigin(origin);
+  if (!normalizedOrigin) return false;
+  if (!allowedOrigins || allowedOrigins.length === 0) {
+    return isDefaultLoopbackOrigin(normalizedOrigin);
+  }
+  return allowedOrigins.some((allowedOrigin) => allowedOrigin === "*" || allowedOrigin === normalizedOrigin);
+}
+
+export const LOOPBACK_CORS_ERROR_CODE = "WORKBENCH_DAEMON_CORS_DENIED";
+export const LOOPBACK_CORS_ERROR_MESSAGE = "Origin is not allowed for the local daemon API.";
+
+function setLoopbackCorsHeaders(config: DaemonConfig, req: IncomingMessage, res: ServerResponse): boolean {
+  const origin = requestOrigin(req);
+  res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, x-workbench-daemon-token");
   res.setHeader("Access-Control-Max-Age", "600");
+  if (!origin) {
+    return true;
+  }
+  if (!isLoopbackOriginAllowed(origin, config.apiAllowedOrigins)) {
+    return false;
+  }
+  res.setHeader("Access-Control-Allow-Origin", origin);
+  return true;
 }
 
 export const LOOPBACK_AUTH_ERROR_CODE = "WORKBENCH_DAEMON_UNAUTHORIZED";
@@ -2583,7 +2655,13 @@ async function sendLocalArtifactDownload(state: DaemonState, item: LocalArtifact
 function startStatusServer(state: DaemonState): void {
   if (state.config.httpPort === 0) return;
   const server = createServer(async (req, res) => {
-    setLoopbackCorsHeaders(res);
+    if (!setLoopbackCorsHeaders(state.config, req, res)) {
+      writeJson(res, {
+        code: LOOPBACK_CORS_ERROR_CODE,
+        message: LOOPBACK_CORS_ERROR_MESSAGE
+      }, 403);
+      return;
+    }
     if (req.method === "OPTIONS") {
       res.statusCode = 204;
       res.end();
