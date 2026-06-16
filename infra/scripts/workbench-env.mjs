@@ -110,6 +110,8 @@ function desiredRuntimeUpdates(env) {
   const imagesUrl = serviceUrl(env, "IMAGES_PORT");
   const lbsBaseUrl = lbsUrl(env);
   const uiDevUrl = `http://${env.UI_DEV_HOST}:${env.UI_DEV_PORT}`;
+  const requireCoreMutationOrigin = env.WORKBENCH_REQUIRE_CORE_MUTATION_ORIGIN || "false";
+  const coreMutationToken = env.WORKBENCH_CORE_MUTATION_TOKEN || "";
 
   return [
     {
@@ -118,6 +120,8 @@ function desiredRuntimeUpdates(env) {
       updates: {
         NOTES_SERVICE_HOST: env.WORKBENCH_HOST,
         NOTES_SERVICE_PORT: env.NOTES_PORT,
+        WORKBENCH_REQUIRE_CORE_MUTATION_ORIGIN: requireCoreMutationOrigin,
+        WORKBENCH_CORE_MUTATION_TOKEN: coreMutationToken,
       },
     },
     {
@@ -127,6 +131,8 @@ function desiredRuntimeUpdates(env) {
         ARTIFACTS_SERVICE_HOST: env.WORKBENCH_HOST,
         ARTIFACTS_SERVICE_PORT: env.ARTIFACTS_PORT,
         PROJECTS_SERVICE_URL: projectsUrl,
+        WORKBENCH_REQUIRE_CORE_MUTATION_ORIGIN: requireCoreMutationOrigin,
+        WORKBENCH_CORE_MUTATION_TOKEN: coreMutationToken,
       },
     },
     {
@@ -137,6 +143,8 @@ function desiredRuntimeUpdates(env) {
         TASKS_SERVICE_PORT: env.TASKS_PORT,
         TASKS_LBS_BASE_URL: lbsBaseUrl,
         TASKS_LBS_AUTH_BASE_URL: lbsBaseUrl,
+        WORKBENCH_REQUIRE_CORE_MUTATION_ORIGIN: requireCoreMutationOrigin,
+        WORKBENCH_CORE_MUTATION_TOKEN: coreMutationToken,
       },
     },
     {
@@ -145,6 +153,8 @@ function desiredRuntimeUpdates(env) {
       updates: {
         PROJECTS_SERVICE_HOST: env.WORKBENCH_HOST,
         PROJECTS_SERVICE_PORT: env.PROJECTS_PORT,
+        WORKBENCH_REQUIRE_CORE_MUTATION_ORIGIN: requireCoreMutationOrigin,
+        WORKBENCH_CORE_MUTATION_TOKEN: coreMutationToken,
       },
     },
     {
@@ -179,6 +189,7 @@ function desiredRuntimeUpdates(env) {
         IMAGES_SERVICE_URL: imagesUrl,
         LBS_SERVICE_URL: lbsBaseUrl,
         INTERNAL_API_KEY_IMAGES: "workbench-internal-images",
+        WORKBENCH_CORE_MUTATION_TOKEN: coreMutationToken,
       },
     },
     {
@@ -207,8 +218,20 @@ function desiredExampleUpdates(env) {
       updates: target.updates,
     })),
     {
+      file: "infra/env_samples/notes.env.example",
+      updates: desiredRuntimeUpdates(env).find((target) => target.file === "services/notes/.env").updates,
+    },
+    {
+      file: "infra/env_samples/artifacts.env.example",
+      updates: desiredRuntimeUpdates(env).find((target) => target.file === "services/artifacts/.env").updates,
+    },
+    {
       file: "infra/env_samples/core.env.example",
       updates: desiredRuntimeUpdates(env).find((target) => target.file === "services/workbench-core/.env").updates,
+    },
+    {
+      file: "infra/env_samples/projects.env.example",
+      updates: desiredRuntimeUpdates(env).find((target) => target.file === "services/projects/.env").updates,
     },
     {
       file: "infra/env_samples/tasks.env.example",

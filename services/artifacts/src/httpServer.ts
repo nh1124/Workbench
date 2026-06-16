@@ -60,6 +60,50 @@ function optionalEnv(name: string): string | undefined {
   return value && value.length > 0 ? value : undefined;
 }
 
+function envFlag(name: string): boolean {
+  const value = process.env[name]?.trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes" || value === "on";
+}
+
+const CORE_MUTATION_ORIGIN_HEADER = "x-workbench-core-mutation";
+const CORE_MUTATION_TOKEN_HEADER = "x-workbench-core-mutation-token";
+const requireCoreMutationOrigin = envFlag("WORKBENCH_REQUIRE_CORE_MUTATION_ORIGIN");
+const coreMutationToken = optionalEnv("WORKBENCH_CORE_MUTATION_TOKEN");
+
+function isMutationMethod(method: string): boolean {
+  const normalized = method.toUpperCase();
+  return normalized === "POST" || normalized === "PUT" || normalized === "PATCH" || normalized === "DELETE";
+}
+
+function requireCoreMutationOriginMiddleware(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+): void {
+  if (!requireCoreMutationOrigin || !isMutationMethod(req.method) || req.path.startsWith("/internal/")) {
+    next();
+    return;
+  }
+
+  if (req.header(CORE_MUTATION_ORIGIN_HEADER) !== "1") {
+    res.status(403).json({
+      code: "CORE_MUTATION_ORIGIN_REQUIRED",
+      message: "Mutations must be routed through Workbench Core."
+    });
+    return;
+  }
+
+  if (coreMutationToken && req.header(CORE_MUTATION_TOKEN_HEADER) !== coreMutationToken) {
+    res.status(403).json({
+      code: "CORE_MUTATION_TOKEN_INVALID",
+      message: "Invalid Workbench Core mutation token."
+    });
+    return;
+  }
+
+  next();
+}
+
 const projectsServiceUrl = (() => {
   const direct = optionalEnv("PROJECTS_SERVICE_URL");
   if (direct) {
@@ -392,6 +436,8 @@ app.post("/internal/accounts", requireInternalApiKey, async (req, res) => {
   await upsertServiceAccount(parsed.data.coreUserId, parsed.data.username);
   return res.status(201).json({ status: "ok", service: "artifacts" });
 });
+
+app.use(requireCoreMutationOriginMiddleware);
 
 app.get("/artifacts", requireUserAuth, async (req, res) => {
   const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;

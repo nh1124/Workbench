@@ -121,12 +121,15 @@ Service `.env` files should keep secrets and DB credentials. Values such as `LBS
 - `INTERNAL_API_KEY_TASKS`
 - `INTERNAL_API_KEY_PROJECTS` (optional)
 - `INTERNAL_API_KEY_IMAGES`
+- `WORKBENCH_CORE_MUTATION_TOKEN` (optional, sent to domain services with Core-origin mutations)
 
 ### Services
 
 - `JWT_SECRET`
 - `JWT_ISSUER`
 - `INTERNAL_API_KEY`
+- `WORKBENCH_REQUIRE_CORE_MUTATION_ORIGIN` (optional, set `true` to reject direct user-facing mutations outside Core)
+- `WORKBENCH_CORE_MUTATION_TOKEN` (optional, must match Core when the mutation-origin guard is enabled)
 - service-specific DB variables
   - Tasks service additionally uses:
     - `TASKS_LBS_BASE_URL`

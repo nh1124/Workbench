@@ -309,8 +309,12 @@ npm run build
 - `[implemented]` Add optional `baseVersion` conflict checks before applying sync push operations.
 - `[partial]` Return applied/rejected operations with stable-ish error codes for implemented domains.
 - `[partial]` Server-side tombstone event metadata exists, but underlying domain services still hard-delete their own records.
-- `[partial]` Core facade mutations now cover the main Projects, Notes, Artifacts, and Tasks paths, including task relation changes. Continue auditing new or direct mutation routes as they are added.
-- `[pending]` Decide and implement how direct internal service changes outside Core are handled.
+- `[partial]` Core facade mutations now cover the main Projects, Notes, Artifacts, and Tasks paths, including task relation changes. Continue auditing new mutation routes as they are added.
+- `[implemented]` Add an opt-in Core-origin guard for direct internal service mutations outside Core.
+  - `workbench-core` attaches `x-workbench-core-mutation: 1` to non-read internal service calls.
+  - If `WORKBENCH_CORE_MUTATION_TOKEN` is configured, Core also attaches `x-workbench-core-mutation-token`.
+  - Notes, Artifacts, Tasks, and Projects services reject user-facing `POST` / `PUT` / `PATCH` / `DELETE` requests unless the Core-origin header is present when `WORKBENCH_REQUIRE_CORE_MUTATION_ORIGIN=true`.
+  - `/internal/*` routes remain governed by their existing internal API key checks.
 
 ### Blob Upload / Replacement
 
@@ -408,9 +412,9 @@ npm run build
 
 ## Recommended Next Implementation Order
 
-1. Decide and implement the policy for direct internal service mutations outside Core.
-2. Add cursor-based full snapshot refresh for Notes/Tasks if those services gain cursor pagination.
-3. Design local outbox write facades for Projects/Notes/Tasks after the read cache has been exercised.
+1. Add cursor-based full snapshot refresh for Notes/Tasks if those services gain cursor pagination.
+2. Design local outbox write facades for Projects/Notes/Tasks after the read cache has been exercised.
+3. Add per-job user confirmation policy if downloads outside the sync folder become allowed.
 
 ## Current Daemon Usage
 

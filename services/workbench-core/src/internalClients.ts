@@ -36,6 +36,10 @@ const projectsService: ServiceConfig | undefined = projectsBaseUrl ? { id: "proj
 const lbsBaseUrl = optionalEnv("LBS_SERVICE_URL");
 const lbsService: ServiceConfig | undefined = lbsBaseUrl ? { id: "lbs", baseUrl: lbsBaseUrl } : undefined;
 
+const CORE_MUTATION_ORIGIN_HEADER = "x-workbench-core-mutation";
+const CORE_MUTATION_TOKEN_HEADER = "x-workbench-core-mutation-token";
+const coreMutationToken = optionalEnv("WORKBENCH_CORE_MUTATION_TOKEN");
+
 export const serviceBaseUrls = {
   notes: notesService.baseUrl,
   artifacts: artifactsService.baseUrl,
@@ -58,6 +62,25 @@ export class InternalServiceError extends Error {
   }
 }
 
+function isMutationRequest(init?: RequestInit): boolean {
+  const method = (init?.method ?? "GET").toUpperCase();
+  return method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
+}
+
+function buildServiceHeaders(token: string, init?: RequestInit): Headers {
+  const headers = new Headers(init?.headers ?? {});
+  headers.set("Authorization", `Bearer ${token}`);
+
+  if (isMutationRequest(init)) {
+    headers.set(CORE_MUTATION_ORIGIN_HEADER, "1");
+    if (coreMutationToken) {
+      headers.set(CORE_MUTATION_TOKEN_HEADER, coreMutationToken);
+    }
+  }
+
+  return headers;
+}
+
 async function serviceRequest<T>(
   service: ServiceConfig,
   path: string,
@@ -67,10 +90,7 @@ async function serviceRequest<T>(
 ): Promise<T> {
   const response = await fetch(`${service.baseUrl}${path}`, {
     ...init,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(init?.headers ?? {})
-    }
+    headers: buildServiceHeaders(token, init)
   });
 
   const text = await response.text();
