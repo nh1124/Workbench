@@ -112,7 +112,7 @@ Last updated: 2026-06-17
   - complete/fail jobs,
   - persist local sync state under `.workbench/manifest.sqlite`,
   - write `.workbench/manifest.json` as a compatibility/debug snapshot,
-  - scan the sync folder for local file create/update/delete,
+  - scan the sync folder for local file/folder create/update/delete,
   - watch the sync folder and debounce local changes before scanning,
   - keep manifest resource mappings and SQLite outbox entries,
   - write sync rejection records under `.workbench/conflicts`,
@@ -181,6 +181,8 @@ npm run build
   - `httpServer.ts` now exports the Express app and starts listening only when executed directly, so HTTP routes can be tested on an ephemeral port.
 - `[implemented]` Sync daemon recovery tests were added in `services/sync-daemon/src/__tests__/syncFolderRecovery.test.ts`.
   - Covers cancelling ghost creates when local files disappear before push.
+  - Covers queuing empty folder creates discovered by sync scans.
+  - Covers queuing one cloud folder delete when a tracked local folder tree is removed.
   - Covers superseding pending deletes when local files reappear.
   - Covers replacing stale pending updates when files are edited again before push.
   - Covers auto-resolving open conflicts when their failed outbox items are superseded.
@@ -256,6 +258,7 @@ npm run build
   - Supersedes pending delete outbox entries when files reappear before push.
   - Supersedes stale pending create/update outbox entries when files change again before push.
   - Queues exact clean local rename/move matches as resource updates instead of delete/create pairs.
+  - Queues tracked folder tree deletion as a single folder delete instead of emitting child deletes first.
   - Auto-resolves open conflict records tied to superseded outbox entries.
 - `[implemented]` Remote snapshot/incremental pull reconciliation exists.
   - Bootstrap reads `/api/sync/snapshot?domains=projects,notes,artifacts,tasks`.
@@ -272,7 +275,7 @@ npm run build
 
 ### Sync Folder Watcher
 
-- `[partial]` Polling scanner detects local create/update/delete.
+- `[partial]` Polling scanner detects local file create/update/delete and folder create/delete.
 - `[implemented]` Scanner ignores `.workbench`.
 - `[implemented]` Add native file watcher for sync folder changes with interval-scan fallback.
 - `[implemented]` Ignore temp files, lock files, partial writes, and reserved Windows device names.
@@ -343,9 +346,9 @@ npm run build
   - Added `PATCH /api/artifacts/items/:id` for local Markdown note content/path/title updates.
   - Added `DELETE /api/artifacts/items/:id` for local note/file deletion.
   - Added `POST /api/artifacts/upload` for local file upload.
-  - Added `POST /api/artifacts/folders` for sync-root folder creation.
+  - Added `POST /api/artifacts/folders` for sync-root folder creation and cloud folder outbox queueing.
   - Added content patch and note section patch routes.
-  - Empty folders are local filesystem directories and are not yet synced as standalone cloud folder resources until they contain files.
+  - Empty folders discovered by scanner are queued as standalone cloud artifact folder resources.
 - `[implemented]` Make artifact UI use the daemon loopback URL when Local Mode is enabled.
   - Tree, item read, note create/update/delete, folder create, file upload, and file download route through the daemon.
   - Existing Core route remains active when Local Mode is disabled.
@@ -405,10 +408,9 @@ npm run build
 
 ## Recommended Next Implementation Order
 
-1. Decide whether empty local folders should become first-class cloud folder resources immediately or remain local until they contain synced files.
-2. Decide and implement the policy for direct internal service mutations outside Core.
-3. Add cursor-based full snapshot refresh for Notes/Tasks if those services gain cursor pagination.
-4. Design local outbox write facades for Projects/Notes/Tasks after the read cache has been exercised.
+1. Decide and implement the policy for direct internal service mutations outside Core.
+2. Add cursor-based full snapshot refresh for Notes/Tasks if those services gain cursor pagination.
+3. Design local outbox write facades for Projects/Notes/Tasks after the read cache has been exercised.
 
 ## Current Daemon Usage
 

@@ -557,6 +557,10 @@ function artifactKindForPath(pathValue: string): "note" | "file" {
   return ext === ".md" || ext === ".markdown" ? "note" : "file";
 }
 
+function artifactKindForOutboxItem(item: OutboxItem): "folder" | "note" | "file" {
+  return item.payload.kind === "folder" ? "folder" : artifactKindForPath(item.relativePath);
+}
+
 function directoryPathFor(relativePath: string): string | undefined {
   const directory = normalizeRelativePath(dirname(relativePath));
   return directory === "." ? undefined : directory;
@@ -702,7 +706,7 @@ async function buildLocalArtifactItem(
     parentPath: directoryPathFor(resource.relativePath) ?? "",
     scope: "private",
     tags: [],
-    mimeType: resource.kind === "note" ? "text/markdown" : mimeTypeForPath(resource.relativePath),
+    mimeType: resource.kind === "folder" ? undefined : resource.kind === "note" ? "text/markdown" : mimeTypeForPath(resource.relativePath),
     sizeBytes: resource.sizeBytes,
     version: 1,
     createdAt: updatedAt,
@@ -733,6 +737,9 @@ export async function listLocalArtifactItems(
 
   const resources = listResources(state.manifestStore)
     .filter((resource) => resource.domain === "artifacts" && !isIgnoredSyncRelativePath(resource.relativePath));
+  const trackedFolderPaths = new Set(
+    resources.filter((resource) => resource.kind === "folder").map((resource) => resource.relativePath)
+  );
   const folderUpdatedAt = new Map<string, string>();
 
   for (const resource of resources) {
@@ -748,6 +755,7 @@ export async function listLocalArtifactItems(
   }
 
   for (const folderPath of await walkSyncDirectories(state.config)) {
+    if (trackedFolderPaths.has(folderPath)) continue;
     const absolutePath = resolveSyncRootRelativePath(state.config, folderPath);
     if (!absolutePath) continue;
     let updatedAt = new Date().toISOString();
@@ -1029,11 +1037,34 @@ export async function createLocalArtifactFolder(
 
   await fs.mkdir(absolutePath, { recursive: true });
   const stat = await fs.stat(absolutePath);
+  const now = new Date().toISOString();
   const updatedAt = stat.mtime.toISOString();
-  setMeta(state.manifestStore, "lastScanAt", new Date().toISOString());
+  supersedeOpenOutboxForPath(
+    state,
+    relativePath,
+    () => true,
+    "Local folder was created through daemon facade; stale folder operation was superseded.",
+    now
+  );
+  enqueueManifestOutbox(state.manifestStore, {
+    relativePath,
+    domain: "artifacts",
+    action: "create",
+    payload: buildOutboxPayloadForFolder(relativePath)
+  });
+  upsertManifestResource(state.manifestStore, {
+    relativePath,
+    domain: "artifacts",
+    kind: "folder",
+    dirty: true,
+    lastSeenAt: now,
+    localUpdatedAt: updatedAt
+  });
+  setMeta(state.manifestStore, "lastScanAt", now);
   await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
   await refreshManifestStats(state);
-  return buildLocalFolderItem(state, relativePath, updatedAt);
+  const resource = getResource(state.manifestStore, relativePath);
+  return resource ? buildLocalArtifactItem(state, resource) : buildLocalFolderItem(state, relativePath, updatedAt);
 }
 
 export async function createLocalArtifactFile(
@@ -1340,7 +1371,7 @@ export async function deleteLocalArtifactItem(state: DaemonState, id: string): P
 
   const absolutePath = resolveSyncRootRelativePath(state.config, resource.relativePath);
   if (absolutePath) {
-    await fs.rm(absolutePath, { force: true }).catch(() => {
+    await fs.rm(absolutePath, { recursive: resource.kind === "folder", force: true }).catch(() => {
       // Best-effort local file deletion.
     });
   }
@@ -1351,7 +1382,7 @@ export async function deleteLocalArtifactItem(state: DaemonState, id: string): P
       domain: "artifacts",
       action: "delete",
       resourceId: resource.resourceId,
-      payload: {}
+      payload: resource.kind === "folder" ? buildOutboxPayloadForFolder(resource.relativePath) : {}
     });
     upsertManifestResource(state.manifestStore, {
       ...resource,
@@ -1391,6 +1422,14 @@ async function buildOutboxPayloadForFile(
     mimeType: mimeTypeForPath(relativePath),
     contentBase64: buffer.toString("base64"),
     maxSyncFileBytes: config.maxSyncFileBytes
+  };
+}
+
+function buildOutboxPayloadForFolder(relativePath: string): Record<string, unknown> {
+  return {
+    kind: "folder",
+    path: relativePath,
+    title: titleFor(relativePath)
   };
 }
 
@@ -1454,6 +1493,7 @@ async function queueCleanLocalRenameUpdates(
 
   const resourceGroups = new Map<string, ManifestResource[]>();
   for (const resource of listResources(state.manifestStore)) {
+    if (resource.kind === "folder") continue;
     if (!resource.resourceId || resource.dirty) continue;
     if (!resource.checksum || typeof resource.sizeBytes !== "number") continue;
     if (isIgnoredSyncRelativePath(resource.relativePath)) continue;
@@ -1524,11 +1564,83 @@ function hasOpenOutboxAction(
   return listOpenOutboxForPath(state.manifestStore, relativePath).some(predicate);
 }
 
+function ancestorFolderPaths(relativePath: string): string[] {
+  const ancestors: string[] = [];
+  let current = directoryPathFor(relativePath);
+  while (current) {
+    ancestors.push(current);
+    current = directoryPathFor(current);
+  }
+  return ancestors;
+}
+
+function hasOpenFolderDeleteAncestor(state: DaemonState, relativePath: string): boolean {
+  return ancestorFolderPaths(relativePath).some((folderPath) => hasOpenOutboxAction(
+    state,
+    folderPath,
+    (item) => item.action === "delete" && item.payload.kind === "folder"
+  ));
+}
+
 export async function scanSyncFolder(state: DaemonState): Promise<void> {
   const currentPaths = new Set<string>();
   const pendingCreateCandidates: PendingLocalCreateCandidate[] = [];
+  const folders = await walkSyncDirectories(state.config);
   const files = await walkSyncFiles(state.config);
   const now = new Date().toISOString();
+
+  for (const relativePath of folders) {
+    if (!relativePath || isIgnoredSyncRelativePath(relativePath)) continue;
+    currentPaths.add(relativePath);
+    const absolutePath = resolveSyncRootRelativePath(state.config, relativePath);
+    if (!absolutePath) continue;
+    let stat;
+    try {
+      stat = await fs.stat(absolutePath);
+    } catch {
+      continue;
+    }
+    if (!stat.isDirectory()) continue;
+
+    const existing = getResource(state.manifestStore, relativePath);
+    const openOutboxItems = listOpenOutboxForPath(state.manifestStore, relativePath);
+    if (openOutboxItems.some((item) => item.action === "delete")) {
+      supersedeOpenOutboxForPath(
+        state,
+        relativePath,
+        (item) => item.action === "delete",
+        "Local folder exists again; pending delete was superseded by recovery scan.",
+        now
+      );
+    }
+
+    if (existing?.kind === "folder" && !existing.dirty) {
+      upsertManifestResource(state.manifestStore, {
+        ...existing,
+        lastSeenAt: now,
+        localUpdatedAt: stat.mtime.toISOString()
+      });
+      continue;
+    }
+    if (hasOpenOutboxForPath(state.manifestStore, relativePath)) continue;
+
+    enqueueManifestOutbox(state.manifestStore, {
+      relativePath,
+      domain: "artifacts",
+      action: existing?.resourceId ? "update" : "create",
+      resourceId: existing?.resourceId,
+      payload: buildOutboxPayloadForFolder(relativePath)
+    });
+    upsertManifestResource(state.manifestStore, {
+      relativePath,
+      domain: "artifacts",
+      kind: "folder",
+      resourceId: existing?.resourceId,
+      dirty: true,
+      lastSeenAt: now,
+      localUpdatedAt: stat.mtime.toISOString()
+    });
+  }
 
   for (const absolutePath of files) {
     const relativePath = relativeSyncPath(state.config, absolutePath);
@@ -1653,6 +1765,7 @@ export async function scanSyncFolder(state: DaemonState): Promise<void> {
       continue;
     }
     if (currentPaths.has(resource.relativePath)) continue;
+    if (resource.kind !== "folder" && hasOpenFolderDeleteAncestor(state, resource.relativePath)) continue;
 
     const supersededWrites = supersedeOpenOutboxForPath(
       state,
@@ -1677,7 +1790,7 @@ export async function scanSyncFolder(state: DaemonState): Promise<void> {
       domain: "artifacts",
       action: "delete",
       resourceId: resource.resourceId,
-      payload: {}
+      payload: resource.kind === "folder" ? buildOutboxPayloadForFolder(resource.relativePath) : {}
     });
     upsertManifestResource(state.manifestStore, {
       ...resource,
@@ -2215,7 +2328,22 @@ async function applyRemoteArtifactItem(
     } catch {
       // Missing directory will be created below.
     }
+    const previousById = findResourceById(state, item.id);
     await fs.mkdir(folderPath, { recursive: true });
+    const stat = await fs.stat(folderPath);
+    upsertManifestResource(state.manifestStore, {
+      relativePath,
+      domain: "artifacts",
+      kind: "folder",
+      resourceId: item.id,
+      dirty: false,
+      lastSeenAt: options.createdAt,
+      lastSyncedAt: options.createdAt,
+      localUpdatedAt: stat.mtime.toISOString()
+    });
+    if (previousById && previousById.relativePath !== relativePath) {
+      removeResource(state.manifestStore, previousById.relativePath);
+    }
     return;
   }
 
@@ -2688,10 +2816,16 @@ async function pushOutbox(state: DaemonState): Promise<void> {
     const resourceId = appliedItem.resourceId ?? extractResourceId(appliedItem.result);
     const existing = getResource(state.manifestStore, item.relativePath);
     if (item.action === "delete") {
-      removeResource(state.manifestStore, item.relativePath);
+      if (existing?.kind === "folder" || item.payload.kind === "folder") {
+        for (const resource of resourcesUnderPath(state, item.relativePath)) {
+          removeResource(state.manifestStore, resource.relativePath);
+        }
+      } else {
+        removeResource(state.manifestStore, item.relativePath);
+      }
     } else {
       upsertManifestResource(state.manifestStore, {
-        ...(existing ?? { relativePath: item.relativePath, domain: "artifacts", kind: artifactKindForPath(item.relativePath) }),
+        ...(existing ?? { relativePath: item.relativePath, domain: "artifacts", kind: artifactKindForOutboxItem(item) }),
         resourceId: resourceId ?? existing?.resourceId,
         dirty: false,
         lastSyncedAt: now

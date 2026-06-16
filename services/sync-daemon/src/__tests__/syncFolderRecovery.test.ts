@@ -200,8 +200,70 @@ describe("sync folder recovery", () => {
       assert.ok(items.some((item) => item.kind === "folder" && item.path === "docs/Empty Folder"));
 
       const manifest = readManifestFromStore(store);
-      assert.equal(manifest.resources?.length, 0);
-      assert.equal(manifest.outbox?.length, 0);
+      assert.equal(manifest.resources?.length, 1);
+      assert.equal(manifest.resources?.[0].kind, "folder");
+      assert.equal(manifest.resources?.[0].relativePath, "docs/Empty Folder");
+      assert.equal(manifest.resources?.[0].dirty, true);
+      assert.equal(manifest.outbox?.length, 1);
+      assert.equal(manifest.outbox?.[0].action, "create");
+      assert.equal(manifest.outbox?.[0].payload.kind, "folder");
+      assert.equal(manifest.outbox?.[0].payload.path, "docs/Empty Folder");
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("queues empty folders discovered by sync scans", async () => {
+    const { root, store, state } = await createState();
+    try {
+      await mkdir(join(root, "empty"), { recursive: true });
+      await scanSyncFolder(state);
+
+      const manifest = readManifestFromStore(store);
+      assert.equal(manifest.resources?.length, 1);
+      assert.equal(manifest.resources?.[0].kind, "folder");
+      assert.equal(manifest.resources?.[0].relativePath, "empty");
+      assert.equal(manifest.resources?.[0].dirty, true);
+      assert.equal(manifest.outbox?.length, 1);
+      assert.equal(manifest.outbox?.[0].action, "create");
+      assert.equal(manifest.outbox?.[0].payload.kind, "folder");
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("queues one folder delete for tracked folder trees removed locally", async () => {
+    const { root, store, state } = await createState();
+    try {
+      await mkdir(join(root, "docs"), { recursive: true });
+      await writeFile(join(root, "docs", "remote.md"), "# Remote\n", "utf8");
+      upsertResource(store, {
+        relativePath: "docs",
+        domain: "artifacts",
+        kind: "folder",
+        resourceId: "folder-docs",
+        dirty: false
+      });
+      upsertResource(store, {
+        relativePath: "docs/remote.md",
+        domain: "artifacts",
+        kind: "note",
+        resourceId: "note-docs",
+        checksum: checksum("# Remote\n"),
+        sizeBytes: Buffer.byteLength("# Remote\n", "utf8"),
+        dirty: false
+      });
+
+      await rm(join(root, "docs"), { recursive: true, force: true });
+      await scanSyncFolder(state);
+
+      const manifest = readManifestFromStore(store);
+      const pending = manifest.outbox?.filter((item) => item.status === "pending") ?? [];
+      assert.equal(pending.length, 1);
+      assert.equal(pending[0].relativePath, "docs");
+      assert.equal(pending[0].action, "delete");
+      assert.equal(pending[0].payload.kind, "folder");
+      assert.equal(state.outboxPending, 1);
     } finally {
       closeManifestStore(store);
     }
@@ -334,18 +396,24 @@ describe("sync folder recovery", () => {
       await scanSyncFolder(state);
 
       const manifest = readManifestFromStore(store);
-      assert.equal(manifest.outbox?.length, 1);
-      assert.equal(manifest.outbox?.[0].action, "update");
-      assert.equal(manifest.outbox?.[0].relativePath, "docs/renamed.txt");
-      assert.equal(manifest.outbox?.[0].resourceId, "cloud-file-rename");
-      assert.equal(manifest.outbox?.[0].payload.kind, "file");
-      assert.equal(manifest.outbox?.[0].payload.path, "docs/renamed.txt");
-      assert.equal("contentBase64" in manifest.outbox![0].payload, false);
-      assert.equal(manifest.resources?.length, 1);
-      assert.equal(manifest.resources?.[0].relativePath, "docs/renamed.txt");
-      assert.equal(manifest.resources?.[0].resourceId, "cloud-file-rename");
-      assert.equal(manifest.resources?.[0].dirty, true);
-      assert.equal(state.outboxPending, 1);
+      assert.equal(manifest.outbox?.length, 2);
+      const fileUpdate = manifest.outbox?.find((item) => item.relativePath === "docs/renamed.txt");
+      const folderCreate = manifest.outbox?.find((item) => item.relativePath === "docs");
+      assert.equal(fileUpdate?.action, "update");
+      assert.equal(fileUpdate?.resourceId, "cloud-file-rename");
+      assert.equal(fileUpdate?.payload.kind, "file");
+      assert.equal(fileUpdate?.payload.path, "docs/renamed.txt");
+      assert.equal("contentBase64" in fileUpdate!.payload, false);
+      assert.equal(folderCreate?.action, "create");
+      assert.equal(folderCreate?.payload.kind, "folder");
+      assert.equal(manifest.resources?.length, 2);
+      const fileResource = manifest.resources?.find((item) => item.relativePath === "docs/renamed.txt");
+      const folderResource = manifest.resources?.find((item) => item.relativePath === "docs");
+      assert.equal(fileResource?.resourceId, "cloud-file-rename");
+      assert.equal(fileResource?.dirty, true);
+      assert.equal(folderResource?.kind, "folder");
+      assert.equal(folderResource?.dirty, true);
+      assert.equal(state.outboxPending, 2);
     } finally {
       closeManifestStore(store);
     }

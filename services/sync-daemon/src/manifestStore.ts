@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 export type ManifestResource = {
   relativePath: string;
   domain: "artifacts";
-  kind: "note" | "file";
+  kind: "folder" | "note" | "file";
   resourceId?: string;
   checksum?: string;
   sizeBytes?: number;
@@ -197,7 +197,7 @@ function toResource(row: ResourceRow): ManifestResource {
   return {
     relativePath: row.relative_path,
     domain: row.domain === "artifacts" ? "artifacts" : "artifacts",
-    kind: row.kind === "file" ? "file" : "note",
+    kind: row.kind === "folder" ? "folder" : row.kind === "file" ? "file" : "note",
     resourceId: row.resource_id ?? undefined,
     checksum: row.checksum ?? undefined,
     sizeBytes: row.size_bytes ?? undefined,
