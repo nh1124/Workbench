@@ -20,6 +20,8 @@ const DAEMON_STATUS_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_DAEMON_STATUS_RESPONSE_BYTES: usize = 1024 * 1024;
 const DAEMON_PREFERENCES_FILE: &str = "daemon-preferences.json";
 const DEFAULT_DAEMON_SIDECAR_NAME: &str = "workbench-sync-daemon";
+const LOCAL_CLIENT_ID_ENV: &str = "WORKBENCH_LOCAL_CLIENT_ID";
+const LOCAL_CLIENT_TOKEN_ENV: &str = "WORKBENCH_LOCAL_CLIENT_TOKEN";
 
 struct ManagedDaemon {
   child: Child,
@@ -434,6 +436,37 @@ fn configure_daemon_env(command: &mut Command) {
       DEFAULT_DAEMON_HTTP_PORT.to_string(),
     );
   }
+
+  configure_daemon_client_identity_env(command);
+}
+
+fn configure_daemon_client_identity_env(command: &mut Command) {
+  let has_parent_client_id = std::env::var_os(LOCAL_CLIENT_ID_ENV).is_some();
+  let has_parent_client_token = std::env::var_os(LOCAL_CLIENT_TOKEN_ENV).is_some();
+
+  if has_parent_client_id && has_parent_client_token {
+    return;
+  }
+
+  if has_parent_client_id || has_parent_client_token {
+    eprintln!(
+      "[workbench-native] not injecting secure local daemon client credentials because parent env is incomplete"
+    );
+    return;
+  }
+
+  match secure_storage::read_local_daemon_client_identity() {
+    Ok(Some(identity)) => {
+      command.env(LOCAL_CLIENT_ID_ENV, identity.local_client_id);
+      command.env(LOCAL_CLIENT_TOKEN_ENV, identity.local_client_token);
+    }
+    Ok(None) => {}
+    Err(error) => {
+      eprintln!(
+        "[workbench-native] failed to read secure local daemon client credentials; daemon will use file fallback: {error}"
+      );
+    }
+  }
 }
 
 fn spawn_daemon(app: Option<&tauri::AppHandle>) -> Result<Child, String> {
@@ -583,6 +616,38 @@ pub fn secure_session_read() -> Result<Option<String>, String> {
 #[tauri::command]
 pub fn secure_session_clear() -> Result<(), String> {
   secure_storage::clear()
+}
+
+#[tauri::command]
+pub fn secure_local_daemon_client_save(
+  local_client_id: String,
+  local_client_token: String,
+) -> Result<(), String> {
+  secure_storage::save_local_daemon_client_identity(&local_client_id, &local_client_token)
+}
+
+#[tauri::command]
+pub fn secure_local_daemon_client_status() -> Result<serde_json::Value, String> {
+  let identity = secure_storage::read_local_daemon_client_identity()?;
+  Ok(match identity {
+    Some(identity) => serde_json::json!({
+      "supported": secure_storage::is_supported(),
+      "available": true,
+      "localClientId": identity.local_client_id,
+      "hasLocalClientToken": true
+    }),
+    None => serde_json::json!({
+      "supported": secure_storage::is_supported(),
+      "available": false,
+      "localClientId": null,
+      "hasLocalClientToken": false
+    }),
+  })
+}
+
+#[tauri::command]
+pub fn secure_local_daemon_client_clear() -> Result<(), String> {
+  secure_storage::clear_local_daemon_client_identity()
 }
 
 #[tauri::command]

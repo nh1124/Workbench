@@ -15,6 +15,7 @@ import {
   createLocalArtifactFolder,
   createLocalArtifactNote,
   decodeLocalItemId,
+  normalizeSha256Checksum,
   normalizeRelativePath,
   resolveSyncRootRelativePath,
   sanitizeFileName,
@@ -80,6 +81,14 @@ afterEach(async () => {
 });
 
 describe("sync-daemon path safety", () => {
+  it("normalizes local job download checksum headers", () => {
+    const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    assert.equal(normalizeSha256Checksum(`sha256:${digest}`), digest);
+    assert.equal(normalizeSha256Checksum(digest.toUpperCase()), digest);
+    assert.equal(normalizeSha256Checksum(undefined), undefined);
+    assert.throws(() => normalizeSha256Checksum("sha256:not-a-digest"), /Invalid local job download checksum header/);
+  });
+
   it("preserves normal relative paths while rejecting traversal, absolute, metadata, temp, and reserved paths", async () => {
     const { root, store, state } = await createState();
     try {

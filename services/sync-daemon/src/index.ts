@@ -357,6 +357,23 @@ async function uniquePath(directory: string, filename: string): Promise<string> 
   return join(directory, `${base}-${Date.now()}${ext}`);
 }
 
+export function normalizeSha256Checksum(value: string | null | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim().toLowerCase();
+  const hex = trimmed.startsWith("sha256:") ? trimmed.slice("sha256:".length) : trimmed;
+  if (!/^[a-f0-9]{64}$/.test(hex)) {
+    throw new Error("Invalid local job download checksum header");
+  }
+  return hex;
+}
+
+function assertExpectedDownloadChecksum(expected: string | null, actualHex: string): void {
+  const expectedHex = normalizeSha256Checksum(expected);
+  if (expectedHex && expectedHex !== actualHex.toLowerCase()) {
+    throw new Error("Local job download checksum mismatch");
+  }
+}
+
 async function downloadJobFile(state: DaemonState, job: LocalJob): Promise<{
   localPath: string;
   checksum: string;
@@ -373,6 +390,8 @@ async function downloadJobFile(state: DaemonState, job: LocalJob): Promise<{
   if (!response.ok) {
     throw new Error(buffer.toString("utf8") || `HTTP ${response.status}`);
   }
+  const checksum = createHash("sha256").update(buffer).digest("hex");
+  assertExpectedDownloadChecksum(response.headers.get("x-workbench-content-checksum"), checksum);
 
   const requestedName = typeof job.payload.filename === "string" ? job.payload.filename : undefined;
   const headerName = parseContentDispositionFilename(response.headers.get("content-disposition"));
@@ -387,7 +406,7 @@ async function downloadJobFile(state: DaemonState, job: LocalJob): Promise<{
 
   return {
     localPath,
-    checksum: createHash("sha256").update(buffer).digest("hex"),
+    checksum,
     sizeBytes: buffer.byteLength
   };
 }
@@ -1321,6 +1340,112 @@ async function buildOutboxPayloadForFile(
   };
 }
 
+type PendingLocalCreateCandidate = {
+  absolutePath: string;
+  relativePath: string;
+  kind: "note" | "file";
+  checksum: string;
+  sizeBytes: number;
+  localUpdatedAt: string;
+};
+
+function renameCandidateKey(kind: "note" | "file", checksum: string, sizeBytes: number): string {
+  return `${kind}\0${sizeBytes}\0${checksum}`;
+}
+
+function addRenameCandidateGroup<T>(
+  groups: Map<string, T[]>,
+  key: string,
+  value: T
+): void {
+  const existing = groups.get(key);
+  if (existing) {
+    existing.push(value);
+  } else {
+    groups.set(key, [value]);
+  }
+}
+
+async function buildOutboxPayloadForRename(
+  config: DaemonConfig,
+  candidate: PendingLocalCreateCandidate
+): Promise<Record<string, unknown>> {
+  if (candidate.kind === "note") {
+    return buildOutboxPayloadForFile(config, candidate.absolutePath, candidate.relativePath, candidate.kind);
+  }
+
+  return {
+    kind: "file",
+    path: candidate.relativePath,
+    title: basename(candidate.relativePath)
+  };
+}
+
+async function queueCleanLocalRenameUpdates(
+  state: DaemonState,
+  currentPaths: Set<string>,
+  pendingCreateCandidates: PendingLocalCreateCandidate[],
+  now: string
+): Promise<Set<string>> {
+  const candidateGroups = new Map<string, PendingLocalCreateCandidate[]>();
+  for (const candidate of pendingCreateCandidates) {
+    if (!resolveSyncRootRelativePath(state.config, candidate.relativePath)) continue;
+    if (hasOpenOutboxForPath(state.manifestStore, candidate.relativePath)) continue;
+    addRenameCandidateGroup(
+      candidateGroups,
+      renameCandidateKey(candidate.kind, candidate.checksum, candidate.sizeBytes),
+      candidate
+    );
+  }
+
+  const resourceGroups = new Map<string, ManifestResource[]>();
+  for (const resource of listResources(state.manifestStore)) {
+    if (!resource.resourceId || resource.dirty) continue;
+    if (!resource.checksum || typeof resource.sizeBytes !== "number") continue;
+    if (isIgnoredSyncRelativePath(resource.relativePath)) continue;
+    if (!resolveSyncRootRelativePath(state.config, resource.relativePath)) continue;
+    if (currentPaths.has(resource.relativePath)) continue;
+    if (hasOpenOutboxForPath(state.manifestStore, resource.relativePath)) continue;
+    if (listOpenOutboxForResource(state.manifestStore, resource.resourceId).length > 0) continue;
+    addRenameCandidateGroup(
+      resourceGroups,
+      renameCandidateKey(resource.kind, resource.checksum, resource.sizeBytes),
+      resource
+    );
+  }
+
+  const renamedCandidatePaths = new Set<string>();
+  for (const [key, resources] of resourceGroups) {
+    const candidates = candidateGroups.get(key);
+    if (resources.length !== 1 || candidates?.length !== 1) continue;
+
+    const resource = resources[0];
+    const candidate = candidates[0];
+    const payload = await buildOutboxPayloadForRename(state.config, candidate);
+    enqueueManifestOutbox(state.manifestStore, {
+      relativePath: candidate.relativePath,
+      domain: "artifacts",
+      action: "update",
+      resourceId: resource.resourceId,
+      payload
+    });
+    removeResource(state.manifestStore, resource.relativePath);
+    upsertManifestResource(state.manifestStore, {
+      ...resource,
+      relativePath: candidate.relativePath,
+      kind: candidate.kind,
+      checksum: candidate.checksum,
+      sizeBytes: candidate.sizeBytes,
+      dirty: true,
+      lastSeenAt: now,
+      localUpdatedAt: candidate.localUpdatedAt
+    });
+    renamedCandidatePaths.add(candidate.relativePath);
+  }
+
+  return renamedCandidatePaths;
+}
+
 function supersedeOpenOutboxForPath(
   state: DaemonState,
   relativePath: string,
@@ -1347,6 +1472,7 @@ function hasOpenOutboxAction(
 
 export async function scanSyncFolder(state: DaemonState): Promise<void> {
   const currentPaths = new Set<string>();
+  const pendingCreateCandidates: PendingLocalCreateCandidate[] = [];
   const files = await walkSyncFiles(state.config);
   const now = new Date().toISOString();
 
@@ -1406,6 +1532,18 @@ export async function scanSyncFolder(state: DaemonState): Promise<void> {
     }
     if (hasOpenOutboxForPath(state.manifestStore, relativePath)) continue;
 
+    if (!existing) {
+      pendingCreateCandidates.push({
+        absolutePath,
+        relativePath,
+        kind,
+        checksum,
+        sizeBytes: stat.size,
+        localUpdatedAt: stat.mtime.toISOString()
+      });
+      continue;
+    }
+
     const payload = await buildOutboxPayloadForFile(state.config, absolutePath, relativePath, kind);
     const action = existing?.resourceId ? "update" : "create";
     enqueueManifestOutbox(state.manifestStore, {
@@ -1423,6 +1561,35 @@ export async function scanSyncFolder(state: DaemonState): Promise<void> {
       dirty: true,
       lastSeenAt: now,
       localUpdatedAt: stat.mtime.toISOString()
+    });
+  }
+
+  const renamedCandidatePaths = await queueCleanLocalRenameUpdates(state, currentPaths, pendingCreateCandidates, now);
+  for (const candidate of pendingCreateCandidates) {
+    if (renamedCandidatePaths.has(candidate.relativePath)) continue;
+    if (hasOpenOutboxForPath(state.manifestStore, candidate.relativePath)) continue;
+
+    const payload = await buildOutboxPayloadForFile(
+      state.config,
+      candidate.absolutePath,
+      candidate.relativePath,
+      candidate.kind
+    );
+    enqueueManifestOutbox(state.manifestStore, {
+      relativePath: candidate.relativePath,
+      domain: "artifacts",
+      action: "create",
+      payload
+    });
+    upsertManifestResource(state.manifestStore, {
+      relativePath: candidate.relativePath,
+      domain: "artifacts",
+      kind: candidate.kind,
+      checksum: candidate.checksum,
+      sizeBytes: candidate.sizeBytes,
+      dirty: true,
+      lastSeenAt: now,
+      localUpdatedAt: candidate.localUpdatedAt
     });
   }
 

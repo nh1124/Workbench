@@ -196,12 +196,17 @@ npm run build
 
 - `[implemented]` Explicit token revoke endpoint exists.
 - `[implemented]` Local client deletion endpoint exists.
-- `[pending]` Add archival/soft-delete option if hard deletion is too aggressive for audit requirements.
-- `[implemented]` Add audit trail for local client registration, update, enable/disable, default change, token revoke, delete, job lifecycle, expiry, and capability denial.
+- `[implemented]` Archival/soft-delete option exists for audit-preserving local client removal.
+  - `POST /api/local-clients/:id/archive` disables the client, revokes active tokens, clears default selection, and records an `archived` audit event.
+  - `GET /api/local-clients` hides archived clients by default; `includeArchived=true` includes them.
+- `[implemented]` Add audit trail for local client registration, update, enable/disable, default change, token revoke, archive, delete, job lifecycle, expiry, and capability denial.
   - `local_client_audit_events` stores user/client/actor/detail metadata.
   - `GET /api/local-clients/audit-events` exposes owner-visible audit history.
   - Settings displays recent local client audit events.
-- `[pending]` Persist OAuth dynamic client registration if HTTPS MCP client continuity is needed across Core restarts.
+- `[implemented]` Persist OAuth dynamic client registration so MCP clients can re-authorize after Core restarts.
+  - `oauth_dynamic_clients` stores public DCR client metadata.
+  - `/oauth/register` writes registrations to DB instead of process memory.
+  - `/authorize` resolves non-URL dynamic `client_id` values from the persisted store.
 - `[implemented]` Add scoped local client capabilities enforcement beyond simple enabled/disabled checks.
   - Capabilities normalize to explicit `scopes`.
   - Supported scopes are `local_jobs.claim`, `local_jobs.download`, `sync.pull`, `sync.push`, `sync.blobs.read`, and `sync.blobs.write`.
@@ -245,6 +250,7 @@ npm run build
   - Supersedes stale pending create/update outbox entries when files are removed before push.
   - Supersedes pending delete outbox entries when files reappear before push.
   - Supersedes stale pending create/update outbox entries when files change again before push.
+  - Queues exact clean local rename/move matches as resource updates instead of delete/create pairs.
   - Auto-resolves open conflict records tied to superseded outbox entries.
 - `[implemented]` Artifact remote snapshot/incremental pull reconciliation exists.
   - Bootstrap reads `/api/sync/snapshot?domains=artifacts`.
@@ -260,7 +266,7 @@ npm run build
 - `[implemented]` Add native file watcher for sync folder changes with interval-scan fallback.
 - `[implemented]` Ignore temp files, lock files, partial writes, and reserved Windows device names.
 - `[implemented]` Debounce and wait for file size/checksum stability before enqueueing changes.
-- `[pending]` Detect local rename as rename instead of delete/create.
+- `[implemented]` Detect clean tracked local file rename/move as update instead of delete/create when there is an exact unambiguous checksum/size match.
 - `[partial]` Map local files back to domain resources through manifest entries.
 - `[implemented]` Add conflict/rejection JSON file creation under `.workbench/conflicts`.
 - `[implemented]` Add daemon MCP and loopback HTTP flows to list conflicts and mark them retry/ignore/close.
@@ -302,7 +308,9 @@ npm run build
 - `[implemented]` Add task attachment upload/update/delete operation through sync push.
 - `[partial]` Add checksum validation on upload and download completion.
   - Artifact and task attachment blob PUT / sync push validate optional `sha256:<hex>` checksums.
-  - Download completion checksum reporting remains job/daemon-side only.
+  - Local job download proxy returns `X-Workbench-Content-Checksum: sha256:<hex>`.
+  - Daemon validates the proxy checksum before writing downloaded job files locally.
+  - Download completion checksum reporting remains bare hex for daemon manifest compatibility.
 
 ### Local UI Through Daemon
 
@@ -348,16 +356,22 @@ npm run build
   - Packaged sidecars are discovered from Tauri resource/executable/current directories as `workbench-sync-daemon` or `workbench-sync-daemon.exe`, including `sidecars/` and `binaries/` subdirectories.
   - Default development command is `npm run dev --workspace services/sync-daemon` from the inferred repo root.
 - `[implemented]` Add managed background process support for development/desktop.
-- `[partial]` Package daemon as a production Tauri sidecar binary.
+- `[implemented]` Package daemon as a production Tauri sidecar binary.
   - `WORKBENCH_DAEMON_EXTERNAL_BIN` can add one or more external binaries to generated `tauri.conf.json`.
   - `NATIVE_BUNDLE_ACTIVE` can explicitly enable or disable Tauri bundle generation.
   - The runtime launcher prefers explicit command override, explicit sidecar path, packaged sidecar, then development npm fallback.
-  - Still needs a repeatable CI/build pipeline that produces the platform-specific daemon executable before Tauri packaging.
+  - `npm run sidecar:build --workspace services/sync-daemon` builds TypeScript, creates a Node SEA sidecar executable at `services/sync-daemon/dist/tauri-sidecar/workbench-sync-daemon-$TARGET_TRIPLE(.exe)`, and writes a sidecar manifest.
+  - `npm run tauri:build --workspace native/desktop` runs the sidecar build before Tauri packaging.
+  - `prepare-tauri-config.mjs` still honors explicit `WORKBENCH_DAEMON_EXTERNAL_BIN`; when it is unset, it reads the generated sidecar manifest and emits the Tauri `bundle.externalBin` base path.
 - `[implemented]` Add optional auto-start.
   - Desktop Settings exposes an Auto-start Daemon toggle.
   - Preference is stored in Tauri app config as `daemon-preferences.json`.
   - On desktop startup, the native shell starts the daemon if auto-start is enabled.
-- `[pending]` Store local client token in OS secure storage instead of plain `.workbench/client-identity.json`.
+- `[partial]` Store local client token in OS secure storage instead of plain `.workbench/client-identity.json`.
+  - Windows native secure storage now has a separate `Workbench.LocalDaemonClient` target for daemon `localClientId` / `localClientToken`, distinct from `Workbench.Session`.
+  - Tauri-managed daemon startup injects stored credentials as `WORKBENCH_LOCAL_CLIENT_ID` and `WORKBENCH_LOCAL_CLIENT_TOKEN` when neither env var is already set.
+  - Native commands can save, inspect non-secret status, and clear the secure daemon client credential.
+  - Standalone daemon startup and first registration still use `.workbench/client-identity.json` as a fallback, so full post-registration migration away from the plain file remains incomplete.
 
 ### Security Hardening
 
@@ -379,12 +393,9 @@ npm run build
 
 ## Recommended Next Implementation Order
 
-1. Add a repeatable production daemon executable build pipeline for Tauri sidecar packaging.
-2. Extend daemon remote reconciliation beyond Artifacts to Projects, Notes, and Tasks.
-3. Decide whether empty local folders should become first-class cloud folder resources immediately or remain local until they contain synced files.
-4. Detect local rename as rename instead of delete/create.
-5. Decide and implement the policy for direct internal service mutations outside Core.
-6. Persist OAuth dynamic client registration if HTTPS MCP client continuity is needed across Core restarts.
+1. Extend daemon remote reconciliation beyond Artifacts to Projects, Notes, and Tasks.
+2. Decide whether empty local folders should become first-class cloud folder resources immediately or remain local until they contain synced files.
+3. Decide and implement the policy for direct internal service mutations outside Core.
 
 ## Current Daemon Usage
 
@@ -398,7 +409,8 @@ $env:WORKBENCH_DAEMON_API_TOKEN="<optional loopback token>"
 npm run dev --workspace services/sync-daemon
 ```
 
-After registration, the daemon reuses `.workbench/client-identity.json` unless `WORKBENCH_LOCAL_CLIENT_ID` and `WORKBENCH_LOCAL_CLIENT_TOKEN` are provided.
+After registration, the standalone daemon reuses `.workbench/client-identity.json` unless `WORKBENCH_LOCAL_CLIENT_ID` and `WORKBENCH_LOCAL_CLIENT_TOKEN` are provided.
+Desktop-managed startup can also inject the local client ID/token from Windows Credential Manager when saved through the native secure daemon client commands.
 
 Desktop `start_daemon` now launches a managed background process. By default it runs:
 
@@ -407,5 +419,13 @@ npm run dev --workspace services/sync-daemon
 ```
 
 Override with `WORKBENCH_DAEMON_COMMAND` and optional `WORKBENCH_DAEMON_ARGS` when using a packaged daemon.
-For sidecar-style packaging, set `WORKBENCH_DAEMON_EXTERNAL_BIN` during `npm run tauri:prepare --workspace native/desktop`
-and place the runtime executable where the desktop app can discover it, or set `WORKBENCH_DAEMON_SIDECAR_PATH`.
+For sidecar-style packaging, run:
+
+```powershell
+npm run sidecar:build --workspace services/sync-daemon
+npm run tauri:prepare --workspace native/desktop
+```
+
+The sidecar build writes `services/sync-daemon/dist/tauri-sidecar/sidecar-manifest.json`, and `tauri:prepare`
+uses that manifest when `WORKBENCH_DAEMON_EXTERNAL_BIN` is unset. Explicit `WORKBENCH_DAEMON_EXTERNAL_BIN`
+still overrides the manifest, and `WORKBENCH_DAEMON_SIDECAR_PATH` can still point the desktop app at a specific executable.

@@ -145,10 +145,16 @@ export async function ensureCoreSchema(): Promise<void> {
             sync_root_label TEXT NOT NULL,
             is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
             is_default BOOLEAN NOT NULL DEFAULT FALSE,
+            archived_at TIMESTAMPTZ,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             UNIQUE (user_id, device_id, sync_root_id)
           );
+        `);
+
+        await pool.query(`
+          ALTER TABLE local_clients
+            ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
         `);
 
         await pool.query(`
@@ -276,6 +282,18 @@ export async function ensureCoreSchema(): Promise<void> {
         await pool.query(`
           CREATE INDEX IF NOT EXISTS idx_local_client_audit_events_client_created
             ON local_client_audit_events (local_client_id, created_at DESC, id DESC);
+        `);
+
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS oauth_dynamic_clients (
+            client_id TEXT PRIMARY KEY,
+            client_name TEXT NOT NULL,
+            redirect_uris TEXT[] NOT NULL,
+            token_endpoint_auth_method TEXT NOT NULL DEFAULT 'none',
+            grant_types TEXT[] NOT NULL,
+            response_types TEXT[] NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          );
         `);
 
         await pool.query(`

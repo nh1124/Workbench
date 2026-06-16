@@ -443,6 +443,87 @@ describe("local client HTTP APIs", () => {
     }
   });
 
+  it("archives local clients through owner API and hides them from default lists", async (t) => {
+    const harness = await requireHarness(t);
+    if (!harness) return;
+
+    const pool = harness.db.getCorePool();
+    const { userId, username } = await createTestUser(pool, "archive");
+    const { accessToken } = harness.auth.issueTokenBundle({ userId, username });
+    const server = await startTestServer(harness);
+    try {
+      const registerResponse = await requestJson(server.baseUrl, "POST", "/api/local-clients/register", {
+        headers: bearerHeaders(accessToken),
+        body: {
+          deviceId: "device-http-archive",
+          clientName: "Archive HTTP Laptop",
+          platform: "win32",
+          syncRootId: "main",
+          syncRootLabel: "Workbench Main",
+          default: true
+        }
+      });
+      assert.equal(registerResponse.status, 201);
+      const registeredClient = registerResponse.body.client as Record<string, unknown>;
+      const localClientId = String(registeredClient.id);
+      const clientToken = String(registerResponse.body.clientToken);
+
+      const archiveResponse = await requestJson(
+        server.baseUrl,
+        "POST",
+        `/api/local-clients/${encodeURIComponent(localClientId)}/archive`,
+        { headers: bearerHeaders(accessToken) }
+      );
+      assert.equal(archiveResponse.status, 200);
+      assert.equal(archiveResponse.body.id, localClientId);
+      assert.equal(archiveResponse.body.enabled, false);
+      assert.equal(archiveResponse.body.default, false);
+      assert.equal(typeof archiveResponse.body.archivedAt, "string");
+
+      const defaultListResponse = await requestJson(server.baseUrl, "GET", "/api/local-clients", {
+        headers: bearerHeaders(accessToken)
+      });
+      assert.equal(defaultListResponse.status, 200);
+      assert.deepEqual(defaultListResponse.body.items, []);
+
+      const archivedListResponse = await requestJson(server.baseUrl, "GET", "/api/local-clients?includeArchived=true", {
+        headers: bearerHeaders(accessToken)
+      });
+      assert.equal(archivedListResponse.status, 200);
+      const archivedClients = archivedListResponse.body.items as Array<Record<string, unknown>>;
+      assert.equal(archivedClients.length, 1);
+      assert.equal(archivedClients[0].id, localClientId);
+      assert.equal(archivedClients[0].archivedAt, archiveResponse.body.archivedAt);
+
+      const archivedHeartbeatResponse = await requestJson(
+        server.baseUrl,
+        "POST",
+        `/api/local-clients/${encodeURIComponent(localClientId)}/heartbeat`,
+        {
+          headers: localClientHeaders(localClientId, clientToken),
+          body: { daemonVersion: "0.1.0-http-test", syncRootState: {} }
+        }
+      );
+      assert.equal(archivedHeartbeatResponse.status, 401);
+      assert.equal(archivedHeartbeatResponse.body.code, "INVALID_LOCAL_CLIENT_TOKEN");
+
+      const auditResponse = await requestJson(
+        server.baseUrl,
+        "GET",
+        `/api/local-clients/audit-events?localClientId=${encodeURIComponent(localClientId)}&limit=10`,
+        { headers: bearerHeaders(accessToken) }
+      );
+      assert.equal(auditResponse.status, 200);
+      const auditEvents = auditResponse.body.items as Array<Record<string, unknown>>;
+      const archivedEvent = auditEvents.find((event) => event.eventType === "archived");
+      assert.ok(archivedEvent);
+      assert.equal((archivedEvent.detail as Record<string, unknown>).revokedTokens, 1);
+    } finally {
+      await server.close();
+      await cleanupTestUser(pool, userId);
+    }
+  });
+
   it("allows daemon-authenticated sync reads and rejects unauthenticated sync access", async (t) => {
     const harness = await requireHarness(t);
     if (!harness) return;

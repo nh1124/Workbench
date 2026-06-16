@@ -37,7 +37,51 @@ function optionalList(name) {
     .filter(Boolean);
 }
 
-const daemonExternalBins = optionalList("WORKBENCH_DAEMON_EXTERNAL_BIN");
+function envHas(name) {
+  return Object.prototype.hasOwnProperty.call(process.env, name);
+}
+
+function resolveManifestPath(manifestPath, value) {
+  return path.isAbsolute(value) ? value : path.resolve(path.dirname(manifestPath), value);
+}
+
+function sidecarManifestExternalBins() {
+  const manifestPath = path.resolve(
+    desktopRoot,
+    "../../services/sync-daemon/dist/tauri-sidecar/sidecar-manifest.json"
+  );
+  if (!fs.existsSync(manifestPath)) {
+    return [];
+  }
+
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const externalBins = Array.isArray(manifest.externalBins)
+    ? manifest.externalBins
+    : typeof manifest.externalBin === "string"
+      ? [manifest.externalBin]
+      : [];
+
+  if (externalBins.some((item) => typeof item !== "string" || item.trim() === "")) {
+    throw new Error(`Invalid externalBin entries in ${manifestPath}`);
+  }
+
+  if (typeof manifest.artifactPath === "string" && manifest.artifactPath.trim() !== "") {
+    const artifactPath = resolveManifestPath(manifestPath, manifest.artifactPath);
+    if (!fs.existsSync(artifactPath)) {
+      throw new Error(`Sync daemon sidecar manifest points to a missing artifact: ${artifactPath}`);
+    }
+  }
+
+  if (externalBins.length > 0) {
+    console.log(`Using sync daemon sidecar manifest ${manifestPath}`);
+  }
+
+  return externalBins.map((item) => item.trim());
+}
+
+const daemonExternalBins = envHas("WORKBENCH_DAEMON_EXTERNAL_BIN")
+  ? optionalList("WORKBENCH_DAEMON_EXTERNAL_BIN")
+  : sidecarManifestExternalBins();
 const bundleActive = optionalBoolean("NATIVE_BUNDLE_ACTIVE", daemonExternalBins.length > 0 ? true : false);
 
 const config = {

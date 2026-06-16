@@ -214,6 +214,64 @@ describe("localClientsStore", () => {
     }
   });
 
+  it("archives clients without deleting audit history or leaving daemon credentials active", async (t) => {
+    const harness = await requireHarness(t);
+    if (!harness) return;
+
+    const pool = harness.db.getCorePool();
+    const userId = await createTestUser(pool, "archive");
+    try {
+      const registered = await harness.localClients.registerLocalClient(userId, {
+        deviceId: "device-archive",
+        clientName: "Archive Laptop",
+        platform: "win32",
+        syncRootId: "main",
+        default: true
+      });
+
+      const archived = await harness.localClients.archiveLocalClient(userId, registered.client.id);
+      assert.ok(archived);
+      assert.equal(archived.enabled, false);
+      assert.equal(archived.default, false);
+      assert.equal(typeof archived.archivedAt, "string");
+
+      await assert.rejects(
+        () => harness.localClients.verifyLocalClientToken(registered.client.id, registered.clientToken),
+        { name: "Error", code: "INVALID_LOCAL_CLIENT_TOKEN" }
+      );
+      await assert.rejects(
+        () =>
+          harness.localClients.createLocalJob(userId, {
+            localClientId: registered.client.id,
+            kind: "download_artifact",
+            target: "downloads",
+            payload: { blobId: "artifact:archived" }
+          }),
+        { name: "Error", code: "LOCAL_CLIENT_NOT_FOUND" }
+      );
+
+      const visibleClients = await harness.localClients.listLocalClients(userId);
+      assert.equal(visibleClients.some((client) => client.id === registered.client.id), false);
+
+      const allClients = await harness.localClients.listLocalClients(userId, { includeArchived: true });
+      const listedArchived = allClients.find((client) => client.id === registered.client.id);
+      assert.equal(listedArchived?.archivedAt, archived.archivedAt);
+      assert.equal(listedArchived?.enabled, false);
+      assert.equal(listedArchived?.default, false);
+
+      const auditEvents = await harness.localClients.listLocalClientAuditEventsForUser(userId, {
+        localClientId: registered.client.id,
+        limit: 20
+      });
+      const archiveEvent = auditEvents.find((event) => event.eventType === "archived");
+      assert.ok(archiveEvent);
+      assert.equal(archiveEvent.detail.revokedTokens, 1);
+      assert.equal(archiveEvent.detail.previouslyDefault, true);
+    } finally {
+      await cleanupTestUser(pool, userId);
+    }
+  });
+
   it("normalizes and enforces scoped local client capabilities", async (t) => {
     const harness = await requireHarness(t);
     if (!harness) return;

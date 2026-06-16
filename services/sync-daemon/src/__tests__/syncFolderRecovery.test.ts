@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile, unlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
@@ -308,6 +308,76 @@ describe("sync folder recovery", () => {
       assert.equal(manifest.outbox?.[0].action, "update");
       assert.equal(manifest.outbox?.[0].resourceId, "cloud-file-1");
       assert.equal(manifest.outbox?.[0].payload.kind, "file");
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("queues a clean tracked local file move as one update", async () => {
+    const { root, store, state } = await createState();
+    try {
+      const oldPath = join(root, "asset.txt");
+      const newPath = join(root, "docs", "renamed.txt");
+      await writeFile(oldPath, "same-content", "utf8");
+      await mkdir(join(root, "docs"), { recursive: true });
+      upsertResource(store, {
+        relativePath: "asset.txt",
+        domain: "artifacts",
+        kind: "file",
+        resourceId: "cloud-file-rename",
+        checksum: checksum("same-content"),
+        sizeBytes: Buffer.byteLength("same-content"),
+        dirty: false
+      });
+
+      await rename(oldPath, newPath);
+      await scanSyncFolder(state);
+
+      const manifest = readManifestFromStore(store);
+      assert.equal(manifest.outbox?.length, 1);
+      assert.equal(manifest.outbox?.[0].action, "update");
+      assert.equal(manifest.outbox?.[0].relativePath, "docs/renamed.txt");
+      assert.equal(manifest.outbox?.[0].resourceId, "cloud-file-rename");
+      assert.equal(manifest.outbox?.[0].payload.kind, "file");
+      assert.equal(manifest.outbox?.[0].payload.path, "docs/renamed.txt");
+      assert.equal("contentBase64" in manifest.outbox![0].payload, false);
+      assert.equal(manifest.resources?.length, 1);
+      assert.equal(manifest.resources?.[0].relativePath, "docs/renamed.txt");
+      assert.equal(manifest.resources?.[0].resourceId, "cloud-file-rename");
+      assert.equal(manifest.resources?.[0].dirty, true);
+      assert.equal(state.outboxPending, 1);
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("keeps delete and creates when local rename candidates are ambiguous", async () => {
+    const { root, store, state } = await createState();
+    try {
+      const oldPath = join(root, "asset.txt");
+      await writeFile(oldPath, "same-content", "utf8");
+      upsertResource(store, {
+        relativePath: "asset.txt",
+        domain: "artifacts",
+        kind: "file",
+        resourceId: "cloud-file-ambiguous",
+        checksum: checksum("same-content"),
+        sizeBytes: Buffer.byteLength("same-content"),
+        dirty: false
+      });
+
+      await unlink(oldPath);
+      await writeFile(join(root, "copy-a.txt"), "same-content", "utf8");
+      await writeFile(join(root, "copy-b.txt"), "same-content", "utf8");
+      await scanSyncFolder(state);
+
+      const manifest = readManifestFromStore(store);
+      assert.deepEqual(manifest.outbox?.map((item) => item.action).sort(), ["create", "create", "delete"]);
+      assert.equal(manifest.outbox?.some((item) => item.action === "update"), false);
+      const deleteItem = manifest.outbox?.find((item) => item.action === "delete");
+      assert.equal(deleteItem?.relativePath, "asset.txt");
+      assert.equal(deleteItem?.resourceId, "cloud-file-ambiguous");
+      assert.equal(state.outboxPending, 3);
     } finally {
       closeManifestStore(store);
     }

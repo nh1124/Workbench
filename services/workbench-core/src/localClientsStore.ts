@@ -18,6 +18,7 @@ export type LocalClientAuditEventType =
   | "updated"
   | "enabled"
   | "disabled"
+  | "archived"
   | "default_changed"
   | "token_revoked"
   | "deleted"
@@ -53,6 +54,7 @@ export interface LocalClient {
   syncRootLabel: string;
   enabled: boolean;
   default: boolean;
+  archivedAt?: string;
   createdAt: string;
   updatedAt: string;
   heartbeat?: {
@@ -120,6 +122,7 @@ type LocalClientRow = {
   sync_root_label: string;
   is_enabled: boolean;
   is_default: boolean;
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
   daemon_version: string | null;
@@ -301,6 +304,7 @@ function makeClientToken(): string {
 
 function toClient(row: LocalClientRow): LocalClient {
   const lastSeenAt = toIso(row.last_seen_at);
+  const archivedAt = toIso(row.archived_at);
   return {
     id: row.id,
     userId: row.user_id,
@@ -312,6 +316,7 @@ function toClient(row: LocalClientRow): LocalClient {
     syncRootLabel: row.sync_root_label,
     enabled: row.is_enabled,
     default: row.is_default,
+    ...(archivedAt ? { archivedAt } : {}),
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
     heartbeat: lastSeenAt
@@ -526,7 +531,7 @@ async function readClientById(userId: string, id: string): Promise<LocalClient |
     `
       SELECT
         c.id, c.user_id, c.device_id, c.client_name, c.platform, c.capabilities_json,
-        c.sync_root_id, c.sync_root_label, c.is_enabled, c.is_default, c.created_at, c.updated_at,
+        c.sync_root_id, c.sync_root_label, c.is_enabled, c.is_default, c.archived_at, c.created_at, c.updated_at,
         h.daemon_version, h.sync_root_state_json, h.last_seen_at
       FROM local_clients c
       LEFT JOIN local_client_heartbeats h ON h.local_client_id = c.id
@@ -545,7 +550,7 @@ async function readClientByLocalClientId(id: string): Promise<LocalClient | unde
     `
       SELECT
         c.id, c.user_id, c.device_id, c.client_name, c.platform, c.capabilities_json,
-        c.sync_root_id, c.sync_root_label, c.is_enabled, c.is_default, c.created_at, c.updated_at,
+        c.sync_root_id, c.sync_root_label, c.is_enabled, c.is_default, c.archived_at, c.created_at, c.updated_at,
         h.daemon_version, h.sync_root_state_json, h.last_seen_at
       FROM local_clients c
       LEFT JOIN local_client_heartbeats h ON h.local_client_id = c.id
@@ -606,7 +611,12 @@ export async function registerLocalClient(
           capabilities_json = EXCLUDED.capabilities_json,
           sync_root_label = EXCLUDED.sync_root_label,
           is_enabled = TRUE,
-          is_default = CASE WHEN EXCLUDED.is_default THEN TRUE ELSE local_clients.is_default END,
+          is_default = CASE
+            WHEN EXCLUDED.is_default THEN TRUE
+            WHEN local_clients.archived_at IS NOT NULL THEN FALSE
+            ELSE local_clients.is_default
+          END,
+          archived_at = NULL,
           updated_at = NOW()
         RETURNING id
       `,
@@ -677,21 +687,25 @@ export async function registerLocalClient(
   }
 }
 
-export async function listLocalClients(userId: string): Promise<LocalClient[]> {
+export async function listLocalClients(
+  userId: string,
+  options: { includeArchived?: boolean } = {}
+): Promise<LocalClient[]> {
   await ensureCoreSchema();
   const pool = getCorePool();
   const result = await pool.query<LocalClientRow>(
     `
       SELECT
         c.id, c.user_id, c.device_id, c.client_name, c.platform, c.capabilities_json,
-        c.sync_root_id, c.sync_root_label, c.is_enabled, c.is_default, c.created_at, c.updated_at,
+        c.sync_root_id, c.sync_root_label, c.is_enabled, c.is_default, c.archived_at, c.created_at, c.updated_at,
         h.daemon_version, h.sync_root_state_json, h.last_seen_at
       FROM local_clients c
       LEFT JOIN local_client_heartbeats h ON h.local_client_id = c.id
       WHERE c.user_id = $1
-      ORDER BY c.is_default DESC, h.last_seen_at DESC NULLS LAST, c.updated_at DESC
+        AND ($2::boolean OR c.archived_at IS NULL)
+      ORDER BY c.archived_at ASC NULLS FIRST, c.is_default DESC, h.last_seen_at DESC NULLS LAST, c.updated_at DESC
     `,
-    [userId]
+    [userId, options.includeArchived === true]
   );
   return result.rows.map(toClient);
 }
@@ -723,6 +737,87 @@ export async function revokeLocalClientTokens(userId: string, id: string): Promi
     });
   }
   return revoked;
+}
+
+export async function archiveLocalClient(userId: string, id: string): Promise<LocalClient | undefined> {
+  await ensureCoreSchema();
+  const pool = getCorePool();
+  const dbClient = await pool.connect();
+
+  try {
+    await dbClient.query("BEGIN");
+
+    const existingResult = await dbClient.query<{
+      id: string;
+      device_id: string;
+      sync_root_id: string;
+      is_enabled: boolean;
+      is_default: boolean;
+      archived_at: string | null;
+    }>(
+      `
+        SELECT id, device_id, sync_root_id, is_enabled, is_default, archived_at
+        FROM local_clients
+        WHERE user_id = $1 AND id = $2
+        FOR UPDATE
+      `,
+      [userId, id]
+    );
+    const existing = existingResult.rows[0];
+    if (!existing) {
+      await dbClient.query("ROLLBACK");
+      return undefined;
+    }
+
+    const revokedResult = await dbClient.query(
+      `
+        UPDATE local_client_tokens
+        SET revoked_at = NOW()
+        WHERE local_client_id = $1
+          AND revoked_at IS NULL
+      `,
+      [id]
+    );
+
+    await dbClient.query(
+      `
+        UPDATE local_clients
+        SET
+          is_enabled = FALSE,
+          is_default = FALSE,
+          archived_at = COALESCE(archived_at, NOW()),
+          updated_at = NOW()
+        WHERE user_id = $1 AND id = $2
+      `,
+      [userId, id]
+    );
+
+    await recordLocalClientAuditEvent(dbClient, {
+      userId,
+      localClientId: id,
+      eventType: "archived",
+      actorType: "user",
+      actorId: userId,
+      detail: {
+        clientId: id,
+        deviceId: existing.device_id,
+        syncRootId: existing.sync_root_id,
+        previouslyEnabled: existing.is_enabled,
+        previouslyDefault: existing.is_default,
+        alreadyArchived: existing.archived_at !== null,
+        revokedTokens: revokedResult.rowCount ?? 0
+      }
+    });
+
+    await dbClient.query("COMMIT");
+  } catch (error) {
+    await dbClient.query("ROLLBACK");
+    throw error;
+  } finally {
+    dbClient.release();
+  }
+
+  return readClientById(userId, id);
 }
 
 export async function deleteLocalClient(userId: string, id: string): Promise<boolean> {
@@ -862,7 +957,7 @@ export async function verifyLocalClientToken(localClientId: string, token: strin
     `
       SELECT
         c.id, c.user_id, c.device_id, c.client_name, c.platform, c.capabilities_json,
-        c.sync_root_id, c.sync_root_label, c.is_enabled, c.is_default, c.created_at, c.updated_at,
+        c.sync_root_id, c.sync_root_label, c.is_enabled, c.is_default, c.archived_at, c.created_at, c.updated_at,
         h.daemon_version, h.sync_root_state_json, h.last_seen_at
       FROM local_clients c
       JOIN local_client_tokens t ON t.local_client_id = c.id
@@ -870,12 +965,13 @@ export async function verifyLocalClientToken(localClientId: string, token: strin
       WHERE c.id = $1
         AND t.token_hash = $2
         AND t.revoked_at IS NULL
+        AND c.archived_at IS NULL
       LIMIT 1
     `,
     [localClientId, hashToken(token)]
   );
   const row = result.rows[0];
-  if (!row || !row.is_enabled) {
+  if (!row || !row.is_enabled || row.archived_at) {
     throw new LocalClientStoreError(401, "INVALID_LOCAL_CLIENT_TOKEN", "Invalid or disabled local client token.");
   }
   return toClient(row);
@@ -909,7 +1005,7 @@ export async function recordLocalClientHeartbeat(
 async function selectLocalClientForJob(userId: string, requestedClientId?: string): Promise<LocalClient> {
   if (requestedClientId) {
     const requested = await readClientById(userId, requestedClientId);
-    if (!requested || !requested.enabled) {
+    if (!requested || !requested.enabled || requested.archivedAt) {
       throw new LocalClientStoreError(404, "LOCAL_CLIENT_NOT_FOUND", "Local client not found or disabled.");
     }
     return requested;
@@ -1178,7 +1274,7 @@ export async function claimLocalJobsForClient(localClientId: string, limit: numb
   await ensureCoreSchema();
   await markExpiredLocalJobsForClient(localClientId);
   const client = await readClientByLocalClientId(localClientId);
-  if (!client || !client.enabled) {
+  if (!client || !client.enabled || client.archivedAt) {
     throw new LocalClientStoreError(401, "INVALID_LOCAL_CLIENT_TOKEN", "Invalid or disabled local client token.");
   }
   assertLocalClientCapability(client, "local_jobs.claim");
@@ -1246,7 +1342,7 @@ export async function completeLocalJobForClient(
 ): Promise<LocalJob | undefined> {
   await ensureCoreSchema();
   const client = await readClientByLocalClientId(localClientId);
-  if (!client || !client.enabled) {
+  if (!client || !client.enabled || client.archivedAt) {
     throw new LocalClientStoreError(401, "INVALID_LOCAL_CLIENT_TOKEN", "Invalid or disabled local client token.");
   }
   assertLocalClientCapability(client, "local_jobs.claim");
@@ -1307,7 +1403,7 @@ export async function failLocalJobForClient(
 ): Promise<LocalJob | undefined> {
   await ensureCoreSchema();
   const client = await readClientByLocalClientId(localClientId);
-  if (!client || !client.enabled) {
+  if (!client || !client.enabled || client.archivedAt) {
     throw new LocalClientStoreError(401, "INVALID_LOCAL_CLIENT_TOKEN", "Invalid or disabled local client token.");
   }
   assertLocalClientCapability(client, "local_jobs.claim");

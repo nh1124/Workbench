@@ -22,7 +22,9 @@ import { registerProjectsTools } from "./mcp/registerProjectsTools.js";
 import { registerTasksTools } from "./mcp/registerTasksTools.js";
 import { ensureIntegrationLinked } from "./integrationLinking.js";
 import { artifactsClient, imagesClient, InternalServiceError, notesClient, projectsClient, serviceBaseUrls, tasksClient } from "./internalClients.js";
+import { getOAuthDynamicClient, saveOAuthDynamicClient } from "./oauthDynamicClientsStore.js";
 import {
+  archiveLocalClient,
   assertLocalClientCapability,
   claimLocalJobsForClient,
   completeLocalJobForClient,
@@ -129,19 +131,6 @@ type ClientMetadataCacheRecord = {
 
 const clientMetadataCache = new Map<string, ClientMetadataCacheRecord>();
 const DYNAMIC_CLIENT_REGISTRATION_PATH = "/oauth/register";
-
-type RegisteredOAuthClient = {
-  clientId: string;
-  clientName: string;
-  redirectUris: string[];
-  tokenEndpointAuthMethod: "none";
-  grantTypes: OAuthGrantType[];
-  responseTypes: "code"[];
-  source: "dynamic_client_registration";
-  createdAtMs: number;
-};
-
-const dynamicallyRegisteredClients = new Map<string, RegisteredOAuthClient>();
 
 type CanonicalBaseConfig = {
   issuer: string;
@@ -663,8 +652,8 @@ function parseDynamicClientRegistrationPayload(raw: unknown): ParseDynamicClient
   };
 }
 
-function resolveClientFromDynamicRegistration(clientId: string): ResolvedOAuthClient | undefined {
-  const registered = dynamicallyRegisteredClients.get(clientId);
+async function resolveClientFromDynamicRegistration(clientId: string): Promise<ResolvedOAuthClient | undefined> {
+  const registered = await getOAuthDynamicClient(clientId);
   if (!registered) {
     return undefined;
   }
@@ -675,7 +664,7 @@ function resolveClientFromDynamicRegistration(clientId: string): ResolvedOAuthCl
     tokenEndpointAuthMethod: registered.tokenEndpointAuthMethod,
     grantTypes: registered.grantTypes,
     responseTypes: registered.responseTypes,
-    source: registered.source
+    source: "dynamic_client_registration"
   };
 }
 
@@ -693,7 +682,7 @@ async function resolveOAuthClient(clientId: string, redirectUri: string): Promis
       };
     }
   } else {
-    const dynamicallyRegisteredClient = resolveClientFromDynamicRegistration(clientId);
+    const dynamicallyRegisteredClient = await resolveClientFromDynamicRegistration(clientId);
     if (!dynamicallyRegisteredClient) {
       console.warn("[oauth] client resolution failed for non-URL client_id", {
         client_id: clientId,
@@ -2372,7 +2361,7 @@ app.get("/.well-known/oauth-authorization-server", (req, res) => {
   });
 });
 
-app.post(DYNAMIC_CLIENT_REGISTRATION_PATH, (req, res) => {
+app.post(DYNAMIC_CLIENT_REGISTRATION_PATH, async (req, res) => {
   const payload = req.body as DynamicClientRegistrationPayload | undefined;
   const redirectUrisCount = Array.isArray(payload?.redirect_uris)
     ? payload.redirect_uris.filter((value): value is string => typeof value === "string").length
@@ -2400,33 +2389,34 @@ app.post(DYNAMIC_CLIENT_REGISTRATION_PATH, (req, res) => {
     });
   }
 
-  const clientId = `workbench_dcr_${randomBytes(16).toString("hex")}`;
-  const registeredClient: RegisteredOAuthClient = {
-    clientId,
-    clientName: parsed.clientName,
-    redirectUris: parsed.redirectUris,
-    tokenEndpointAuthMethod: parsed.tokenEndpointAuthMethod,
-    grantTypes: parsed.grantTypes,
-    responseTypes: parsed.responseTypes,
-    source: "dynamic_client_registration",
-    createdAtMs: Date.now()
-  };
-  dynamicallyRegisteredClients.set(clientId, registeredClient);
-  console.info("[oauth] dynamic client registration succeeded", {
-    client_id: registeredClient.clientId,
-    client_name: registeredClient.clientName,
-    redirect_uris_count: registeredClient.redirectUris.length
-  });
+  try {
+    const clientId = `workbench_dcr_${randomBytes(16).toString("hex")}`;
+    const registeredClient = await saveOAuthDynamicClient({
+      clientId,
+      clientName: parsed.clientName,
+      redirectUris: parsed.redirectUris,
+      tokenEndpointAuthMethod: parsed.tokenEndpointAuthMethod,
+      grantTypes: parsed.grantTypes,
+      responseTypes: parsed.responseTypes
+    });
+    console.info("[oauth] dynamic client registration succeeded", {
+      client_id: registeredClient.clientId,
+      client_name: registeredClient.clientName,
+      redirect_uris_count: registeredClient.redirectUris.length
+    });
 
-  return res.status(201).json({
-    client_id: clientId,
-    client_id_issued_at: Math.floor(registeredClient.createdAtMs / 1000),
-    client_name: registeredClient.clientName,
-    redirect_uris: registeredClient.redirectUris,
-    token_endpoint_auth_method: parsed.tokenEndpointAuthMethod,
-    grant_types: parsed.grantTypes,
-    response_types: parsed.responseTypes
-  });
+    return res.status(201).json({
+      client_id: registeredClient.clientId,
+      client_id_issued_at: Math.floor(registeredClient.createdAtMs / 1000),
+      client_name: registeredClient.clientName,
+      redirect_uris: registeredClient.redirectUris,
+      token_endpoint_auth_method: registeredClient.tokenEndpointAuthMethod,
+      grant_types: registeredClient.grantTypes,
+      response_types: registeredClient.responseTypes
+    });
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
 });
 
 app.get("/authorize", async (req, res) => {
@@ -3283,9 +3273,10 @@ app.post("/api/local-clients/register", async (req, res) => {
 app.get("/api/local-clients", async (req, res) => {
   const authContext = await requireAuthenticatedContext(req, res);
   if (!authContext) return;
+  const includeArchived = queryFlagEnabled(req.query.includeArchived);
 
   try {
-    const clients = await listLocalClients(authContext.userId);
+    const clients = await listLocalClients(authContext.userId, { includeArchived });
     return res.json({ items: clients });
   } catch (error) {
     return respondInternalError(res, error);
@@ -3341,6 +3332,21 @@ app.post("/api/local-clients/:id/revoke", async (req, res) => {
     }
     const client = await updateLocalClient(authContext.userId, String(req.params.id), { enabled: false });
     return res.json({ revoked: true, client });
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/local-clients/:id/archive", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  try {
+    const client = await archiveLocalClient(authContext.userId, String(req.params.id));
+    if (!client) {
+      return res.status(404).json({ message: "Local client not found" });
+    }
+    return res.json(client);
   } catch (error) {
     return respondInternalError(res, error);
   }
@@ -3589,6 +3595,7 @@ app.get("/api/local-jobs/:jobId/download", async (req, res) => {
     if (contentType) res.setHeader("Content-Type", contentType);
     if (disposition) res.setHeader("Content-Disposition", disposition);
     if (length) res.setHeader("Content-Length", length);
+    if (upstream.ok) res.setHeader("X-Workbench-Content-Checksum", sha256Checksum(buffer));
     return res.status(upstream.status).send(buffer);
   } catch (error) {
     return respondInternalError(res, error);
