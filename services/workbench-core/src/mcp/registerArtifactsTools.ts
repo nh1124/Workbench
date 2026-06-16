@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { artifactsClient } from "../internalClients.js";
-import { createLocalJob, getLocalJob } from "../localClientsStore.js";
+import { createLocalJob, getLocalJob, serializeLocalJobForOwner } from "../localClientsStore.js";
 import { asMcpText, runWithAuth, runWithAuthContext } from "./helpers.js";
 
 type ToolContext = {
@@ -455,17 +455,20 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
     "artifacts.download.to_client.status",
     {
       title: "Get Local Client Artifact Download Job Status",
-      description: "Read completion status and local path result for an artifact download local-client job.",
+      description:
+        "Read completion status for an artifact download local-client job. " +
+        "The local path is redacted unless includeLocalPath is true.",
       inputSchema: {
-        jobId: z.string().min(1)
+        jobId: z.string().min(1),
+        includeLocalPath: z.boolean().optional()
       }
     },
-    async ({ jobId }) => {
+    async ({ jobId, includeLocalPath }) => {
       const job = await runWithAuthContext(ctx.accessToken, ({ userId }) => getLocalJob(userId, jobId));
       if (!job) {
         throw new Error("Local job not found");
       }
-      return asMcpText(job);
+      return asMcpText(serializeLocalJobForOwner(job, { includeLocalPaths: includeLocalPath === true }));
     }
   );
 }

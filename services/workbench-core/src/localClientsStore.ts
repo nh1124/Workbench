@@ -84,6 +84,10 @@ export interface LocalJob {
   updatedAt: string;
 }
 
+export type LocalJobDisclosureOptions = {
+  includeLocalPaths?: boolean;
+};
+
 export interface LocalJobEvent {
   id: string;
   jobId: string;
@@ -342,6 +346,32 @@ function toJob(row: LocalJobRow): LocalJob {
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString()
   };
+}
+
+export function serializeLocalJobForOwner(job: LocalJob, options: LocalJobDisclosureOptions = {}): LocalJob {
+  if (options.includeLocalPaths) {
+    return job;
+  }
+
+  const localPath = job.result.localPath;
+  if (typeof localPath !== "string") {
+    return job;
+  }
+
+  const result = { ...job.result };
+  delete result.localPath;
+  return {
+    ...job,
+    result: {
+      ...result,
+      localPathAvailable: true,
+      localPathRedacted: true
+    }
+  };
+}
+
+export function serializeLocalJobsForOwner(jobs: LocalJob[], options: LocalJobDisclosureOptions = {}): LocalJob[] {
+  return jobs.map((job) => serializeLocalJobForOwner(job, options));
 }
 
 function toJobEvent(row: LocalJobEventRow): LocalJobEvent {

@@ -1272,16 +1272,28 @@ export const coreApi = {
     fetchJson(`${coreBaseUrl()}/api/local-clients/${encodeURIComponent(id)}`, {
       method: "DELETE"
     }),
-  listLocalJobs: (options: { localClientId?: string; status?: LocalJobRecord["status"]; limit?: number } = {}): Promise<{ items: LocalJobRecord[] }> => {
+  listLocalJobs: (
+    options: {
+      localClientId?: string;
+      status?: LocalJobRecord["status"];
+      limit?: number;
+      includeLocalPaths?: boolean;
+    } = {}
+  ): Promise<{ items: LocalJobRecord[] }> => {
     const params = new URLSearchParams();
     if (options.localClientId) params.set("localClientId", options.localClientId);
     if (options.status) params.set("status", options.status);
     if (options.limit) params.set("limit", String(options.limit));
+    if (options.includeLocalPaths) params.set("includeLocalPaths", "true");
     const query = params.toString();
     return fetchJson(`${coreBaseUrl()}/api/local-jobs${query ? `?${query}` : ""}`);
   },
-  getLocalJob: (id: string): Promise<LocalJobRecord> =>
-    fetchJson(`${coreBaseUrl()}/api/local-jobs/${encodeURIComponent(id)}`)
+  getLocalJob: (id: string, options: { includeLocalPaths?: boolean } = {}): Promise<LocalJobRecord> => {
+    const params = new URLSearchParams();
+    if (options.includeLocalPaths) params.set("includeLocalPaths", "true");
+    const query = params.toString();
+    return fetchJson(`${coreBaseUrl()}/api/local-jobs/${encodeURIComponent(id)}${query ? `?${query}` : ""}`);
+  }
 };
 
 export const localDaemonApi = {

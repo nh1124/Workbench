@@ -344,6 +344,14 @@ export interface LocalClientAuditEventRecord {
   createdAt: string;
 }
 
+export interface LocalJobResultRecord extends Record<string, unknown> {
+  localPath?: string;
+  localPathAvailable?: boolean;
+  localPathRedacted?: boolean;
+  checksum?: string;
+  sizeBytes?: number;
+}
+
 export interface LocalJobRecord {
   id: string;
   userId: string;
@@ -359,7 +367,7 @@ export interface LocalJobRecord {
   failedAt?: string;
   nextAttemptAt?: string;
   expiresAt?: string;
-  result: Record<string, unknown>;
+  result: LocalJobResultRecord;
   errorMessage?: string;
   createdAt: string;
   updatedAt: string;

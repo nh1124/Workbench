@@ -40,6 +40,8 @@ import {
   recordLocalClientHeartbeat,
   registerLocalClient,
   revokeLocalClientTokens,
+  serializeLocalJobForOwner,
+  serializeLocalJobsForOwner,
   updateLocalClient,
   verifyLocalClientToken,
   type LocalClient,
@@ -1218,6 +1220,16 @@ function asNonEmptyString(value: unknown): string | undefined {
 
 function asBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
+}
+
+function queryFlagEnabled(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some(queryFlagEnabled);
+  }
+  if (typeof value !== "string") {
+    return false;
+  }
+  return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
 }
 
 function optionalNonNegativeInteger(value: unknown, fieldName: string): number | undefined {
@@ -3380,6 +3392,7 @@ app.get("/api/local-jobs", async (req, res) => {
   }
   const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
   const localClientId = typeof req.query.localClientId === "string" ? req.query.localClientId : undefined;
+  const includeLocalPaths = queryFlagEnabled(req.query.includeLocalPaths);
 
   try {
     const jobs = await listLocalJobsForUser(authContext.userId, {
@@ -3387,7 +3400,7 @@ app.get("/api/local-jobs", async (req, res) => {
       status: parsedStatus?.success ? (parsedStatus.data as LocalJobStatus) : undefined,
       limit: Number.isFinite(limit) ? limit : undefined
     });
-    return res.json({ items: jobs });
+    return res.json({ items: serializeLocalJobsForOwner(jobs, { includeLocalPaths }) });
   } catch (error) {
     return respondInternalError(res, error);
   }
@@ -3443,12 +3456,14 @@ app.get("/api/local-jobs/:jobId", async (req, res) => {
   const authContext = await requireAuthenticatedContext(req, res);
   if (!authContext) return;
 
+  const includeLocalPaths = queryFlagEnabled(req.query.includeLocalPaths);
+
   try {
     const job = await getLocalJob(authContext.userId, String(req.params.jobId));
     if (!job) {
       return res.status(404).json({ message: "Local job not found" });
     }
-    return res.json(job);
+    return res.json(serializeLocalJobForOwner(job, { includeLocalPaths }));
   } catch (error) {
     return respondInternalError(res, error);
   }

@@ -220,6 +220,9 @@ npm run build
 - `[pending]` Add task attachment MCP convenience tool, for example `tasks.attachment.download.to_client`.
 - `[implemented]` Local job list/filter API exists for recent UI history.
 - `[implemented]` UI job history and result path display exists.
+- `[implemented]` Owner-facing local job APIs and MCP status redact `result.localPath` by default.
+  - `includeLocalPaths=true` on HTTP APIs or `includeLocalPath: true` on MCP status explicitly returns the path for authorized owner calls.
+  - Daemon-authenticated completion responses keep the full path for the reporting local client.
 
 ### Sync Daemon Persistence
 

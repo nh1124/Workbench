@@ -258,7 +258,7 @@ export function SettingsPage() {
         coreApi.me(),
         coreApi.listIntegrationConfigs(),
         coreApi.listLocalClients(),
-        coreApi.listLocalJobs({ limit: 25 }),
+        coreApi.listLocalJobs({ limit: 25, includeLocalPaths: true }),
         coreApi.listLocalClientAuditEvents({ limit: 25 })
       ]);
       setIntegrationConfigs((current) =>
@@ -361,7 +361,7 @@ export function SettingsPage() {
     try {
       const [clientsResult, jobsResult, auditResult] = await Promise.all([
         coreApi.listLocalClients(),
-        coreApi.listLocalJobs({ limit: 25 }),
+        coreApi.listLocalJobs({ limit: 25, includeLocalPaths: true }),
         coreApi.listLocalClientAuditEvents({ limit: 25 })
       ]);
       setLocalClients(clientsResult.items);

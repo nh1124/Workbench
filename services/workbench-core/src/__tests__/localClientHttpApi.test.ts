@@ -309,6 +309,56 @@ describe("local client HTTP APIs", () => {
       );
       assert.equal(completeResponse.status, 200);
       assert.equal(completeResponse.body.status, "completed");
+      const daemonCompleteResult = completeResponse.body.result as Record<string, unknown>;
+      assert.equal(daemonCompleteResult.localPath, "C:/Downloads/report.md");
+
+      const redactedDetailResponse = await requestJson(
+        server.baseUrl,
+        "GET",
+        `/api/local-jobs/${encodeURIComponent(jobId)}`,
+        { headers: bearerHeaders(accessToken) }
+      );
+      assert.equal(redactedDetailResponse.status, 200);
+      const redactedDetailResult = redactedDetailResponse.body.result as Record<string, unknown>;
+      assert.equal(redactedDetailResult.localPath, undefined);
+      assert.equal(redactedDetailResult.localPathAvailable, true);
+      assert.equal(redactedDetailResult.localPathRedacted, true);
+      assert.equal(redactedDetailResult.checksum, "sha256:abc");
+
+      const fullDetailResponse = await requestJson(
+        server.baseUrl,
+        "GET",
+        `/api/local-jobs/${encodeURIComponent(jobId)}?includeLocalPaths=true`,
+        { headers: bearerHeaders(accessToken) }
+      );
+      assert.equal(fullDetailResponse.status, 200);
+      const fullDetailResult = fullDetailResponse.body.result as Record<string, unknown>;
+      assert.equal(fullDetailResult.localPath, "C:/Downloads/report.md");
+
+      const redactedListResponse = await requestJson(
+        server.baseUrl,
+        "GET",
+        `/api/local-jobs?status=completed&localClientId=${encodeURIComponent(localClientId)}`,
+        { headers: bearerHeaders(accessToken) }
+      );
+      assert.equal(redactedListResponse.status, 200);
+      const redactedListJobs = redactedListResponse.body.items as Array<Record<string, unknown>>;
+      assert.equal(redactedListJobs.length, 1);
+      const redactedListResult = redactedListJobs[0].result as Record<string, unknown>;
+      assert.equal(redactedListResult.localPath, undefined);
+      assert.equal(redactedListResult.localPathAvailable, true);
+
+      const fullListResponse = await requestJson(
+        server.baseUrl,
+        "GET",
+        `/api/local-jobs?status=completed&localClientId=${encodeURIComponent(localClientId)}&includeLocalPaths=true`,
+        { headers: bearerHeaders(accessToken) }
+      );
+      assert.equal(fullListResponse.status, 200);
+      const fullListJobs = fullListResponse.body.items as Array<Record<string, unknown>>;
+      assert.equal(fullListJobs.length, 1);
+      const fullListResult = fullListJobs[0].result as Record<string, unknown>;
+      assert.equal(fullListResult.localPath, "C:/Downloads/report.md");
 
       const eventsResponse = await requestJson(
         server.baseUrl,
