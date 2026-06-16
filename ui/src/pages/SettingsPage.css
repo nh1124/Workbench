@@ -767,6 +767,73 @@
   font-size: 0.72rem;
 }
 
+.account-local-folder-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.62rem;
+}
+
+.account-local-folder-card {
+  border: 1px solid rgba(51, 65, 85, 0.68);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.58);
+  padding: 0.72rem;
+  display: grid;
+  gap: 0.52rem;
+  min-width: 0;
+}
+
+.account-local-folder-card strong {
+  display: block;
+  color: #e5eefb;
+  font-size: 0.88rem;
+}
+
+.account-local-folder-card small {
+  display: block;
+  margin-top: 0.12rem;
+  color: #94a3b8;
+  font-size: 0.72rem;
+}
+
+.account-local-folder-card code {
+  border: 1px solid rgba(51, 65, 85, 0.72);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.42);
+  color: #dbeafe;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  padding: 0.46rem 0.52rem;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.account-local-folder-next {
+  color: #67e8f9;
+  overflow-wrap: anywhere;
+}
+
+.account-local-folder-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.34rem;
+}
+
+.account-local-folder-meta span {
+  border: 1px solid rgba(51, 65, 85, 0.82);
+  border-radius: 999px;
+  color: #cbd5e1;
+  font-size: 0.64rem;
+  font-weight: 800;
+  padding: 0.12rem 0.42rem;
+}
+
+.account-local-folder-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.42rem;
+}
+
 .account-local-daemon-url,
 .account-local-daemon-token {
   display: flex;
@@ -788,6 +855,7 @@
 
 .account-local-daemon-url button,
 .account-local-daemon-token button,
+.account-local-folder-actions button,
 .account-local-native-actions button,
 .account-local-conflict-actions button {
   min-height: 2.1rem;
@@ -932,6 +1000,10 @@
   .account-local-daemon-token {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .account-local-folder-grid {
+    grid-template-columns: 1fr;
   }
 
   .account-local-native-actions {

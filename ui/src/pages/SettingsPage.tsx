@@ -32,6 +32,7 @@ import type {
   LocalClientAuditEventRecord,
   LocalClientRecord,
   LocalDaemonConflictRecord,
+  LocalDaemonPreferences,
   LocalDaemonStatus,
   LocalJobRecord,
   StoredIntegrationConfig,
@@ -183,6 +184,7 @@ export function SettingsPage() {
   const [localDaemonLoading, setLocalDaemonLoading] = useState(false);
   const [localDaemonResolving, setLocalDaemonResolving] = useState<Record<string, boolean>>({});
   const [localDaemonAutoStart, setLocalDaemonAutoStart] = useState(false);
+  const [localDaemonPreferences, setLocalDaemonPreferences] = useState<LocalDaemonPreferences | undefined>(undefined);
 
   useEffect(() => {
     setSettings(loadUiSettings());
@@ -232,6 +234,7 @@ export function SettingsPage() {
       .then((preferences) => {
         if (!cancelled) {
           setLocalDaemonAutoStart(preferences.autoStart);
+          setLocalDaemonPreferences(preferences);
         }
       })
       .catch((error) => {
@@ -449,6 +452,7 @@ export function SettingsPage() {
     try {
       const preferences = await nativeDaemonApi.setAutoStart(enabled);
       setLocalDaemonAutoStart(preferences.autoStart);
+      setLocalDaemonPreferences(preferences);
       setLocalDaemonMessage(preferences.autoStart ? "Daemon auto-start enabled." : "Daemon auto-start disabled.");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to update daemon auto-start";
@@ -456,13 +460,74 @@ export function SettingsPage() {
     }
   };
 
+  const refreshNativeDaemonPreferences = async () => {
+    if (!nativeRuntimeAvailable) {
+      return undefined;
+    }
+    const preferences = await nativeDaemonApi.readPreferences();
+    setLocalDaemonAutoStart(preferences.autoStart);
+    setLocalDaemonPreferences(preferences);
+    return preferences;
+  };
+
   const chooseNativeSyncFolder = async () => {
     setLocalDaemonMessage("");
     try {
       const path = await nativeDaemonApi.chooseSyncFolder();
-      setLocalDaemonMessage(path ? `Selected sync folder: ${path}` : "Sync folder selection cancelled.");
+      if (path) {
+        await refreshNativeDaemonPreferences();
+      }
+      setLocalDaemonMessage(
+        path
+          ? `Sync folder saved: ${path}. Restart the daemon if it is already running.`
+          : "Sync folder selection cancelled."
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to choose sync folder";
+      setLocalDaemonMessage(message);
+    }
+  };
+
+  const chooseNativeDownloadsFolder = async () => {
+    setLocalDaemonMessage("");
+    try {
+      const path = await nativeDaemonApi.chooseDownloadsFolder();
+      if (path) {
+        await refreshNativeDaemonPreferences();
+      }
+      setLocalDaemonMessage(
+        path
+          ? `Downloads folder saved: ${path}. Restart the daemon if it is already running.`
+          : "Downloads folder selection cancelled."
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to choose downloads folder";
+      setLocalDaemonMessage(message);
+    }
+  };
+
+  const resetNativeSyncFolder = async () => {
+    setLocalDaemonMessage("");
+    try {
+      const preferences = await nativeDaemonApi.resetSyncFolder();
+      setLocalDaemonPreferences(preferences);
+      setLocalDaemonAutoStart(preferences.autoStart);
+      setLocalDaemonMessage("Sync folder reset to the per-user default. Restart the daemon if it is already running.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to reset sync folder";
+      setLocalDaemonMessage(message);
+    }
+  };
+
+  const resetNativeDownloadsFolder = async () => {
+    setLocalDaemonMessage("");
+    try {
+      const preferences = await nativeDaemonApi.resetDownloadsFolder();
+      setLocalDaemonPreferences(preferences);
+      setLocalDaemonAutoStart(preferences.autoStart);
+      setLocalDaemonMessage("Downloads folder reset to the per-user default. Restart the daemon if it is already running.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to reset downloads folder";
       setLocalDaemonMessage(message);
     }
   };
@@ -791,6 +856,14 @@ export function SettingsPage() {
       setIsDetectingLocation(false);
     }
   };
+
+  const savedSyncRoot = localDaemonPreferences?.syncRoot || "";
+  const savedDownloadsDir = localDaemonPreferences?.downloadsDir || "";
+  const effectiveSyncRoot =
+    localDaemonStatus?.syncRoot || localDaemonPreferences?.effectiveSyncRoot || savedSyncRoot || "WorkbenchSync";
+  const effectiveDownloadsDir =
+    localDaemonStatus?.downloadsDir || localDaemonPreferences?.effectiveDownloadsDir || savedDownloadsDir || "Downloads";
+  const folderPathSource = localDaemonStatus ? "Current daemon" : "Next daemon start";
 
   return (
     <section className="settings-shell">
@@ -1303,6 +1376,76 @@ export function SettingsPage() {
                 </label>
               </div>
 
+              <div className="account-local-folder-grid">
+                <article className="account-local-folder-card">
+                  <div>
+                    <strong>Sync Folder</strong>
+                    <small>{savedSyncRoot ? "Custom folder" : "Per-user default"}</small>
+                  </div>
+                  <code>{effectiveSyncRoot}</code>
+                  {localDaemonStatus && savedSyncRoot && localDaemonStatus.syncRoot !== savedSyncRoot ? (
+                    <small className="account-local-folder-next">Next start: {savedSyncRoot}</small>
+                  ) : null}
+                  <div className="account-local-folder-meta">
+                    <span>{folderPathSource}</span>
+                    {localDaemonStatus && savedSyncRoot && localDaemonStatus.syncRoot !== savedSyncRoot ? (
+                      <span>Restart pending</span>
+                    ) : null}
+                  </div>
+                  <div className="account-local-folder-actions">
+                    <button type="button" onClick={() => void chooseNativeSyncFolder()} disabled={!nativeRuntimeAvailable}>
+                      Choose
+                    </button>
+                    <button type="button" onClick={() => void openNativeSyncFolder()} disabled={!nativeRuntimeAvailable}>
+                      Open
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void resetNativeSyncFolder()}
+                      disabled={!nativeRuntimeAvailable || !savedSyncRoot}
+                    >
+                      Use Default
+                    </button>
+                  </div>
+                </article>
+
+                <article className="account-local-folder-card">
+                  <div>
+                    <strong>Downloads Folder</strong>
+                    <small>{savedDownloadsDir ? "Custom folder" : "Per-user default"}</small>
+                  </div>
+                  <code>{effectiveDownloadsDir}</code>
+                  {localDaemonStatus && savedDownloadsDir && localDaemonStatus.downloadsDir !== savedDownloadsDir ? (
+                    <small className="account-local-folder-next">Next start: {savedDownloadsDir}</small>
+                  ) : null}
+                  <div className="account-local-folder-meta">
+                    <span>{folderPathSource}</span>
+                    {localDaemonStatus && savedDownloadsDir && localDaemonStatus.downloadsDir !== savedDownloadsDir ? (
+                      <span>Restart pending</span>
+                    ) : null}
+                  </div>
+                  <div className="account-local-folder-actions">
+                    <button
+                      type="button"
+                      onClick={() => void chooseNativeDownloadsFolder()}
+                      disabled={!nativeRuntimeAvailable}
+                    >
+                      Choose
+                    </button>
+                    <button type="button" onClick={() => void openNativeDownloadsFolder()} disabled={!nativeRuntimeAvailable}>
+                      Open
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void resetNativeDownloadsFolder()}
+                      disabled={!nativeRuntimeAvailable || !savedDownloadsDir}
+                    >
+                      Use Default
+                    </button>
+                  </div>
+                </article>
+              </div>
+
               <div className="account-local-daemon-url">
                 <input
                   value={localDaemonUrlInput}
@@ -1325,15 +1468,6 @@ export function SettingsPage() {
               </div>
 
               <div className="account-local-native-actions">
-                <button type="button" onClick={() => void chooseNativeSyncFolder()} disabled={!nativeRuntimeAvailable}>
-                  Choose Folder
-                </button>
-                <button type="button" onClick={() => void openNativeSyncFolder()} disabled={!nativeRuntimeAvailable}>
-                  Open Sync
-                </button>
-                <button type="button" onClick={() => void openNativeDownloadsFolder()} disabled={!nativeRuntimeAvailable}>
-                  Open Downloads
-                </button>
                 <button
                   type="button"
                   onClick={() => void readNativeDaemonStatus()}

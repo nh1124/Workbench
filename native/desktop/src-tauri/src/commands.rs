@@ -429,7 +429,7 @@ fn resolve_daemon_command(app: Option<&tauri::AppHandle>) -> Result<DaemonComman
   })
 }
 
-fn configure_daemon_env(command: &mut Command) {
+fn configure_daemon_env(command: &mut Command, app: Option<&tauri::AppHandle>) -> Result<(), String> {
   if std::env::var_os("WORKBENCH_DAEMON_HTTP_PORT").is_none() {
     command.env(
       "WORKBENCH_DAEMON_HTTP_PORT",
@@ -437,7 +437,16 @@ fn configure_daemon_env(command: &mut Command) {
     );
   }
 
+  if let Some(app) = app {
+    let preferences = read_daemon_preferences_from_disk(app)?;
+    let sync_root = configured_sync_folder(app, &preferences)?;
+    let downloads_dir = configured_downloads_folder(app, &preferences)?;
+    command.env("WORKBENCH_SYNC_ROOT", path_to_string(sync_root));
+    command.env("WORKBENCH_DOWNLOADS_DIR", path_to_string(downloads_dir));
+  }
+
   configure_daemon_client_identity_env(command);
+  Ok(())
 }
 
 fn configure_daemon_client_identity_env(command: &mut Command) {
@@ -476,7 +485,7 @@ fn spawn_daemon(app: Option<&tauri::AppHandle>) -> Result<Child, String> {
     .args(&daemon_command.args)
     .current_dir(&daemon_command.cwd)
     .stdin(Stdio::null());
-  configure_daemon_env(&mut command);
+  configure_daemon_env(&mut command, app)?;
 
   command.spawn().map_err(|error| {
     format!(
@@ -495,14 +504,64 @@ fn daemon_preferences_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     .map_err(|error| format!("failed to resolve app config directory: {error}"))
 }
 
+fn normalized_optional_path_string(value: &serde_json::Value, key: &str) -> Option<String> {
+  value
+    .get(key)
+    .and_then(serde_json::Value::as_str)
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .map(|value| path_to_string(PathBuf::from(value)))
+}
+
 fn normalize_daemon_preferences(value: serde_json::Value) -> serde_json::Value {
   let auto_start = value
     .get("autoStart")
     .and_then(serde_json::Value::as_bool)
     .unwrap_or(false);
   serde_json::json!({
-    "autoStart": auto_start
+    "autoStart": auto_start,
+    "syncRoot": normalized_optional_path_string(&value, "syncRoot"),
+    "downloadsDir": normalized_optional_path_string(&value, "downloadsDir")
   })
+}
+
+fn configured_preference_path(preferences: &serde_json::Value, key: &str) -> Option<PathBuf> {
+  preferences
+    .get(key)
+    .and_then(serde_json::Value::as_str)
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .map(PathBuf::from)
+}
+
+fn configured_sync_folder(app: &tauri::AppHandle, preferences: &serde_json::Value) -> Result<PathBuf, String> {
+  configured_preference_path(preferences, "syncRoot")
+    .map(Ok)
+    .unwrap_or_else(|| default_sync_folder(app))
+}
+
+fn configured_downloads_folder(app: &tauri::AppHandle, preferences: &serde_json::Value) -> Result<PathBuf, String> {
+  configured_preference_path(preferences, "downloadsDir")
+    .map(Ok)
+    .unwrap_or_else(|| default_downloads_folder(app))
+}
+
+fn daemon_preferences_response(
+  app: &tauri::AppHandle,
+  preferences: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+  let effective_sync_root = configured_sync_folder(app, &preferences)?;
+  let effective_downloads_dir = configured_downloads_folder(app, &preferences)?;
+  let mut response = preferences.as_object().cloned().unwrap_or_default();
+  response.insert(
+    "effectiveSyncRoot".to_string(),
+    serde_json::Value::String(path_to_string(effective_sync_root)),
+  );
+  response.insert(
+    "effectiveDownloadsDir".to_string(),
+    serde_json::Value::String(path_to_string(effective_downloads_dir)),
+  );
+  Ok(serde_json::Value::Object(response))
 }
 
 fn read_daemon_preferences_from_disk(app: &tauri::AppHandle) -> Result<serde_json::Value, String> {
@@ -532,6 +591,28 @@ fn write_daemon_preferences_to_disk(
     .map_err(|error| format!("failed to serialize daemon preferences: {error}"))?;
   fs::write(&path, format!("{serialized}\n"))
     .map_err(|error| format!("failed to write daemon preferences {}: {error}", path.display()))
+}
+
+fn set_daemon_preference_path(
+  app: &tauri::AppHandle,
+  key: &str,
+  path: Option<PathBuf>,
+) -> Result<serde_json::Value, String> {
+  let mut preferences = read_daemon_preferences_from_disk(app)?;
+  let object = preferences
+    .as_object_mut()
+    .ok_or_else(|| "daemon preferences were not an object".to_string())?;
+  match path {
+    Some(path) => {
+      object.insert(key.to_string(), serde_json::Value::String(path_to_string(path)));
+    }
+    None => {
+      object.insert(key.to_string(), serde_json::Value::Null);
+    }
+  }
+  let preferences = normalize_daemon_preferences(preferences);
+  write_daemon_preferences_to_disk(app, &preferences)?;
+  daemon_preferences_response(app, preferences)
 }
 
 fn start_daemon_with_app(app: Option<&tauri::AppHandle>) -> Result<bool, String> {
@@ -667,23 +748,55 @@ pub async fn choose_sync_folder(app: tauri::AppHandle) -> Result<Option<String>,
   let path = app.dialog().file().blocking_pick_folder();
 
   match path {
-    Some(folder_path) => folder_path
-      .into_path()
-      .map(path_to_string)
-      .map(Some)
-      .map_err(|error| format!("invalid folder path: {error}")),
+    Some(folder_path) => {
+      let path = folder_path
+        .into_path()
+        .map_err(|error| format!("invalid folder path: {error}"))?;
+      let selected = path_to_string(path.clone());
+      set_daemon_preference_path(&app, "syncRoot", Some(path))?;
+      Ok(Some(selected))
+    }
     None => Ok(None),
   }
 }
 
 #[tauri::command]
+pub async fn choose_downloads_folder(app: tauri::AppHandle) -> Result<Option<String>, String> {
+  let path = app.dialog().file().blocking_pick_folder();
+
+  match path {
+    Some(folder_path) => {
+      let path = folder_path
+        .into_path()
+        .map_err(|error| format!("invalid folder path: {error}"))?;
+      let selected = path_to_string(path.clone());
+      set_daemon_preference_path(&app, "downloadsDir", Some(path))?;
+      Ok(Some(selected))
+    }
+    None => Ok(None),
+  }
+}
+
+#[tauri::command]
+pub fn reset_sync_folder(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+  set_daemon_preference_path(&app, "syncRoot", None)
+}
+
+#[tauri::command]
+pub fn reset_downloads_folder(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+  set_daemon_preference_path(&app, "downloadsDir", None)
+}
+
+#[tauri::command]
 pub fn open_sync_folder(app: tauri::AppHandle) -> Result<bool, String> {
-  ensure_folder_and_open(default_sync_folder(&app)?)
+  let preferences = read_daemon_preferences_from_disk(&app)?;
+  ensure_folder_and_open(configured_sync_folder(&app, &preferences)?)
 }
 
 #[tauri::command]
 pub fn open_downloads_folder(app: tauri::AppHandle) -> Result<bool, String> {
-  ensure_folder_and_open(default_downloads_folder(&app)?)
+  let preferences = read_daemon_preferences_from_disk(&app)?;
+  ensure_folder_and_open(configured_downloads_folder(&app, &preferences)?)
 }
 
 #[tauri::command]
@@ -693,7 +806,8 @@ pub fn read_daemon_status(port: Option<u16>) -> Result<serde_json::Value, String
 
 #[tauri::command]
 pub fn read_daemon_preferences(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-  read_daemon_preferences_from_disk(&app)
+  let preferences = read_daemon_preferences_from_disk(&app)?;
+  daemon_preferences_response(&app, preferences)
 }
 
 #[tauri::command]
@@ -701,11 +815,14 @@ pub fn set_daemon_auto_start(
   app: tauri::AppHandle,
   auto_start: bool,
 ) -> Result<serde_json::Value, String> {
-  let preferences = normalize_daemon_preferences(serde_json::json!({
-    "autoStart": auto_start
-  }));
+  let mut preferences = read_daemon_preferences_from_disk(&app)?;
+  let object = preferences
+    .as_object_mut()
+    .ok_or_else(|| "daemon preferences were not an object".to_string())?;
+  object.insert("autoStart".to_string(), serde_json::Value::Bool(auto_start));
+  let preferences = normalize_daemon_preferences(preferences);
   write_daemon_preferences_to_disk(&app, &preferences)?;
-  Ok(preferences)
+  daemon_preferences_response(&app, preferences)
 }
 
 #[tauri::command]

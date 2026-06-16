@@ -369,6 +369,8 @@ npm run build
   - read daemon status.
 - `[implemented]` The UI can invoke the native daemon commands from Settings.
   - Folder open/status commands are functional in Tauri.
+  - Settings can persist per-user Sync Folder and Downloads Folder selections.
+  - Desktop-managed daemon startup injects the saved folders as `WORKBENCH_SYNC_ROOT` and `WORKBENCH_DOWNLOADS_DIR`.
   - Start/stop now manage a background daemon process.
   - `WORKBENCH_DAEMON_COMMAND` and `WORKBENCH_DAEMON_ARGS` can override the default command.
   - `WORKBENCH_DAEMON_SIDECAR_PATH` and `WORKBENCH_DAEMON_SIDECAR_ARGS` can point the desktop app at a production daemon executable.

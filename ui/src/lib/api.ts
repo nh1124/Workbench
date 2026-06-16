@@ -149,6 +149,11 @@ export { isTauriNativeRuntime };
 
 export const nativeDaemonApi = {
   chooseSyncFolder: (): Promise<string | null> => invokeNative<string | null>("choose_sync_folder"),
+  chooseDownloadsFolder: (): Promise<string | null> => invokeNative<string | null>("choose_downloads_folder"),
+  resetSyncFolder: (): Promise<LocalDaemonPreferences> =>
+    invokeNative<LocalDaemonPreferences>("reset_sync_folder"),
+  resetDownloadsFolder: (): Promise<LocalDaemonPreferences> =>
+    invokeNative<LocalDaemonPreferences>("reset_downloads_folder"),
   openSyncFolder: (): Promise<boolean> => invokeNative<boolean>("open_sync_folder"),
   openDownloadsFolder: (): Promise<boolean> => invokeNative<boolean>("open_downloads_folder"),
   readStatus: (port?: number): Promise<LocalDaemonStatus> =>
