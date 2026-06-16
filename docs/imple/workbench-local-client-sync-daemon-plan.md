@@ -65,6 +65,7 @@ Last updated: 2026-06-17
   - `PUT /api/sync/blobs/:blobId`
   - `POST /api/sync/push`
 - `[implemented]` Sync endpoints accept either normal bearer auth or daemon local-client credentials.
+- `[implemented]` `GET /api/sync/snapshot` accepts `cursor` and `limit`; Projects snapshot forwards cursor pagination to the Projects service.
 - `[partial]` Core facade writes best-effort sync events for representative Projects, Notes, Artifacts, and Tasks mutations.
 - `[implemented]` Delete sync events include tombstone metadata in pull responses and resource-version listings.
   - `deleted`
@@ -259,6 +260,7 @@ npm run build
 - `[implemented]` Remote snapshot/incremental pull reconciliation exists.
   - Bootstrap reads `/api/sync/snapshot?domains=projects,notes,artifacts,tasks`.
   - If all-domain snapshot is unavailable, daemon falls back to artifact-only bootstrap so file sync keeps running.
+  - Projects bootstrap follows `nextCursor` with `/api/sync/snapshot?domains=projects&cursor=...&limit=100`.
   - Incremental pull reads `/api/sync/pull` from the stored cursor.
   - Clean remote artifact changes are materialized locally before local scan/push.
   - Remote Projects, Notes, and Tasks are stored under `.workbench/manifest.sqlite` `remote_resources`.
@@ -405,7 +407,7 @@ npm run build
 
 1. Decide whether empty local folders should become first-class cloud folder resources immediately or remain local until they contain synced files.
 2. Decide and implement the policy for direct internal service mutations outside Core.
-3. Add paginated full snapshot refresh for Projects/Notes/Tasks so first-time daemon cache is not limited by Core snapshot page sizes.
+3. Add cursor-based full snapshot refresh for Notes/Tasks if those services gain cursor pagination.
 4. Design local outbox write facades for Projects/Notes/Tasks after the read cache has been exercised.
 
 ## Current Daemon Usage

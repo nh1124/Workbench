@@ -3614,20 +3614,23 @@ app.get("/api/sync/snapshot", async (req, res) => {
     ? req.query.domains.split(",").map((value) => value.trim()).filter(Boolean)
     : ["projects", "notes", "artifacts", "tasks"];
   const domainSet = new Set(requestedDomains);
+  const cursor = typeof req.query.cursor === "string" ? req.query.cursor : undefined;
+  const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
+  const snapshotLimit = Number.isFinite(limit) ? limit : undefined;
 
   try {
     const snapshot: Record<string, unknown> = {};
     if (domainSet.has("projects")) {
-      snapshot.projects = await projectsClient.list(authContext.accessToken, undefined, undefined, 100);
+      snapshot.projects = await projectsClient.list(authContext.accessToken, undefined, undefined, snapshotLimit ?? 100, cursor);
     }
     if (domainSet.has("notes")) {
-      snapshot.notes = await notesClient.list(authContext.accessToken, undefined, 500);
+      snapshot.notes = await notesClient.list(authContext.accessToken, undefined, snapshotLimit ?? 500);
     }
     if (domainSet.has("artifacts")) {
-      snapshot.artifacts = await artifactsClient.treeList(authContext.accessToken, { limit: 500 });
+      snapshot.artifacts = await artifactsClient.treeList(authContext.accessToken, { limit: snapshotLimit ?? 500 });
     }
     if (domainSet.has("tasks")) {
-      snapshot.tasks = await tasksClient.list(authContext.accessToken, undefined, undefined, 500);
+      snapshot.tasks = await tasksClient.list(authContext.accessToken, undefined, undefined, snapshotLimit ?? 500);
     }
     return res.json({
       generatedAt: new Date().toISOString(),

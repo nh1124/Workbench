@@ -95,7 +95,7 @@ describe("remote artifact pull reconciliation", () => {
       globalThis.fetch = (async (input: RequestInfo | URL) => {
         const url = String(input);
         calls.push(url);
-        if (url === "http://core.test/api/sync/snapshot?domains=projects,notes,artifacts,tasks") {
+        if (url === "http://core.test/api/sync/snapshot?domains=projects%2Cnotes%2Cartifacts%2Ctasks") {
           return jsonResponse({
             generatedAt: "2026-06-16T00:00:00.000Z",
             domains: {
@@ -107,7 +107,8 @@ describe("remote artifact pull reconciliation", () => {
                     status: "active",
                     updatedAt: "2026-06-16T00:00:00.000Z"
                   }
-                ]
+                ],
+                nextCursor: "project-cursor-2"
               },
               notes: [
                 {
@@ -134,6 +135,23 @@ describe("remote artifact pull reconciliation", () => {
                   projectId: "project-1"
                 }
               ]
+            }
+          });
+        }
+        if (url === "http://core.test/api/sync/snapshot?domains=projects&cursor=project-cursor-2&limit=100") {
+          return jsonResponse({
+            generatedAt: "2026-06-16T00:00:01.000Z",
+            domains: {
+              projects: {
+                items: [
+                  {
+                    id: "project-2",
+                    name: "Remote Project 2",
+                    status: "draft",
+                    updatedAt: "2026-06-16T00:00:01.000Z"
+                  }
+                ]
+              }
             }
           });
         }
@@ -165,12 +183,14 @@ describe("remote artifact pull reconciliation", () => {
       await pullRemoteArtifactSyncState(state);
 
       assert.deepEqual(calls, [
-        "http://core.test/api/sync/snapshot?domains=projects,notes,artifacts,tasks",
+        "http://core.test/api/sync/snapshot?domains=projects%2Cnotes%2Cartifacts%2Ctasks",
+        "http://core.test/api/sync/snapshot?domains=projects&cursor=project-cursor-2&limit=100",
         "http://core.test/api/sync/pull?limit=500"
       ]);
       assert.equal(await readFile(join(root, "docs", "remote.md"), "utf8"), "# Remote\n");
       const manifest = readManifestFromStore(store);
       assert.equal(manifest.remoteResources?.find((item) => item.domain === "projects")?.resourceId, "project-1");
+      assert.equal(manifest.remoteResources?.some((item) => item.domain === "projects" && item.resourceId === "project-2"), true);
       assert.equal(manifest.remoteResources?.find((item) => item.domain === "notes")?.resourceId, "core-note-1");
       assert.equal(manifest.remoteResources?.find((item) => item.domain === "tasks")?.resourceId, "task-1");
       assert.equal(getMeta(store, "remoteSyncCursor"), "7");
@@ -285,7 +305,7 @@ describe("remote artifact pull reconciliation", () => {
       globalThis.fetch = (async (input: RequestInfo | URL) => {
         const url = String(input);
         calls.push(url);
-        if (url === "http://core.test/api/sync/snapshot?domains=projects,notes,artifacts,tasks") {
+        if (url === "http://core.test/api/sync/snapshot?domains=projects%2Cnotes%2Cartifacts%2Ctasks") {
           return new Response("Projects service is not configured", { status: 500 });
         }
         if (url === "http://core.test/api/sync/snapshot?domains=artifacts") {
@@ -313,7 +333,7 @@ describe("remote artifact pull reconciliation", () => {
       await pullRemoteArtifactSyncState(state);
 
       assert.deepEqual(calls, [
-        "http://core.test/api/sync/snapshot?domains=projects,notes,artifacts,tasks",
+        "http://core.test/api/sync/snapshot?domains=projects%2Cnotes%2Cartifacts%2Ctasks",
         "http://core.test/api/sync/snapshot?domains=artifacts",
         "http://core.test/api/sync/pull?limit=500"
       ]);

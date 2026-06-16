@@ -1728,11 +1728,11 @@ type SyncSnapshotResponse = {
 };
 
 const REMOTE_SYNC_DOMAINS: RemoteResourceDomain[] = ["projects", "notes", "artifacts", "tasks"];
-const REMOTE_SYNC_DOMAINS_QUERY = REMOTE_SYNC_DOMAINS.join(",");
 const REMOTE_SYNC_CURSOR_META_KEY = "remoteSyncCursor";
 const REMOTE_ARTIFACT_CURSOR_META_KEY = "remoteArtifactCursor";
 const LAST_REMOTE_PULL_AT_META_KEY = "lastRemotePullAt";
 const REMOTE_PULL_LIMIT = 100;
+const REMOTE_SNAPSHOT_PAGE_LIMIT = 100;
 const REMOTE_CURSOR_DRAIN_LIMIT = 500;
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -1801,6 +1801,11 @@ function snapshotItems(value: unknown): unknown[] {
     if (Array.isArray(nested)) return nested;
   }
   return [];
+}
+
+function snapshotNextCursor(value: unknown): string | undefined {
+  const record = asRecord(value);
+  return asString(record?.nextCursor);
 }
 
 function parseRemoteArtifactKind(value: unknown): RemoteArtifactKind | undefined {
@@ -2437,26 +2442,31 @@ async function getSyncPullPage(state: DaemonState, cursor: string | undefined, l
   });
 }
 
-async function bootstrapRemoteArtifactSnapshot(state: DaemonState): Promise<string | undefined> {
+async function getSyncSnapshot(
+  state: DaemonState,
+  domains: RemoteResourceDomain[],
+  options: { cursor?: string; limit?: number } = {}
+): Promise<SyncSnapshotResponse> {
   if (!state.identity) throw new Error("Missing local client identity");
-  let snapshot: SyncSnapshotResponse;
-  try {
-    snapshot = await coreJson<SyncSnapshotResponse>(state.config, `/api/sync/snapshot?domains=${REMOTE_SYNC_DOMAINS_QUERY}`, {
-      method: "GET",
-      localIdentity: state.identity
-    });
-  } catch (error) {
-    console.warn(
-      `[sync-daemon] all-domain remote snapshot failed; falling back to artifacts-only snapshot: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
-    snapshot = await coreJson<SyncSnapshotResponse>(state.config, "/api/sync/snapshot?domains=artifacts", {
-      method: "GET",
-      localIdentity: state.identity
-    });
+  const query = new URLSearchParams();
+  query.set("domains", domains.join(","));
+  if (options.cursor) {
+    query.set("cursor", options.cursor);
   }
-  const generatedAt = asString(snapshot.generatedAt) ?? new Date().toISOString();
+  if (options.limit) {
+    query.set("limit", String(options.limit));
+  }
+  return coreJson<SyncSnapshotResponse>(state.config, `/api/sync/snapshot?${query.toString()}`, {
+    method: "GET",
+    localIdentity: state.identity
+  });
+}
+
+async function applyRemoteSnapshot(
+  state: DaemonState,
+  snapshot: SyncSnapshotResponse,
+  generatedAt: string
+): Promise<void> {
   for (const domain of REMOTE_SYNC_DOMAINS) {
     for (const item of snapshotItems(snapshot.domains?.[domain])) {
       if (domain === "artifacts") {
@@ -2466,6 +2476,47 @@ async function bootstrapRemoteArtifactSnapshot(state: DaemonState): Promise<stri
       }
     }
   }
+}
+
+async function bootstrapPagedProjectSnapshots(
+  state: DaemonState,
+  firstPage: unknown,
+  initialGeneratedAt: string
+): Promise<void> {
+  let cursor = snapshotNextCursor(firstPage);
+  for (let pageIndex = 0; cursor && pageIndex < 100; pageIndex += 1) {
+    const page = await getSyncSnapshot(state, ["projects"], {
+      cursor,
+      limit: REMOTE_SNAPSHOT_PAGE_LIMIT
+    });
+    const generatedAt = asString(page.generatedAt) ?? initialGeneratedAt;
+    for (const item of snapshotItems(page.domains?.projects)) {
+      applyRemoteDomainSnapshotEntry(state, "projects", item, generatedAt);
+    }
+    const nextCursor = snapshotNextCursor(page.domains?.projects);
+    if (!nextCursor || nextCursor === cursor) {
+      return;
+    }
+    cursor = nextCursor;
+  }
+}
+
+async function bootstrapRemoteArtifactSnapshot(state: DaemonState): Promise<string | undefined> {
+  if (!state.identity) throw new Error("Missing local client identity");
+  let snapshot: SyncSnapshotResponse;
+  try {
+    snapshot = await getSyncSnapshot(state, REMOTE_SYNC_DOMAINS);
+  } catch (error) {
+    console.warn(
+      `[sync-daemon] all-domain remote snapshot failed; falling back to artifacts-only snapshot: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+    snapshot = await getSyncSnapshot(state, ["artifacts"]);
+  }
+  const generatedAt = asString(snapshot.generatedAt) ?? new Date().toISOString();
+  await applyRemoteSnapshot(state, snapshot, generatedAt);
+  await bootstrapPagedProjectSnapshots(state, snapshot.domains?.projects, generatedAt);
 
   let cursor: string | undefined;
   for (let pageIndex = 0; pageIndex < 20; pageIndex += 1) {
