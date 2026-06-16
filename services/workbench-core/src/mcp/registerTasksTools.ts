@@ -1,7 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { lbsClient, tasksClient } from "../internalClients.js";
-import { asMcpText, runWithAuth } from "./helpers.js";
+import { createLocalJob, getLocalJob, serializeLocalJobForOwner } from "../localClientsStore.js";
+import { asMcpText, runWithAuth, runWithAuthContext } from "./helpers.js";
 
 type ToolContext = {
   accessToken: string;
@@ -682,6 +683,63 @@ export function registerTasksTools(server: McpServer, ctx?: ToolContext): void {
         tasksClient.downloadAttachment(ctx.accessToken, taskId, attachmentId)
       );
       return asMcpText(result);
+    }
+  );
+
+  server.registerTool(
+    "tasks.attachments.download.to_client",
+    {
+      title: "Download Task Attachment To Local Client",
+      description:
+        "Create a daemon-pulled local job that downloads a task attachment to an enabled Workbench local client.",
+      inputSchema: {
+        taskId: z.string().min(1).describe("Task ID"),
+        attachmentId: z.string().min(1).describe("Attachment ID"),
+        localClientId: z.string().optional(),
+        target: z.enum(["downloads", "sync-folder"]).optional(),
+        filename: z.string().optional()
+      }
+    },
+    async ({ taskId, attachmentId, localClientId, target, filename }) => {
+      const job = await runWithAuthContext(ctx.accessToken, ({ userId }) =>
+        createLocalJob(userId, {
+          localClientId,
+          kind: "download_task_attachment",
+          target: target ?? "downloads",
+          payload: {
+            taskId,
+            attachmentId,
+            filename
+          }
+        })
+      );
+      return asMcpText({
+        jobId: job.id,
+        localClientId: job.localClientId,
+        status: job.status,
+        target: job.target
+      });
+    }
+  );
+
+  server.registerTool(
+    "tasks.attachments.download.to_client.status",
+    {
+      title: "Get Local Client Task Attachment Download Job Status",
+      description:
+        "Read completion status for a task attachment download local-client job. " +
+        "The local path is redacted unless includeLocalPath is true.",
+      inputSchema: {
+        jobId: z.string().min(1),
+        includeLocalPath: z.boolean().optional()
+      }
+    },
+    async ({ jobId, includeLocalPath }) => {
+      const job = await runWithAuthContext(ctx.accessToken, ({ userId }) => getLocalJob(userId, jobId));
+      if (!job) {
+        throw new Error("Local job not found");
+      }
+      return asMcpText(serializeLocalJobForOwner(job, { includeLocalPaths: includeLocalPath === true }));
     }
   );
 

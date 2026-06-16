@@ -217,7 +217,9 @@ npm run build
 - `[implemented]` Add job event log/history table.
   - `local_job_events` records create, claim, complete, fail, retry schedule, and expiry.
   - `GET /api/local-jobs/:jobId/events` exposes owner-visible event history.
-- `[pending]` Add task attachment MCP convenience tool, for example `tasks.attachment.download.to_client`.
+- `[implemented]` Task attachment MCP local-client download tools were added.
+  - `tasks.attachments.download.to_client`
+  - `tasks.attachments.download.to_client.status`
 - `[implemented]` Local job list/filter API exists for recent UI history.
 - `[implemented]` UI job history and result path display exists.
 - `[implemented]` Owner-facing local job APIs and MCP status redact `result.localPath` by default.
