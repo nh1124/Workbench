@@ -1,6 +1,6 @@
 # Workbench Local Client / Sync Daemon Implementation Plan
 
-Last updated: 2026-06-16
+Last updated: 2026-06-17
 
 ## Status Legend
 
@@ -91,6 +91,7 @@ Last updated: 2026-06-16
   - Tasks subtask create/update/delete/upsert through relation `subtask`.
   - Tasks Today add/remove through relation `today`.
   - Tasks schedule item create/update/delete/upsert through relation `scheduleItem`.
+- `[implemented]` Successful sync-push events include applied `resource` payloads for Projects, Notes, Artifacts, and non-relation Tasks so other daemons can update remote caches without waiting for a full snapshot.
 - `[implemented]` `PUT /api/sync/blobs/:blobId` supports artifact file and task attachment replacement.
   - `artifact:<artifactItemId>`
   - `task-attachment:<taskId>:<attachmentId>`
@@ -119,9 +120,10 @@ Last updated: 2026-06-16
   - expose local status at `http://127.0.0.1:<port>/status`.
   - expose local conflict list/resolve endpoints under `http://127.0.0.1:<port>/conflicts`.
   - recover stale local outbox entries when files are changed, removed, or restored before a pending sync push finishes.
-  - pull remote artifact snapshot/incremental events before local scan/push,
-  - persist remote artifact cursor and last remote pull timestamp in manifest meta,
+  - pull remote snapshot/incremental events before local scan/push,
+  - persist remote sync/artifact cursors and last remote pull timestamp in manifest meta,
   - apply clean remote artifact note/file/folder changes into the sync folder,
+  - cache remote Projects, Notes, and Tasks state in SQLite for local-first reads,
   - fetch small remote artifact file blobs through Core,
   - create conflicts instead of overwriting dirty local artifact files or folders,
   - apply remote folder deletes only when tracked local contents are clean,
@@ -189,6 +191,7 @@ npm run build
   - Covers traversal, absolute paths, encoded local ids, `.workbench`, temp/partial files, reserved Windows names, and hostile download filenames.
 - `[implemented]` Sync daemon remote artifact pull tests were added.
   - Covers snapshot bootstrap, incremental note updates, blob fetch, dirty-local conflicts, clean folder deletes, untracked-folder conflicts, and metadata path rejection.
+  - Covers Projects/Notes/Tasks remote cache bootstrap and incremental non-artifact event reconciliation.
 
 ## Pending / Partial Work
 
@@ -237,6 +240,7 @@ npm run build
 - `[implemented]` `.workbench/manifest.json` remains as a compatibility/debug snapshot.
 - `[implemented]` SQLite manifest tables exist for:
   - `resources`
+  - `remote_resources`
   - `outbox`
   - `local_jobs`
   - `conflicts`
@@ -252,12 +256,17 @@ npm run build
   - Supersedes stale pending create/update outbox entries when files change again before push.
   - Queues exact clean local rename/move matches as resource updates instead of delete/create pairs.
   - Auto-resolves open conflict records tied to superseded outbox entries.
-- `[implemented]` Artifact remote snapshot/incremental pull reconciliation exists.
-  - Bootstrap reads `/api/sync/snapshot?domains=artifacts`.
+- `[implemented]` Remote snapshot/incremental pull reconciliation exists.
+  - Bootstrap reads `/api/sync/snapshot?domains=projects,notes,artifacts,tasks`.
+  - If all-domain snapshot is unavailable, daemon falls back to artifact-only bootstrap so file sync keeps running.
   - Incremental pull reads `/api/sync/pull` from the stored cursor.
   - Clean remote artifact changes are materialized locally before local scan/push.
+  - Remote Projects, Notes, and Tasks are stored under `.workbench/manifest.sqlite` `remote_resources`.
+  - Metadata-only relation events merge into existing cached domain payloads instead of erasing richer snapshot data.
   - Dirty local state or open outbox work creates `.workbench/conflicts` records instead of overwriting local files.
-- `[pending]` Remote reconciliation for Projects, Notes, and Tasks is not implemented in the daemon yet.
+- `[implemented]` Remote reconciliation for Projects, Notes, and Tasks is implemented as daemon SQLite cache.
+  - These domains are not materialized into human-readable sync-folder files in this phase.
+  - Local writes for these domains are not queued through daemon outbox yet.
 
 ### Sync Folder Watcher
 
@@ -326,6 +335,7 @@ npm run build
   - Added `DELETE /api/artifacts/items/:id`.
 - `[partial]` Serve local-first reads from daemon SQLite when offline.
   - Artifact tree/item reads are served from `.workbench/manifest.sqlite` plus files in the sync folder.
+  - Projects, Notes, and Tasks list/item reads are served from `remote_resources` cache.
 - `[partial]` Queue local UI writes into daemon outbox.
   - Added `POST /api/artifacts/notes` for local Markdown note creation.
   - Added `PATCH /api/artifacts/items/:id` for local Markdown note content/path/title updates.
@@ -393,9 +403,10 @@ npm run build
 
 ## Recommended Next Implementation Order
 
-1. Extend daemon remote reconciliation beyond Artifacts to Projects, Notes, and Tasks.
-2. Decide whether empty local folders should become first-class cloud folder resources immediately or remain local until they contain synced files.
-3. Decide and implement the policy for direct internal service mutations outside Core.
+1. Decide whether empty local folders should become first-class cloud folder resources immediately or remain local until they contain synced files.
+2. Decide and implement the policy for direct internal service mutations outside Core.
+3. Add paginated full snapshot refresh for Projects/Notes/Tasks so first-time daemon cache is not limited by Core snapshot page sizes.
+4. Design local outbox write facades for Projects/Notes/Tasks after the read cache has been exercised.
 
 ## Current Daemon Usage
 

@@ -17,6 +17,18 @@ export type ManifestResource = {
   lastError?: string;
 };
 
+export type RemoteResourceDomain = "projects" | "notes" | "artifacts" | "tasks";
+
+export type RemoteResource = {
+  domain: RemoteResourceDomain;
+  resourceId: string;
+  version?: number;
+  deleted?: boolean;
+  payload: Record<string, unknown>;
+  updatedAt?: string;
+  lastSyncedAt?: string;
+};
+
 export type OutboxItem = {
   id: string;
   clientOpId: string;
@@ -58,6 +70,7 @@ export type ConflictRecord = {
 export type Manifest = {
   jobs?: unknown[];
   resources?: ManifestResource[];
+  remoteResources?: RemoteResource[];
   outbox?: OutboxItem[];
   conflicts?: ConflictRecord[];
   lastScanAt?: string;
@@ -107,6 +120,16 @@ type JobRow = {
   completed_at: string;
 };
 
+type RemoteResourceRow = {
+  domain: string;
+  resource_id: string;
+  version: number | null;
+  deleted: number;
+  payload_json: string;
+  updated_at: string | null;
+  last_synced_at: string | null;
+};
+
 type ConflictRow = {
   id: string;
   outbox_id: string | null;
@@ -133,6 +156,7 @@ type MetaRow = {
 type NormalizedManifest = {
   jobs: unknown[];
   resources: ManifestResource[];
+  remoteResources: RemoteResource[];
   outbox: OutboxItem[];
   conflicts: ConflictRecord[];
   lastScanAt?: string;
@@ -182,6 +206,21 @@ function toResource(row: ResourceRow): ManifestResource {
     lastSyncedAt: row.last_synced_at ?? undefined,
     localUpdatedAt: row.local_updated_at ?? undefined,
     lastError: row.last_error ?? undefined
+  };
+}
+
+function toRemoteResource(row: RemoteResourceRow): RemoteResource {
+  const domain = row.domain === "projects" || row.domain === "notes" || row.domain === "tasks" || row.domain === "artifacts"
+    ? row.domain
+    : "artifacts";
+  return {
+    domain,
+    resourceId: row.resource_id,
+    version: row.version ?? undefined,
+    deleted: row.deleted === 1,
+    payload: parseJsonRecord(row.payload_json),
+    updatedAt: row.updated_at ?? undefined,
+    lastSyncedAt: row.last_synced_at ?? undefined
   };
 }
 
@@ -243,6 +282,7 @@ function normalizeManifest(manifest: Manifest): NormalizedManifest {
   return {
     jobs: Array.isArray(manifest.jobs) ? manifest.jobs : [],
     resources: Array.isArray(manifest.resources) ? manifest.resources : [],
+    remoteResources: Array.isArray(manifest.remoteResources) ? manifest.remoteResources : [],
     outbox: Array.isArray(manifest.outbox) ? manifest.outbox : [],
     conflicts: Array.isArray(manifest.conflicts) ? manifest.conflicts : [],
     lastScanAt: manifest.lastScanAt,
@@ -303,6 +343,20 @@ export function openManifestStore(syncRoot: string): ManifestStore {
       completed_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS remote_resources (
+      domain TEXT NOT NULL,
+      resource_id TEXT NOT NULL,
+      version INTEGER,
+      deleted INTEGER NOT NULL DEFAULT 0,
+      payload_json TEXT NOT NULL,
+      updated_at TEXT,
+      last_synced_at TEXT,
+      PRIMARY KEY (domain, resource_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_remote_resources_domain_updated
+      ON remote_resources (domain, updated_at);
+
     CREATE TABLE IF NOT EXISTS conflicts (
       id TEXT PRIMARY KEY,
       outbox_id TEXT,
@@ -353,6 +407,11 @@ export function readManifestFromStore(store: ManifestStore): Manifest {
     ORDER BY completed_at DESC
     LIMIT 500
   `).all() as JobRow[];
+  const remoteResources = store.db.prepare(`
+    SELECT domain, resource_id, version, deleted, payload_json, updated_at, last_synced_at
+    FROM remote_resources
+    ORDER BY domain ASC, resource_id ASC
+  `).all() as RemoteResourceRow[];
   const conflicts = store.db.prepare(`
     SELECT id, outbox_id, client_op_id, relative_path, domain, action, resource_id,
            payload_json, error_message, conflict_path, status, created_at, resolved_at,
@@ -366,6 +425,7 @@ export function readManifestFromStore(store: ManifestStore): Manifest {
   return {
     jobs: jobs.map(toJob),
     resources: resources.map(toResource),
+    remoteResources: remoteResources.map(toRemoteResource),
     outbox: outbox.map(toOutbox),
     conflicts: conflicts.map(toConflict),
     lastScanAt: metaMap.get("lastScanAt"),
@@ -377,9 +437,12 @@ export function replaceManifestInStore(store: ManifestStore, manifest: Manifest)
   const normalized = normalizeManifest(manifest);
   store.db.exec("BEGIN IMMEDIATE");
   try {
-    store.db.exec("DELETE FROM resources; DELETE FROM outbox; DELETE FROM local_jobs;");
+    store.db.exec("DELETE FROM resources; DELETE FROM remote_resources; DELETE FROM outbox; DELETE FROM local_jobs;");
     for (const resource of normalized.resources) {
       upsertResource(store, resource);
+    }
+    for (const resource of normalized.remoteResources) {
+      upsertRemoteResource(store, resource);
     }
     for (const item of normalized.outbox) {
       store.db.prepare(`
@@ -535,6 +598,95 @@ export function upsertResource(store: ManifestStore, resource: ManifestResource)
 
 export function removeResource(store: ManifestStore, relativePath: string): void {
   store.db.prepare("DELETE FROM resources WHERE relative_path = ?").run(relativePath);
+}
+
+export function upsertRemoteResource(store: ManifestStore, resource: RemoteResource): void {
+  store.db.prepare(`
+    INSERT INTO remote_resources (
+      domain, resource_id, version, deleted, payload_json, updated_at, last_synced_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(domain, resource_id)
+    DO UPDATE SET
+      version = excluded.version,
+      deleted = excluded.deleted,
+      payload_json = excluded.payload_json,
+      updated_at = excluded.updated_at,
+      last_synced_at = excluded.last_synced_at
+  `).run(
+    resource.domain,
+    resource.resourceId,
+    resource.version ?? null,
+    resource.deleted ? 1 : 0,
+    JSON.stringify(resource.payload ?? {}),
+    resource.updatedAt ?? null,
+    resource.lastSyncedAt ?? null
+  );
+}
+
+export function getRemoteResource(
+  store: ManifestStore,
+  domain: RemoteResourceDomain,
+  resourceId: string
+): RemoteResource | undefined {
+  const row = store.db.prepare(`
+    SELECT domain, resource_id, version, deleted, payload_json, updated_at, last_synced_at
+    FROM remote_resources
+    WHERE domain = ? AND resource_id = ?
+  `).get(domain, resourceId) as RemoteResourceRow | undefined;
+  return row ? toRemoteResource(row) : undefined;
+}
+
+export function listRemoteResources(
+  store: ManifestStore,
+  options: { domain?: RemoteResourceDomain; includeDeleted?: boolean; limit?: number } = {}
+): RemoteResource[] {
+  const limit = Math.max(1, Math.min(1000, Math.floor(options.limit ?? 500)));
+  if (options.domain) {
+    const deletedWhere = options.includeDeleted ? "" : "AND deleted = 0";
+    return (store.db.prepare(`
+      SELECT domain, resource_id, version, deleted, payload_json, updated_at, last_synced_at
+      FROM remote_resources
+      WHERE domain = ? ${deletedWhere}
+      ORDER BY updated_at DESC, resource_id ASC
+      LIMIT ?
+    `).all(options.domain, limit) as RemoteResourceRow[]).map(toRemoteResource);
+  }
+
+  const deletedWhere = options.includeDeleted ? "" : "WHERE deleted = 0";
+  return (store.db.prepare(`
+    SELECT domain, resource_id, version, deleted, payload_json, updated_at, last_synced_at
+    FROM remote_resources
+    ${deletedWhere}
+    ORDER BY domain ASC, updated_at DESC, resource_id ASC
+    LIMIT ?
+  `).all(limit) as RemoteResourceRow[]).map(toRemoteResource);
+}
+
+export function markRemoteResourceDeleted(
+  store: ManifestStore,
+  input: {
+    domain: RemoteResourceDomain;
+    resourceId: string;
+    version?: number;
+    payload?: Record<string, unknown>;
+    deletedAt?: string;
+    lastSyncedAt?: string;
+  }
+): void {
+  upsertRemoteResource(store, {
+    domain: input.domain,
+    resourceId: input.resourceId,
+    version: input.version,
+    deleted: true,
+    payload: {
+      ...(input.payload ?? {}),
+      deleted: true,
+      deletedAt: input.deletedAt
+    },
+    updatedAt: input.deletedAt,
+    lastSyncedAt: input.lastSyncedAt ?? input.deletedAt
+  });
 }
 
 export function hasOpenOutboxForPath(store: ManifestStore, relativePath: string): boolean {

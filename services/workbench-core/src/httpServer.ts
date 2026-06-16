@@ -1669,6 +1669,7 @@ async function applySyncPushOperation(
       source: "sync-push",
       clientOpId,
       localClientId: authContext.localClient?.id,
+      ...(action !== "delete" ? { resource: result } : {}),
       ...(action === "delete" ? { deleted: true } : {})
     });
     return {
@@ -1726,6 +1727,7 @@ async function applySyncPushOperation(
       clientOpId,
       localClientId: authContext.localClient?.id,
       relation,
+      ...(action !== "delete" ? { resource: result } : {}),
       ...(action === "delete" ? { deleted: true } : {})
     });
     return {
@@ -1849,6 +1851,7 @@ async function applySyncPushOperation(
       clientOpId,
       localClientId: authContext.localClient?.id,
       relation,
+      ...(action !== "delete" && !relation ? { resource: result } : {}),
       ...(action === "delete" ? { deleted: true } : {})
     });
     return {
@@ -1927,6 +1930,7 @@ async function applySyncPushOperation(
     source: "sync-push",
     clientOpId,
     localClientId: authContext.localClient?.id,
+    ...(action !== "delete" ? { resource: result } : {}),
     ...(action === "delete" ? { deleted: true } : {})
   });
   return {

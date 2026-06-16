@@ -9,8 +9,10 @@ import { config as loadEnv } from "dotenv";
 import {
   enqueueOutbox as enqueueManifestOutbox,
   getMeta,
+  getRemoteResource,
   getResource,
   hasOpenOutboxForPath,
+  listRemoteResources,
   listConflicts,
   listOpenOutboxForResource,
   listOpenOutboxForPath,
@@ -25,16 +27,20 @@ import {
   readManifestStats,
   recordConflict,
   recordLocalJob,
+  markRemoteResourceDeleted,
   removeResource,
   resolveConflict,
   setMeta,
+  upsertRemoteResource,
   upsertResource as upsertManifestResource,
   writeManifestDebugSnapshot,
   type ConflictResolution,
   type ConflictStatus,
   type ManifestResource,
   type ManifestStore,
-  type OutboxItem
+  type OutboxItem,
+  type RemoteResource,
+  type RemoteResourceDomain
 } from "./manifestStore.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -776,6 +782,54 @@ export async function getLocalArtifactItemById(
   const resource = resources.find((item) => item.resourceId === id)
     ?? (local ? resources.find((item) => item.kind === local.kind && item.relativePath === local.relativePath) : undefined);
   return resource ? buildLocalArtifactItem(state, resource, options) : undefined;
+}
+
+function listLocalRemoteDomainItems(
+  state: DaemonState,
+  domain: Exclude<RemoteResourceDomain, "artifacts">,
+  options: { includeDeleted?: boolean; limit?: number } = {}
+): Record<string, unknown>[] {
+  return listRemoteResources(state.manifestStore, {
+    domain,
+    includeDeleted: options.includeDeleted,
+    limit: options.limit
+  }).map((resource) => ({
+    ...resource.payload,
+    id: asString(resource.payload.id) ?? resource.resourceId,
+    version: asNumber(resource.payload.version) ?? resource.version,
+    deleted: resource.deleted ? true : resource.payload.deleted,
+    updatedAt: asString(resource.payload.updatedAt) ?? resource.updatedAt,
+    lastSyncedAt: resource.lastSyncedAt
+  }));
+}
+
+function localRemoteDomainItem(
+  state: DaemonState,
+  domain: Exclude<RemoteResourceDomain, "artifacts">,
+  resourceId: string,
+  options: { includeDeleted?: boolean } = {}
+): Record<string, unknown> | undefined {
+  const resource = getRemoteResource(state.manifestStore, domain, resourceId);
+  if (!resource || (resource.deleted && !options.includeDeleted)) return undefined;
+  return {
+    ...resource.payload,
+    id: asString(resource.payload.id) ?? resource.resourceId,
+    version: asNumber(resource.payload.version) ?? resource.version,
+    deleted: resource.deleted ? true : resource.payload.deleted,
+    updatedAt: asString(resource.payload.updatedAt) ?? resource.updatedAt,
+    lastSyncedAt: resource.lastSyncedAt
+  };
+}
+
+function localDefaultProjectSelection(state: DaemonState): Record<string, unknown> | undefined {
+  const projects = listLocalRemoteDomainItems(state, "projects");
+  const project = projects.find((item) => item.isUserDefault === true)
+    ?? projects.find((item) => item.isFallbackDefault === true);
+  if (!project) return undefined;
+  return {
+    project,
+    source: project.isUserDefault === true ? "user" : "fallback"
+  };
 }
 
 function getLocalArtifactResourceById(state: DaemonState, id: string): ManifestResource | undefined {
@@ -1670,11 +1724,12 @@ type SyncPullResponse = {
 
 type SyncSnapshotResponse = {
   generatedAt?: string;
-  domains?: {
-    artifacts?: unknown;
-  };
+  domains?: Partial<Record<RemoteResourceDomain, unknown>>;
 };
 
+const REMOTE_SYNC_DOMAINS: RemoteResourceDomain[] = ["projects", "notes", "artifacts", "tasks"];
+const REMOTE_SYNC_DOMAINS_QUERY = REMOTE_SYNC_DOMAINS.join(",");
+const REMOTE_SYNC_CURSOR_META_KEY = "remoteSyncCursor";
 const REMOTE_ARTIFACT_CURSOR_META_KEY = "remoteArtifactCursor";
 const LAST_REMOTE_PULL_AT_META_KEY = "lastRemotePullAt";
 const REMOTE_PULL_LIMIT = 100;
@@ -1690,6 +1745,62 @@ function asString(value: unknown): string | undefined {
 
 function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function parseRemoteResourceDomain(value: unknown): RemoteResourceDomain | undefined {
+  return value === "projects" || value === "notes" || value === "artifacts" || value === "tasks" ? value : undefined;
+}
+
+function firstRecord(...values: unknown[]): Record<string, unknown> | undefined {
+  for (const value of values) {
+    const record = asRecord(value);
+    if (record) return record;
+  }
+  return undefined;
+}
+
+function remoteResourceIdFromUnknown(value: unknown, fallbackResourceId?: string): string | undefined {
+  const record = asRecord(value);
+  return asString(record?.id)
+    ?? asString(record?._id)
+    ?? asString(record?.resourceId)
+    ?? fallbackResourceId;
+}
+
+function remoteResourcePayloadFromEvent(event: RemoteSyncEvent): { payload: Record<string, unknown>; merge: boolean } {
+  const payload = asRecord(event.payload) ?? {};
+  const resource = firstRecord(payload.resource, payload.result);
+  if (resource) {
+    return { payload: resource, merge: false };
+  }
+  const patch = asRecord(payload.patch);
+  if (patch) {
+    return { payload: patch, merge: true };
+  }
+  return { payload, merge: true };
+}
+
+function remoteResourcePayloadFromSnapshot(value: unknown): Record<string, unknown> | undefined {
+  return asRecord(value);
+}
+
+function isRemoteResourceTombstone(event: RemoteSyncEvent): boolean {
+  const payload = asRecord(event.payload) ?? {};
+  return event.action === "delete"
+    || payload.deleted === true
+    || payload.tombstone === true
+    || typeof payload.deletedAt === "string";
+}
+
+function snapshotItems(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  const record = asRecord(value);
+  if (!record) return [];
+  for (const key of ["items", "data", "results", "projects", "notes", "tasks", "artifacts"]) {
+    const nested = record[key];
+    if (Array.isArray(nested)) return nested;
+  }
+  return [];
 }
 
 function parseRemoteArtifactKind(value: unknown): RemoteArtifactKind | undefined {
@@ -2227,6 +2338,92 @@ async function applyRemoteArtifactSnapshotEntry(
   });
 }
 
+function remoteResourceUpdatedAt(payload: Record<string, unknown>, fallback: string): string {
+  return asString(payload.updatedAt)
+    ?? asString(payload.updated_at)
+    ?? asString(payload.modifiedAt)
+    ?? asString(payload.createdAt)
+    ?? fallback;
+}
+
+function remoteResourceRecord(
+  domain: RemoteResourceDomain,
+  resourceId: string,
+  payload: Record<string, unknown>,
+  options: { version?: number; deleted?: boolean; timestamp: string }
+): RemoteResource {
+  return {
+    domain,
+    resourceId,
+    version: options.version,
+    deleted: options.deleted ?? false,
+    payload,
+    updatedAt: remoteResourceUpdatedAt(payload, options.timestamp),
+    lastSyncedAt: options.timestamp
+  };
+}
+
+function applyRemoteDomainSnapshotEntry(
+  state: DaemonState,
+  domain: RemoteResourceDomain,
+  value: unknown,
+  generatedAt: string
+): void {
+  if (domain === "artifacts") return;
+  const payload = remoteResourcePayloadFromSnapshot(value);
+  if (!payload) return;
+  const resourceId = remoteResourceIdFromUnknown(payload);
+  if (!resourceId) return;
+  upsertRemoteResource(state.manifestStore, remoteResourceRecord(domain, resourceId, payload, {
+    version: asNumber(payload.version),
+    timestamp: generatedAt
+  }));
+}
+
+function applyRemoteDomainEvent(state: DaemonState, event: RemoteSyncEvent): void {
+  const domain = parseRemoteResourceDomain(event.domain);
+  if (!domain || domain === "artifacts") return;
+  const payload = asRecord(event.payload) ?? {};
+  if (asString(payload.localClientId) === state.identity?.localClientId) return;
+
+  const createdAt = asString(event.createdAt) ?? new Date().toISOString();
+  const { payload: recordPayload, merge } = remoteResourcePayloadFromEvent(event);
+  const resourceId = event.resourceId ?? remoteResourceIdFromUnknown(recordPayload);
+  if (!resourceId) return;
+
+  if (isRemoteResourceTombstone(event)) {
+    markRemoteResourceDeleted(state.manifestStore, {
+      domain,
+      resourceId,
+      version: event.version,
+      payload: recordPayload,
+      deletedAt: createdAt,
+      lastSyncedAt: createdAt
+    });
+    return;
+  }
+
+  const existing = getRemoteResource(state.manifestStore, domain, resourceId);
+  const nextPayload = merge
+    ? {
+        ...(existing?.payload ?? { id: resourceId }),
+        ...recordPayload
+      }
+    : recordPayload;
+  upsertRemoteResource(state.manifestStore, remoteResourceRecord(domain, resourceId, nextPayload, {
+    version: event.version ?? asNumber(nextPayload.version),
+    timestamp: createdAt
+  }));
+}
+
+async function applyRemoteSyncEvent(state: DaemonState, event: RemoteSyncEvent): Promise<void> {
+  if (event.domain === "artifacts") {
+    await applyRemoteArtifactEvent(state, event);
+    return;
+  }
+  applyRemoteDomainEvent(state, event);
+}
+
 async function getSyncPullPage(state: DaemonState, cursor: string | undefined, limit: number): Promise<SyncPullResponse> {
   if (!state.identity) throw new Error("Missing local client identity");
   const query = new URLSearchParams();
@@ -2242,14 +2439,32 @@ async function getSyncPullPage(state: DaemonState, cursor: string | undefined, l
 
 async function bootstrapRemoteArtifactSnapshot(state: DaemonState): Promise<string | undefined> {
   if (!state.identity) throw new Error("Missing local client identity");
-  const snapshot = await coreJson<SyncSnapshotResponse>(state.config, "/api/sync/snapshot?domains=artifacts", {
-    method: "GET",
-    localIdentity: state.identity
-  });
+  let snapshot: SyncSnapshotResponse;
+  try {
+    snapshot = await coreJson<SyncSnapshotResponse>(state.config, `/api/sync/snapshot?domains=${REMOTE_SYNC_DOMAINS_QUERY}`, {
+      method: "GET",
+      localIdentity: state.identity
+    });
+  } catch (error) {
+    console.warn(
+      `[sync-daemon] all-domain remote snapshot failed; falling back to artifacts-only snapshot: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+    snapshot = await coreJson<SyncSnapshotResponse>(state.config, "/api/sync/snapshot?domains=artifacts", {
+      method: "GET",
+      localIdentity: state.identity
+    });
+  }
   const generatedAt = asString(snapshot.generatedAt) ?? new Date().toISOString();
-  const artifacts = Array.isArray(snapshot.domains?.artifacts) ? snapshot.domains.artifacts : [];
-  for (const artifact of artifacts) {
-    await applyRemoteArtifactSnapshotEntry(state, artifact, generatedAt);
+  for (const domain of REMOTE_SYNC_DOMAINS) {
+    for (const item of snapshotItems(snapshot.domains?.[domain])) {
+      if (domain === "artifacts") {
+        await applyRemoteArtifactSnapshotEntry(state, item, generatedAt);
+      } else {
+        applyRemoteDomainSnapshotEntry(state, domain, item, generatedAt);
+      }
+    }
   }
 
   let cursor: string | undefined;
@@ -2259,7 +2474,7 @@ async function bootstrapRemoteArtifactSnapshot(state: DaemonState): Promise<stri
     for (const event of events) {
       const eventTime = event.createdAt ? Date.parse(event.createdAt) : Number.NaN;
       if (Number.isFinite(eventTime) && eventTime > Date.parse(generatedAt)) {
-        await applyRemoteArtifactEvent(state, event);
+        await applyRemoteSyncEvent(state, event);
       }
     }
     if (!page.nextCursor || page.nextCursor === cursor) {
@@ -2275,18 +2490,21 @@ async function bootstrapRemoteArtifactSnapshot(state: DaemonState): Promise<stri
 
 export async function pullRemoteArtifactSyncState(state: DaemonState): Promise<void> {
   if (!state.identity) return;
-  let cursor = getMeta(state.manifestStore, REMOTE_ARTIFACT_CURSOR_META_KEY) ?? state.remoteArtifactCursor;
+  let cursor = getMeta(state.manifestStore, REMOTE_SYNC_CURSOR_META_KEY)
+    ?? getMeta(state.manifestStore, REMOTE_ARTIFACT_CURSOR_META_KEY)
+    ?? state.remoteArtifactCursor;
   if (!cursor) {
     cursor = await bootstrapRemoteArtifactSnapshot(state);
   } else {
     const page = await getSyncPullPage(state, cursor, REMOTE_PULL_LIMIT);
     for (const event of page.events ?? []) {
-      await applyRemoteArtifactEvent(state, event);
+      await applyRemoteSyncEvent(state, event);
     }
     cursor = page.nextCursor ?? cursor;
   }
 
   const now = new Date().toISOString();
+  setMeta(state.manifestStore, REMOTE_SYNC_CURSOR_META_KEY, cursor ?? "0");
   setMeta(state.manifestStore, REMOTE_ARTIFACT_CURSOR_META_KEY, cursor ?? "0");
   setMeta(state.manifestStore, LAST_REMOTE_PULL_AT_META_KEY, now);
   state.remoteArtifactCursor = cursor ?? "0";
@@ -2408,6 +2626,7 @@ async function pushOutbox(state: DaemonState): Promise<void> {
   const rejected = result.rejected ?? [];
   const now = new Date().toISOString();
   if (result.serverCursor) {
+    setMeta(state.manifestStore, REMOTE_SYNC_CURSOR_META_KEY, result.serverCursor);
     setMeta(state.manifestStore, REMOTE_ARTIFACT_CURSOR_META_KEY, result.serverCursor);
     state.remoteArtifactCursor = result.serverCursor;
   }
@@ -2781,6 +3000,7 @@ function daemonStatusPayload(state: DaemonState): Record<string, unknown> {
     lastScanAt: state.lastScanAt,
     lastPushAt: state.lastPushAt,
     lastRemotePullAt: state.lastRemotePullAt,
+    remoteSyncCursor: getMeta(state.manifestStore, REMOTE_SYNC_CURSOR_META_KEY) ?? state.remoteArtifactCursor,
     remoteArtifactCursor: state.remoteArtifactCursor,
     lastError: state.lastError,
     processedJobs: state.processedJobs,
@@ -2851,19 +3071,98 @@ function startStatusServer(state: DaemonState): void {
     if (url.pathname === "/api/sync/snapshot" && req.method === "GET") {
       const requestedDomains = typeof url.searchParams.get("domains") === "string"
         ? (url.searchParams.get("domains") ?? "").split(",").map((value) => value.trim()).filter(Boolean)
-        : ["artifacts"];
+        : REMOTE_SYNC_DOMAINS;
       const domainSet = new Set(requestedDomains);
       const domains: Record<string, unknown> = {};
+      const includeDeleted = parseBooleanQuery(url.searchParams.get("includeDeleted"));
+      const limitRaw = Number(url.searchParams.get("limit") ?? "");
+      const limit = Number.isFinite(limitRaw) ? limitRaw : undefined;
+      if (domainSet.has("projects")) {
+        domains.projects = { items: listLocalRemoteDomainItems(state, "projects", { includeDeleted, limit }) };
+      }
+      if (domainSet.has("notes")) {
+        domains.notes = listLocalRemoteDomainItems(state, "notes", { includeDeleted, limit });
+      }
       if (domainSet.has("artifacts")) {
         domains.artifacts = await listLocalArtifactItems(state, {
           includeContent: parseBooleanQuery(url.searchParams.get("includeContent"))
         });
+      }
+      if (domainSet.has("tasks")) {
+        domains.tasks = listLocalRemoteDomainItems(state, "tasks", { includeDeleted, limit });
       }
       writeJson(res, {
         generatedAt: new Date().toISOString(),
         source: "local-daemon",
         domains
       });
+      return;
+    }
+
+    const remoteDomainListMatch = url.pathname.match(/^\/api\/(projects|notes|tasks)$/);
+    if (remoteDomainListMatch && req.method === "GET") {
+      const domain = remoteDomainListMatch[1] as Exclude<RemoteResourceDomain, "artifacts">;
+      const includeDeleted = parseBooleanQuery(url.searchParams.get("includeDeleted"));
+      const limitRaw = Number(url.searchParams.get("limit") ?? "");
+      const limit = Number.isFinite(limitRaw) ? limitRaw : undefined;
+      let items = listLocalRemoteDomainItems(state, domain, { includeDeleted, limit });
+      if (domain === "projects") {
+        const status = url.searchParams.get("status");
+        const query = url.searchParams.get("q")?.trim().toLowerCase();
+        if (status) {
+          items = items.filter((item) => item.status === status);
+        }
+        if (query) {
+          items = items.filter((item) => {
+            const name = typeof item.name === "string" ? item.name.toLowerCase() : "";
+            const description = typeof item.description === "string" ? item.description.toLowerCase() : "";
+            return name.includes(query) || description.includes(query);
+          });
+        }
+        writeJson(res, { items });
+        return;
+      }
+      if (domain === "notes") {
+        const projectId = url.searchParams.get("projectId");
+        if (projectId) {
+          items = items.filter((item) => item.projectId === projectId);
+        }
+      }
+      if (domain === "tasks") {
+        const status = url.searchParams.get("status");
+        const context = url.searchParams.get("context");
+        if (status) {
+          items = items.filter((item) => item.status === status);
+        }
+        if (context) {
+          items = items.filter((item) => item.context === context || item.projectId === context);
+        }
+      }
+      writeJson(res, items);
+      return;
+    }
+
+    if (url.pathname === "/api/projects/default" && req.method === "GET") {
+      const selection = localDefaultProjectSelection(state);
+      if (!selection) {
+        writeJson(res, { message: "Local default project not found" }, 404);
+        return;
+      }
+      writeJson(res, selection);
+      return;
+    }
+
+    const remoteDomainItemMatch = url.pathname.match(/^\/api\/(projects|notes|tasks)\/([^/]+)$/);
+    if (remoteDomainItemMatch && req.method === "GET") {
+      const domain = remoteDomainItemMatch[1] as Exclude<RemoteResourceDomain, "artifacts">;
+      const item = localRemoteDomainItem(state, domain, decodeURIComponent(remoteDomainItemMatch[2]), {
+        includeDeleted: parseBooleanQuery(url.searchParams.get("includeDeleted"))
+      });
+      if (!item) {
+        writeJson(res, { message: `Local ${domain.slice(0, -1)} not found` }, 404);
+        return;
+      }
+      writeJson(res, item);
       return;
     }
 
