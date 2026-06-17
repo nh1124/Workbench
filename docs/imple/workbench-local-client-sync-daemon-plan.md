@@ -1,6 +1,6 @@
 # Workbench Local Client / Sync Daemon Implementation Plan
 
-Last updated: 2026-06-17
+Last updated: 2026-06-18
 
 ## Status Legend
 
@@ -104,7 +104,8 @@ Last updated: 2026-06-17
   - read config from env vars,
   - create sync/download folders,
   - register itself with Core when `WORKBENCH_ACCESS_TOKEN` is provided,
-  - persist local client identity under `.workbench/client-identity.json`,
+  - persist local client identity under `.workbench/client-identity.json` by default,
+  - run without writing `.workbench/client-identity.json` when `WORKBENCH_PERSIST_CLIENT_IDENTITY=0` or `WORKBENCH_LOCAL_CLIENT_IDENTITY_FILE=0` is set,
   - heartbeat to Core,
   - claim local jobs,
   - download job blobs through Core,
@@ -121,6 +122,7 @@ Last updated: 2026-06-17
   - expose local status at `http://127.0.0.1:<port>/status`.
   - expose local conflict list/resolve endpoints under `http://127.0.0.1:<port>/conflicts`.
   - recover stale local outbox entries when files are changed, removed, or restored before a pending sync push finishes.
+  - reuse a memory-held local client identity during the daemon process lifetime when plaintext identity persistence is disabled.
   - pull remote snapshot/incremental events before local scan/push,
   - persist remote sync/artifact cursors and last remote pull timestamp in manifest meta,
   - apply clean remote artifact note/file/folder changes into the sync folder,
@@ -195,6 +197,10 @@ npm run build
 - `[implemented]` Sync daemon remote artifact pull tests were added.
   - Covers snapshot bootstrap, incremental note updates, blob fetch, dirty-local conflicts, clean folder deletes, untracked-folder conflicts, and metadata path rejection.
   - Covers Projects/Notes/Tasks remote cache bootstrap and incremental non-artifact event reconciliation.
+- `[implemented]` Sync daemon local client identity tests were added.
+  - Covers optional no-plaintext identity persistence.
+  - Covers in-memory identity reuse while no-plaintext persistence is enabled.
+  - Covers backward-compatible identity file persistence with restrictive file mode where the OS supports it.
 
 ## Pending / Partial Work
 
@@ -410,7 +416,9 @@ npm run build
   - Windows native secure storage now has a separate `Workbench.LocalDaemonClient` target for daemon `localClientId` / `localClientToken`, distinct from `Workbench.Session`.
   - Tauri-managed daemon startup injects stored credentials as `WORKBENCH_LOCAL_CLIENT_ID` and `WORKBENCH_LOCAL_CLIENT_TOKEN` when neither env var is already set.
   - Native commands can save, inspect non-secret status, and clear the secure daemon client credential.
-  - Standalone daemon startup and first registration still use `.workbench/client-identity.json` as a fallback, so full post-registration migration away from the plain file remains incomplete.
+  - Standalone daemon identity file persistence can be disabled with `WORKBENCH_PERSIST_CLIENT_IDENTITY=0` or `WORKBENCH_LOCAL_CLIENT_IDENTITY_FILE=0`.
+  - Persisted standalone identity files are written with restrictive permissions where the OS supports it.
+  - Standalone daemon startup and first registration still use `.workbench/client-identity.json` as the default fallback, and there is not yet a cross-platform daemon-side secure storage writer, so full post-registration migration away from the plain file remains incomplete.
 
 ### Security Hardening
 
@@ -428,12 +436,17 @@ npm run build
 - `[implemented]` Avoid returning sensitive local paths to non-local callers unless explicitly requested and authorized.
   - Owner-facing local job HTTP APIs redact `result.localPath` unless `includeLocalPaths=true`.
   - MCP local job status tools redact `result.localPath` unless `includeLocalPath: true`.
+- `[implemented]` Avoid returning local client tokens from the daemon MCP `workbench.local.clients.current` tool.
+  - The tool reports whether a token is present and whether identity came from env or file.
+  - It no longer includes the raw `localClientToken`.
 - `[pending]` Add per-job user confirmation policy for downloads outside sync folder if that behavior is later allowed.
 
 ## Recommended Next Implementation Order
 
-1. Design local outbox write facades for Projects/Notes/Tasks after the read cache has been exercised.
-2. Add per-job user confirmation policy if downloads outside the sync folder become allowed.
+1. Continue hardening sync conflict/error reporting so UI can distinguish retryable network failures, version conflicts, and local path rejections.
+2. Audit remaining direct domain mutation routes as new Projects/Notes/Artifacts/Tasks endpoints are added.
+3. Add cross-platform daemon-side secure storage or a first-run migration flow so standalone mode can stop defaulting to `.workbench/client-identity.json`.
+4. Add per-job user confirmation policy if downloads outside the sync folder become allowed.
 
 ## Current Daemon Usage
 
@@ -449,6 +462,7 @@ npm run dev --workspace services/sync-daemon
 
 After registration, the standalone daemon reuses `.workbench/client-identity.json` unless `WORKBENCH_LOCAL_CLIENT_ID` and `WORKBENCH_LOCAL_CLIENT_TOKEN` are provided.
 Desktop-managed startup can also inject the local client ID/token from Windows Credential Manager when saved through the native secure daemon client commands.
+Set `WORKBENCH_PERSIST_CLIENT_IDENTITY=0` to keep the registered identity only in memory for the current daemon process; on restart, provide secure env credentials or a normal access token for re-registration.
 
 Desktop `start_daemon` now launches a managed background process. By default it runs:
 

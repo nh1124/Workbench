@@ -97,6 +97,7 @@ export type DaemonConfig = {
   maxSyncFileBytes: number;
   watchEnabled: boolean;
   watchDebounceMs: number;
+  persistClientIdentity?: boolean;
 };
 
 export type DaemonState = {
@@ -126,6 +127,14 @@ function env(name: string): string | undefined {
   return value && value.length > 0 ? value : undefined;
 }
 
+function envBoolean(value: string | undefined, fallback: boolean): boolean {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) return fallback;
+  if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on") return true;
+  if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off") return false;
+  return fallback;
+}
+
 function readConfig(): DaemonConfig {
   const syncRoot = resolve(env("WORKBENCH_SYNC_ROOT") ?? join(homedir(), "WorkbenchSync"));
   const downloadsDir = resolve(env("WORKBENCH_DOWNLOADS_DIR") ?? join(homedir(), "Downloads"));
@@ -134,6 +143,7 @@ function readConfig(): DaemonConfig {
   const maxSyncFileBytesRaw = Number(env("WORKBENCH_MAX_SYNC_FILE_BYTES") ?? String(10 * 1024 * 1024));
   const watchDebounceRaw = Number(env("WORKBENCH_SYNC_WATCH_DEBOUNCE_MS") ?? "800");
   const watchEnabledRaw = env("WORKBENCH_SYNC_WATCH")?.toLowerCase();
+  const persistIdentityRaw = env("WORKBENCH_PERSIST_CLIENT_IDENTITY") ?? env("WORKBENCH_LOCAL_CLIENT_IDENTITY_FILE");
   return {
     coreUrl: (env("WORKBENCH_CORE_URL") ?? "http://localhost:3000").replace(/\/+$/, ""),
     accessToken: env("WORKBENCH_ACCESS_TOKEN"),
@@ -151,7 +161,8 @@ function readConfig(): DaemonConfig {
     ),
     maxSyncFileBytes: Number.isFinite(maxSyncFileBytesRaw) ? Math.max(1024, maxSyncFileBytesRaw) : 10 * 1024 * 1024,
     watchEnabled: watchEnabledRaw !== "0" && watchEnabledRaw !== "false" && watchEnabledRaw !== "off",
-    watchDebounceMs: Number.isFinite(watchDebounceRaw) ? Math.max(100, watchDebounceRaw) : 800
+    watchDebounceMs: Number.isFinite(watchDebounceRaw) ? Math.max(100, watchDebounceRaw) : 800,
+    persistClientIdentity: envBoolean(persistIdentityRaw, true)
   };
 }
 
@@ -174,12 +185,14 @@ async function readJsonFile<T>(pathValue: string): Promise<T | undefined> {
   }
 }
 
-async function writeJsonFile(pathValue: string, value: unknown): Promise<void> {
+async function writeIdentityFile(config: DaemonConfig, identity: ClientIdentity): Promise<void> {
+  const pathValue = identityPath(config);
   await fs.mkdir(dirname(pathValue), { recursive: true });
-  await fs.writeFile(pathValue, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await fs.writeFile(pathValue, `${JSON.stringify(identity, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  await fs.chmod(pathValue, 0o600).catch(() => undefined);
 }
 
-async function readIdentity(config: DaemonConfig): Promise<ClientIdentity | undefined> {
+export async function readIdentity(config: DaemonConfig): Promise<ClientIdentity | undefined> {
   const envClientId = env("WORKBENCH_LOCAL_CLIENT_ID");
   const envClientToken = env("WORKBENCH_LOCAL_CLIENT_TOKEN");
   if (envClientId && envClientToken) {
@@ -189,6 +202,9 @@ async function readIdentity(config: DaemonConfig): Promise<ClientIdentity | unde
       deviceId: config.deviceId,
       syncRootId: config.syncRootId
     };
+  }
+  if (config.persistClientIdentity === false) {
+    return undefined;
   }
   return readJsonFile<ClientIdentity>(identityPath(config));
 }
@@ -220,7 +236,7 @@ async function coreJson<T>(
   return (text.trim() ? JSON.parse(text) : undefined) as T;
 }
 
-async function registerIfNeeded(config: DaemonConfig): Promise<ClientIdentity> {
+export async function registerIfNeeded(config: DaemonConfig): Promise<ClientIdentity> {
   const existing = await readIdentity(config);
   if (existing) return existing;
   if (!config.accessToken) {
@@ -255,7 +271,16 @@ async function registerIfNeeded(config: DaemonConfig): Promise<ClientIdentity> {
     deviceId: result.client.deviceId,
     syncRootId: result.client.syncRootId
   };
-  await writeJsonFile(identityPath(config), identity);
+  if (config.persistClientIdentity !== false) {
+    await writeIdentityFile(config, identity);
+  }
+  return identity;
+}
+
+export async function ensureIdentity(state: Pick<DaemonState, "config" | "identity">): Promise<ClientIdentity> {
+  if (state.identity) return state.identity;
+  const identity = await registerIfNeeded(state.config);
+  state.identity = identity;
   return identity;
 }
 
@@ -4820,7 +4845,7 @@ async function processJob(state: DaemonState, job: LocalJob): Promise<void> {
 
 async function performTick(state: DaemonState): Promise<void> {
   try {
-    state.identity = await registerIfNeeded(state.config);
+    await ensureIdentity(state);
     const jobs = await claimJobs(state);
     for (const job of jobs) {
       await processJob(state, job);

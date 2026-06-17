@@ -28,9 +28,30 @@ function asText(value: unknown): { content: Array<{ type: "text"; text: string }
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
 }
 
+function redactIdentity(identity: Record<string, unknown>, source: string): Record<string, unknown> {
+  const { localClientToken: _localClientToken, ...safeIdentity } = identity;
+  return {
+    ...safeIdentity,
+    source,
+    hasLocalClientToken: typeof _localClientToken === "string" && _localClientToken.length > 0
+  };
+}
+
 async function readIdentity(): Promise<Record<string, unknown> | undefined> {
+  const envClientId = env("WORKBENCH_LOCAL_CLIENT_ID");
+  const envClientToken = env("WORKBENCH_LOCAL_CLIENT_TOKEN");
+  if (envClientId && envClientToken) {
+    return redactIdentity({
+      localClientId: envClientId,
+      localClientToken: envClientToken,
+      syncRootId: env("WORKBENCH_SYNC_ROOT_ID") ?? "default"
+    }, "env");
+  }
   try {
-    return JSON.parse(await fs.readFile(join(syncRoot, ".workbench", "client-identity.json"), "utf8")) as Record<string, unknown>;
+    return redactIdentity(
+      JSON.parse(await fs.readFile(join(syncRoot, ".workbench", "client-identity.json"), "utf8")) as Record<string, unknown>,
+      "file"
+    );
   } catch {
     return undefined;
   }
