@@ -496,6 +496,25 @@ async function fetchTasksFacadeJson<T>(path: string, options?: RequestInit): Pro
   return fetchJson<T>(coreApiPath(path), options);
 }
 
+async function fileToBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function filenameFromDisposition(disposition: string | null, fallback: string): string {
+  const value = disposition ?? "";
+  const utf8Match = value.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+  const quotedMatch = value.match(/filename\s*=\s*"([^"]+)"/i);
+  return utf8Match?.[1]
+    ? decodeURIComponent(utf8Match[1])
+    : (quotedMatch?.[1] ?? fallback);
+}
+
 async function refreshAccessToken(refreshToken: string): Promise<void> {
   const refreshed = await requestJson<WorkbenchRefreshResponse>(
     `${coreBaseUrl()}/auth/refresh`,
@@ -938,62 +957,62 @@ export const tasksApi = {
       body: JSON.stringify({ pinned })
     }),
   todayList: (date: string): Promise<TodayTask[]> =>
-    fetchJson<TodayTask[]>(`${coreBaseUrl()}/api/tasks/today?date=${encodeURIComponent(date)}`),
+    fetchTasksFacadeJson<TodayTask[]>(`/api/tasks/today?date=${encodeURIComponent(date)}`),
   addToToday: (
     taskId: string,
     scheduledDate: string,
     occurrenceDate: string,
     opts?: { startTime?: string; endTime?: string; timezone?: string }
   ): Promise<ScheduleItem> =>
-    fetchJson<ScheduleItem>(
-      `${coreBaseUrl()}/api/tasks/today`,
+    fetchTasksFacadeJson<ScheduleItem>(
+      "/api/tasks/today",
       { method: "POST", body: JSON.stringify({ taskId, scheduledDate, occurrenceDate, ...opts }) }
     ),
   removeFromToday: (taskId: string, scheduledDate: string): Promise<{ taskId: string; scheduledDate: string; removed: number }> =>
-    fetchJson<{ taskId: string; scheduledDate: string; removed: number }>(
-      `${coreBaseUrl()}/api/tasks/today/${encodeURIComponent(taskId)}?scheduledDate=${encodeURIComponent(scheduledDate)}`,
+    fetchTasksFacadeJson<{ taskId: string; scheduledDate: string; removed: number }>(
+      `/api/tasks/today/${encodeURIComponent(taskId)}?scheduledDate=${encodeURIComponent(scheduledDate)}`,
       { method: "DELETE" }
     ),
   scheduleCalendar: (startDate: string, endDate: string): Promise<ScheduleCalendarDay[]> => {
     const params = new URLSearchParams({ startDate, endDate });
-    return fetchJson<ScheduleCalendarDay[]>(`${coreBaseUrl()}/api/tasks/schedule-calendar?${params.toString()}`);
+    return fetchTasksFacadeJson<ScheduleCalendarDay[]>(`/api/tasks/schedule-calendar?${params.toString()}`);
   },
   updateScheduleItem: (
     scheduleId: number,
     patch: { scheduledDate?: string; occurrenceDate?: string; startTime?: string | null; endTime?: string | null; timezone?: string | null }
   ): Promise<ScheduleItem> =>
-    fetchJson<ScheduleItem>(
-      `${coreBaseUrl()}/api/tasks/schedule-items/${scheduleId}`,
+    fetchTasksFacadeJson<ScheduleItem>(
+      `/api/tasks/schedule-items/${scheduleId}`,
       { method: "PUT", body: JSON.stringify(patch) }
     ),
   removeScheduleItem: (scheduleId: number): Promise<void> =>
-    fetchJson<void>(
-      `${coreBaseUrl()}/api/tasks/schedule-items/${scheduleId}`,
+    fetchTasksFacadeJson<void>(
+      `/api/tasks/schedule-items/${scheduleId}`,
       { method: "DELETE" }
     ),
   scheduleItemsForTask: (taskId: string): Promise<ScheduleItem[]> =>
-    fetchJson<ScheduleItem[]>(
-      `${coreBaseUrl()}/api/tasks/${encodeURIComponent(taskId)}/schedule-items`
+    fetchTasksFacadeJson<ScheduleItem[]>(
+      `/api/tasks/${encodeURIComponent(taskId)}/schedule-items`
     ),
   completeOccurrence: (id: string, targetDate: string, status: TaskStatus): Promise<{ taskId: string; targetDate: string; status: TaskStatus }> =>
-    fetchJson<{ taskId: string; targetDate: string; status: TaskStatus }>(
-      `${coreBaseUrl()}/api/tasks/${encodeURIComponent(id)}/occurrences/complete`,
+    fetchTasksFacadeJson<{ taskId: string; targetDate: string; status: TaskStatus }>(
+      `/api/tasks/${encodeURIComponent(id)}/occurrences/complete`,
       {
         method: "POST",
         body: JSON.stringify({ targetDate, status })
       }
     ),
   moveOccurrence: (id: string, sourceDate: string, targetDate: string): Promise<{ taskId: string; sourceDate: string; targetDate: string }> =>
-    fetchJson<{ taskId: string; sourceDate: string; targetDate: string }>(
-      `${coreBaseUrl()}/api/tasks/${encodeURIComponent(id)}/occurrences/move`,
+    fetchTasksFacadeJson<{ taskId: string; sourceDate: string; targetDate: string }>(
+      `/api/tasks/${encodeURIComponent(id)}/occurrences/move`,
       {
         method: "POST",
         body: JSON.stringify({ sourceDate, targetDate })
       }
     ),
   skipOccurrenceException: (id: string, targetDate: string): Promise<{ taskId: string; targetDate: string }> =>
-    fetchJson<{ taskId: string; targetDate: string }>(
-      `${coreBaseUrl()}/api/tasks/${encodeURIComponent(id)}/occurrences/skip-exception`,
+    fetchTasksFacadeJson<{ taskId: string; targetDate: string }>(
+      `/api/tasks/${encodeURIComponent(id)}/occurrences/skip-exception`,
       {
         method: "POST",
         body: JSON.stringify({ targetDate })
@@ -1005,11 +1024,21 @@ export const tasksApi = {
     params.set("endDate", endDate);
     if (context) params.set("context", context);
     if (status) params.set("status", status);
-    return fetchJson<TaskScheduleDay[]>(`${coreBaseUrl()}/api/tasks/schedule?${params.toString()}`);
+    return fetchTasksFacadeJson<TaskScheduleDay[]>(`/api/tasks/schedule?${params.toString()}`);
   },
   history: (id: string): Promise<TaskHistoryEntry[]> =>
-    fetchJson<TaskHistoryEntry[]>(`${coreBaseUrl()}/api/tasks/${encodeURIComponent(id)}/history`),
+    fetchTasksFacadeJson<TaskHistoryEntry[]>(`/api/tasks/${encodeURIComponent(id)}/history`),
   exportCsv: async (): Promise<Blob> => {
+    if (tasksFacadeEnabled()) {
+      const response = await requestLocalDaemon("/api/tasks/export", {
+        headers: { Accept: "text/csv" }
+      });
+      if (!response.ok) {
+        throw new Error(`Export failed: ${response.status}`);
+      }
+      return response.blob();
+    }
+
     await initializeSessionStorage();
     const requestExport = async (): Promise<Response> =>
       fetch(`${coreBaseUrl()}/api/tasks/export`, {
@@ -1034,8 +1063,21 @@ export const tasksApi = {
     return response.blob();
   },
   importCsv: (file: File): Promise<{ imported: number }> => {
-    const formData = new FormData();
-    formData.append("file", file);
+    if (tasksFacadeEnabled()) {
+      return file.text().then(async (text) => {
+        const response = await requestLocalDaemon("/api/tasks/import", {
+          method: "POST",
+          headers: { "Content-Type": "text/csv" },
+          body: text
+        });
+        const responseText = await response.text();
+        if (!response.ok) {
+          throw new Error(responseText || `Import failed: ${response.status}`);
+        }
+        return JSON.parse(responseText) as { imported: number };
+      });
+    }
+
     return file.text().then((text) =>
       fetchJson<{ imported: number }>(`${coreBaseUrl()}/api/tasks/import`, {
         method: "POST",
@@ -1048,9 +1090,22 @@ export const tasksApi = {
 
 export const taskAttachmentsApi = {
   list: (taskId: string): Promise<TaskAttachment[]> =>
-    fetchJson<TaskAttachment[]>(`${coreBaseUrl()}/api/tasks/${encodeURIComponent(taskId)}/attachments`),
+    tasksFacadeEnabled()
+      ? fetchTasksFacadeJson<TaskAttachment[]>(`/api/tasks/${encodeURIComponent(taskId)}/attachments`)
+      : fetchJson<TaskAttachment[]>(`${coreBaseUrl()}/api/tasks/${encodeURIComponent(taskId)}/attachments`),
 
   upload: async (taskId: string, file: File): Promise<TaskAttachment> => {
+    if (tasksFacadeEnabled()) {
+      return fetchTasksFacadeJson<TaskAttachment>(`/api/tasks/${encodeURIComponent(taskId)}/attachments`, {
+        method: "POST",
+        body: JSON.stringify({
+          filename: file.name,
+          mimeType: file.type || "application/octet-stream",
+          contentBase64: await fileToBase64(file)
+        })
+      });
+    }
+
     await initializeSessionStorage();
     const formData = new FormData();
     formData.append("file", file);
@@ -1086,6 +1141,30 @@ export const taskAttachmentsApi = {
   },
 
   download: async (taskId: string, attachmentId: string, inline = false): Promise<void> => {
+    if (tasksFacadeEnabled()) {
+      const suffix = inline ? "" : "?download=1";
+      const response = await requestLocalDaemon(
+        `/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}/download${suffix}`
+      );
+      if (!response.ok) {
+        throw new Error(`Download failed: ${response.status}`);
+      }
+      const blob = await response.blob();
+      const filename = filenameFromDisposition(response.headers.get("content-disposition"), attachmentId);
+      if (inline) {
+        const objectUrl = URL.createObjectURL(blob);
+        window.open(objectUrl, "_blank");
+        setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+      } else {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = filename;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+      }
+      return;
+    }
+
     await initializeSessionStorage();
     const suffix = inline ? "" : "?download=1";
     const url = `${coreBaseUrl()}/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}/download${suffix}`;
@@ -1107,12 +1186,7 @@ export const taskAttachmentsApi = {
     }
 
     const blob = await response.blob();
-    const disposition = response.headers.get("content-disposition") ?? "";
-    const utf8Match = disposition.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
-    const quotedMatch = disposition.match(/filename\s*=\s*"([^"]+)"/i);
-    const filename = utf8Match?.[1]
-      ? decodeURIComponent(utf8Match[1])
-      : (quotedMatch?.[1] ?? attachmentId);
+    const filename = filenameFromDisposition(response.headers.get("content-disposition"), attachmentId);
 
     if (inline) {
       const objectUrl = URL.createObjectURL(blob);
@@ -1128,6 +1202,17 @@ export const taskAttachmentsApi = {
   },
 
   fetchBlob: async (taskId: string, attachmentId: string): Promise<{ blob: Blob; filename: string; mimeType: string }> => {
+    if (tasksFacadeEnabled()) {
+      const response = await requestLocalDaemon(
+        `/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}/download`
+      );
+      if (!response.ok) throw new Error(`Fetch failed: ${response.status}`);
+      const blob = await response.blob();
+      const filename = filenameFromDisposition(response.headers.get("content-disposition"), attachmentId);
+      const mimeType = (response.headers.get("content-type") ?? blob.type ?? "").split(";")[0].trim();
+      return { blob, filename, mimeType };
+    }
+
     await initializeSessionStorage();
     const url = `${coreBaseUrl()}/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}/download`;
     const requestFetch = async (): Promise<Response> => fetch(url, { headers: authHeaders() });
@@ -1141,32 +1226,32 @@ export const taskAttachmentsApi = {
     }
     if (!response.ok) throw new Error(`Fetch failed: ${response.status}`);
     const blob = await response.blob();
-    const disposition = response.headers.get("content-disposition") ?? "";
-    const utf8Match = disposition.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
-    const quotedMatch = disposition.match(/filename\s*=\s*"([^"]+)"/i);
-    const filename = utf8Match?.[1]
-      ? decodeURIComponent(utf8Match[1])
-      : (quotedMatch?.[1] ?? attachmentId);
+    const filename = filenameFromDisposition(response.headers.get("content-disposition"), attachmentId);
     const mimeType = (response.headers.get("content-type") ?? blob.type ?? "").split(";")[0].trim();
     return { blob, filename, mimeType };
   },
 
   remove: (taskId: string, attachmentId: string): Promise<void> =>
-    fetchJson<void>(
-      `${coreBaseUrl()}/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}`,
-      { method: "DELETE" }
-    )
+    tasksFacadeEnabled()
+      ? fetchTasksFacadeJson<void>(
+        `/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}`,
+        { method: "DELETE" }
+      )
+      : fetchJson<void>(
+        `${coreBaseUrl()}/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}`,
+        { method: "DELETE" }
+      )
 };
 
 export const taskSubtasksApi = {
   list: (taskId: string, occurrenceDate: string): Promise<TaskSubtask[]> =>
-    fetchJson<TaskSubtask[]>(
-      `${coreBaseUrl()}/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(occurrenceDate)}/subtasks`
+    fetchTasksFacadeJson<TaskSubtask[]>(
+      `/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(occurrenceDate)}/subtasks`
     ),
 
   create: (taskId: string, occurrenceDate: string, title: string): Promise<TaskSubtask> =>
-    fetchJson<TaskSubtask>(
-      `${coreBaseUrl()}/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(occurrenceDate)}/subtasks`,
+    fetchTasksFacadeJson<TaskSubtask>(
+      `/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(occurrenceDate)}/subtasks`,
       { method: "POST", body: JSON.stringify({ title }) }
     ),
 
@@ -1176,14 +1261,14 @@ export const taskSubtasksApi = {
     subtaskId: string,
     updates: { title?: string; isDone?: boolean; sortOrder?: number }
   ): Promise<TaskSubtask> =>
-    fetchJson<TaskSubtask>(
-      `${coreBaseUrl()}/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(occurrenceDate)}/subtasks/${encodeURIComponent(subtaskId)}`,
+    fetchTasksFacadeJson<TaskSubtask>(
+      `/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(occurrenceDate)}/subtasks/${encodeURIComponent(subtaskId)}`,
       { method: "PATCH", body: JSON.stringify(updates) }
     ),
 
   remove: (taskId: string, occurrenceDate: string, subtaskId: string): Promise<void> =>
-    fetchJson<void>(
-      `${coreBaseUrl()}/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(occurrenceDate)}/subtasks/${encodeURIComponent(subtaskId)}`,
+    fetchTasksFacadeJson<void>(
+      `/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(occurrenceDate)}/subtasks/${encodeURIComponent(subtaskId)}`,
       { method: "DELETE" }
     )
 };

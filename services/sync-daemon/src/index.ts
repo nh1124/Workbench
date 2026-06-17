@@ -1552,6 +1552,535 @@ function applyTaskPinPushResult(
   return true;
 }
 
+function recordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is Record<string, unknown> => Boolean(asRecord(item)))
+    : [];
+}
+
+function nextLocalScheduleId(): number {
+  return -Number.parseInt(randomUUID().slice(0, 8), 16);
+}
+
+function localSubtaskId(): string {
+  return `local-subtask-${randomUUID()}`;
+}
+
+function localTaskPayloadForUpdate(state: DaemonState, taskId: string): Record<string, unknown> | undefined {
+  return localRemoteDomainItem(state, "tasks", taskId, { includeDeleted: true });
+}
+
+function upsertLocalTaskPayload(
+  state: DaemonState,
+  taskId: string,
+  payload: Record<string, unknown>,
+  updatedAt: string
+): void {
+  upsertRemoteResource(state.manifestStore, {
+    domain: "tasks",
+    resourceId: taskId,
+    version: asNumber(payload.version),
+    payload: {
+      ...payload,
+      id: taskId,
+      updatedAt
+    },
+    updatedAt,
+    lastSyncedAt: asString(payload.lastSyncedAt)
+  });
+}
+
+function taskScheduleItems(task: Record<string, unknown> | undefined): Record<string, unknown>[] {
+  return recordArray(task?.scheduleItems);
+}
+
+function taskSubtasks(task: Record<string, unknown> | undefined): Record<string, unknown>[] {
+  return recordArray(task?.subtasks);
+}
+
+function taskAttachments(task: Record<string, unknown> | undefined): Record<string, unknown>[] {
+  return recordArray(task?.attachments);
+}
+
+function taskOccurrenceActions(task: Record<string, unknown> | undefined): Record<string, unknown>[] {
+  return recordArray(task?.occurrenceActions);
+}
+
+function scheduleItemOutboxPath(taskId: string, scheduleId: string | number): string {
+  return `tasks/${taskId}/schedule-items/${scheduleId}`;
+}
+
+function subtaskOutboxPath(taskId: string, occurrenceDate: string, subtaskId: string): string {
+  return `tasks/${taskId}/subtasks/${occurrenceDate}/${subtaskId}`;
+}
+
+function attachmentOutboxPath(taskId: string, attachmentId: string): string {
+  return `tasks/${taskId}/attachments/${attachmentId}`;
+}
+
+function occurrenceOutboxPath(taskId: string, operation: string, targetDate: string): string {
+  return `tasks/${taskId}/occurrences/${operation}/${targetDate}`;
+}
+
+function scheduleItemId(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function scheduleItemIdValue(item: Record<string, unknown>): number | undefined {
+  return scheduleItemId(item.id) ?? scheduleItemId(item.scheduleId);
+}
+
+function normalizeScheduleItemPayload(taskId: string, input: Record<string, unknown>, existing?: Record<string, unknown>): Record<string, unknown> {
+  const now = new Date().toISOString();
+  const scheduledDate = asString(input.scheduledDate) ?? asString(existing?.scheduledDate) ?? new Date().toISOString().slice(0, 10);
+  const occurrenceDate = typeof input.occurrenceDate === "string"
+    ? input.occurrenceDate
+    : typeof existing?.occurrenceDate === "string"
+      ? existing.occurrenceDate
+      : scheduledDate;
+  const payload: Record<string, unknown> = {
+    ...(existing ?? {}),
+    id: scheduleItemId(input.id) ?? scheduleItemId(input.scheduleId) ?? scheduleItemId(existing?.id) ?? nextLocalScheduleId(),
+    taskId,
+    occurrenceDate,
+    scheduledDate,
+    createdAt: typeof existing?.createdAt === "string" ? existing.createdAt : now,
+    updatedAt: now
+  };
+  for (const key of ["startTime", "endTime", "timezone"]) {
+    if (key in input) {
+      payload[key] = input[key] ?? undefined;
+    } else if (key in (existing ?? {})) {
+      payload[key] = existing?.[key];
+    }
+  }
+  return payload;
+}
+
+function updateTaskScheduleItems(
+  state: DaemonState,
+  taskId: string,
+  updater: (items: Record<string, unknown>[]) => Record<string, unknown>[],
+  updatedAt: string
+): Record<string, unknown> | undefined {
+  const task = localTaskPayloadForUpdate(state, taskId);
+  if (!task || task.deleted === true) return undefined;
+  const payload = {
+    ...task,
+    scheduleItems: updater(taskScheduleItems(task))
+  };
+  upsertLocalTaskPayload(state, taskId, payload, updatedAt);
+  return payload;
+}
+
+function findLocalScheduleItem(
+  state: DaemonState,
+  scheduleId: number
+): { taskId: string; task: Record<string, unknown>; item: Record<string, unknown> } | undefined {
+  for (const task of listLocalRemoteDomainItems(state, "tasks", { includeDeleted: false, limit: 1000 })) {
+    const taskId = asString(task.id);
+    if (!taskId) continue;
+    const item = taskScheduleItems(task).find((candidate) => scheduleItemIdValue(candidate) === scheduleId);
+    if (item) return { taskId, task, item };
+  }
+  return undefined;
+}
+
+function localTodayTasks(state: DaemonState, date: string): Record<string, unknown>[] {
+  const tasks: Record<string, unknown>[] = [];
+  for (const task of listLocalRemoteDomainItems(state, "tasks", { includeDeleted: false, limit: 1000 })) {
+    for (const item of taskScheduleItems(task)) {
+      if (item.scheduledDate !== date) continue;
+      tasks.push({
+        ...task,
+        occurrenceDate: asString(item.occurrenceDate) ?? date,
+        scheduledDate: date,
+        scheduleId: scheduleItemIdValue(item),
+        startTime: item.startTime,
+        endTime: item.endTime,
+        timezone: item.timezone
+      });
+    }
+  }
+  return tasks.sort((a, b) => String(a.startTime ?? "").localeCompare(String(b.startTime ?? "")));
+}
+
+function dateRange(startDate: string, endDate: string): string[] {
+  const start = new Date(`${startDate}T00:00:00.000Z`);
+  const end = new Date(`${endDate}T00:00:00.000Z`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) return [];
+  const days: string[] = [];
+  for (let current = start; current <= end; current = new Date(current.getTime() + 24 * 60 * 60 * 1000)) {
+    days.push(current.toISOString().slice(0, 10));
+  }
+  return days;
+}
+
+function csvEscape(value: unknown): string {
+  const text = value === null || value === undefined ? "" : String(value);
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+export function exportLocalTasksCsv(state: DaemonState): string {
+  const headers = [
+    "task_name", "context", "base_load_score", "active", "rule_type",
+    "due_date", "mon", "tue", "wed", "thu", "fri", "sat", "sun",
+    "interval_days", "anchor_date", "month_day", "nth_in_month", "weekday_mon1",
+    "start_date", "end_date", "notes", "timezone"
+  ];
+  const rows = listLocalRemoteDomainItems(state, "tasks", { includeDeleted: false, limit: 1000 }).map((task) => [
+    task.title,
+    task.context,
+    task.baseLoadScore,
+    task.active,
+    task.recurrence,
+    task.dueDate ?? "",
+    task.mon ?? false,
+    task.tue ?? false,
+    task.wed ?? false,
+    task.thu ?? false,
+    task.fri ?? false,
+    task.sat ?? false,
+    task.sun ?? false,
+    task.intervalDays ?? "",
+    task.anchorDate ?? "",
+    task.monthDay ?? "",
+    task.nthInMonth ?? "",
+    task.weekdayMon1 ?? "",
+    task.activeFrom ?? "",
+    task.activeUntil ?? "",
+    task.notes ?? "",
+    task.timezone ?? ""
+  ].map(csvEscape).join(","));
+  return [headers.join(","), ...rows].join("\n");
+}
+
+function parseCsvRows(csv: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let quoted = false;
+  for (let index = 0; index < csv.length; index += 1) {
+    const char = csv[index];
+    if (quoted) {
+      if (char === '"' && csv[index + 1] === '"') {
+        cell += '"';
+        index += 1;
+      } else if (char === '"') {
+        quoted = false;
+      } else {
+        cell += char;
+      }
+      continue;
+    }
+    if (char === '"') {
+      quoted = true;
+    } else if (char === ",") {
+      row.push(cell);
+      cell = "";
+    } else if (char === "\n") {
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+    } else if (char !== "\r") {
+      cell += char;
+    }
+  }
+  row.push(cell);
+  if (row.some((value) => value.length > 0) || rows.length === 0) rows.push(row);
+  return rows;
+}
+
+function csvBoolean(value: string | undefined): boolean | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  const normalized = value.trim().toLowerCase();
+  return normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on";
+}
+
+function csvNumber(value: string | undefined): number | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function csvString(value: string | undefined): string | undefined {
+  return value === undefined || value === "" ? undefined : value;
+}
+
+function csvTaskPayload(record: Record<string, string>): Record<string, unknown> | undefined {
+  const title = csvString(record.task_name) ?? csvString(record.title);
+  const context = csvString(record.context);
+  if (!title || !context) return undefined;
+  return {
+    title,
+    context,
+    baseLoadScore: csvNumber(record.base_load_score),
+    active: csvBoolean(record.active),
+    recurrence: csvString(record.rule_type),
+    dueDate: csvString(record.due_date),
+    mon: csvBoolean(record.mon),
+    tue: csvBoolean(record.tue),
+    wed: csvBoolean(record.wed),
+    thu: csvBoolean(record.thu),
+    fri: csvBoolean(record.fri),
+    sat: csvBoolean(record.sat),
+    sun: csvBoolean(record.sun),
+    intervalDays: csvNumber(record.interval_days),
+    anchorDate: csvString(record.anchor_date),
+    monthDay: csvNumber(record.month_day),
+    nthInMonth: csvNumber(record.nth_in_month),
+    weekdayMon1: csvNumber(record.weekday_mon1),
+    activeFrom: csvString(record.start_date),
+    activeUntil: csvString(record.end_date),
+    notes: record.notes ?? "",
+    timezone: csvString(record.timezone)
+  };
+}
+
+export async function importLocalTasksCsv(state: DaemonState, csv: string): Promise<number> {
+  const rows = parseCsvRows(csv);
+  const headers = rows.shift()?.map((header) => header.trim()) ?? [];
+  let imported = 0;
+  for (const row of rows) {
+    const record = Object.fromEntries(headers.map((header, index) => [header, row[index] ?? ""]));
+    const payload = csvTaskPayload(record);
+    if (!payload) continue;
+    await createLocalTask(state, payload);
+    imported += 1;
+  }
+  return imported;
+}
+
+export function localTaskHistory(state: DaemonState, taskId: string): Record<string, unknown>[] {
+  const task = localTaskPayloadForUpdate(state, taskId);
+  return taskOccurrenceActions(task).map((action, index) => ({
+    id: action.id ?? `local-history-${index}`,
+    taskId,
+    targetDate: action.targetDate ?? action.sourceDate ?? "",
+    status: action.status ?? action.operation ?? "",
+    createdAt: action.updatedAt ?? action.syncedAt ?? ""
+  }));
+}
+
+function localScheduleCalendar(state: DaemonState, startDate: string, endDate: string): Record<string, unknown>[] {
+  return dateRange(startDate, endDate).map((date) => ({
+    date,
+    items: localTodayTasks(state, date).map((task) => ({
+      scheduleId: task.scheduleId,
+      taskId: task.id,
+      title: task.title,
+      context: task.context,
+      status: task.status,
+      occurrenceDate: task.occurrenceDate,
+      scheduledDate: task.scheduledDate,
+      load: task.baseLoadScore,
+      startTime: task.startTime,
+      endTime: task.endTime,
+      timezone: task.timezone,
+      isLocked: task.isLocked
+    }))
+  }));
+}
+
+function localTaskSchedule(state: DaemonState, startDate: string, endDate: string, context?: string, status?: string): Record<string, unknown>[] {
+  return dateRange(startDate, endDate).map((date) => {
+    const tasks = localTodayTasks(state, date)
+      .filter((task) => !context || task.context === context)
+      .filter((task) => !status || task.status === status)
+      .map((task) => ({
+        taskId: task.id,
+        title: task.title,
+        context: task.context,
+        status: task.status,
+        load: task.baseLoadScore,
+        startTime: task.startTime,
+        endTime: task.endTime,
+        isLocked: task.isLocked
+      }));
+    return {
+      date,
+      totalLoad: tasks.reduce((sum, task) => sum + (typeof task.load === "number" ? task.load : 0), 0),
+      tasks
+    };
+  });
+}
+
+function enqueueTaskRelationOutbox(
+  state: DaemonState,
+  input: {
+    path: string;
+    action: "create" | "update" | "delete";
+    taskId: string;
+    payload: Record<string, unknown>;
+    supersedeReason: string;
+    updatedAt: string;
+  }
+): void {
+  supersedeOpenOutboxForPath(state, input.path, () => true, input.supersedeReason, input.updatedAt);
+  enqueueManifestOutbox(state.manifestStore, {
+    relativePath: input.path,
+    domain: "tasks",
+    action: input.action,
+    resourceId: input.taskId,
+    payload: {
+      taskId: input.taskId,
+      ...input.payload
+    }
+  });
+}
+
+function applyTaskScheduleResult(
+  state: DaemonState,
+  item: OutboxItem,
+  appliedItem: NonNullable<SyncPushResponse["applied"]>[number],
+  now: string
+): boolean {
+  const relationPayload = taskRelationPayload(item);
+  if (!relationPayload || (relationPayload.relation !== "today" && relationPayload.relation !== "scheduleItem")) return false;
+  const result = resultRecord(appliedItem.result);
+  const taskId = appliedItem.resourceId ?? relationPayload.taskId;
+  const localId = scheduleItemId(item.payload.scheduleId) ?? scheduleItemId(item.payload.id);
+  const resultId = scheduleItemId(result?.id) ?? scheduleItemId(result?.scheduleId) ?? localId;
+
+  updateTaskScheduleItems(state, taskId, (items) => {
+    if (item.action === "delete") {
+      return items.filter((candidate) => scheduleItemIdValue(candidate) !== localId && scheduleItemIdValue(candidate) !== resultId);
+    }
+    const nextItem = normalizeScheduleItemPayload(taskId, {
+      ...item.payload,
+      ...(result ?? {}),
+      id: resultId ?? localId
+    });
+    const replaced = items.map((candidate) => {
+      const candidateId = scheduleItemIdValue(candidate);
+      return candidateId === localId || candidateId === resultId ? nextItem : candidate;
+    });
+    return replaced.some((candidate) => scheduleItemIdValue(candidate) === scheduleItemIdValue(nextItem))
+      ? replaced
+      : [...replaced, nextItem];
+  }, now);
+  return true;
+}
+
+function applyTaskSubtaskResult(
+  state: DaemonState,
+  item: OutboxItem,
+  appliedItem: NonNullable<SyncPushResponse["applied"]>[number],
+  now: string
+): boolean {
+  const relationPayload = taskRelationPayload(item);
+  if (!relationPayload || relationPayload.relation !== "subtask") return false;
+  const result = resultRecord(appliedItem.result);
+  const taskId = appliedItem.resourceId ?? relationPayload.taskId;
+  const localId = asString(item.payload.subtaskId) ?? asString(item.payload.id);
+  const resultId = asString(result?.id) ?? asString(result?.subtaskId) ?? localId;
+
+  const task = localTaskPayloadForUpdate(state, taskId);
+  if (!task) return true;
+  const subtasks = taskSubtasks(task);
+  const nextSubtasks = item.action === "delete"
+    ? subtasks.filter((candidate) => asString(candidate.id) !== localId && asString(candidate.id) !== resultId)
+    : (() => {
+      const nextSubtask = {
+        ...item.payload,
+        ...(result ?? {}),
+        id: resultId,
+        taskId,
+        updatedAt: now
+      };
+      const replaced = subtasks.map((candidate) => {
+        const candidateId = asString(candidate.id);
+        return candidateId === localId || candidateId === resultId ? nextSubtask : candidate;
+      });
+      return replaced.some((candidate) => asString(candidate.id) === resultId)
+        ? replaced
+        : [...replaced, nextSubtask];
+    })();
+  upsertLocalTaskPayload(state, taskId, { ...task, subtasks: nextSubtasks }, now);
+  return true;
+}
+
+function applyTaskAttachmentResult(
+  state: DaemonState,
+  item: OutboxItem,
+  appliedItem: NonNullable<SyncPushResponse["applied"]>[number],
+  now: string
+): boolean {
+  const relationPayload = taskRelationPayload(item);
+  if (!relationPayload || relationPayload.relation !== "attachment") return false;
+  const result = resultRecord(appliedItem.result);
+  const taskId = appliedItem.resourceId ?? relationPayload.taskId;
+  const localId = asString(item.payload.attachmentId) ?? asString(item.payload.id);
+  const resultId = asString(result?.id) ?? asString(result?.attachmentId) ?? localId;
+  const task = localTaskPayloadForUpdate(state, taskId);
+  if (!task) return true;
+  const attachments = taskAttachments(task);
+  const nextAttachments = item.action === "delete"
+    ? attachments.filter((candidate) => asString(candidate.id) !== localId && asString(candidate.id) !== resultId)
+    : (() => {
+      const nextAttachment = {
+        ...item.payload,
+        ...(result ?? {}),
+        id: resultId,
+        taskId,
+        updatedAt: now
+      };
+      const replaced = attachments.map((candidate) => {
+        const candidateId = asString(candidate.id);
+        return candidateId === localId || candidateId === resultId ? nextAttachment : candidate;
+      });
+      return replaced.some((candidate) => asString(candidate.id) === resultId)
+        ? replaced
+        : [...replaced, nextAttachment];
+    })();
+  upsertLocalTaskPayload(state, taskId, { ...task, attachments: nextAttachments }, now);
+  return true;
+}
+
+function applyTaskOccurrenceResult(
+  state: DaemonState,
+  item: OutboxItem,
+  appliedItem: NonNullable<SyncPushResponse["applied"]>[number],
+  now: string
+): boolean {
+  const relationPayload = taskRelationPayload(item);
+  if (!relationPayload || relationPayload.relation !== "occurrence") return false;
+  const taskId = appliedItem.resourceId ?? relationPayload.taskId;
+  const task = localTaskPayloadForUpdate(state, taskId);
+  if (!task) return true;
+  const occurrence = {
+    ...item.payload,
+    ...(resultRecord(appliedItem.result) ?? {}),
+    taskId,
+    syncedAt: now
+  };
+  upsertLocalTaskPayload(state, taskId, {
+    ...task,
+    ...(item.payload.operation === "complete" && asString(item.payload.status) ? { status: item.payload.status } : {}),
+    occurrenceActions: [...taskOccurrenceActions(task), occurrence]
+  }, now);
+  return true;
+}
+
+function applyTaskRelationPushResult(
+  state: DaemonState,
+  item: OutboxItem,
+  appliedItem: NonNullable<SyncPushResponse["applied"]>[number],
+  now: string
+): boolean {
+  return applyTaskPinPushResult(state, item, appliedItem, now)
+    || applyTaskScheduleResult(state, item, appliedItem, now)
+    || applyTaskSubtaskResult(state, item, appliedItem, now)
+    || applyTaskAttachmentResult(state, item, appliedItem, now)
+    || applyTaskOccurrenceResult(state, item, appliedItem, now);
+}
+
 function enqueueLocalTaskPinOutbox(state: DaemonState, id: string, pinned: boolean, now: string): void {
   const outboxPath = taskRelationOutboxPath(id, "pin");
   supersedeOpenOutboxForPath(
@@ -1572,6 +2101,429 @@ function enqueueLocalTaskPinOutbox(state: DaemonState, id: string, pinned: boole
       pinned
     }
   });
+}
+
+export async function addLocalTaskToToday(
+  state: DaemonState,
+  taskId: string,
+  input: Record<string, unknown>
+): Promise<Record<string, unknown> | undefined> {
+  const now = new Date().toISOString();
+  const task = localTaskPayloadForUpdate(state, taskId);
+  if (!task || task.deleted === true) return undefined;
+  const item = normalizeScheduleItemPayload(taskId, input);
+  const scheduleId = scheduleItemIdValue(item);
+  if (scheduleId === undefined) return undefined;
+  updateTaskScheduleItems(state, taskId, (items) => [...items, item], now);
+  enqueueTaskRelationOutbox(state, {
+    path: scheduleItemOutboxPath(taskId, scheduleId),
+    action: "create",
+    taskId,
+    payload: {
+      relation: "today",
+      scheduleId,
+      id: scheduleId,
+      ...item
+    },
+    supersedeReason: "Local task schedule item was recreated; stale schedule operation was superseded.",
+    updatedAt: now
+  });
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
+  await refreshManifestStats(state);
+  return item;
+}
+
+export async function removeLocalTaskFromToday(
+  state: DaemonState,
+  taskId: string,
+  scheduledDate: string
+): Promise<Record<string, unknown> | undefined> {
+  const now = new Date().toISOString();
+  const task = localTaskPayloadForUpdate(state, taskId);
+  if (!task || task.deleted === true) return undefined;
+  const existing = taskScheduleItems(task).filter((item) => item.scheduledDate === scheduledDate);
+  if (existing.length === 0) return { taskId, scheduledDate, removed: 0 };
+  updateTaskScheduleItems(state, taskId, (items) => items.filter((item) => item.scheduledDate !== scheduledDate), now);
+  for (const item of existing) {
+    const scheduleId = scheduleItemIdValue(item);
+    if (scheduleId === undefined) continue;
+    const path = scheduleItemOutboxPath(taskId, scheduleId);
+    supersedeOpenOutboxForPath(
+      state,
+      path,
+      () => true,
+      "Local task schedule item was removed; stale schedule operation was superseded.",
+      now
+    );
+    if (scheduleId > 0) {
+      enqueueManifestOutbox(state.manifestStore, {
+        relativePath: path,
+        domain: "tasks",
+        action: "delete",
+        resourceId: taskId,
+        payload: {
+          relation: "today",
+          taskId,
+          scheduleId,
+          id: scheduleId,
+          scheduledDate
+        }
+      });
+    }
+  }
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
+  await refreshManifestStats(state);
+  return { taskId, scheduledDate, removed: existing.length };
+}
+
+export async function updateLocalTaskScheduleItem(
+  state: DaemonState,
+  scheduleId: number,
+  input: Record<string, unknown>
+): Promise<Record<string, unknown> | undefined> {
+  const found = findLocalScheduleItem(state, scheduleId);
+  if (!found) return undefined;
+  const now = new Date().toISOString();
+  const item = normalizeScheduleItemPayload(found.taskId, { ...found.item, ...input, id: scheduleId }, found.item);
+  updateTaskScheduleItems(state, found.taskId, (items) => items.map((candidate) => (
+    scheduleItemIdValue(candidate) === scheduleId ? item : candidate
+  )), now);
+  const path = scheduleItemOutboxPath(found.taskId, scheduleId);
+  const action = scheduleId < 0 ? "create" : "update";
+  enqueueTaskRelationOutbox(state, {
+    path,
+    action,
+    taskId: found.taskId,
+    payload: {
+      relation: scheduleId < 0 ? "today" : "scheduleItem",
+      scheduleId,
+      id: scheduleId,
+      ...item
+    },
+    supersedeReason: "Local task schedule item was updated; stale schedule operation was superseded.",
+    updatedAt: now
+  });
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
+  await refreshManifestStats(state);
+  return item;
+}
+
+export async function removeLocalTaskScheduleItem(state: DaemonState, scheduleId: number): Promise<boolean> {
+  const found = findLocalScheduleItem(state, scheduleId);
+  if (!found) return false;
+  const now = new Date().toISOString();
+  updateTaskScheduleItems(state, found.taskId, (items) => items.filter((item) => scheduleItemIdValue(item) !== scheduleId), now);
+  const path = scheduleItemOutboxPath(found.taskId, scheduleId);
+  supersedeOpenOutboxForPath(
+    state,
+    path,
+    () => true,
+    "Local task schedule item was removed; stale schedule operation was superseded.",
+    now
+  );
+  if (scheduleId > 0) {
+    enqueueManifestOutbox(state.manifestStore, {
+      relativePath: path,
+      domain: "tasks",
+      action: "delete",
+      resourceId: found.taskId,
+      payload: {
+        relation: "scheduleItem",
+        taskId: found.taskId,
+        scheduleId,
+        id: scheduleId,
+        scheduledDate: found.item.scheduledDate,
+        occurrenceDate: found.item.occurrenceDate
+      }
+    });
+  }
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
+  await refreshManifestStats(state);
+  return true;
+}
+
+export async function recordLocalTaskOccurrence(
+  state: DaemonState,
+  taskId: string,
+  input: Record<string, unknown>
+): Promise<Record<string, unknown> | undefined> {
+  const task = localTaskPayloadForUpdate(state, taskId);
+  if (!task || task.deleted === true) return undefined;
+  const operation = asString(input.operation);
+  const targetDate = asString(input.targetDate);
+  if (!operation || !targetDate) return undefined;
+  const now = new Date().toISOString();
+  const occurrence = {
+    relation: "occurrence",
+    taskId,
+    operation,
+    ...input,
+    updatedAt: now
+  };
+  upsertLocalTaskPayload(state, taskId, {
+    ...task,
+    ...(operation === "complete" && asString(input.status) ? { status: input.status } : {}),
+    occurrenceActions: [...taskOccurrenceActions(task), occurrence]
+  }, now);
+  enqueueTaskRelationOutbox(state, {
+    path: occurrenceOutboxPath(taskId, operation, targetDate),
+    action: "update",
+    taskId,
+    payload: occurrence,
+    supersedeReason: "Local task occurrence was updated; stale occurrence operation was superseded.",
+    updatedAt: now
+  });
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
+  await refreshManifestStats(state);
+  if (operation === "move") {
+    return { taskId, sourceDate: input.sourceDate, targetDate };
+  }
+  if (operation === "skipException") {
+    return { taskId, targetDate };
+  }
+  return { taskId, targetDate, status: input.status };
+}
+
+export async function createLocalTaskSubtask(
+  state: DaemonState,
+  taskId: string,
+  occurrenceDate: string,
+  input: Record<string, unknown>
+): Promise<Record<string, unknown> | undefined> {
+  const task = localTaskPayloadForUpdate(state, taskId);
+  if (!task || task.deleted === true) return undefined;
+  const title = asString(input.title);
+  if (!title) return undefined;
+  const now = new Date().toISOString();
+  const subtask = {
+    id: localSubtaskId(),
+    taskId,
+    occurrenceDate,
+    title,
+    isDone: false,
+    sortOrder: taskSubtasks(task).length,
+    createdAt: now,
+    updatedAt: now
+  };
+  upsertLocalTaskPayload(state, taskId, { ...task, subtasks: [...taskSubtasks(task), subtask] }, now);
+  enqueueTaskRelationOutbox(state, {
+    path: subtaskOutboxPath(taskId, occurrenceDate, subtask.id),
+    action: "create",
+    taskId,
+    payload: {
+      relation: "subtask",
+      subtaskId: subtask.id,
+      ...subtask
+    },
+    supersedeReason: "Local task subtask was recreated; stale subtask operation was superseded.",
+    updatedAt: now
+  });
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
+  await refreshManifestStats(state);
+  return subtask;
+}
+
+export async function updateLocalTaskSubtask(
+  state: DaemonState,
+  taskId: string,
+  occurrenceDate: string,
+  subtaskId: string,
+  input: Record<string, unknown>
+): Promise<Record<string, unknown> | undefined> {
+  const task = localTaskPayloadForUpdate(state, taskId);
+  if (!task || task.deleted === true) return undefined;
+  const existing = taskSubtasks(task).find((item) => asString(item.id) === subtaskId && item.occurrenceDate === occurrenceDate);
+  if (!existing) return undefined;
+  const now = new Date().toISOString();
+  const subtask = {
+    ...existing,
+    ...(typeof input.title === "string" ? { title: input.title } : {}),
+    ...(typeof input.isDone === "boolean" ? { isDone: input.isDone } : {}),
+    ...(typeof input.sortOrder === "number" ? { sortOrder: input.sortOrder } : {}),
+    updatedAt: now
+  };
+  upsertLocalTaskPayload(state, taskId, {
+    ...task,
+    subtasks: taskSubtasks(task).map((item) => asString(item.id) === subtaskId ? subtask : item)
+  }, now);
+  enqueueTaskRelationOutbox(state, {
+    path: subtaskOutboxPath(taskId, occurrenceDate, subtaskId),
+    action: subtaskId.startsWith("local-subtask-") ? "create" : "update",
+    taskId,
+    payload: {
+      relation: "subtask",
+      subtaskId,
+      ...subtask
+    },
+    supersedeReason: "Local task subtask was updated; stale subtask operation was superseded.",
+    updatedAt: now
+  });
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
+  await refreshManifestStats(state);
+  return subtask;
+}
+
+export async function deleteLocalTaskSubtask(
+  state: DaemonState,
+  taskId: string,
+  occurrenceDate: string,
+  subtaskId: string
+): Promise<boolean> {
+  const task = localTaskPayloadForUpdate(state, taskId);
+  if (!task || task.deleted === true) return false;
+  const existing = taskSubtasks(task).find((item) => asString(item.id) === subtaskId && item.occurrenceDate === occurrenceDate);
+  if (!existing) return false;
+  const now = new Date().toISOString();
+  upsertLocalTaskPayload(state, taskId, {
+    ...task,
+    subtasks: taskSubtasks(task).filter((item) => asString(item.id) !== subtaskId)
+  }, now);
+  const path = subtaskOutboxPath(taskId, occurrenceDate, subtaskId);
+  supersedeOpenOutboxForPath(
+    state,
+    path,
+    () => true,
+    "Local task subtask was removed; stale subtask operation was superseded.",
+    now
+  );
+  if (!subtaskId.startsWith("local-subtask-")) {
+    enqueueManifestOutbox(state.manifestStore, {
+      relativePath: path,
+      domain: "tasks",
+      action: "delete",
+      resourceId: taskId,
+      payload: {
+        relation: "subtask",
+        taskId,
+        occurrenceDate,
+        subtaskId,
+        id: subtaskId
+      }
+    });
+  }
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
+  await refreshManifestStats(state);
+  return true;
+}
+
+export async function createLocalTaskAttachment(
+  state: DaemonState,
+  taskId: string,
+  input: Record<string, unknown>
+): Promise<Record<string, unknown> | undefined> {
+  const task = localTaskPayloadForUpdate(state, taskId);
+  if (!task || task.deleted === true) return undefined;
+  const filename = asString(input.filename) ?? asString(input.originalFilename);
+  const contentBase64 = asString(input.contentBase64);
+  if (!filename || !contentBase64) return undefined;
+  const now = new Date().toISOString();
+  const buffer = Buffer.from(contentBase64, "base64");
+  const attachment = {
+    id: `local-attachment-${randomUUID()}`,
+    taskId,
+    filename,
+    mimeType: asString(input.mimeType) ?? "application/octet-stream",
+    sizeBytes: buffer.byteLength,
+    contentBase64,
+    createdAt: now,
+    updatedAt: now
+  };
+  upsertLocalTaskPayload(state, taskId, { ...task, attachments: [...taskAttachments(task), attachment] }, now);
+  enqueueTaskRelationOutbox(state, {
+    path: attachmentOutboxPath(taskId, attachment.id),
+    action: "create",
+    taskId,
+    payload: {
+      relation: "attachment",
+      attachmentId: attachment.id,
+      ...attachment
+    },
+    supersedeReason: "Local task attachment was recreated; stale attachment operation was superseded.",
+    updatedAt: now
+  });
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
+  await refreshManifestStats(state);
+  return attachment;
+}
+
+export async function updateLocalTaskAttachment(
+  state: DaemonState,
+  taskId: string,
+  attachmentId: string,
+  input: Record<string, unknown>
+): Promise<Record<string, unknown> | undefined> {
+  const task = localTaskPayloadForUpdate(state, taskId);
+  if (!task || task.deleted === true) return undefined;
+  const existing = taskAttachments(task).find((item) => asString(item.id) === attachmentId);
+  if (!existing) return undefined;
+  const contentBase64 = asString(input.contentBase64) ?? asString(existing.contentBase64);
+  if (!contentBase64) return undefined;
+  const now = new Date().toISOString();
+  const buffer = Buffer.from(contentBase64, "base64");
+  const attachment = {
+    ...existing,
+    filename: asString(input.filename) ?? asString(existing.filename) ?? attachmentId,
+    mimeType: asString(input.mimeType) ?? asString(existing.mimeType) ?? "application/octet-stream",
+    sizeBytes: buffer.byteLength,
+    contentBase64,
+    updatedAt: now
+  };
+  upsertLocalTaskPayload(state, taskId, {
+    ...task,
+    attachments: taskAttachments(task).map((item) => asString(item.id) === attachmentId ? attachment : item)
+  }, now);
+  enqueueTaskRelationOutbox(state, {
+    path: attachmentOutboxPath(taskId, attachmentId),
+    action: attachmentId.startsWith("local-attachment-") ? "create" : "update",
+    taskId,
+    payload: {
+      relation: "attachment",
+      attachmentId,
+      ...attachment
+    },
+    supersedeReason: "Local task attachment was updated; stale attachment operation was superseded.",
+    updatedAt: now
+  });
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
+  await refreshManifestStats(state);
+  return attachment;
+}
+
+export async function deleteLocalTaskAttachment(state: DaemonState, taskId: string, attachmentId: string): Promise<boolean> {
+  const task = localTaskPayloadForUpdate(state, taskId);
+  if (!task || task.deleted === true) return false;
+  const existing = taskAttachments(task).find((item) => asString(item.id) === attachmentId);
+  if (!existing) return false;
+  const now = new Date().toISOString();
+  upsertLocalTaskPayload(state, taskId, {
+    ...task,
+    attachments: taskAttachments(task).filter((item) => asString(item.id) !== attachmentId)
+  }, now);
+  const path = attachmentOutboxPath(taskId, attachmentId);
+  supersedeOpenOutboxForPath(
+    state,
+    path,
+    () => true,
+    "Local task attachment was removed; stale attachment operation was superseded.",
+    now
+  );
+  if (!attachmentId.startsWith("local-attachment-")) {
+    enqueueManifestOutbox(state.manifestStore, {
+      relativePath: path,
+      domain: "tasks",
+      action: "delete",
+      resourceId: taskId,
+      payload: {
+        relation: "attachment",
+        taskId,
+        attachmentId,
+        id: attachmentId
+      }
+    });
+  }
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
+  await refreshManifestStats(state);
+  return true;
 }
 
 export async function createLocalTask(state: DaemonState, input: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -3730,7 +4682,7 @@ async function pushOutbox(state: DaemonState): Promise<void> {
       if (applyProjectDefaultPushResult(state, item, appliedItem, now)) {
         continue;
       }
-      if (applyTaskPinPushResult(state, item, appliedItem, now)) {
+      if (applyTaskRelationPushResult(state, item, appliedItem, now)) {
         continue;
       }
       if (item.resourceId && item.resourceId !== nextResourceId) {
@@ -3946,6 +4898,10 @@ async function readRequestJson(req: IncomingMessage): Promise<Record<string, unk
   if (!text.trim()) return {};
   const parsed = JSON.parse(text) as unknown;
   return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+}
+
+async function readRequestText(req: IncomingMessage): Promise<string> {
+  return (await readRequestBuffer(req)).toString("utf8");
 }
 
 async function readRequestFormData(req: IncomingMessage): Promise<FormData> {
@@ -4293,6 +5249,354 @@ function startStatusServer(state: DaemonState): void {
 
     if (url.pathname === "/api/tasks/pins" && req.method === "GET") {
       writeJson(res, { taskIds: localTaskPinnedIds(state) });
+      return;
+    }
+
+    if (url.pathname === "/api/tasks/export" && req.method === "GET") {
+      const csv = exportLocalTasksCsv(state);
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", 'attachment; filename="tasks.csv"');
+      res.end(csv);
+      return;
+    }
+
+    if (url.pathname === "/api/tasks/import" && req.method === "POST") {
+      try {
+        const csv = await readRequestText(req);
+        const imported = await importLocalTasksCsv(state, csv);
+        scheduleTick(state, 0);
+        writeJson(res, { imported });
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/tasks/today" && req.method === "GET") {
+      const date = asString(url.searchParams.get("date"));
+      if (!date) {
+        writeJson(res, { message: "date query parameter is required" }, 400);
+        return;
+      }
+      writeJson(res, localTodayTasks(state, date));
+      return;
+    }
+
+    if (url.pathname === "/api/tasks/today" && req.method === "POST") {
+      try {
+        const body = await readRequestJson(req);
+        const taskId = asString(body.taskId);
+        if (!taskId) {
+          writeJson(res, { message: "taskId is required" }, 400);
+          return;
+        }
+        const item = await addLocalTaskToToday(state, taskId, body);
+        if (!item) {
+          writeJson(res, { message: "Local task not found" }, 404);
+          return;
+        }
+        scheduleTick(state, 0);
+        writeJson(res, item, 201);
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+      }
+      return;
+    }
+
+    const taskTodayDeleteMatch = url.pathname.match(/^\/api\/tasks\/today\/([^/]+)$/);
+    if (taskTodayDeleteMatch && req.method === "DELETE") {
+      try {
+        const taskId = decodeURIComponent(taskTodayDeleteMatch[1]);
+        const scheduledDate = asString(url.searchParams.get("scheduledDate"));
+        if (!scheduledDate) {
+          writeJson(res, { message: "scheduledDate query parameter is required" }, 400);
+          return;
+        }
+        const result = await removeLocalTaskFromToday(state, taskId, scheduledDate);
+        if (!result) {
+          writeJson(res, { message: "Local task not found" }, 404);
+          return;
+        }
+        scheduleTick(state, 0);
+        writeJson(res, result);
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/tasks/schedule-calendar" && req.method === "GET") {
+      const startDate = asString(url.searchParams.get("startDate"));
+      const endDate = asString(url.searchParams.get("endDate"));
+      if (!startDate || !endDate) {
+        writeJson(res, { message: "startDate and endDate query parameters are required" }, 400);
+        return;
+      }
+      writeJson(res, localScheduleCalendar(state, startDate, endDate));
+      return;
+    }
+
+    if (url.pathname === "/api/tasks/schedule" && req.method === "GET") {
+      const startDate = asString(url.searchParams.get("startDate"));
+      const endDate = asString(url.searchParams.get("endDate"));
+      if (!startDate || !endDate) {
+        writeJson(res, { message: "startDate and endDate query parameters are required" }, 400);
+        return;
+      }
+      writeJson(res, localTaskSchedule(
+        state,
+        startDate,
+        endDate,
+        url.searchParams.get("context") ?? undefined,
+        url.searchParams.get("status") ?? undefined
+      ));
+      return;
+    }
+
+    const taskHistoryMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/history$/);
+    if (taskHistoryMatch && req.method === "GET") {
+      const taskId = decodeURIComponent(taskHistoryMatch[1]);
+      const task = localTaskPayloadForUpdate(state, taskId);
+      if (!task || task.deleted === true) {
+        writeJson(res, { message: "Local task not found" }, 404);
+        return;
+      }
+      writeJson(res, localTaskHistory(state, taskId));
+      return;
+    }
+
+    const taskScheduleItemsMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/schedule-items$/);
+    if (taskScheduleItemsMatch && req.method === "GET") {
+      const taskId = decodeURIComponent(taskScheduleItemsMatch[1]);
+      const task = localTaskPayloadForUpdate(state, taskId);
+      if (!task || task.deleted === true) {
+        writeJson(res, { message: "Local task not found" }, 404);
+        return;
+      }
+      writeJson(res, taskScheduleItems(task));
+      return;
+    }
+
+    const taskScheduleItemMatch = url.pathname.match(/^\/api\/tasks\/schedule-items\/(-?\d+)$/);
+    if (taskScheduleItemMatch && req.method === "PUT") {
+      try {
+        const scheduleId = Number(taskScheduleItemMatch[1]);
+        const body = await readRequestJson(req);
+        const item = await updateLocalTaskScheduleItem(state, scheduleId, body);
+        if (!item) {
+          writeJson(res, { message: "Local schedule item not found" }, 404);
+          return;
+        }
+        scheduleTick(state, 0);
+        writeJson(res, item);
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+      }
+      return;
+    }
+
+    if (taskScheduleItemMatch && req.method === "DELETE") {
+      try {
+        const scheduleId = Number(taskScheduleItemMatch[1]);
+        const deleted = await removeLocalTaskScheduleItem(state, scheduleId);
+        if (!deleted) {
+          writeJson(res, { message: "Local schedule item not found" }, 404);
+          return;
+        }
+        scheduleTick(state, 0);
+        res.statusCode = 204;
+        res.end();
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+      }
+      return;
+    }
+
+    const taskOccurrenceMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/occurrences\/(complete|move|skip-exception)$/);
+    if (taskOccurrenceMatch && req.method === "POST") {
+      try {
+        const taskId = decodeURIComponent(taskOccurrenceMatch[1]);
+        const routeOperation = taskOccurrenceMatch[2] === "skip-exception" ? "skipException" : taskOccurrenceMatch[2];
+        const body = await readRequestJson(req);
+        const result = await recordLocalTaskOccurrence(state, taskId, {
+          ...body,
+          operation: routeOperation
+        });
+        if (!result) {
+          writeJson(res, { message: "Local task or occurrence payload not found" }, 404);
+          return;
+        }
+        scheduleTick(state, 0);
+        writeJson(res, result);
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+      }
+      return;
+    }
+
+    const taskSubtasksListMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/occurrences\/([^/]+)\/subtasks$/);
+    if (taskSubtasksListMatch && req.method === "GET") {
+      const taskId = decodeURIComponent(taskSubtasksListMatch[1]);
+      const occurrenceDate = decodeURIComponent(taskSubtasksListMatch[2]);
+      const task = localTaskPayloadForUpdate(state, taskId);
+      if (!task || task.deleted === true) {
+        writeJson(res, { message: "Local task not found" }, 404);
+        return;
+      }
+      writeJson(res, taskSubtasks(task).filter((item) => item.occurrenceDate === occurrenceDate));
+      return;
+    }
+
+    if (taskSubtasksListMatch && req.method === "POST") {
+      try {
+        const taskId = decodeURIComponent(taskSubtasksListMatch[1]);
+        const occurrenceDate = decodeURIComponent(taskSubtasksListMatch[2]);
+        const body = await readRequestJson(req);
+        const subtask = await createLocalTaskSubtask(state, taskId, occurrenceDate, body);
+        if (!subtask) {
+          writeJson(res, { message: "Local task or subtask payload not found" }, 404);
+          return;
+        }
+        scheduleTick(state, 0);
+        writeJson(res, subtask, 201);
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+      }
+      return;
+    }
+
+    const taskSubtaskItemMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/occurrences\/([^/]+)\/subtasks\/([^/]+)$/);
+    if (taskSubtaskItemMatch && req.method === "PATCH") {
+      try {
+        const taskId = decodeURIComponent(taskSubtaskItemMatch[1]);
+        const occurrenceDate = decodeURIComponent(taskSubtaskItemMatch[2]);
+        const subtaskId = decodeURIComponent(taskSubtaskItemMatch[3]);
+        const body = await readRequestJson(req);
+        const subtask = await updateLocalTaskSubtask(state, taskId, occurrenceDate, subtaskId, body);
+        if (!subtask) {
+          writeJson(res, { message: "Local subtask not found" }, 404);
+          return;
+        }
+        scheduleTick(state, 0);
+        writeJson(res, subtask);
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+      }
+      return;
+    }
+
+    if (taskSubtaskItemMatch && req.method === "DELETE") {
+      try {
+        const taskId = decodeURIComponent(taskSubtaskItemMatch[1]);
+        const occurrenceDate = decodeURIComponent(taskSubtaskItemMatch[2]);
+        const subtaskId = decodeURIComponent(taskSubtaskItemMatch[3]);
+        const deleted = await deleteLocalTaskSubtask(state, taskId, occurrenceDate, subtaskId);
+        if (!deleted) {
+          writeJson(res, { message: "Local subtask not found" }, 404);
+          return;
+        }
+        scheduleTick(state, 0);
+        res.statusCode = 204;
+        res.end();
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+      }
+      return;
+    }
+
+    const taskAttachmentsMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/attachments$/);
+    if (taskAttachmentsMatch && req.method === "GET") {
+      const taskId = decodeURIComponent(taskAttachmentsMatch[1]);
+      const task = localTaskPayloadForUpdate(state, taskId);
+      if (!task || task.deleted === true) {
+        writeJson(res, { message: "Local task not found" }, 404);
+        return;
+      }
+      writeJson(res, taskAttachments(task).map((item) => {
+        const { contentBase64: _contentBase64, ...metadata } = item;
+        return metadata;
+      }));
+      return;
+    }
+
+    if (taskAttachmentsMatch && req.method === "POST") {
+      try {
+        const taskId = decodeURIComponent(taskAttachmentsMatch[1]);
+        const body = await readRequestJson(req);
+        const attachment = await createLocalTaskAttachment(state, taskId, body);
+        if (!attachment) {
+          writeJson(res, { message: "Local task or attachment payload not found" }, 404);
+          return;
+        }
+        const { contentBase64: _contentBase64, ...metadata } = attachment;
+        scheduleTick(state, 0);
+        writeJson(res, metadata, 201);
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+      }
+      return;
+    }
+
+    const taskAttachmentDownloadMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/attachments\/([^/]+)\/download$/);
+    if (taskAttachmentDownloadMatch && req.method === "GET") {
+      const taskId = decodeURIComponent(taskAttachmentDownloadMatch[1]);
+      const attachmentId = decodeURIComponent(taskAttachmentDownloadMatch[2]);
+      const task = localTaskPayloadForUpdate(state, taskId);
+      const attachment = taskAttachments(task).find((item) => asString(item.id) === attachmentId);
+      const contentBase64 = asString(attachment?.contentBase64);
+      if (!attachment || !contentBase64) {
+        writeJson(res, { message: "Local attachment not found" }, 404);
+        return;
+      }
+      const buffer = Buffer.from(contentBase64, "base64");
+      const filename = (asString(attachment.filename) ?? attachmentId).replace(/["\r\n]/g, "_");
+      res.statusCode = 200;
+      res.setHeader("Content-Type", asString(attachment.mimeType) ?? "application/octet-stream");
+      res.setHeader("Content-Length", String(buffer.byteLength));
+      res.setHeader(
+        "Content-Disposition",
+        `${url.searchParams.get("download") === "1" ? "attachment" : "inline"}; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`
+      );
+      res.end(buffer);
+      return;
+    }
+
+    const taskAttachmentItemMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/attachments\/([^/]+)$/);
+    if (taskAttachmentItemMatch && req.method === "PUT") {
+      try {
+        const taskId = decodeURIComponent(taskAttachmentItemMatch[1]);
+        const attachmentId = decodeURIComponent(taskAttachmentItemMatch[2]);
+        const body = await readRequestJson(req);
+        const attachment = await updateLocalTaskAttachment(state, taskId, attachmentId, body);
+        if (!attachment) {
+          writeJson(res, { message: "Local attachment not found" }, 404);
+          return;
+        }
+        const { contentBase64: _contentBase64, ...metadata } = attachment;
+        scheduleTick(state, 0);
+        writeJson(res, metadata);
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+      }
+      return;
+    }
+
+    if (taskAttachmentItemMatch && req.method === "DELETE") {
+      try {
+        const taskId = decodeURIComponent(taskAttachmentItemMatch[1]);
+        const attachmentId = decodeURIComponent(taskAttachmentItemMatch[2]);
+        const deleted = await deleteLocalTaskAttachment(state, taskId, attachmentId);
+        if (!deleted) {
+          writeJson(res, { message: "Local attachment not found" }, 404);
+          return;
+        }
+        scheduleTick(state, 0);
+        res.statusCode = 204;
+        res.end();
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+      }
       return;
     }
 

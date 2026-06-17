@@ -21,16 +21,28 @@ import {
   createLocalArtifactFolder,
   createLocalArtifactNote,
   createLocalTask,
+  createLocalTaskAttachment,
+  addLocalTaskToToday,
+  createLocalTaskSubtask,
+  deleteLocalTaskSubtask,
+  deleteLocalTaskAttachment,
   deleteLocalProject,
   deleteLocalNote,
   deleteLocalArtifactItem,
   deleteLocalTask,
+  exportLocalTasksCsv,
   getLocalArtifactItemById,
+  importLocalTasksCsv,
   listLocalArtifactItems,
+  localTaskHistory,
   patchLocalArtifactNoteContent,
   scanSyncFolder,
   setLocalDefaultProject,
   setLocalTaskPin,
+  recordLocalTaskOccurrence,
+  removeLocalTaskScheduleItem,
+  updateLocalTaskScheduleItem,
+  updateLocalTaskSubtask,
   updateLocalProject,
   updateLocalNote,
   updateLocalArtifactNoteSection,
@@ -577,6 +589,249 @@ describe("sync folder recovery", () => {
       ]);
       const cached = manifest.remoteResources?.find((item) => item.domain === "tasks" && item.resourceId === "task-1");
       assert.equal(cached?.payload.isPinned, true);
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("queues local task today and schedule item changes into the outbox cache", async () => {
+    const { store, state } = await createState();
+    try {
+      upsertRemoteResource(store, {
+        domain: "tasks",
+        resourceId: "task-1",
+        version: 2,
+        payload: {
+          id: "task-1",
+          title: "Scheduled Task",
+          notes: "",
+          context: "project-1",
+          contextName: "Project 1",
+          status: "todo",
+          isLocked: false,
+          baseLoadScore: 5,
+          recurrence: "ONCE",
+          active: true,
+          createdAt: "2026-06-17T00:00:00.000Z",
+          updatedAt: "2026-06-17T00:00:00.000Z"
+        },
+        updatedAt: "2026-06-17T00:00:00.000Z",
+        lastSyncedAt: "2026-06-17T00:00:00.000Z"
+      });
+
+      const item = await addLocalTaskToToday(state, "task-1", {
+        scheduledDate: "2026-06-18",
+        occurrenceDate: "2026-06-18",
+        startTime: "09:00"
+      });
+      const scheduleId = Number(item?.id);
+      assert.ok(scheduleId < 0);
+
+      const updated = await updateLocalTaskScheduleItem(state, scheduleId, {
+        startTime: "10:00",
+        endTime: "11:00"
+      });
+      assert.equal(updated?.startTime, "10:00");
+
+      const manifest = readManifestFromStore(store);
+      assert.deepEqual(manifest.outbox?.map((entry) => `${entry.domain}:${entry.action}:${entry.status}:${entry.payload.relation}`).sort(), [
+        "tasks:create:pending:today",
+        "tasks:create:superseded:today"
+      ]);
+      const cached = manifest.remoteResources?.find((entry) => entry.domain === "tasks" && entry.resourceId === "task-1");
+      const scheduleItems = cached?.payload.scheduleItems as Array<Record<string, unknown>>;
+      assert.equal(scheduleItems.length, 1);
+      assert.equal(scheduleItems[0].startTime, "10:00");
+
+      const removed = await removeLocalTaskScheduleItem(state, scheduleId);
+      assert.equal(removed, true);
+      const afterRemove = readManifestFromStore(store);
+      const afterCached = afterRemove.remoteResources?.find((entry) => entry.domain === "tasks" && entry.resourceId === "task-1");
+      assert.deepEqual(afterCached?.payload.scheduleItems, []);
+      assert.equal(afterRemove.outbox?.filter((entry) => entry.status === "pending").length, 0);
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("queues local task occurrence changes into the outbox cache", async () => {
+    const { store, state } = await createState();
+    try {
+      upsertRemoteResource(store, {
+        domain: "tasks",
+        resourceId: "task-1",
+        version: 2,
+        payload: {
+          id: "task-1",
+          title: "Occurrence Task",
+          notes: "",
+          context: "project-1",
+          status: "todo",
+          isLocked: false,
+          baseLoadScore: 5,
+          recurrence: "ONCE",
+          active: true,
+          createdAt: "2026-06-17T00:00:00.000Z",
+          updatedAt: "2026-06-17T00:00:00.000Z"
+        },
+        updatedAt: "2026-06-17T00:00:00.000Z",
+        lastSyncedAt: "2026-06-17T00:00:00.000Z"
+      });
+
+      const result = await recordLocalTaskOccurrence(state, "task-1", {
+        operation: "complete",
+        targetDate: "2026-06-18",
+        status: "done"
+      });
+      assert.deepEqual(result, { taskId: "task-1", targetDate: "2026-06-18", status: "done" });
+
+      const manifest = readManifestFromStore(store);
+      assert.deepEqual(manifest.outbox?.map((entry) => `${entry.domain}:${entry.action}:${entry.status}:${entry.payload.relation}:${entry.payload.operation}`), [
+        "tasks:update:pending:occurrence:complete"
+      ]);
+      const cached = manifest.remoteResources?.find((entry) => entry.domain === "tasks" && entry.resourceId === "task-1");
+      assert.equal(cached?.payload.status, "done");
+      assert.equal((cached?.payload.occurrenceActions as Array<Record<string, unknown>>).length, 1);
+      assert.deepEqual(localTaskHistory(state, "task-1").map((entry) => `${entry.taskId}:${entry.targetDate}:${entry.status}`), [
+        "task-1:2026-06-18:done"
+      ]);
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("queues local task subtask changes into the outbox cache", async () => {
+    const { store, state } = await createState();
+    try {
+      upsertRemoteResource(store, {
+        domain: "tasks",
+        resourceId: "task-1",
+        version: 2,
+        payload: {
+          id: "task-1",
+          title: "Subtask Task",
+          notes: "",
+          context: "project-1",
+          status: "todo",
+          isLocked: false,
+          baseLoadScore: 5,
+          recurrence: "ONCE",
+          active: true,
+          createdAt: "2026-06-17T00:00:00.000Z",
+          updatedAt: "2026-06-17T00:00:00.000Z"
+        },
+        updatedAt: "2026-06-17T00:00:00.000Z",
+        lastSyncedAt: "2026-06-17T00:00:00.000Z"
+      });
+
+      const subtask = await createLocalTaskSubtask(state, "task-1", "2026-06-18", { title: "Draft subtask" });
+      const subtaskId = String(subtask?.id);
+      assert.ok(subtaskId.startsWith("local-subtask-"));
+
+      const updated = await updateLocalTaskSubtask(state, "task-1", "2026-06-18", subtaskId, {
+        title: "Edited subtask",
+        isDone: true
+      });
+      assert.equal(updated?.title, "Edited subtask");
+      assert.equal(updated?.isDone, true);
+
+      let manifest = readManifestFromStore(store);
+      assert.deepEqual(manifest.outbox?.map((entry) => `${entry.domain}:${entry.action}:${entry.status}:${entry.payload.relation}`).sort(), [
+        "tasks:create:pending:subtask",
+        "tasks:create:superseded:subtask"
+      ]);
+      let cached = manifest.remoteResources?.find((entry) => entry.domain === "tasks" && entry.resourceId === "task-1");
+      assert.equal((cached?.payload.subtasks as Array<Record<string, unknown>>)[0].title, "Edited subtask");
+
+      const deleted = await deleteLocalTaskSubtask(state, "task-1", "2026-06-18", subtaskId);
+      assert.equal(deleted, true);
+      manifest = readManifestFromStore(store);
+      cached = manifest.remoteResources?.find((entry) => entry.domain === "tasks" && entry.resourceId === "task-1");
+      assert.deepEqual(cached?.payload.subtasks, []);
+      assert.equal(manifest.outbox?.filter((entry) => entry.status === "pending").length, 0);
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("queues local task attachment changes into the outbox cache", async () => {
+    const { store, state } = await createState();
+    try {
+      upsertRemoteResource(store, {
+        domain: "tasks",
+        resourceId: "task-1",
+        version: 2,
+        payload: {
+          id: "task-1",
+          title: "Attachment Task",
+          notes: "",
+          context: "project-1",
+          status: "todo",
+          isLocked: false,
+          baseLoadScore: 5,
+          recurrence: "ONCE",
+          active: true,
+          createdAt: "2026-06-17T00:00:00.000Z",
+          updatedAt: "2026-06-17T00:00:00.000Z"
+        },
+        updatedAt: "2026-06-17T00:00:00.000Z",
+        lastSyncedAt: "2026-06-17T00:00:00.000Z"
+      });
+
+      const contentBase64 = Buffer.from("attachment body", "utf8").toString("base64");
+      const attachment = await createLocalTaskAttachment(state, "task-1", {
+        filename: "brief.txt",
+        mimeType: "text/plain",
+        contentBase64
+      });
+      const attachmentId = String(attachment?.id);
+      assert.ok(attachmentId.startsWith("local-attachment-"));
+
+      let manifest = readManifestFromStore(store);
+      assert.deepEqual(manifest.outbox?.map((entry) => `${entry.domain}:${entry.action}:${entry.status}:${entry.payload.relation}`), [
+        "tasks:create:pending:attachment"
+      ]);
+      let cached = manifest.remoteResources?.find((entry) => entry.domain === "tasks" && entry.resourceId === "task-1");
+      const attachments = cached?.payload.attachments as Array<Record<string, unknown>>;
+      assert.equal(attachments[0].filename, "brief.txt");
+      assert.equal(attachments[0].contentBase64, contentBase64);
+
+      const deleted = await deleteLocalTaskAttachment(state, "task-1", attachmentId);
+      assert.equal(deleted, true);
+      manifest = readManifestFromStore(store);
+      cached = manifest.remoteResources?.find((entry) => entry.domain === "tasks" && entry.resourceId === "task-1");
+      assert.deepEqual(cached?.payload.attachments, []);
+      assert.equal(manifest.outbox?.filter((entry) => entry.status === "pending").length, 0);
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("exports and imports local task CSV through the daemon cache", async () => {
+    const { store, state } = await createState();
+    try {
+      const created = await createLocalTask(state, {
+        title: "CSV Task",
+        context: "project-1",
+        notes: "export me",
+        recurrence: "ONCE"
+      });
+      assert.ok(String(created.id).startsWith("local-task-"));
+
+      const csv = exportLocalTasksCsv(state);
+      assert.match(csv, /task_name,context,base_load_score/);
+      assert.match(csv, /CSV Task,project-1/);
+
+      const imported = await importLocalTasksCsv(state, [
+        "task_name,context,base_load_score,active,rule_type,notes",
+        "Imported Task,project-2,3,true,ONCE,hello"
+      ].join("\n"));
+      assert.equal(imported, 1);
+
+      const manifest = readManifestFromStore(store);
+      const cachedTasks = manifest.remoteResources?.filter((entry) => entry.domain === "tasks") ?? [];
+      assert.equal(cachedTasks.length, 2);
+      assert.ok(cachedTasks.some((entry) => entry.payload.title === "Imported Task"));
     } finally {
       closeManifestStore(store);
     }

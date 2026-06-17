@@ -271,8 +271,8 @@ npm run build
   - Dirty local state or open outbox work creates `.workbench/conflicts` records instead of overwriting local files.
 - `[implemented]` Remote reconciliation for Projects, Notes, and Tasks is implemented as daemon SQLite cache.
   - These domains are not materialized into human-readable sync-folder files in this phase.
-  - Projects, Notes, and core Tasks local UI writes can now be queued through daemon outbox.
-  - Task relations beyond pin (`today`, `scheduleItem`, `occurrence`, `subtask`, and `attachment`) are not fully routed through daemon outbox yet.
+  - Projects, Notes, core Tasks, and the main Task relations can now be queued through daemon outbox.
+  - Task import/export/history are served from the daemon cache in Local Mode.
 
 ### Sync Folder Watcher
 
@@ -357,6 +357,9 @@ npm run build
   - Added `POST /api/projects`, `PATCH /api/projects/:id`, `DELETE /api/projects/:id`, and `PUT /api/projects/default` for Projects cache/outbox writes.
   - Added `POST /api/notes`, `PATCH /api/notes/:id`, and `DELETE /api/notes/:id` for Notes cache/outbox writes.
   - Added `POST /api/tasks`, `PATCH /api/tasks/:id`, `DELETE /api/tasks/:id`, and `PUT /api/tasks/:id/pin` for core Tasks cache/outbox writes.
+  - Added Task relation cache/outbox routes for Today, schedule items, occurrences, and subtasks.
+  - Added Task attachment list/upload/download/delete cache/outbox routes for Local Mode.
+  - Added Task CSV import/export and local history routes.
 - `[implemented]` Make artifact UI use the daemon loopback URL when Local Mode is enabled.
   - Tree, item read, note create/update/delete, folder create, file upload, and file download route through the daemon.
   - Existing Core route remains active when Local Mode is disabled.
@@ -368,7 +371,8 @@ npm run build
   - Existing Core route remains active when Local Mode is disabled.
 - `[partial]` Make Tasks UI use the daemon loopback URL when Local Mode is enabled.
   - Task list/item/project/pin reads and task create/update/delete/pin route through the daemon.
-  - Today, schedule, occurrence, subtask, attachment, import, and export routes still use Core.
+  - Today, schedule, occurrence, subtask, and attachment routes route through the daemon.
+  - Import, export, and history routes route through the daemon.
   - Existing Core route remains active when Local Mode is disabled.
 - `[implemented]` Add Settings UI display/actions for daemon status and open conflicts.
 - `[implemented]` Add offline/sync/conflict status display in the main app shell.
