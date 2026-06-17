@@ -41,7 +41,9 @@ import {
   type ManifestStore,
   type OutboxItem,
   type RemoteResource,
-  type RemoteResourceDomain
+  type RemoteResourceDomain,
+  type SyncErrorCategory,
+  type SyncErrorMetadata
 } from "./manifestStore.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -111,6 +113,9 @@ export type DaemonState = {
   lastRemotePullAt?: string;
   remoteArtifactCursor?: string;
   lastError?: string;
+  lastErrorCode?: string;
+  lastErrorCategory?: SyncErrorCategory;
+  lastErrorRetryable?: boolean;
   processedJobs: number;
   outboxPending: number;
   outboxFailed: number;
@@ -3965,8 +3970,15 @@ async function writeRemoteConflict(
     payload: Record<string, unknown>;
     errorMessage: string;
     createdAt: string;
+    errorCode?: string;
+    errorCategory?: SyncErrorCategory;
+    retryable?: boolean;
   }
 ): Promise<void> {
+  const details = classifySyncError({
+    message: input.errorMessage,
+    code: input.errorCode
+  });
   const conflictId = randomUUID();
   const conflictBaseName = sanitizeFileName(input.relativePath.replace(/[\\/]/g, "__")) || "remote-conflict";
   const timestamp = input.createdAt.replace(/[:.]/g, "-");
@@ -3979,6 +3991,9 @@ async function writeRemoteConflict(
     resourceId: input.resourceId,
     payload: input.payload,
     errorMessage: input.errorMessage,
+    errorCode: input.errorCode ?? details.errorCode ?? "LOCAL_SYNC_CONFLICT",
+    errorCategory: input.errorCategory ?? details.errorCategory ?? "local_conflict",
+    retryable: input.retryable ?? details.retryable ?? false,
     conflictPath,
     status: "open",
     createdAt: input.createdAt
@@ -3990,6 +4005,9 @@ async function writeRemoteConflict(
     action: input.action,
     resourceId: input.resourceId,
     errorMessage: input.errorMessage,
+    errorCode: input.errorCode ?? details.errorCode ?? "LOCAL_SYNC_CONFLICT",
+    errorCategory: input.errorCategory ?? details.errorCategory ?? "local_conflict",
+    retryable: input.retryable ?? details.retryable ?? false,
     remotePayload: input.payload,
     createdAt: input.createdAt
   }, null, 2)}\n`, "utf8");
@@ -4583,6 +4601,99 @@ type SyncPushResponse = {
   serverCursor?: string;
 };
 
+type SyncErrorDetails = SyncErrorMetadata & {
+  errorMessage: string;
+};
+
+function stringFromUnknown(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function errorCodeFromUnknown(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const code = (value as { code?: unknown }).code;
+  return stringFromUnknown(code);
+}
+
+function statusFromUnknown(value: unknown): number | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const status = (value as { status?: unknown; statusCode?: unknown }).status
+    ?? (value as { statusCode?: unknown }).statusCode;
+  return typeof status === "number" && Number.isFinite(status) ? status : undefined;
+}
+
+export function classifySyncError(input: unknown): SyncErrorDetails {
+  const record = input && typeof input === "object" ? input as Record<string, unknown> : undefined;
+  const errorMessage = stringFromUnknown(record?.message)
+    ?? (input instanceof Error ? input.message : undefined)
+    ?? stringFromUnknown(input)
+    ?? "Sync operation failed";
+  const errorCode = stringFromUnknown(record?.code) ?? errorCodeFromUnknown(input);
+  const status = typeof record?.status === "number" ? record.status : statusFromUnknown(input);
+  const normalizedCode = errorCode?.toUpperCase() ?? "";
+  const normalizedMessage = errorMessage.toLowerCase();
+
+  if (normalizedCode === "SYNC_VERSION_CONFLICT" || status === 409) {
+    return { errorMessage, errorCode, errorCategory: "version_conflict", retryable: false };
+  }
+  if (normalizedCode.includes("CHECKSUM")) {
+    return { errorMessage, errorCode, errorCategory: "checksum", retryable: false };
+  }
+  if (normalizedCode.includes("CAPABILITY")) {
+    return { errorMessage, errorCode, errorCategory: "capability", retryable: false };
+  }
+  if (status === 401 || status === 403 || normalizedCode.includes("UNAUTHORIZED") || normalizedCode.includes("AUTH")) {
+    return { errorMessage, errorCode, errorCategory: "auth", retryable: false };
+  }
+  if (
+    normalizedCode.includes("PATH")
+    || normalizedCode.includes("TRAVERSAL")
+    || normalizedMessage.includes("unsafe path")
+    || normalizedMessage.includes("invalid local artifact path")
+    || normalizedMessage.includes("outside the sync root")
+    || normalizedMessage.includes(".workbench")
+  ) {
+    return { errorMessage, errorCode, errorCategory: "path_rejection", retryable: false };
+  }
+  if (normalizedCode.includes("NOT_SUPPORTED") || normalizedCode.includes("UNSUPPORTED")) {
+    return { errorMessage, errorCode, errorCategory: "unsupported", retryable: false };
+  }
+  if (normalizedMessage.includes("conflict") || normalizedMessage.includes("unsynced local")) {
+    return { errorMessage, errorCode, errorCategory: "local_conflict", retryable: false };
+  }
+  if (
+    normalizedCode.includes("INVALID")
+    || normalizedCode.includes("VALIDATION")
+    || normalizedCode.includes("BASE64")
+    || normalizedMessage.includes("exceeds max sync size")
+    || status === 400
+  ) {
+    return { errorMessage, errorCode, errorCategory: "validation", retryable: false };
+  }
+  if (
+    normalizedCode === "SYNC_PUSH_OPERATION_FAILED"
+    || (typeof status === "number" && status >= 500)
+  ) {
+    return { errorMessage, errorCode, errorCategory: "server", retryable: true };
+  }
+  if (
+    normalizedMessage.includes("fetch failed")
+    || normalizedMessage.includes("network")
+    || normalizedMessage.includes("econnrefused")
+    || normalizedMessage.includes("econnreset")
+    || normalizedMessage.includes("enotfound")
+    || normalizedMessage.includes("etimedout")
+    || normalizedCode === "ECONNREFUSED"
+    || normalizedCode === "ECONNRESET"
+    || normalizedCode === "ENOTFOUND"
+    || normalizedCode === "ETIMEDOUT"
+    || normalizedCode.startsWith("UND_ERR_")
+  ) {
+    return { errorMessage, errorCode, errorCategory: "network", retryable: true };
+  }
+  return { errorMessage, errorCode, errorCategory: "unknown", retryable: false };
+}
+
 async function postSyncPush(state: DaemonState, ops: OutboxItem[]): Promise<SyncPushResponse> {
   if (!state.identity) throw new Error("Missing local client identity");
   const response = await fetch(`${state.config.coreUrl}/api/sync/push`, {
@@ -4632,7 +4743,7 @@ function resultRecord(value: unknown): Record<string, unknown> | undefined {
 async function writeConflictRecord(
   state: DaemonState,
   item: OutboxItem,
-  errorMessage: string,
+  error: SyncErrorDetails,
   createdAt: string
 ): Promise<void> {
   const conflictId = randomUUID();
@@ -4648,7 +4759,10 @@ async function writeConflictRecord(
     action: item.action,
     resourceId: item.resourceId,
     payload: item.payload,
-    errorMessage,
+    errorMessage: error.errorMessage,
+    errorCode: error.errorCode,
+    errorCategory: error.errorCategory,
+    retryable: error.retryable,
     conflictPath,
     status: "open",
     createdAt
@@ -4660,7 +4774,10 @@ async function writeConflictRecord(
     action: item.action,
     resourceId: item.resourceId,
     clientOpId: item.clientOpId,
-    errorMessage,
+    errorMessage: error.errorMessage,
+    errorCode: error.errorCode,
+    errorCategory: error.errorCategory,
+    retryable: error.retryable,
     payload: item.payload,
     createdAt
   }, null, 2)}\n`, "utf8");
@@ -4670,7 +4787,7 @@ async function writeConflictRecord(
     upsertManifestResource(state.manifestStore, {
       ...resource,
       dirty: true,
-      lastError: errorMessage
+      lastError: error.errorMessage
     });
   }
   await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
@@ -4765,9 +4882,12 @@ async function pushOutbox(state: DaemonState): Promise<void> {
   for (const rejectedItem of rejected) {
     const item = pending[rejectedItem.index];
     if (!item) continue;
-    const message = rejectedItem.message ?? rejectedItem.code ?? "Sync push rejected";
-    markOutboxFailed(state.manifestStore, item.id, message, now);
-    await writeConflictRecord(state, item, message, now);
+    const error = classifySyncError({
+      code: rejectedItem.code,
+      message: rejectedItem.message ?? rejectedItem.code ?? "Sync push rejected"
+    });
+    markOutboxFailed(state.manifestStore, item.id, error.errorMessage, now, error);
+    await writeConflictRecord(state, item, error, now);
   }
   setMeta(state.manifestStore, "lastPushAt", now);
   await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
@@ -4855,8 +4975,15 @@ async function performTick(state: DaemonState): Promise<void> {
     await pushOutbox(state);
     await heartbeat(state);
     state.lastError = undefined;
+    state.lastErrorCode = undefined;
+    state.lastErrorCategory = undefined;
+    state.lastErrorRetryable = undefined;
   } catch (error) {
-    state.lastError = error instanceof Error ? error.message : String(error);
+    const details = classifySyncError(error);
+    state.lastError = details.errorMessage;
+    state.lastErrorCode = details.errorCode;
+    state.lastErrorCategory = details.errorCategory;
+    state.lastErrorRetryable = details.retryable;
     console.warn(`[sync-daemon] ${state.lastError}`);
   }
 }
@@ -5122,6 +5249,9 @@ function daemonStatusPayload(state: DaemonState): Record<string, unknown> {
     remoteSyncCursor: getMeta(state.manifestStore, REMOTE_SYNC_CURSOR_META_KEY) ?? state.remoteArtifactCursor,
     remoteArtifactCursor: state.remoteArtifactCursor,
     lastError: state.lastError,
+    lastErrorCode: state.lastErrorCode,
+    lastErrorCategory: state.lastErrorCategory,
+    lastErrorRetryable: state.lastErrorRetryable,
     processedJobs: state.processedJobs,
     outboxPending: state.outboxPending,
     outboxFailed: state.outboxFailed,

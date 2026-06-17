@@ -406,11 +406,27 @@ export interface LocalDaemonStatus {
   lastScanAt?: string;
   lastPushAt?: string;
   lastError?: string;
+  lastErrorCode?: string;
+  lastErrorCategory?: LocalDaemonSyncErrorCategory;
+  lastErrorRetryable?: boolean;
   processedJobs?: number;
   outboxPending?: number;
   outboxFailed?: number;
   conflictsOpen?: number;
 }
+
+export type LocalDaemonSyncErrorCategory =
+  | "network"
+  | "auth"
+  | "capability"
+  | "version_conflict"
+  | "path_rejection"
+  | "validation"
+  | "checksum"
+  | "unsupported"
+  | "local_conflict"
+  | "server"
+  | "unknown";
 
 export interface LocalDaemonConflictRecord {
   id: string;
@@ -422,6 +438,9 @@ export interface LocalDaemonConflictRecord {
   resourceId?: string;
   payload: Record<string, unknown>;
   errorMessage: string;
+  errorCode?: string;
+  errorCategory?: LocalDaemonSyncErrorCategory;
+  retryable?: boolean;
   conflictPath?: string;
   status: "open" | "resolved" | "ignored";
   createdAt: string;

@@ -947,6 +947,37 @@
   font-size: 0.74rem;
 }
 
+.account-local-conflict-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.28rem;
+  margin-top: 0.32rem;
+}
+
+.account-local-conflict-meta span {
+  border: 1px solid rgba(248, 113, 113, 0.26);
+  border-radius: 999px;
+  color: #fecaca;
+  background: rgba(127, 29, 29, 0.22);
+  padding: 0.08rem 0.4rem;
+  font-size: 0.62rem;
+  line-height: 1.35;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.account-local-conflict-meta span.retryable {
+  border-color: rgba(96, 165, 250, 0.34);
+  color: #bfdbfe;
+  background: rgba(30, 64, 175, 0.2);
+}
+
+.account-local-conflict-meta span.blocking {
+  border-color: rgba(251, 191, 36, 0.34);
+  color: #fde68a;
+  background: rgba(113, 63, 18, 0.22);
+}
+
 .account-local-conflict-row small {
   display: block;
   margin-top: 0.16rem;

@@ -29,6 +29,25 @@ export type RemoteResource = {
   lastSyncedAt?: string;
 };
 
+export type SyncErrorCategory =
+  | "network"
+  | "auth"
+  | "capability"
+  | "version_conflict"
+  | "path_rejection"
+  | "validation"
+  | "checksum"
+  | "unsupported"
+  | "local_conflict"
+  | "server"
+  | "unknown";
+
+export type SyncErrorMetadata = {
+  errorCode?: string;
+  errorCategory?: SyncErrorCategory;
+  retryable?: boolean;
+};
+
 export type OutboxItem = {
   id: string;
   clientOpId: string;
@@ -40,6 +59,9 @@ export type OutboxItem = {
   status: "pending" | "applied" | "failed" | "superseded";
   attempts: number;
   lastError?: string;
+  errorCode?: string;
+  errorCategory?: SyncErrorCategory;
+  retryable?: boolean;
   createdAt: string;
   updatedAt: string;
   appliedAt?: string;
@@ -59,6 +81,9 @@ export type ConflictRecord = {
   resourceId?: string;
   payload: Record<string, unknown>;
   errorMessage: string;
+  errorCode?: string;
+  errorCategory?: SyncErrorCategory;
+  retryable?: boolean;
   conflictPath?: string;
   status: ConflictStatus;
   createdAt: string;
@@ -107,6 +132,9 @@ type OutboxRow = {
   status: string;
   attempts: number;
   last_error: string | null;
+  error_code: string | null;
+  error_category: string | null;
+  retryable: number | null;
   created_at: string;
   updated_at: string;
   applied_at: string | null;
@@ -140,6 +168,9 @@ type ConflictRow = {
   resource_id: string | null;
   payload_json: string;
   error_message: string;
+  error_code: string | null;
+  error_category: string | null;
+  retryable: number | null;
   conflict_path: string | null;
   status: string;
   created_at: string;
@@ -228,6 +259,29 @@ function toRemoteResourceDomain(value: string): RemoteResourceDomain {
   return value === "projects" || value === "notes" || value === "tasks" ? value : "artifacts";
 }
 
+function toSyncErrorCategory(value: string | null | undefined): SyncErrorCategory | undefined {
+  switch (value) {
+    case "network":
+    case "auth":
+    case "capability":
+    case "version_conflict":
+    case "path_rejection":
+    case "validation":
+    case "checksum":
+    case "unsupported":
+    case "local_conflict":
+    case "server":
+    case "unknown":
+      return value;
+    default:
+      return undefined;
+  }
+}
+
+function retryableToSql(value: boolean | undefined): number | null {
+  return typeof value === "boolean" ? (value ? 1 : 0) : null;
+}
+
 function toOutbox(row: OutboxRow): OutboxItem {
   return {
     id: row.id,
@@ -246,6 +300,9 @@ function toOutbox(row: OutboxRow): OutboxItem {
           : "pending",
     attempts: Number(row.attempts ?? 0),
     lastError: row.last_error ?? undefined,
+    errorCode: row.error_code ?? undefined,
+    errorCategory: toSyncErrorCategory(row.error_category),
+    retryable: row.retryable === null || row.retryable === undefined ? undefined : row.retryable === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     appliedAt: row.applied_at ?? undefined
@@ -273,6 +330,9 @@ function toConflict(row: ConflictRow): ConflictRecord {
     resourceId: row.resource_id ?? undefined,
     payload: parseJsonRecord(row.payload_json),
     errorMessage: row.error_message,
+    errorCode: row.error_code ?? undefined,
+    errorCategory: toSyncErrorCategory(row.error_category),
+    retryable: row.retryable === null || row.retryable === undefined ? undefined : row.retryable === 1,
     conflictPath: row.conflict_path ?? undefined,
     status: row.status === "resolved" ? "resolved" : row.status === "ignored" ? "ignored" : "open",
     createdAt: row.created_at,
@@ -292,6 +352,18 @@ function normalizeManifest(manifest: Manifest): NormalizedManifest {
     lastScanAt: manifest.lastScanAt,
     lastPushAt: manifest.lastPushAt
   };
+}
+
+function ensureColumn(
+  db: DatabaseSync,
+  tableName: "outbox" | "conflicts",
+  columnName: string,
+  definition: string
+): void {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === columnName)) {
+    db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+  }
 }
 
 export function openManifestStore(syncRoot: string): ManifestStore {
@@ -331,6 +403,9 @@ export function openManifestStore(syncRoot: string): ManifestStore {
       status TEXT NOT NULL,
       attempts INTEGER NOT NULL DEFAULT 0,
       last_error TEXT,
+      error_code TEXT,
+      error_category TEXT,
+      retryable INTEGER,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       applied_at TEXT
@@ -371,6 +446,9 @@ export function openManifestStore(syncRoot: string): ManifestStore {
       resource_id TEXT,
       payload_json TEXT NOT NULL,
       error_message TEXT NOT NULL,
+      error_code TEXT,
+      error_category TEXT,
+      retryable INTEGER,
       conflict_path TEXT,
       status TEXT NOT NULL,
       created_at TEXT NOT NULL,
@@ -385,6 +463,12 @@ export function openManifestStore(syncRoot: string): ManifestStore {
     CREATE INDEX IF NOT EXISTS idx_conflicts_outbox_id
       ON conflicts (outbox_id);
   `);
+  ensureColumn(db, "outbox", "error_code", "TEXT");
+  ensureColumn(db, "outbox", "error_category", "TEXT");
+  ensureColumn(db, "outbox", "retryable", "INTEGER");
+  ensureColumn(db, "conflicts", "error_code", "TEXT");
+  ensureColumn(db, "conflicts", "error_category", "TEXT");
+  ensureColumn(db, "conflicts", "retryable", "INTEGER");
   return { db, path: manifestDbPath(syncRoot) };
 }
 
@@ -401,7 +485,8 @@ export function readManifestFromStore(store: ManifestStore): Manifest {
   `).all() as ResourceRow[];
   const outbox = store.db.prepare(`
     SELECT id, client_op_id, relative_path, domain, action, resource_id, payload_json,
-           status, attempts, last_error, created_at, updated_at, applied_at
+           status, attempts, last_error, error_code, error_category, retryable,
+           created_at, updated_at, applied_at
     FROM outbox
     ORDER BY created_at ASC
   `).all() as OutboxRow[];
@@ -418,8 +503,8 @@ export function readManifestFromStore(store: ManifestStore): Manifest {
   `).all() as RemoteResourceRow[];
   const conflicts = store.db.prepare(`
     SELECT id, outbox_id, client_op_id, relative_path, domain, action, resource_id,
-           payload_json, error_message, conflict_path, status, created_at, resolved_at,
-           resolution, resolution_note
+           payload_json, error_message, error_code, error_category, retryable,
+           conflict_path, status, created_at, resolved_at, resolution, resolution_note
     FROM conflicts
     ORDER BY created_at DESC
     LIMIT 200
@@ -452,9 +537,10 @@ export function replaceManifestInStore(store: ManifestStore, manifest: Manifest)
       store.db.prepare(`
         INSERT INTO outbox (
           id, client_op_id, relative_path, domain, action, resource_id, payload_json,
-          status, attempts, last_error, created_at, updated_at, applied_at
+          status, attempts, last_error, error_code, error_category, retryable,
+          created_at, updated_at, applied_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id)
         DO UPDATE SET
           client_op_id = excluded.client_op_id,
@@ -466,6 +552,9 @@ export function replaceManifestInStore(store: ManifestStore, manifest: Manifest)
           status = excluded.status,
           attempts = excluded.attempts,
           last_error = excluded.last_error,
+          error_code = excluded.error_code,
+          error_category = excluded.error_category,
+          retryable = excluded.retryable,
           updated_at = excluded.updated_at,
           applied_at = excluded.applied_at
       `).run(
@@ -479,6 +568,9 @@ export function replaceManifestInStore(store: ManifestStore, manifest: Manifest)
         item.status,
         item.attempts,
         item.lastError ?? null,
+        item.errorCode ?? null,
+        item.errorCategory ?? null,
+        retryableToSql(item.retryable),
         item.createdAt,
         item.updatedAt,
         item.appliedAt ?? null
@@ -710,7 +802,8 @@ export function hasOpenOutboxForPath(store: ManifestStore, relativePath: string)
 export function listOpenOutboxForResource(store: ManifestStore, resourceId: string): OutboxItem[] {
   return (store.db.prepare(`
     SELECT id, client_op_id, relative_path, domain, action, resource_id, payload_json,
-           status, attempts, last_error, created_at, updated_at, applied_at
+           status, attempts, last_error, error_code, error_category, retryable,
+           created_at, updated_at, applied_at
     FROM outbox
     WHERE resource_id = ? AND status IN ('pending', 'failed')
     ORDER BY created_at ASC
@@ -720,7 +813,8 @@ export function listOpenOutboxForResource(store: ManifestStore, resourceId: stri
 export function listOpenOutboxForPath(store: ManifestStore, relativePath: string): OutboxItem[] {
   return (store.db.prepare(`
     SELECT id, client_op_id, relative_path, domain, action, resource_id, payload_json,
-           status, attempts, last_error, created_at, updated_at, applied_at
+           status, attempts, last_error, error_code, error_category, retryable,
+           created_at, updated_at, applied_at
     FROM outbox
     WHERE relative_path = ? AND status IN ('pending', 'failed')
     ORDER BY created_at ASC
@@ -731,7 +825,8 @@ export function listOpenOutboxUnderPath(store: ManifestStore, relativePath: stri
   const prefix = `${relativePath.replace(/\/+$/, "")}/%`;
   return (store.db.prepare(`
     SELECT id, client_op_id, relative_path, domain, action, resource_id, payload_json,
-           status, attempts, last_error, created_at, updated_at, applied_at
+           status, attempts, last_error, error_code, error_category, retryable,
+           created_at, updated_at, applied_at
     FROM outbox
     WHERE (relative_path = ? OR relative_path LIKE ?) AND status IN ('pending', 'failed')
     ORDER BY created_at ASC
@@ -756,9 +851,10 @@ export function enqueueOutbox(
   store.db.prepare(`
     INSERT INTO outbox (
       id, client_op_id, relative_path, domain, action, resource_id, payload_json,
-      status, attempts, last_error, created_at, updated_at, applied_at
+      status, attempts, last_error, error_code, error_category, retryable,
+      created_at, updated_at, applied_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     outboxItem.id,
     outboxItem.clientOpId,
@@ -770,6 +866,9 @@ export function enqueueOutbox(
     outboxItem.status,
     outboxItem.attempts,
     null,
+    null,
+    null,
+    null,
     outboxItem.createdAt,
     outboxItem.updatedAt,
     null
@@ -780,7 +879,8 @@ export function enqueueOutbox(
 export function listPendingOutbox(store: ManifestStore, limit: number): OutboxItem[] {
   return (store.db.prepare(`
     SELECT id, client_op_id, relative_path, domain, action, resource_id, payload_json,
-           status, attempts, last_error, created_at, updated_at, applied_at
+           status, attempts, last_error, error_code, error_category, retryable,
+           created_at, updated_at, applied_at
     FROM outbox
     WHERE status = 'pending'
     ORDER BY created_at ASC
@@ -795,20 +895,39 @@ export function markOutboxApplied(store: ManifestStore, id: string, appliedAt: s
         attempts = attempts + 1,
         applied_at = ?,
         updated_at = ?,
-        last_error = NULL
+        last_error = NULL,
+        error_code = NULL,
+        error_category = NULL,
+        retryable = NULL
     WHERE id = ?
   `).run(appliedAt, appliedAt, id);
 }
 
-export function markOutboxFailed(store: ManifestStore, id: string, errorMessage: string, updatedAt: string): void {
+export function markOutboxFailed(
+  store: ManifestStore,
+  id: string,
+  errorMessage: string,
+  updatedAt: string,
+  metadata: SyncErrorMetadata = {}
+): void {
   store.db.prepare(`
     UPDATE outbox
     SET status = 'failed',
         attempts = attempts + 1,
         last_error = ?,
+        error_code = ?,
+        error_category = ?,
+        retryable = ?,
         updated_at = ?
     WHERE id = ?
-  `).run(errorMessage.slice(0, 2000), updatedAt, id);
+  `).run(
+    errorMessage.slice(0, 2000),
+    metadata.errorCode ?? null,
+    metadata.errorCategory ?? null,
+    retryableToSql(metadata.retryable),
+    updatedAt,
+    id
+  );
 }
 
 export function markOutboxSuperseded(store: ManifestStore, id: string, reason: string, updatedAt: string): void {
@@ -818,6 +937,9 @@ export function markOutboxSuperseded(store: ManifestStore, id: string, reason: s
       UPDATE outbox
       SET status = 'superseded',
           last_error = ?,
+          error_code = NULL,
+          error_category = NULL,
+          retryable = NULL,
           updated_at = ?
       WHERE id = ? AND status IN ('pending', 'failed')
     `).run(reason.slice(0, 2000), updatedAt, id);
@@ -876,10 +998,10 @@ export function recordConflict(
   store.db.prepare(`
     INSERT INTO conflicts (
       id, outbox_id, client_op_id, relative_path, domain, action, resource_id,
-      payload_json, error_message, conflict_path, status, created_at, resolved_at,
-      resolution, resolution_note
+      payload_json, error_message, error_code, error_category, retryable,
+      conflict_path, status, created_at, resolved_at, resolution, resolution_note
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id)
     DO UPDATE SET
       outbox_id = excluded.outbox_id,
@@ -890,6 +1012,9 @@ export function recordConflict(
       resource_id = excluded.resource_id,
       payload_json = excluded.payload_json,
       error_message = excluded.error_message,
+      error_code = excluded.error_code,
+      error_category = excluded.error_category,
+      retryable = excluded.retryable,
       conflict_path = excluded.conflict_path,
       status = excluded.status,
       resolved_at = excluded.resolved_at,
@@ -905,6 +1030,9 @@ export function recordConflict(
     input.resourceId ?? null,
     JSON.stringify(input.payload ?? {}),
     input.errorMessage.slice(0, 4000),
+    input.errorCode ?? null,
+    input.errorCategory ?? null,
+    retryableToSql(input.retryable),
     input.conflictPath ?? null,
     input.status ?? "open",
     now,
@@ -922,8 +1050,8 @@ export function recordConflict(
 export function getConflict(store: ManifestStore, id: string): ConflictRecord | undefined {
   const row = store.db.prepare(`
     SELECT id, outbox_id, client_op_id, relative_path, domain, action, resource_id,
-           payload_json, error_message, conflict_path, status, created_at, resolved_at,
-           resolution, resolution_note
+           payload_json, error_message, error_code, error_category, retryable,
+           conflict_path, status, created_at, resolved_at, resolution, resolution_note
     FROM conflicts
     WHERE id = ?
   `).get(id) as ConflictRow | undefined;
@@ -938,8 +1066,8 @@ export function listConflicts(
   if (options.status && options.status !== "all") {
     return (store.db.prepare(`
       SELECT id, outbox_id, client_op_id, relative_path, domain, action, resource_id,
-             payload_json, error_message, conflict_path, status, created_at, resolved_at,
-             resolution, resolution_note
+             payload_json, error_message, error_code, error_category, retryable,
+             conflict_path, status, created_at, resolved_at, resolution, resolution_note
       FROM conflicts
       WHERE status = ?
       ORDER BY created_at DESC
@@ -948,8 +1076,8 @@ export function listConflicts(
   }
   return (store.db.prepare(`
     SELECT id, outbox_id, client_op_id, relative_path, domain, action, resource_id,
-           payload_json, error_message, conflict_path, status, created_at, resolved_at,
-           resolution, resolution_note
+           payload_json, error_message, error_code, error_category, retryable,
+           conflict_path, status, created_at, resolved_at, resolution, resolution_note
     FROM conflicts
     ORDER BY created_at DESC
     LIMIT ?
@@ -973,6 +1101,9 @@ export function resolveConflict(
         UPDATE outbox
         SET status = 'pending',
             last_error = NULL,
+            error_code = NULL,
+            error_category = NULL,
+            retryable = NULL,
             updated_at = ?
         WHERE id = ?
       `).run(now, conflict.outboxId);
@@ -983,6 +1114,9 @@ export function resolveConflict(
         UPDATE outbox
         SET status = 'applied',
             last_error = NULL,
+            error_code = NULL,
+            error_category = NULL,
+            retryable = NULL,
             applied_at = ?,
             updated_at = ?
         WHERE id = ?

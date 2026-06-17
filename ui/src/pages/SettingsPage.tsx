@@ -63,6 +63,15 @@ function normalizeCategoryKey(category: string): string {
   return formatCategoryLabel(category).toLowerCase();
 }
 
+function formatSyncErrorCategory(category?: LocalDaemonStatus["lastErrorCategory"]): string {
+  if (!category) return "Unknown";
+  return category
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 function serviceEmoji(manifestId: string, manifestIcon?: string): string {
   if (manifestIcon && /\p{Extended_Pictographic}/u.test(manifestIcon)) {
     return manifestIcon;
@@ -1491,7 +1500,14 @@ export function SettingsPage() {
                   <span>{localDaemonStatus.outboxPending ?? 0} pending</span>
                   <span>{localDaemonStatus.outboxFailed ?? 0} failed</span>
                   <span>{localDaemonStatus.conflictsOpen ?? 0} conflicts</span>
-                  {localDaemonStatus.lastError ? <small>{localDaemonStatus.lastError}</small> : null}
+                  {localDaemonStatus.lastError ? (
+                    <small>
+                      {localDaemonStatus.lastErrorCategory
+                        ? `${formatSyncErrorCategory(localDaemonStatus.lastErrorCategory)}${localDaemonStatus.lastErrorRetryable ? " retryable" : ""}: `
+                        : ""}
+                      {localDaemonStatus.lastError}
+                    </small>
+                  ) : null}
                 </div>
               ) : (
                 <p className="info">Local daemon status is not loaded.</p>
@@ -1511,6 +1527,15 @@ export function SettingsPage() {
                         <div>
                           <strong>{conflict.relativePath}</strong>
                           <p>{conflict.action} / {conflict.domain}</p>
+                          <div className="account-local-conflict-meta">
+                            {conflict.errorCategory ? <span>{formatSyncErrorCategory(conflict.errorCategory)}</span> : null}
+                            {conflict.errorCode ? <span>{conflict.errorCode}</span> : null}
+                            {typeof conflict.retryable === "boolean" ? (
+                              <span className={conflict.retryable ? "retryable" : "blocking"}>
+                                {conflict.retryable ? "Retryable" : "Needs review"}
+                              </span>
+                            ) : null}
+                          </div>
                           <small>{conflict.errorMessage}</small>
                         </div>
                         <div className="account-local-conflict-actions">

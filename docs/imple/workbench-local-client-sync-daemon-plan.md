@@ -118,6 +118,7 @@ Last updated: 2026-06-18
   - keep manifest resource mappings and SQLite outbox entries,
   - write sync rejection records under `.workbench/conflicts`,
   - track conflict lifecycle in `.workbench/manifest.sqlite`,
+  - persist sync error metadata on outbox/conflict records (`errorCode`, `errorCategory`, `retryable`),
   - push local outbox changes to Core through `POST /api/sync/push`,
   - expose local status at `http://127.0.0.1:<port>/status`.
   - expose local conflict list/resolve endpoints under `http://127.0.0.1:<port>/conflicts`.
@@ -131,6 +132,7 @@ Last updated: 2026-06-18
   - create conflicts instead of overwriting dirty local artifact files or folders,
   - apply remote folder deletes only when tracked local contents are clean,
   - reject unsafe remote paths under `.workbench` or outside the sync root.
+  - expose classified daemon runtime errors in `/status` through `lastErrorCode`, `lastErrorCategory`, and `lastErrorRetryable`.
 - `[implemented]` Daemon MCP tools were added in `services/sync-daemon/src/mcpServer.ts`.
   - `workbench.local.clients.current`
   - `workbench.local.path.resolve`
@@ -201,6 +203,9 @@ npm run build
   - Covers optional no-plaintext identity persistence.
   - Covers in-memory identity reuse while no-plaintext persistence is enabled.
   - Covers backward-compatible identity file persistence with restrictive file mode where the OS supports it.
+- `[implemented]` Sync daemon sync error classification tests were added.
+  - Covers version conflict, network failure, and path rejection classification.
+  - Covers SQLite persistence of outbox/conflict `errorCode`, `errorCategory`, and `retryable`.
 
 ## Pending / Partial Work
 
@@ -314,7 +319,10 @@ npm run build
   - Tasks Today add/remove through relation `today`.
   - Tasks schedule item create/update/delete/upsert through relation `scheduleItem`.
 - `[implemented]` Add optional `baseVersion` conflict checks before applying sync push operations.
-- `[partial]` Return applied/rejected operations with stable-ish error codes for implemented domains.
+- `[implemented]` Return applied/rejected operations with stable error codes for implemented domains.
+  - Core sync-push rejections include `code` and `message`.
+  - Daemon maps rejection codes and runtime failures into `network`, `version_conflict`, `path_rejection`, `validation`, `checksum`, `unsupported`, `local_conflict`, `auth`, `capability`, `server`, or `unknown`.
+  - Settings displays local conflict category/code/retryability.
 - `[partial]` Server-side tombstone event metadata exists, but underlying domain services still hard-delete their own records.
 - `[partial]` Core facade mutations now cover the main Projects, Notes, Artifacts, and Tasks paths, including task relation changes. Continue auditing new mutation routes as they are added.
 - `[implemented]` Add an opt-in Core-origin guard for direct internal service mutations outside Core.
@@ -443,10 +451,9 @@ npm run build
 
 ## Recommended Next Implementation Order
 
-1. Continue hardening sync conflict/error reporting so UI can distinguish retryable network failures, version conflicts, and local path rejections.
-2. Audit remaining direct domain mutation routes as new Projects/Notes/Artifacts/Tasks endpoints are added.
-3. Add cross-platform daemon-side secure storage or a first-run migration flow so standalone mode can stop defaulting to `.workbench/client-identity.json`.
-4. Add per-job user confirmation policy if downloads outside the sync folder become allowed.
+1. Audit remaining direct domain mutation routes as new Projects/Notes/Artifacts/Tasks endpoints are added.
+2. Add cross-platform daemon-side secure storage or a first-run migration flow so standalone mode can stop defaulting to `.workbench/client-identity.json`.
+3. Add per-job user confirmation policy if downloads outside the sync folder become allowed.
 
 ## Current Daemon Usage
 
