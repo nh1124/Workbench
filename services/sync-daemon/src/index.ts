@@ -2606,26 +2606,37 @@ async function applyRemoteSnapshot(
   }
 }
 
-async function bootstrapPagedProjectSnapshots(
+async function bootstrapPagedDomainSnapshot(
   state: DaemonState,
+  domain: "projects" | "notes" | "tasks",
   firstPage: unknown,
   initialGeneratedAt: string
 ): Promise<void> {
   let cursor = snapshotNextCursor(firstPage);
   for (let pageIndex = 0; cursor && pageIndex < 100; pageIndex += 1) {
-    const page = await getSyncSnapshot(state, ["projects"], {
+    const page = await getSyncSnapshot(state, [domain], {
       cursor,
       limit: REMOTE_SNAPSHOT_PAGE_LIMIT
     });
     const generatedAt = asString(page.generatedAt) ?? initialGeneratedAt;
-    for (const item of snapshotItems(page.domains?.projects)) {
-      applyRemoteDomainSnapshotEntry(state, "projects", item, generatedAt);
+    for (const item of snapshotItems(page.domains?.[domain])) {
+      applyRemoteDomainSnapshotEntry(state, domain, item, generatedAt);
     }
-    const nextCursor = snapshotNextCursor(page.domains?.projects);
+    const nextCursor = snapshotNextCursor(page.domains?.[domain]);
     if (!nextCursor || nextCursor === cursor) {
       return;
     }
     cursor = nextCursor;
+  }
+}
+
+async function bootstrapPagedDomainSnapshots(
+  state: DaemonState,
+  snapshot: SyncSnapshotResponse,
+  initialGeneratedAt: string
+): Promise<void> {
+  for (const domain of ["projects", "notes", "tasks"] as const) {
+    await bootstrapPagedDomainSnapshot(state, domain, snapshot.domains?.[domain], initialGeneratedAt);
   }
 }
 
@@ -2644,7 +2655,7 @@ async function bootstrapRemoteArtifactSnapshot(state: DaemonState): Promise<stri
   }
   const generatedAt = asString(snapshot.generatedAt) ?? new Date().toISOString();
   await applyRemoteSnapshot(state, snapshot, generatedAt);
-  await bootstrapPagedProjectSnapshots(state, snapshot.domains?.projects, generatedAt);
+  await bootstrapPagedDomainSnapshots(state, snapshot, generatedAt);
 
   let cursor: string | undefined;
   for (let pageIndex = 0; pageIndex < 20; pageIndex += 1) {

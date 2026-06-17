@@ -32,6 +32,7 @@ import {
   getTaskHistory,
   importTasksCsv,
   listTaskProjects,
+  listTasksPage,
   listTaskPins,
   listTasks,
   provisionLbsAccount,
@@ -278,6 +279,8 @@ app.get("/tasks", requireUserAuth, async (req, res) => {
     const projectId = typeof req.query.projectId === "string" ? req.query.projectId : undefined;
     const context = typeof req.query.context === "string" ? req.query.context : projectId;
     const status = typeof req.query.status === "string" ? req.query.status : undefined;
+    const cursor = typeof req.query.cursor === "string" ? req.query.cursor : undefined;
+    const paged = req.query.page === "true" || cursor !== undefined;
 
     const owner = req.authUser?.coreUserId;
     const lbsAccessToken = await ensureLbsAccessToken(req);
@@ -288,13 +291,20 @@ app.get("/tasks", requireUserAuth, async (req, res) => {
       return res.status(403).json({ message: "LBS account token not provisioned" });
     }
 
-    const tasks = await listTasks({
+    const filters = {
       projectId: context,
       status: TASK_STATUSES.includes(status as (typeof TASK_STATUSES)[number])
         ? (status as (typeof TASK_STATUSES)[number])
         : undefined,
       limit: Number.isFinite(limit) ? limit : undefined
-    }, owner, lbsAccessToken);
+    };
+
+    if (paged) {
+      const page = await listTasksPage({ ...filters, cursor }, owner, lbsAccessToken);
+      return res.json(page);
+    }
+
+    const tasks = await listTasks(filters, owner, lbsAccessToken);
 
     return res.json(tasks);
   } catch (error) {

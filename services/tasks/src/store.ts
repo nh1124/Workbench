@@ -24,6 +24,11 @@ import type {
   TaskStatus
 } from "./types.js";
 
+export interface TaskListPage {
+  items: Task[];
+  nextCursor?: string;
+}
+
 interface LbsHistoryEntry {
   id?: string | number;
   task_id?: string;
@@ -181,12 +186,50 @@ async function setTaskCompletion(
   await client.completeTask(taskId, toDueDateOnly(targetDate) || targetDate, toLbsStatus(status));
 }
 
-export async function listTasks(
-  filters: { projectId?: string; status?: TaskStatus; limit?: number } | undefined,
+function encodeTaskCursor(task: Task): string {
+  return Buffer.from(JSON.stringify({ updatedAt: task.updatedAt, id: task.id }), "utf8").toString("base64url");
+}
+
+function decodeTaskCursor(cursor: string | undefined): { updatedAt: string; id: string } | undefined {
+  if (!cursor?.trim()) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Partial<{
+      updatedAt: unknown;
+      id: unknown;
+    }>;
+    if (typeof parsed.updatedAt !== "string" || typeof parsed.id !== "string") {
+      return undefined;
+    }
+    return { updatedAt: parsed.updatedAt, id: parsed.id };
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizePageLimit(limit: number | undefined, fallback: number): number {
+  if (!Number.isFinite(limit) || !limit || limit <= 0) {
+    return fallback;
+  }
+  return Math.min(Math.floor(limit), 500);
+}
+
+function applyTaskCursor(tasks: Task[], cursor: string | undefined): Task[] {
+  const decoded = decodeTaskCursor(cursor);
+  if (!decoded) {
+    return tasks;
+  }
+  return tasks.filter(
+    (task) => task.updatedAt < decoded.updatedAt || (task.updatedAt === decoded.updatedAt && task.id < decoded.id)
+  );
+}
+
+async function listSortedTasks(
+  filters: { projectId?: string; status?: TaskStatus } | undefined,
   ownerUsername: string,
   lbsAccessToken: string
 ): Promise<Task[]> {
-  console.log(`[tasks-service] listTasks  owner=${ownerUsername} filters=${JSON.stringify(filters ?? {})}`);
   const config = getLbsConfig();
   const client = createLbsClient(config, lbsAccessToken);
   const tasks = (await client.listTasks(filters?.projectId, config.defaultActive)) as unknown as LbsTask[];
@@ -200,12 +243,42 @@ export async function listTasks(
   const statusFiltered = filters?.status
     ? withPins.filter((task) => task.status === filters.status)
     : withPins;
-  const sorted = statusFiltered.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return statusFiltered.sort((a, b) => {
+    const updatedAtComparison = b.updatedAt.localeCompare(a.updatedAt);
+    return updatedAtComparison !== 0 ? updatedAtComparison : b.id.localeCompare(a.id);
+  });
+}
 
+export async function listTasks(
+  filters: { projectId?: string; status?: TaskStatus; limit?: number } | undefined,
+  ownerUsername: string,
+  lbsAccessToken: string
+): Promise<Task[]> {
+  console.log(`[tasks-service] listTasks  owner=${ownerUsername} filters=${JSON.stringify(filters ?? {})}`);
+  const sorted = await listSortedTasks(filters, ownerUsername, lbsAccessToken);
   const result = filters?.limit && filters.limit > 0 ? sorted.slice(0, filters.limit) : sorted;
   await cacheTasks(result, ownerUsername);
   console.log(`[tasks-service] listTasks  returning ${result.length} task(s) after filters`);
   return result;
+}
+
+export async function listTasksPage(
+  filters: { projectId?: string; status?: TaskStatus; limit?: number; cursor?: string } | undefined,
+  ownerUsername: string,
+  lbsAccessToken: string
+): Promise<TaskListPage> {
+  console.log(`[tasks-service] listTasksPage  owner=${ownerUsername} filters=${JSON.stringify(filters ?? {})}`);
+  const sorted = await listSortedTasks(filters, ownerUsername, lbsAccessToken);
+  const pageSize = normalizePageLimit(filters?.limit, 100);
+  const cursorFiltered = applyTaskCursor(sorted, filters?.cursor);
+  const items = cursorFiltered.slice(0, pageSize);
+  const hasMore = cursorFiltered.length > pageSize;
+  await cacheTasks(items, ownerUsername);
+  console.log(`[tasks-service] listTasksPage  returning ${items.length} task(s) after cursor`);
+  return {
+    items,
+    nextCursor: hasMore && items.length > 0 ? encodeTaskCursor(items[items.length - 1]) : undefined
+  };
 }
 
 export async function getTask(id: string, ownerUsername: string, lbsAccessToken: string): Promise<Task | undefined> {

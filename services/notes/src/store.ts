@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 import { ensureNotesSchema, getNotesPool } from "./db.js";
 import type { Note, NoteInput, NoteProjectSummary } from "./types.js";
 
+export interface NoteListPage {
+  items: Note[];
+  nextCursor?: string;
+}
+
 type NoteRow = {
   id: string;
   owner_username: string;
@@ -35,6 +40,35 @@ function normalizeOwner(ownerUsername: string): string {
   return normalized;
 }
 
+function encodeCursor(note: Note): string {
+  return Buffer.from(JSON.stringify({ updatedAt: note.updatedAt, id: note.id }), "utf8").toString("base64url");
+}
+
+function decodeCursor(cursor: string | undefined): { updatedAt: string; id: string } | undefined {
+  if (!cursor?.trim()) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Partial<{
+      updatedAt: unknown;
+      id: unknown;
+    }>;
+    if (typeof parsed.updatedAt !== "string" || typeof parsed.id !== "string") {
+      return undefined;
+    }
+    return { updatedAt: parsed.updatedAt, id: parsed.id };
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeLimit(limit: number | undefined, fallback: number): number {
+  if (!Number.isFinite(limit) || !limit || limit <= 0) {
+    return fallback;
+  }
+  return Math.min(Math.floor(limit), 500);
+}
+
 export async function listNotes(projectId: string | undefined, limit: number | undefined, ownerUsername: string): Promise<Note[]> {
   await ensureNotesSchema();
   const pool = getNotesPool();
@@ -60,6 +94,49 @@ export async function listNotes(projectId: string | undefined, limit: number | u
 
   const result = await pool.query<NoteRow>(sql, values);
   return result.rows.map(toNote);
+}
+
+export async function listNotesPage(
+  projectId: string | undefined,
+  limit: number | undefined,
+  cursor: string | undefined,
+  ownerUsername: string
+): Promise<NoteListPage> {
+  await ensureNotesSchema();
+  const pool = getNotesPool();
+  const owner = normalizeOwner(ownerUsername);
+  const pageSize = normalizeLimit(limit, 100);
+  const values: Array<string | number> = [owner];
+  let sql = `
+    SELECT id, owner_username, title, content, project_id, project_name, tags, created_at, updated_at
+    FROM notes
+    WHERE owner_username = $1
+  `;
+
+  if (projectId) {
+    values.push(projectId);
+    sql += ` AND project_id = $${values.length}`;
+  }
+
+  const decodedCursor = decodeCursor(cursor);
+  if (decodedCursor) {
+    values.push(decodedCursor.updatedAt, decodedCursor.id);
+    const updatedAtIndex = values.length - 1;
+    const idIndex = values.length;
+    sql += ` AND (updated_at < $${updatedAtIndex}::timestamptz OR (updated_at = $${updatedAtIndex}::timestamptz AND id::text < $${idIndex}))`;
+  }
+
+  values.push(pageSize + 1);
+  sql += ` ORDER BY updated_at DESC, id::text DESC LIMIT $${values.length}`;
+
+  const result = await pool.query<NoteRow>(sql, values);
+  const notes = result.rows.map(toNote);
+  const items = notes.slice(0, pageSize);
+  const hasMore = notes.length > pageSize;
+  return {
+    items,
+    nextCursor: hasMore && items.length > 0 ? encodeCursor(items[items.length - 1]) : undefined
+  };
 }
 
 export async function getNote(id: string, ownerUsername: string): Promise<Note | undefined> {

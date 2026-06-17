@@ -110,14 +110,17 @@ describe("remote artifact pull reconciliation", () => {
                 ],
                 nextCursor: "project-cursor-2"
               },
-              notes: [
-                {
-                  id: "core-note-1",
-                  projectId: "project-1",
-                  title: "Core Note",
-                  content: "cached"
-                }
-              ],
+              notes: {
+                items: [
+                  {
+                    id: "core-note-1",
+                    projectId: "project-1",
+                    title: "Core Note",
+                    content: "cached"
+                  }
+                ],
+                nextCursor: "note-cursor-2"
+              },
               artifacts: [
                 {
                   id: "note-1",
@@ -127,14 +130,17 @@ describe("remote artifact pull reconciliation", () => {
                   contentMarkdown: "# Remote\n"
                 }
               ],
-              tasks: [
-                {
-                  id: "task-1",
-                  title: "Remote Task",
-                  status: "todo",
-                  projectId: "project-1"
-                }
-              ]
+              tasks: {
+                items: [
+                  {
+                    id: "task-1",
+                    title: "Remote Task",
+                    status: "todo",
+                    projectId: "project-1"
+                  }
+                ],
+                nextCursor: "task-cursor-2"
+              }
             }
           });
         }
@@ -149,6 +155,40 @@ describe("remote artifact pull reconciliation", () => {
                     name: "Remote Project 2",
                     status: "draft",
                     updatedAt: "2026-06-16T00:00:01.000Z"
+                  }
+                ]
+              }
+            }
+          });
+        }
+        if (url === "http://core.test/api/sync/snapshot?domains=notes&cursor=note-cursor-2&limit=100") {
+          return jsonResponse({
+            generatedAt: "2026-06-16T00:00:02.000Z",
+            domains: {
+              notes: {
+                items: [
+                  {
+                    id: "core-note-2",
+                    projectId: "project-2",
+                    title: "Core Note 2",
+                    content: "cached page 2"
+                  }
+                ]
+              }
+            }
+          });
+        }
+        if (url === "http://core.test/api/sync/snapshot?domains=tasks&cursor=task-cursor-2&limit=100") {
+          return jsonResponse({
+            generatedAt: "2026-06-16T00:00:03.000Z",
+            domains: {
+              tasks: {
+                items: [
+                  {
+                    id: "task-2",
+                    title: "Remote Task 2",
+                    status: "todo",
+                    projectId: "project-2"
                   }
                 ]
               }
@@ -185,6 +225,8 @@ describe("remote artifact pull reconciliation", () => {
       assert.deepEqual(calls, [
         "http://core.test/api/sync/snapshot?domains=projects%2Cnotes%2Cartifacts%2Ctasks",
         "http://core.test/api/sync/snapshot?domains=projects&cursor=project-cursor-2&limit=100",
+        "http://core.test/api/sync/snapshot?domains=notes&cursor=note-cursor-2&limit=100",
+        "http://core.test/api/sync/snapshot?domains=tasks&cursor=task-cursor-2&limit=100",
         "http://core.test/api/sync/pull?limit=500"
       ]);
       assert.equal(await readFile(join(root, "docs", "remote.md"), "utf8"), "# Remote\n");
@@ -192,7 +234,9 @@ describe("remote artifact pull reconciliation", () => {
       assert.equal(manifest.remoteResources?.find((item) => item.domain === "projects")?.resourceId, "project-1");
       assert.equal(manifest.remoteResources?.some((item) => item.domain === "projects" && item.resourceId === "project-2"), true);
       assert.equal(manifest.remoteResources?.find((item) => item.domain === "notes")?.resourceId, "core-note-1");
+      assert.equal(manifest.remoteResources?.some((item) => item.domain === "notes" && item.resourceId === "core-note-2"), true);
       assert.equal(manifest.remoteResources?.find((item) => item.domain === "tasks")?.resourceId, "task-1");
+      assert.equal(manifest.remoteResources?.some((item) => item.domain === "tasks" && item.resourceId === "task-2"), true);
       assert.equal(getMeta(store, "remoteSyncCursor"), "7");
       assert.equal(getMeta(store, "remoteArtifactCursor"), "7");
       assert.ok(getMeta(store, "lastRemotePullAt"));

@@ -65,7 +65,7 @@ Last updated: 2026-06-17
   - `PUT /api/sync/blobs/:blobId`
   - `POST /api/sync/push`
 - `[implemented]` Sync endpoints accept either normal bearer auth or daemon local-client credentials.
-- `[implemented]` `GET /api/sync/snapshot` accepts `cursor` and `limit`; Projects snapshot forwards cursor pagination to the Projects service.
+- `[implemented]` `GET /api/sync/snapshot` accepts `cursor` and `limit`; Projects, Notes, and Tasks snapshots forward cursor pagination to their domain services.
 - `[partial]` Core facade writes best-effort sync events for representative Projects, Notes, Artifacts, and Tasks mutations.
 - `[implemented]` Delete sync events include tombstone metadata in pull responses and resource-version listings.
   - `deleted`
@@ -263,7 +263,7 @@ npm run build
 - `[implemented]` Remote snapshot/incremental pull reconciliation exists.
   - Bootstrap reads `/api/sync/snapshot?domains=projects,notes,artifacts,tasks`.
   - If all-domain snapshot is unavailable, daemon falls back to artifact-only bootstrap so file sync keeps running.
-  - Projects bootstrap follows `nextCursor` with `/api/sync/snapshot?domains=projects&cursor=...&limit=100`.
+  - Projects, Notes, and Tasks bootstrap follows per-domain `nextCursor` with `/api/sync/snapshot?domains=<domain>&cursor=...&limit=100`.
   - Incremental pull reads `/api/sync/pull` from the stored cursor.
   - Clean remote artifact changes are materialized locally before local scan/push.
   - Remote Projects, Notes, and Tasks are stored under `.workbench/manifest.sqlite` `remote_resources`.
@@ -414,9 +414,8 @@ npm run build
 
 ## Recommended Next Implementation Order
 
-1. Add cursor-based full snapshot refresh for Notes/Tasks if those services gain cursor pagination.
-2. Design local outbox write facades for Projects/Notes/Tasks after the read cache has been exercised.
-3. Add per-job user confirmation policy if downloads outside the sync folder become allowed.
+1. Design local outbox write facades for Projects/Notes/Tasks after the read cache has been exercised.
+2. Add per-job user confirmation policy if downloads outside the sync folder become allowed.
 
 ## Current Daemon Usage
 

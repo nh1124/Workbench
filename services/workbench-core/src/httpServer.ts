@@ -3624,13 +3624,13 @@ app.get("/api/sync/snapshot", async (req, res) => {
       snapshot.projects = await projectsClient.list(authContext.accessToken, undefined, undefined, snapshotLimit ?? 100, cursor);
     }
     if (domainSet.has("notes")) {
-      snapshot.notes = await notesClient.list(authContext.accessToken, undefined, snapshotLimit ?? 500);
+      snapshot.notes = await notesClient.listPage(authContext.accessToken, undefined, snapshotLimit ?? 100, cursor);
     }
     if (domainSet.has("artifacts")) {
       snapshot.artifacts = await artifactsClient.treeList(authContext.accessToken, { limit: snapshotLimit ?? 500 });
     }
     if (domainSet.has("tasks")) {
-      snapshot.tasks = await tasksClient.list(authContext.accessToken, undefined, undefined, snapshotLimit ?? 500);
+      snapshot.tasks = await tasksClient.listPage(authContext.accessToken, undefined, undefined, snapshotLimit ?? 100, cursor);
     }
     return res.json({
       generatedAt: new Date().toISOString(),

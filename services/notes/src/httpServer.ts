@@ -12,6 +12,7 @@ import {
   getNote,
   listNoteProjects,
   listNotes,
+  listNotesPage,
   updateNote
 } from "./store.js";
 
@@ -116,9 +117,15 @@ app.use(requireCoreMutationOriginMiddleware);
 app.get("/notes", requireUserAuth, async (req, res) => {
   const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
   const projectId = typeof req.query.projectId === "string" ? req.query.projectId : undefined;
+  const cursor = typeof req.query.cursor === "string" ? req.query.cursor : undefined;
+  const paged = req.query.page === "true" || cursor !== undefined;
   const owner = req.authUser?.coreUserId;
   if (!owner) {
     return res.status(401).json({ message: "Missing auth context" });
+  }
+  if (paged) {
+    const page = await listNotesPage(projectId, Number.isFinite(limit) ? limit : undefined, cursor, owner);
+    return res.json(page);
   }
   const notes = await listNotes(projectId, Number.isFinite(limit) ? limit : undefined, owner);
   res.json(notes);

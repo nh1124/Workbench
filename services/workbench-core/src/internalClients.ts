@@ -154,6 +154,8 @@ function buildQuery(params: Record<string, string | number | boolean | undefined
 export const notesClient = {
   list: (token: string, projectId?: string, limit?: number) =>
     serviceRequest<unknown[]>(notesService, `/notes${buildQuery({ projectId, limit })}`, token),
+  listPage: (token: string, projectId?: string, limit?: number, cursor?: string) =>
+    serviceRequest<unknown>(notesService, `/notes${buildQuery({ projectId, limit, cursor, page: true })}`, token),
   get: (token: string, id: string) => serviceRequest<unknown>(notesService, `/notes/${encodeURIComponent(id)}`, token),
   create: (token: string, payload: unknown) =>
     serviceRequest<unknown>(notesService, "/notes", token, {
@@ -436,6 +438,8 @@ export const imagesClient = {
 export const tasksClient = {
   list: (token: string, context?: string, status?: string, limit?: number) =>
     serviceRequest<unknown[]>(tasksService, `/tasks${buildQuery({ context, status, limit })}`, token),
+  listPage: (token: string, context?: string, status?: string, limit?: number, cursor?: string) =>
+    serviceRequest<unknown>(tasksService, `/tasks${buildQuery({ context, status, limit, cursor, page: true })}`, token),
   pins: (token: string) => serviceRequest<{ taskIds: string[] }>(tasksService, "/tasks/pins", token),
   setPin: (token: string, id: string, pinned: boolean) =>
     serviceRequest<{ taskId: string; pinned: boolean }>(tasksService, `/tasks/${encodeURIComponent(id)}/pin`, token, {
