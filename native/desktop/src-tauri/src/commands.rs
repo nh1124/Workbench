@@ -22,6 +22,7 @@ const DAEMON_PREFERENCES_FILE: &str = "daemon-preferences.json";
 const DEFAULT_DAEMON_SIDECAR_NAME: &str = "workbench-sync-daemon";
 const LOCAL_CLIENT_ID_ENV: &str = "WORKBENCH_LOCAL_CLIENT_ID";
 const LOCAL_CLIENT_TOKEN_ENV: &str = "WORKBENCH_LOCAL_CLIENT_TOKEN";
+const PERSIST_CLIENT_IDENTITY_ENV: &str = "WORKBENCH_PERSIST_CLIENT_IDENTITY";
 
 struct ManagedDaemon {
   child: Child,
@@ -430,6 +431,7 @@ fn resolve_daemon_command(app: Option<&tauri::AppHandle>) -> Result<DaemonComman
 }
 
 fn configure_daemon_env(command: &mut Command, app: Option<&tauri::AppHandle>) -> Result<(), String> {
+  let mut sync_root_for_identity: Option<PathBuf> = None;
   if std::env::var_os("WORKBENCH_DAEMON_HTTP_PORT").is_none() {
     command.env(
       "WORKBENCH_DAEMON_HTTP_PORT",
@@ -441,19 +443,23 @@ fn configure_daemon_env(command: &mut Command, app: Option<&tauri::AppHandle>) -
     let preferences = read_daemon_preferences_from_disk(app)?;
     let sync_root = configured_sync_folder(app, &preferences)?;
     let downloads_dir = configured_downloads_folder(app, &preferences)?;
+    sync_root_for_identity = Some(sync_root.clone());
     command.env("WORKBENCH_SYNC_ROOT", path_to_string(sync_root));
     command.env("WORKBENCH_DOWNLOADS_DIR", path_to_string(downloads_dir));
   }
 
-  configure_daemon_client_identity_env(command);
+  configure_daemon_client_identity_env(command, sync_root_for_identity.as_deref());
   Ok(())
 }
 
-fn configure_daemon_client_identity_env(command: &mut Command) {
+fn configure_daemon_client_identity_env(command: &mut Command, sync_root: Option<&Path>) {
   let has_parent_client_id = std::env::var_os(LOCAL_CLIENT_ID_ENV).is_some();
   let has_parent_client_token = std::env::var_os(LOCAL_CLIENT_TOKEN_ENV).is_some();
 
   if has_parent_client_id && has_parent_client_token {
+    if std::env::var_os(PERSIST_CLIENT_IDENTITY_ENV).is_none() {
+      command.env(PERSIST_CLIENT_IDENTITY_ENV, "0");
+    }
     return;
   }
 
@@ -468,8 +474,30 @@ fn configure_daemon_client_identity_env(command: &mut Command) {
     Ok(Some(identity)) => {
       command.env(LOCAL_CLIENT_ID_ENV, identity.local_client_id);
       command.env(LOCAL_CLIENT_TOKEN_ENV, identity.local_client_token);
+      if std::env::var_os(PERSIST_CLIENT_IDENTITY_ENV).is_none() {
+        command.env(PERSIST_CLIENT_IDENTITY_ENV, "0");
+      }
     }
-    Ok(None) => {}
+    Ok(None) => {
+      let Some(sync_root) = sync_root else {
+        return;
+      };
+      match migrate_local_daemon_identity_file_to_secure_storage(sync_root) {
+        Ok(Some(identity)) => {
+          command.env(LOCAL_CLIENT_ID_ENV, identity.local_client_id);
+          command.env(LOCAL_CLIENT_TOKEN_ENV, identity.local_client_token);
+          if std::env::var_os(PERSIST_CLIENT_IDENTITY_ENV).is_none() {
+            command.env(PERSIST_CLIENT_IDENTITY_ENV, "0");
+          }
+        }
+        Ok(None) => {}
+        Err(error) => {
+          eprintln!(
+            "[workbench-native] failed to migrate local daemon client credentials; daemon will use file fallback: {error}"
+          );
+        }
+      }
+    }
     Err(error) => {
       eprintln!(
         "[workbench-native] failed to read secure local daemon client credentials; daemon will use file fallback: {error}"
@@ -544,6 +572,56 @@ fn configured_downloads_folder(app: &tauri::AppHandle, preferences: &serde_json:
   configured_preference_path(preferences, "downloadsDir")
     .map(Ok)
     .unwrap_or_else(|| default_downloads_folder(app))
+}
+
+fn local_daemon_identity_file(sync_root: &Path) -> PathBuf {
+  sync_root.join(".workbench").join("client-identity.json")
+}
+
+fn read_local_daemon_identity_file(
+  sync_root: &Path,
+) -> Result<Option<secure_storage::LocalDaemonClientIdentity>, String> {
+  let path = local_daemon_identity_file(sync_root);
+  if !path.is_file() {
+    return Ok(None);
+  }
+  let raw = fs::read_to_string(&path).map_err(|error| {
+    format!(
+      "failed to read local daemon identity file {}: {error}",
+      path.display()
+    )
+  })?;
+  secure_storage::parse_local_daemon_client_identity(&raw).map(Some)
+}
+
+fn migrate_local_daemon_identity_file_to_secure_storage(
+  sync_root: &Path,
+) -> Result<Option<secure_storage::LocalDaemonClientIdentity>, String> {
+  if !secure_storage::is_supported() {
+    return Ok(None);
+  }
+  let Some(identity) = read_local_daemon_identity_file(sync_root)? else {
+    return Ok(None);
+  };
+
+  secure_storage::save_local_daemon_client_identity(
+    &identity.local_client_id,
+    &identity.local_client_token,
+  )?;
+
+  let path = local_daemon_identity_file(sync_root);
+  match fs::remove_file(&path) {
+    Ok(()) => {}
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+    Err(error) => {
+      eprintln!(
+        "[workbench-native] migrated local daemon client credentials to secure storage, but failed to remove {}: {error}",
+        path.display()
+      );
+    }
+  }
+
+  Ok(Some(identity))
 }
 
 fn daemon_preferences_response(
@@ -855,6 +933,54 @@ pub fn stop_daemon() -> Result<bool, String> {
     .wait()
     .map_err(|error| format!("failed to wait for sync daemon shutdown: {error}"))?;
   Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn unique_test_root(name: &str) -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .expect("system time should be after unix epoch")
+      .as_nanos();
+    std::env::temp_dir().join(format!(
+      "workbench-native-{name}-{}-{nanos}",
+      std::process::id()
+    ))
+  }
+
+  #[test]
+  fn reads_legacy_local_daemon_identity_file() {
+    let root = unique_test_root("identity");
+    let metadata_dir = root.join(".workbench");
+    fs::create_dir_all(&metadata_dir).expect("metadata dir should be created");
+    fs::write(
+      local_daemon_identity_file(&root),
+      r#"{"localClientId":"client-1","localClientToken":"token-1"}"#,
+    )
+    .expect("identity file should be written");
+
+    let identity = read_local_daemon_identity_file(&root)
+      .expect("identity file should be readable")
+      .expect("identity should exist");
+
+    assert_eq!(identity.local_client_id, "client-1");
+    assert_eq!(identity.local_client_token, "token-1");
+    fs::remove_dir_all(root).ok();
+  }
+
+  #[test]
+  fn returns_none_when_legacy_local_daemon_identity_file_is_missing() {
+    let root = unique_test_root("identity-missing");
+    fs::create_dir_all(root.join(".workbench")).expect("metadata dir should be created");
+
+    let identity =
+      read_local_daemon_identity_file(&root).expect("missing identity file should not be an error");
+
+    assert!(identity.is_none());
+    fs::remove_dir_all(root).ok();
+  }
 }
 
 /// Open a native Save-As dialog and write `bytes` to the chosen path.

@@ -424,9 +424,11 @@ npm run build
   - Windows native secure storage now has a separate `Workbench.LocalDaemonClient` target for daemon `localClientId` / `localClientToken`, distinct from `Workbench.Session`.
   - Tauri-managed daemon startup injects stored credentials as `WORKBENCH_LOCAL_CLIENT_ID` and `WORKBENCH_LOCAL_CLIENT_TOKEN` when neither env var is already set.
   - Native commands can save, inspect non-secret status, and clear the secure daemon client credential.
+  - Desktop-managed daemon startup now migrates an existing `.workbench/client-identity.json` from the configured sync folder into OS secure storage when secure storage is supported.
+  - After secure credential injection or successful migration, desktop-managed startup sets `WORKBENCH_PERSIST_CLIENT_IDENTITY=0` for the daemon unless the parent env already overrides it.
   - Standalone daemon identity file persistence can be disabled with `WORKBENCH_PERSIST_CLIENT_IDENTITY=0` or `WORKBENCH_LOCAL_CLIENT_IDENTITY_FILE=0`.
   - Persisted standalone identity files are written with restrictive permissions where the OS supports it.
-  - Standalone daemon startup and first registration still use `.workbench/client-identity.json` as the default fallback, and there is not yet a cross-platform daemon-side secure storage writer, so full post-registration migration away from the plain file remains incomplete.
+  - Non-desktop standalone daemon startup and first registration still use `.workbench/client-identity.json` as the default fallback, and there is not yet a cross-platform daemon-side secure storage writer.
 
 ### Security Hardening
 
@@ -452,7 +454,7 @@ npm run build
 ## Recommended Next Implementation Order
 
 1. Audit remaining direct domain mutation routes as new Projects/Notes/Artifacts/Tasks endpoints are added.
-2. Add cross-platform daemon-side secure storage or a first-run migration flow so standalone mode can stop defaulting to `.workbench/client-identity.json`.
+2. Add cross-platform daemon-side secure storage if standalone non-desktop mode must avoid `.workbench/client-identity.json` by default.
 3. Add per-job user confirmation policy if downloads outside the sync folder become allowed.
 
 ## Current Daemon Usage
@@ -469,6 +471,7 @@ npm run dev --workspace services/sync-daemon
 
 After registration, the standalone daemon reuses `.workbench/client-identity.json` unless `WORKBENCH_LOCAL_CLIENT_ID` and `WORKBENCH_LOCAL_CLIENT_TOKEN` are provided.
 Desktop-managed startup can also inject the local client ID/token from Windows Credential Manager when saved through the native secure daemon client commands.
+If desktop-managed startup finds an existing `.workbench/client-identity.json` and secure storage is supported, it migrates that identity into secure storage, removes the plaintext file, injects env credentials, and disables further daemon identity-file persistence for that process.
 Set `WORKBENCH_PERSIST_CLIENT_IDENTITY=0` to keep the registered identity only in memory for the current daemon process; on restart, provide secure env credentials or a normal access token for re-registration.
 
 Desktop `start_daemon` now launches a managed background process. By default it runs:
