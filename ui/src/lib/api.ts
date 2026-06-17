@@ -452,6 +452,10 @@ function notesFacadeEnabled(): boolean {
   return getWorkbenchLocalModeEnabled();
 }
 
+function projectsFacadeEnabled(): boolean {
+  return getWorkbenchLocalModeEnabled();
+}
+
 function coreArtifactPath(path: string): string {
   return `${coreBaseUrl()}${path}`;
 }
@@ -469,6 +473,13 @@ async function fetchArtifactFacadeJson<T>(path: string, options?: RequestInit): 
 
 async function fetchNotesFacadeJson<T>(path: string, options?: RequestInit): Promise<T> {
   if (notesFacadeEnabled()) {
+    return requestLocalDaemonJson<T>(path, options);
+  }
+  return fetchJson<T>(coreApiPath(path), options);
+}
+
+async function fetchProjectsFacadeJson<T>(path: string, options?: RequestInit): Promise<T> {
+  if (projectsFacadeEnabled()) {
     return requestLocalDaemonJson<T>(path, options);
   }
   return fetchJson<T>(coreApiPath(path), options);
@@ -1172,28 +1183,29 @@ export const projectsApi = {
     if (status) params.set("status", status);
     if (limit) params.set("limit", String(limit));
     if (cursor) params.set("cursor", cursor);
-    return fetchJson<ProjectListResult>(`${coreBaseUrl()}/api/projects?${params.toString()}`);
+    const queryString = params.toString();
+    return fetchProjectsFacadeJson<ProjectListResult>(`/api/projects${queryString ? `?${queryString}` : ""}`);
   },
   get: (id: string): Promise<ProjectRecord> =>
-    fetchJson<ProjectRecord>(`${coreBaseUrl()}/api/projects/${encodeURIComponent(id)}`),
+    fetchProjectsFacadeJson<ProjectRecord>(`/api/projects/${encodeURIComponent(id)}`),
   create: (payload: { name: string; description?: string; status?: "draft" | "active" | "archived" }): Promise<ProjectRecord> =>
-    fetchJson<ProjectRecord>(`${coreBaseUrl()}/api/projects`, {
+    fetchProjectsFacadeJson<ProjectRecord>("/api/projects", {
       method: "POST",
       body: JSON.stringify(payload)
     }),
   update: (id: string, payload: Partial<Pick<ProjectRecord, "name" | "description" | "status">>): Promise<ProjectRecord> =>
-    fetchJson<ProjectRecord>(`${coreBaseUrl()}/api/projects/${encodeURIComponent(id)}`, {
+    fetchProjectsFacadeJson<ProjectRecord>(`/api/projects/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(payload)
     }),
   remove: (id: string): Promise<void> =>
-    fetchJson<void>(`${coreBaseUrl()}/api/projects/${encodeURIComponent(id)}`, {
+    fetchProjectsFacadeJson<void>(`/api/projects/${encodeURIComponent(id)}`, {
       method: "DELETE"
     }),
   getDefault: (): Promise<ProjectDefaultSelection> =>
-    fetchJson<ProjectDefaultSelection>(`${coreBaseUrl()}/api/projects/default`),
+    fetchProjectsFacadeJson<ProjectDefaultSelection>("/api/projects/default"),
   setDefault: (projectId: string): Promise<ProjectDefaultSelection> =>
-    fetchJson<ProjectDefaultSelection>(`${coreBaseUrl()}/api/projects/default`, {
+    fetchProjectsFacadeJson<ProjectDefaultSelection>("/api/projects/default", {
       method: "PUT",
       body: JSON.stringify({ projectId })
     })

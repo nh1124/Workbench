@@ -15,16 +15,20 @@ import {
   type ManifestStore
 } from "../manifestStore.js";
 import {
+  createLocalProject,
   createLocalNote,
   createLocalArtifactFile,
   createLocalArtifactFolder,
   createLocalArtifactNote,
+  deleteLocalProject,
   deleteLocalNote,
   deleteLocalArtifactItem,
   getLocalArtifactItemById,
   listLocalArtifactItems,
   patchLocalArtifactNoteContent,
   scanSyncFolder,
+  setLocalDefaultProject,
+  updateLocalProject,
   updateLocalNote,
   updateLocalArtifactNoteSection,
   updateLocalArtifactItem,
@@ -335,6 +339,118 @@ describe("sync folder recovery", () => {
       assert.equal(cached?.payload.content, "edited");
       assert.deepEqual(cached?.payload.tags, ["offline", "edited"]);
       assert.equal(state.outboxPending, 1);
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("queues local project domain creates and updates into the outbox cache", async () => {
+    const { store, state } = await createState();
+    try {
+      const created = await createLocalProject(state, {
+        name: "Offline Project",
+        description: "draft",
+        status: "draft"
+      });
+      const id = String(created.id);
+      assert.ok(id.startsWith("local-project-"));
+
+      const updated = await updateLocalProject(state, id, {
+        description: "edited",
+        status: "active"
+      });
+      assert.equal(updated?.description, "edited");
+      assert.equal(updated?.status, "active");
+
+      const manifest = readManifestFromStore(store);
+      const outbox = manifest.outbox ?? [];
+      assert.deepEqual(outbox.map((item) => `${item.domain}:${item.action}:${item.status}`).sort(), [
+        "projects:create:pending",
+        "projects:create:superseded"
+      ]);
+      const cached = manifest.remoteResources?.find((item) => item.domain === "projects" && item.resourceId === id);
+      assert.equal(cached?.payload.name, "Offline Project");
+      assert.equal(cached?.payload.description, "edited");
+      assert.equal(cached?.payload.status, "active");
+      assert.equal(state.outboxPending, 1);
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("queues existing cached project updates and deletes into the outbox", async () => {
+    const { store, state } = await createState();
+    try {
+      upsertRemoteResource(store, {
+        domain: "projects",
+        resourceId: "project-1",
+        version: 4,
+        payload: {
+          id: "project-1",
+          name: "Remote Project",
+          description: "old",
+          status: "active",
+          isUserDefault: true,
+          createdAt: "2026-06-17T00:00:00.000Z",
+          updatedAt: "2026-06-17T00:00:00.000Z"
+        },
+        updatedAt: "2026-06-17T00:00:00.000Z",
+        lastSyncedAt: "2026-06-17T00:00:00.000Z"
+      });
+
+      const updated = await updateLocalProject(state, "project-1", { name: "Renamed Project" });
+      assert.equal(updated?.name, "Renamed Project");
+      const deleted = await deleteLocalProject(state, "project-1");
+      assert.equal(deleted, true);
+
+      const manifest = readManifestFromStore(store);
+      assert.deepEqual(manifest.outbox?.map((item) => `${item.action}:${item.status}`).sort(), [
+        "delete:pending",
+        "update:superseded"
+      ]);
+      const cached = manifest.remoteResources?.find((item) => item.domain === "projects" && item.resourceId === "project-1");
+      assert.equal(cached?.deleted, true);
+      assert.equal(cached?.payload.deleted, true);
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("queues local project default changes and updates cached default flags", async () => {
+    const { store, state } = await createState();
+    try {
+      for (const project of [
+        { id: "project-1", name: "Project 1", isUserDefault: true },
+        { id: "project-2", name: "Project 2", isUserDefault: false }
+      ]) {
+        upsertRemoteResource(store, {
+          domain: "projects",
+          resourceId: project.id,
+          version: 1,
+          payload: {
+            ...project,
+            description: "",
+            status: "active",
+            createdAt: "2026-06-17T00:00:00.000Z",
+            updatedAt: "2026-06-17T00:00:00.000Z"
+          },
+          updatedAt: "2026-06-17T00:00:00.000Z",
+          lastSyncedAt: "2026-06-17T00:00:00.000Z"
+        });
+      }
+
+      const selection = await setLocalDefaultProject(state, "project-2");
+      assert.equal((selection?.project as Record<string, unknown> | undefined)?.id, "project-2");
+      assert.equal(selection?.source, "user");
+
+      const manifest = readManifestFromStore(store);
+      assert.deepEqual(manifest.outbox?.map((item) => `${item.domain}:${item.action}:${item.status}:${item.payload.relation}`).sort(), [
+        "projects:update:pending:default"
+      ]);
+      const project1 = manifest.remoteResources?.find((item) => item.domain === "projects" && item.resourceId === "project-1");
+      const project2 = manifest.remoteResources?.find((item) => item.domain === "projects" && item.resourceId === "project-2");
+      assert.equal(project1?.payload.isUserDefault, false);
+      assert.equal(project2?.payload.isUserDefault, true);
     } finally {
       closeManifestStore(store);
     }

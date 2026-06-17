@@ -1344,7 +1344,7 @@ export function SettingsPage() {
               <div className="account-local-mode-control">
                 <div>
                   <strong>Local Mode</strong>
-                  <small>{localModeEnabled ? "Supported artifacts and notes use daemon" : "Core API active"}</small>
+                  <small>{localModeEnabled ? "Supported artifacts, notes, and projects use daemon" : "Core API active"}</small>
                 </div>
                 <label className="integration-switch">
                   <input

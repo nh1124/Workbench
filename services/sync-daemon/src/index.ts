@@ -841,6 +841,311 @@ function localDefaultProjectSelection(state: DaemonState): Record<string, unknow
   };
 }
 
+const LOCAL_PROJECT_ID_PREFIX = "local-project-";
+const LOCAL_PROJECT_STATUSES = new Set(["draft", "active", "archived"]);
+
+function isLocalProjectId(id: string | undefined): boolean {
+  return typeof id === "string" && id.startsWith(LOCAL_PROJECT_ID_PREFIX);
+}
+
+function projectOutboxPath(id: string): string {
+  return `projects/${id}`;
+}
+
+function projectDefaultOutboxPath(): string {
+  return "projects/default";
+}
+
+function normalizeProjectStatus(value: unknown, fallback?: unknown): "draft" | "active" | "archived" {
+  if (typeof value === "string" && LOCAL_PROJECT_STATUSES.has(value)) {
+    return value as "draft" | "active" | "archived";
+  }
+  if (typeof fallback === "string" && LOCAL_PROJECT_STATUSES.has(fallback)) {
+    return fallback as "draft" | "active" | "archived";
+  }
+  return "active";
+}
+
+function normalizeLocalProjectPayload(
+  input: Record<string, unknown>,
+  existing?: Record<string, unknown>
+): Record<string, unknown> {
+  const now = new Date().toISOString();
+  const name = typeof input.name === "string" && input.name.trim()
+    ? input.name.trim()
+    : typeof existing?.name === "string" && existing.name.trim()
+      ? existing.name
+      : "Untitled Project";
+  const description = typeof input.description === "string"
+    ? input.description
+    : typeof existing?.description === "string"
+      ? existing.description
+      : "";
+  return {
+    ...(existing ?? {}),
+    name,
+    description,
+    status: normalizeProjectStatus(input.status, existing?.status),
+    createdAt: typeof existing?.createdAt === "string" ? existing.createdAt : now,
+    updatedAt: now
+  };
+}
+
+function localProjectDefaultSelection(project: Record<string, unknown>): Record<string, unknown> {
+  return {
+    project,
+    source: project.isFallbackDefault === true && project.isUserDefault !== true ? "fallback" : "user"
+  };
+}
+
+function updateLocalProjectDefaultCache(state: DaemonState, projectId: string, updatedAt: string): Record<string, unknown> | undefined {
+  let selected: Record<string, unknown> | undefined;
+  for (const resource of listRemoteResources(state.manifestStore, { domain: "projects", includeDeleted: false, limit: 1000 })) {
+    const id = asString(resource.payload.id) ?? resource.resourceId;
+    const payload = {
+      ...resource.payload,
+      id,
+      isUserDefault: id === projectId,
+      updatedAt: asString(resource.payload.updatedAt) ?? resource.updatedAt ?? updatedAt
+    };
+    upsertRemoteResource(state.manifestStore, {
+      domain: "projects",
+      resourceId: resource.resourceId,
+      version: resource.version,
+      payload,
+      updatedAt: asString(payload.updatedAt) ?? updatedAt,
+      lastSyncedAt: resource.lastSyncedAt
+    });
+    if (id === projectId) {
+      selected = payload;
+    }
+  }
+  return selected;
+}
+
+function supersedeOpenProjectDefaultForResource(state: DaemonState, resourceId: string, reason: string, updatedAt: string): void {
+  for (const item of listOpenOutboxForResource(state.manifestStore, resourceId)) {
+    if (item.domain !== "projects" || asString(item.payload.relation) !== "default") continue;
+    markOutboxSuperseded(state.manifestStore, item.id, reason, updatedAt);
+  }
+}
+
+function retargetOpenProjectOutboxReferences(state: DaemonState, oldResourceId: string, newResourceId: string, updatedAt: string): void {
+  for (const item of listOpenOutboxForResource(state.manifestStore, oldResourceId)) {
+    if (item.domain !== "projects") continue;
+    markOutboxSuperseded(
+      state.manifestStore,
+      item.id,
+      "Local project received a cloud id; pending project operation was retargeted.",
+      updatedAt
+    );
+    enqueueManifestOutbox(state.manifestStore, {
+      relativePath: item.relativePath,
+      domain: item.domain,
+      action: item.action,
+      resourceId: newResourceId,
+      payload: {
+        ...item.payload,
+        id: asString(item.payload.id) === oldResourceId ? newResourceId : item.payload.id,
+        projectId: asString(item.payload.projectId) === oldResourceId ? newResourceId : item.payload.projectId
+      }
+    });
+  }
+}
+
+function projectDefaultRelationPayload(item: OutboxItem): { relation: "default"; projectId: string } | undefined {
+  if (item.domain !== "projects" || asString(item.payload.relation) !== "default") return undefined;
+  const projectId = asString(item.payload.projectId) ?? item.resourceId ?? asString(item.payload.id);
+  return projectId ? { relation: "default", projectId } : undefined;
+}
+
+function shouldDeferProjectOutboxItem(state: DaemonState, item: OutboxItem): boolean {
+  const defaultPayload = projectDefaultRelationPayload(item);
+  if (!defaultPayload || !isLocalProjectId(defaultPayload.projectId)) return false;
+  return listOpenOutboxForResource(state.manifestStore, defaultPayload.projectId).some(
+    (candidate) => candidate.domain === "projects"
+      && candidate.action === "create"
+      && asString(candidate.payload.relation) !== "default"
+  );
+}
+
+function applyProjectDefaultPushResult(
+  state: DaemonState,
+  item: OutboxItem,
+  appliedItem: NonNullable<SyncPushResponse["applied"]>[number],
+  now: string
+): boolean {
+  const defaultPayload = projectDefaultRelationPayload(item);
+  if (!defaultPayload) return false;
+  const result = resultRecord(appliedItem.result);
+  const resultProject = resultRecord(result?.project);
+  const projectId = appliedItem.resourceId ?? asString(resultProject?.id) ?? defaultPayload.projectId;
+  if (resultProject) {
+    upsertRemoteResource(state.manifestStore, {
+      domain: "projects",
+      resourceId: projectId,
+      version: appliedItem.version,
+      payload: {
+        ...resultProject,
+        id: projectId,
+        isUserDefault: true
+      },
+      updatedAt: remoteResourceUpdatedAt(resultProject, now),
+      lastSyncedAt: now
+    });
+  }
+  updateLocalProjectDefaultCache(state, projectId, now);
+  return true;
+}
+
+export async function createLocalProject(state: DaemonState, input: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const id = `${LOCAL_PROJECT_ID_PREFIX}${randomUUID()}`;
+  const payload: Record<string, unknown> = {
+    ...normalizeLocalProjectPayload(input),
+    id
+  };
+  const now = new Date().toISOString();
+  const outboxPath = projectOutboxPath(id);
+  supersedeOpenOutboxForPath(
+    state,
+    outboxPath,
+    () => true,
+    "Local project was recreated through daemon facade; stale project operation was superseded.",
+    now
+  );
+  enqueueManifestOutbox(state.manifestStore, {
+    relativePath: outboxPath,
+    domain: "projects",
+    action: "create",
+    resourceId: id,
+    payload
+  });
+  upsertRemoteResource(state.manifestStore, {
+    domain: "projects",
+    resourceId: id,
+    payload,
+    updatedAt: asString(payload.updatedAt) ?? now
+  });
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
+  await refreshManifestStats(state);
+  return payload;
+}
+
+export async function updateLocalProject(
+  state: DaemonState,
+  id: string,
+  input: Record<string, unknown>
+): Promise<Record<string, unknown> | undefined> {
+  const existing = localRemoteDomainItem(state, "projects", id);
+  if (!existing) return undefined;
+  const now = new Date().toISOString();
+  const payload: Record<string, unknown> = {
+    ...normalizeLocalProjectPayload(input, existing),
+    id
+  };
+  const outboxPath = projectOutboxPath(id);
+  const action = isLocalProjectId(id) ? "create" : "update";
+  supersedeOpenOutboxForPath(
+    state,
+    outboxPath,
+    () => true,
+    "Local project was updated through daemon facade; stale project operation was superseded.",
+    now
+  );
+  enqueueManifestOutbox(state.manifestStore, {
+    relativePath: outboxPath,
+    domain: "projects",
+    action,
+    resourceId: id,
+    payload
+  });
+  upsertRemoteResource(state.manifestStore, {
+    domain: "projects",
+    resourceId: id,
+    version: asNumber(existing.version),
+    payload,
+    updatedAt: asString(payload.updatedAt) ?? now,
+    lastSyncedAt: asString(existing.lastSyncedAt)
+  });
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
+  await refreshManifestStats(state);
+  return payload;
+}
+
+export async function deleteLocalProject(state: DaemonState, id: string): Promise<boolean> {
+  const existing = localRemoteDomainItem(state, "projects", id);
+  if (!existing) return false;
+  const now = new Date().toISOString();
+  const outboxPath = projectOutboxPath(id);
+  supersedeOpenOutboxForPath(
+    state,
+    outboxPath,
+    () => true,
+    "Local project was deleted through daemon facade; stale project operation was superseded.",
+    now
+  );
+  supersedeOpenProjectDefaultForResource(
+    state,
+    id,
+    "Local project was deleted before its default selection synced; stale default operation was superseded.",
+    now
+  );
+
+  if (isLocalProjectId(id)) {
+    removeRemoteResource(state.manifestStore, "projects", id);
+  } else {
+    enqueueManifestOutbox(state.manifestStore, {
+      relativePath: outboxPath,
+      domain: "projects",
+      action: "delete",
+      resourceId: id,
+      payload: existing
+    });
+    markRemoteResourceDeleted(state.manifestStore, {
+      domain: "projects",
+      resourceId: id,
+      version: asNumber(existing.version),
+      payload: existing,
+      deletedAt: now,
+      lastSyncedAt: asString(existing.lastSyncedAt)
+    });
+  }
+
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
+  await refreshManifestStats(state);
+  return true;
+}
+
+export async function setLocalDefaultProject(state: DaemonState, projectId: string): Promise<Record<string, unknown> | undefined> {
+  const existing = localRemoteDomainItem(state, "projects", projectId);
+  if (!existing) return undefined;
+  const now = new Date().toISOString();
+  const selected = updateLocalProjectDefaultCache(state, projectId, now) ?? {
+    ...existing,
+    isUserDefault: true
+  };
+  supersedeOpenOutboxForPath(
+    state,
+    projectDefaultOutboxPath(),
+    () => true,
+    "Local project default was changed through daemon facade; stale default operation was superseded.",
+    now
+  );
+  enqueueManifestOutbox(state.manifestStore, {
+    relativePath: projectDefaultOutboxPath(),
+    domain: "projects",
+    action: "update",
+    resourceId: projectId,
+    payload: {
+      relation: "default",
+      projectId
+    }
+  });
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
+  await refreshManifestStats(state);
+  return localProjectDefaultSelection(selected);
+}
+
 const LOCAL_NOTE_ID_PREFIX = "local-note-";
 
 function isLocalNoteId(id: string | undefined): boolean {
@@ -2918,6 +3223,7 @@ async function postSyncPush(state: DaemonState, ops: OutboxItem[]): Promise<Sync
         clientOpId: item.clientOpId,
         domain: item.domain,
         action: item.action,
+        ...(asString(item.payload.relation) ? { relation: asString(item.payload.relation) } : {}),
         resourceId: item.resourceId,
         payload: item.payload
       }))
@@ -2998,7 +3304,7 @@ async function writeConflictRecord(
 
 async function pushOutbox(state: DaemonState): Promise<void> {
   if (!state.identity) return;
-  const pending = listPendingOutbox(state.manifestStore, 20);
+  const pending = listPendingOutbox(state.manifestStore, 20).filter((item) => !shouldDeferProjectOutboxItem(state, item));
   if (pending.length === 0) {
     await refreshManifestStats(state);
     return;
@@ -3022,8 +3328,14 @@ async function pushOutbox(state: DaemonState): Promise<void> {
       const domain = item.domain;
       const nextResourceId = resourceId ?? item.resourceId;
       if (!nextResourceId) continue;
+      if (applyProjectDefaultPushResult(state, item, appliedItem, now)) {
+        continue;
+      }
       if (item.resourceId && item.resourceId !== nextResourceId) {
         removeRemoteResource(state.manifestStore, domain, item.resourceId);
+        if (domain === "projects") {
+          retargetOpenProjectOutboxReferences(state, item.resourceId, nextResourceId, now);
+        }
       }
       if (item.action === "delete") {
         markRemoteResourceDeleted(state.manifestStore, {
@@ -3569,12 +3881,45 @@ function startStatusServer(state: DaemonState): void {
       return;
     }
 
+    if (url.pathname === "/api/projects" && req.method === "POST") {
+      try {
+        const body = await readRequestJson(req);
+        const project = await createLocalProject(state, body);
+        scheduleTick(state, 0);
+        writeJson(res, project, 201);
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+      }
+      return;
+    }
+
     if (url.pathname === "/api/notes" && req.method === "POST") {
       try {
         const body = await readRequestJson(req);
         const note = await createLocalNote(state, body);
         scheduleTick(state, 0);
         writeJson(res, note, 201);
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/projects/default" && req.method === "PUT") {
+      try {
+        const body = await readRequestJson(req);
+        const projectId = asString(body.projectId);
+        if (!projectId) {
+          writeJson(res, { message: "projectId is required" }, 400);
+          return;
+        }
+        const selection = await setLocalDefaultProject(state, projectId);
+        if (!selection) {
+          writeJson(res, { message: "Local project not found" }, 404);
+          return;
+        }
+        scheduleTick(state, 0);
+        writeJson(res, selection);
       } catch (error) {
         writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
       }
@@ -3592,6 +3937,38 @@ function startStatusServer(state: DaemonState): void {
     }
 
     const remoteDomainItemMatch = url.pathname.match(/^\/api\/(projects|notes|tasks)\/([^/]+)$/);
+    if (remoteDomainItemMatch && remoteDomainItemMatch[1] === "projects" && req.method === "PATCH") {
+      try {
+        const body = await readRequestJson(req);
+        const project = await updateLocalProject(state, decodeURIComponent(remoteDomainItemMatch[2]), body);
+        if (!project) {
+          writeJson(res, { message: "Local project not found" }, 404);
+          return;
+        }
+        scheduleTick(state, 0);
+        writeJson(res, project);
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+      }
+      return;
+    }
+
+    if (remoteDomainItemMatch && remoteDomainItemMatch[1] === "projects" && req.method === "DELETE") {
+      try {
+        const deleted = await deleteLocalProject(state, decodeURIComponent(remoteDomainItemMatch[2]));
+        if (!deleted) {
+          writeJson(res, { message: "Local project not found" }, 404);
+          return;
+        }
+        scheduleTick(state, 0);
+        res.statusCode = 204;
+        res.end();
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+      }
+      return;
+    }
+
     if (remoteDomainItemMatch && remoteDomainItemMatch[1] === "notes" && req.method === "PATCH") {
       try {
         const body = await readRequestJson(req);
