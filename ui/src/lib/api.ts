@@ -448,7 +448,15 @@ function artifactsFacadeEnabled(): boolean {
   return getWorkbenchLocalModeEnabled();
 }
 
+function notesFacadeEnabled(): boolean {
+  return getWorkbenchLocalModeEnabled();
+}
+
 function coreArtifactPath(path: string): string {
+  return `${coreBaseUrl()}${path}`;
+}
+
+function coreApiPath(path: string): string {
   return `${coreBaseUrl()}${path}`;
 }
 
@@ -457,6 +465,13 @@ async function fetchArtifactFacadeJson<T>(path: string, options?: RequestInit): 
     return requestLocalDaemonJson<T>(path, options);
   }
   return fetchJson<T>(coreArtifactPath(path), options);
+}
+
+async function fetchNotesFacadeJson<T>(path: string, options?: RequestInit): Promise<T> {
+  if (notesFacadeEnabled()) {
+    return requestLocalDaemonJson<T>(path, options);
+  }
+  return fetchJson<T>(coreApiPath(path), options);
 }
 
 async function refreshAccessToken(refreshToken: string): Promise<void> {
@@ -540,11 +555,12 @@ export const notesApi = {
     const params = new URLSearchParams();
     if (projectId) params.set("projectId", projectId);
     if (limit) params.set("limit", String(limit));
-    return fetchJson<Note[]>(`${coreBaseUrl()}/api/notes?${params.toString()}`);
+    const query = params.toString();
+    return fetchNotesFacadeJson<Note[]>(`/api/notes${query ? `?${query}` : ""}`);
   },
-  get: (id: string): Promise<Note> => fetchJson<Note>(`${coreBaseUrl()}/api/notes/${encodeURIComponent(id)}`),
+  get: (id: string): Promise<Note> => fetchNotesFacadeJson<Note>(`/api/notes/${encodeURIComponent(id)}`),
   create: (payload: Omit<Note, "id" | "createdAt" | "updatedAt">): Promise<Note> =>
-    fetchJson<Note>(`${coreBaseUrl()}/api/notes`, {
+    fetchNotesFacadeJson<Note>("/api/notes", {
       method: "POST",
       body: JSON.stringify(payload)
     }),
@@ -552,15 +568,15 @@ export const notesApi = {
     id: string,
     payload: Partial<Omit<Note, "id" | "createdAt" | "updatedAt">>
   ): Promise<Note> =>
-    fetchJson<Note>(`${coreBaseUrl()}/api/notes/${encodeURIComponent(id)}`, {
+    fetchNotesFacadeJson<Note>(`/api/notes/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(payload)
     }),
   remove: (id: string): Promise<void> =>
-    fetchJson<void>(`${coreBaseUrl()}/api/notes/${encodeURIComponent(id)}`, {
+    fetchNotesFacadeJson<void>(`/api/notes/${encodeURIComponent(id)}`, {
       method: "DELETE"
     }),
-  projects: (): Promise<NoteProjectSummary[]> => fetchJson<NoteProjectSummary[]>(`${coreBaseUrl()}/api/notes/projects`)
+  projects: (): Promise<NoteProjectSummary[]> => fetchNotesFacadeJson<NoteProjectSummary[]>("/api/notes/projects")
 };
 
 export const artifactsApi = {

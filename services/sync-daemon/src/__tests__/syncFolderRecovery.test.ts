@@ -10,18 +10,22 @@ import {
   openManifestStore,
   readManifestFromStore,
   recordConflict,
+  upsertRemoteResource,
   upsertResource,
   type ManifestStore
 } from "../manifestStore.js";
 import {
+  createLocalNote,
   createLocalArtifactFile,
   createLocalArtifactFolder,
   createLocalArtifactNote,
+  deleteLocalNote,
   deleteLocalArtifactItem,
   getLocalArtifactItemById,
   listLocalArtifactItems,
   patchLocalArtifactNoteContent,
   scanSyncFolder,
+  updateLocalNote,
   updateLocalArtifactNoteSection,
   updateLocalArtifactItem,
   type DaemonConfig,
@@ -296,6 +300,78 @@ describe("sync folder recovery", () => {
 
       const items = await listLocalArtifactItems(state);
       assert.ok(items.some((item) => item.kind === "folder" && item.path === "uploads"));
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("queues local note domain creates and updates into the outbox cache", async () => {
+    const { store, state } = await createState();
+    try {
+      const created = await createLocalNote(state, {
+        title: "Offline Note",
+        content: "draft",
+        projectId: "project-1",
+        projectName: "Project 1",
+        tags: ["offline"]
+      });
+      const id = String(created.id);
+      assert.ok(id.startsWith("local-note-"));
+
+      const updated = await updateLocalNote(state, id, {
+        content: "edited",
+        tags: ["offline", "edited"]
+      });
+      assert.equal(updated?.content, "edited");
+
+      const manifest = readManifestFromStore(store);
+      const outbox = manifest.outbox ?? [];
+      assert.deepEqual(outbox.map((item) => `${item.domain}:${item.action}:${item.status}`).sort(), [
+        "notes:create:pending",
+        "notes:create:superseded"
+      ]);
+      const cached = manifest.remoteResources?.find((item) => item.domain === "notes" && item.resourceId === id);
+      assert.equal(cached?.payload.title, "Offline Note");
+      assert.equal(cached?.payload.content, "edited");
+      assert.deepEqual(cached?.payload.tags, ["offline", "edited"]);
+      assert.equal(state.outboxPending, 1);
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("queues existing cached note updates and deletes into the outbox", async () => {
+    const { store, state } = await createState();
+    try {
+      upsertRemoteResource(store, {
+        domain: "notes",
+        resourceId: "note-1",
+        version: 3,
+        payload: {
+          id: "note-1",
+          title: "Remote Note",
+          content: "old",
+          projectId: "project-1",
+          tags: [],
+          updatedAt: "2026-06-17T00:00:00.000Z"
+        },
+        updatedAt: "2026-06-17T00:00:00.000Z",
+        lastSyncedAt: "2026-06-17T00:00:00.000Z"
+      });
+
+      const updated = await updateLocalNote(state, "note-1", { title: "Renamed", content: "new" });
+      assert.equal(updated?.title, "Renamed");
+      const deleted = await deleteLocalNote(state, "note-1");
+      assert.equal(deleted, true);
+
+      const manifest = readManifestFromStore(store);
+      assert.deepEqual(manifest.outbox?.map((item) => `${item.action}:${item.status}`).sort(), [
+        "delete:pending",
+        "update:superseded"
+      ]);
+      const cached = manifest.remoteResources?.find((item) => item.domain === "notes" && item.resourceId === "note-1");
+      assert.equal(cached?.deleted, true);
+      assert.equal(cached?.payload.deleted, true);
     } finally {
       closeManifestStore(store);
     }

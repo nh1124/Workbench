@@ -417,7 +417,7 @@ export interface LocalDaemonConflictRecord {
   outboxId?: string;
   clientOpId?: string;
   relativePath: string;
-  domain: "artifacts";
+  domain: "projects" | "notes" | "artifacts" | "tasks";
   action: "create" | "update" | "delete";
   resourceId?: string;
   payload: Record<string, unknown>;

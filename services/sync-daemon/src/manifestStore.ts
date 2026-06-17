@@ -33,7 +33,7 @@ export type OutboxItem = {
   id: string;
   clientOpId: string;
   relativePath: string;
-  domain: "artifacts";
+  domain: RemoteResourceDomain;
   action: "create" | "update" | "delete";
   resourceId?: string;
   payload: Record<string, unknown>;
@@ -54,7 +54,7 @@ export type ConflictRecord = {
   outboxId?: string;
   clientOpId?: string;
   relativePath: string;
-  domain: "artifacts";
+  domain: RemoteResourceDomain;
   action: "create" | "update" | "delete";
   resourceId?: string;
   payload: Record<string, unknown>;
@@ -224,12 +224,16 @@ function toRemoteResource(row: RemoteResourceRow): RemoteResource {
   };
 }
 
+function toRemoteResourceDomain(value: string): RemoteResourceDomain {
+  return value === "projects" || value === "notes" || value === "tasks" ? value : "artifacts";
+}
+
 function toOutbox(row: OutboxRow): OutboxItem {
   return {
     id: row.id,
     clientOpId: row.client_op_id,
     relativePath: row.relative_path,
-    domain: row.domain === "artifacts" ? "artifacts" : "artifacts",
+    domain: toRemoteResourceDomain(row.domain),
     action: row.action === "delete" ? "delete" : row.action === "update" ? "update" : "create",
     resourceId: row.resource_id ?? undefined,
     payload: parseJsonRecord(row.payload_json),
@@ -264,7 +268,7 @@ function toConflict(row: ConflictRow): ConflictRecord {
     outboxId: row.outbox_id ?? undefined,
     clientOpId: row.client_op_id ?? undefined,
     relativePath: row.relative_path,
-    domain: row.domain === "artifacts" ? "artifacts" : "artifacts",
+    domain: toRemoteResourceDomain(row.domain),
     action: row.action === "delete" ? "delete" : row.action === "update" ? "update" : "create",
     resourceId: row.resource_id ?? undefined,
     payload: parseJsonRecord(row.payload_json),
@@ -637,6 +641,10 @@ export function getRemoteResource(
   return row ? toRemoteResource(row) : undefined;
 }
 
+export function removeRemoteResource(store: ManifestStore, domain: RemoteResourceDomain, resourceId: string): void {
+  store.db.prepare("DELETE FROM remote_resources WHERE domain = ? AND resource_id = ?").run(domain, resourceId);
+}
+
 export function listRemoteResources(
   store: ManifestStore,
   options: { domain?: RemoteResourceDomain; includeDeleted?: boolean; limit?: number } = {}
@@ -857,7 +865,7 @@ export function recordConflict(
   store: ManifestStore,
   input: Partial<ConflictRecord> & {
     relativePath: string;
-    domain: "artifacts";
+    domain: RemoteResourceDomain;
     action: "create" | "update" | "delete";
     payload: Record<string, unknown>;
     errorMessage: string;
