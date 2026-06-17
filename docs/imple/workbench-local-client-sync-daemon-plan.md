@@ -271,8 +271,8 @@ npm run build
   - Dirty local state or open outbox work creates `.workbench/conflicts` records instead of overwriting local files.
 - `[implemented]` Remote reconciliation for Projects, Notes, and Tasks is implemented as daemon SQLite cache.
   - These domains are not materialized into human-readable sync-folder files in this phase.
-  - Projects and Notes local UI writes can now be queued through daemon outbox.
-  - Tasks local UI writes are not queued through daemon outbox yet.
+  - Projects, Notes, and core Tasks local UI writes can now be queued through daemon outbox.
+  - Task relations beyond pin (`today`, `scheduleItem`, `occurrence`, `subtask`, and `attachment`) are not fully routed through daemon outbox yet.
 
 ### Sync Folder Watcher
 
@@ -356,6 +356,7 @@ npm run build
   - Empty folders discovered by scanner are queued as standalone cloud artifact folder resources.
   - Added `POST /api/projects`, `PATCH /api/projects/:id`, `DELETE /api/projects/:id`, and `PUT /api/projects/default` for Projects cache/outbox writes.
   - Added `POST /api/notes`, `PATCH /api/notes/:id`, and `DELETE /api/notes/:id` for Notes cache/outbox writes.
+  - Added `POST /api/tasks`, `PATCH /api/tasks/:id`, `DELETE /api/tasks/:id`, and `PUT /api/tasks/:id/pin` for core Tasks cache/outbox writes.
 - `[implemented]` Make artifact UI use the daemon loopback URL when Local Mode is enabled.
   - Tree, item read, note create/update/delete, folder create, file upload, and file download route through the daemon.
   - Existing Core route remains active when Local Mode is disabled.
@@ -364,6 +365,10 @@ npm run build
   - Existing Core route remains active when Local Mode is disabled.
 - `[implemented]` Make Notes UI use the daemon loopback URL when Local Mode is enabled.
   - Note list/item/project reads and note create/update/delete route through the daemon.
+  - Existing Core route remains active when Local Mode is disabled.
+- `[partial]` Make Tasks UI use the daemon loopback URL when Local Mode is enabled.
+  - Task list/item/project/pin reads and task create/update/delete/pin route through the daemon.
+  - Today, schedule, occurrence, subtask, attachment, import, and export routes still use Core.
   - Existing Core route remains active when Local Mode is disabled.
 - `[implemented]` Add Settings UI display/actions for daemon status and open conflicts.
 - `[implemented]` Add offline/sync/conflict status display in the main app shell.

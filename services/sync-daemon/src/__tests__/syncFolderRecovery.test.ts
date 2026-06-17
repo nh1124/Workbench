@@ -20,18 +20,22 @@ import {
   createLocalArtifactFile,
   createLocalArtifactFolder,
   createLocalArtifactNote,
+  createLocalTask,
   deleteLocalProject,
   deleteLocalNote,
   deleteLocalArtifactItem,
+  deleteLocalTask,
   getLocalArtifactItemById,
   listLocalArtifactItems,
   patchLocalArtifactNoteContent,
   scanSyncFolder,
   setLocalDefaultProject,
+  setLocalTaskPin,
   updateLocalProject,
   updateLocalNote,
   updateLocalArtifactNoteSection,
   updateLocalArtifactItem,
+  updateLocalTask,
   type DaemonConfig,
   type DaemonState
 } from "../index.js";
@@ -451,6 +455,128 @@ describe("sync folder recovery", () => {
       const project2 = manifest.remoteResources?.find((item) => item.domain === "projects" && item.resourceId === "project-2");
       assert.equal(project1?.payload.isUserDefault, false);
       assert.equal(project2?.payload.isUserDefault, true);
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("queues local task domain creates and updates into the outbox cache", async () => {
+    const { store, state } = await createState();
+    try {
+      const created = await createLocalTask(state, {
+        title: "Offline Task",
+        notes: "draft",
+        context: "project-1",
+        contextName: "Project 1",
+        status: "todo",
+        baseLoadScore: 4,
+        recurrence: "ONCE"
+      });
+      const id = String(created.id);
+      assert.ok(id.startsWith("local-task-"));
+
+      const updated = await updateLocalTask(state, id, {
+        notes: "edited",
+        status: "done",
+        baseLoadScore: 6
+      });
+      assert.equal(updated?.notes, "edited");
+      assert.equal(updated?.status, "done");
+      assert.equal(updated?.baseLoadScore, 6);
+
+      const manifest = readManifestFromStore(store);
+      const outbox = manifest.outbox ?? [];
+      assert.deepEqual(outbox.map((item) => `${item.domain}:${item.action}:${item.status}`).sort(), [
+        "tasks:create:pending",
+        "tasks:create:superseded"
+      ]);
+      const cached = manifest.remoteResources?.find((item) => item.domain === "tasks" && item.resourceId === id);
+      assert.equal(cached?.payload.title, "Offline Task");
+      assert.equal(cached?.payload.notes, "edited");
+      assert.equal(cached?.payload.status, "done");
+      assert.equal(state.outboxPending, 1);
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("queues existing cached task updates and deletes into the outbox", async () => {
+    const { store, state } = await createState();
+    try {
+      upsertRemoteResource(store, {
+        domain: "tasks",
+        resourceId: "task-1",
+        version: 5,
+        payload: {
+          id: "task-1",
+          title: "Remote Task",
+          notes: "old",
+          context: "project-1",
+          status: "todo",
+          isLocked: false,
+          baseLoadScore: 5,
+          recurrence: "ONCE",
+          active: true,
+          createdAt: "2026-06-17T00:00:00.000Z",
+          updatedAt: "2026-06-17T00:00:00.000Z"
+        },
+        updatedAt: "2026-06-17T00:00:00.000Z",
+        lastSyncedAt: "2026-06-17T00:00:00.000Z"
+      });
+
+      const updated = await updateLocalTask(state, "task-1", { title: "Renamed Task" });
+      assert.equal(updated?.title, "Renamed Task");
+      const deleted = await deleteLocalTask(state, "task-1");
+      assert.equal(deleted, true);
+
+      const manifest = readManifestFromStore(store);
+      assert.deepEqual(manifest.outbox?.map((item) => `${item.action}:${item.status}`).sort(), [
+        "delete:pending",
+        "update:superseded"
+      ]);
+      const cached = manifest.remoteResources?.find((item) => item.domain === "tasks" && item.resourceId === "task-1");
+      assert.equal(cached?.deleted, true);
+      assert.equal(cached?.payload.deleted, true);
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("queues local task pin changes and updates cached pins", async () => {
+    const { store, state } = await createState();
+    try {
+      upsertRemoteResource(store, {
+        domain: "tasks",
+        resourceId: "task-1",
+        version: 2,
+        payload: {
+          id: "task-1",
+          title: "Pinned Task",
+          notes: "",
+          context: "project-1",
+          contextName: "Project 1",
+          status: "todo",
+          isPinned: false,
+          isLocked: false,
+          baseLoadScore: 5,
+          recurrence: "ONCE",
+          active: true,
+          createdAt: "2026-06-17T00:00:00.000Z",
+          updatedAt: "2026-06-17T00:00:00.000Z"
+        },
+        updatedAt: "2026-06-17T00:00:00.000Z",
+        lastSyncedAt: "2026-06-17T00:00:00.000Z"
+      });
+
+      const result = await setLocalTaskPin(state, "task-1", true);
+      assert.deepEqual(result, { taskId: "task-1", pinned: true });
+
+      const manifest = readManifestFromStore(store);
+      assert.deepEqual(manifest.outbox?.map((item) => `${item.domain}:${item.action}:${item.status}:${item.payload.relation}`).sort(), [
+        "tasks:update:pending:pin"
+      ]);
+      const cached = manifest.remoteResources?.find((item) => item.domain === "tasks" && item.resourceId === "task-1");
+      assert.equal(cached?.payload.isPinned, true);
     } finally {
       closeManifestStore(store);
     }

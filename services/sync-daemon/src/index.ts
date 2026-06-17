@@ -1329,6 +1329,403 @@ export async function deleteLocalNote(state: DaemonState, id: string): Promise<b
   return true;
 }
 
+const LOCAL_TASK_ID_PREFIX = "local-task-";
+const LOCAL_TASK_STATUSES = new Set(["todo", "done", "skipped"]);
+const LOCAL_TASK_PRIORITIES = new Set(["low", "medium", "high"]);
+const LOCAL_TASK_RECURRENCES = new Set(["ONCE", "WEEKLY", "EVERY_N_DAYS", "MONTHLY_DAY", "MONTHLY_NTH_WEEKDAY"]);
+
+function isLocalTaskId(id: string | undefined): boolean {
+  return typeof id === "string" && id.startsWith(LOCAL_TASK_ID_PREFIX);
+}
+
+function taskOutboxPath(id: string): string {
+  return `tasks/${id}`;
+}
+
+function taskRelationOutboxPath(id: string, relation: string): string {
+  return `tasks/${id}/${relation}`;
+}
+
+function normalizeTaskStatus(value: unknown, fallback?: unknown): "todo" | "done" | "skipped" {
+  if (typeof value === "string" && LOCAL_TASK_STATUSES.has(value)) return value as "todo" | "done" | "skipped";
+  if (typeof fallback === "string" && LOCAL_TASK_STATUSES.has(fallback)) return fallback as "todo" | "done" | "skipped";
+  return "todo";
+}
+
+function normalizeTaskPriority(value: unknown, fallback?: unknown): "low" | "medium" | "high" | undefined {
+  if (typeof value === "string" && LOCAL_TASK_PRIORITIES.has(value)) return value as "low" | "medium" | "high";
+  if (typeof fallback === "string" && LOCAL_TASK_PRIORITIES.has(fallback)) return fallback as "low" | "medium" | "high";
+  return undefined;
+}
+
+function normalizeTaskRecurrence(value: unknown, fallback?: unknown): string {
+  if (typeof value === "string" && LOCAL_TASK_RECURRENCES.has(value)) return value;
+  if (typeof fallback === "string" && LOCAL_TASK_RECURRENCES.has(fallback)) return fallback;
+  return "ONCE";
+}
+
+function finiteNumber(value: unknown, fallback?: unknown, defaultValue?: number): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof fallback === "number" && Number.isFinite(fallback)) return fallback;
+  return defaultValue;
+}
+
+function finiteInteger(value: unknown, fallback?: unknown): number | undefined {
+  const number = finiteNumber(value, fallback);
+  return number === undefined ? undefined : Math.trunc(number);
+}
+
+function normalizeTaskBoolean(value: unknown, fallback: unknown, defaultValue?: boolean): boolean | undefined {
+  if (typeof value === "boolean") return value;
+  if (typeof fallback === "boolean") return fallback;
+  return defaultValue;
+}
+
+function copyOptionalTaskString(payload: Record<string, unknown>, key: string, input: Record<string, unknown>, existing?: Record<string, unknown>): void {
+  if (typeof input[key] === "string") {
+    payload[key] = input[key];
+  } else if (typeof existing?.[key] === "string") {
+    payload[key] = existing[key];
+  }
+}
+
+function copyOptionalTaskBoolean(payload: Record<string, unknown>, key: string, input: Record<string, unknown>, existing?: Record<string, unknown>): void {
+  const value = normalizeTaskBoolean(input[key], existing?.[key]);
+  if (value !== undefined) payload[key] = value;
+}
+
+function copyOptionalTaskInteger(payload: Record<string, unknown>, key: string, input: Record<string, unknown>, existing?: Record<string, unknown>): void {
+  const value = finiteInteger(input[key], existing?.[key]);
+  if (value !== undefined) payload[key] = value;
+}
+
+function normalizeLocalTaskPayload(
+  state: DaemonState,
+  input: Record<string, unknown>,
+  existing?: Record<string, unknown>
+): Record<string, unknown> {
+  const now = new Date().toISOString();
+  const title = typeof input.title === "string" && input.title.trim()
+    ? input.title.trim()
+    : typeof existing?.title === "string" && existing.title.trim()
+      ? existing.title
+      : "Untitled Task";
+  const context = typeof input.context === "string" && input.context.trim()
+    ? input.context.trim()
+    : typeof existing?.context === "string" && existing.context.trim()
+      ? existing.context
+      : typeof existing?.projectId === "string" && existing.projectId.trim()
+        ? existing.projectId
+        : localProjectId(state);
+  const contextName = typeof input.contextName === "string"
+    ? input.contextName
+    : typeof existing?.contextName === "string"
+      ? existing.contextName
+      : localProjectName(state);
+  const payload: Record<string, unknown> = {
+    ...(existing ?? {}),
+    title,
+    notes: typeof input.notes === "string" ? input.notes : typeof existing?.notes === "string" ? existing.notes : "",
+    context,
+    contextName,
+    status: normalizeTaskStatus(input.status, existing?.status),
+    isLocked: normalizeTaskBoolean(input.isLocked, existing?.isLocked, false) ?? false,
+    baseLoadScore: finiteNumber(input.baseLoadScore, existing?.baseLoadScore, 5) ?? 5,
+    recurrence: normalizeTaskRecurrence(input.recurrence, existing?.recurrence),
+    active: normalizeTaskBoolean(input.active, existing?.active, true) ?? true,
+    isPinned: normalizeTaskBoolean(input.isPinned, existing?.isPinned, false) ?? false,
+    createdAt: typeof existing?.createdAt === "string" ? existing.createdAt : now,
+    updatedAt: now
+  };
+  const priority = normalizeTaskPriority(input.priority, existing?.priority);
+  if (priority) payload.priority = priority;
+  for (const key of ["dueDate", "startTime", "endTime", "timezone", "activeFrom", "activeUntil", "anchorDate"]) {
+    copyOptionalTaskString(payload, key, input, existing);
+  }
+  for (const key of ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]) {
+    copyOptionalTaskBoolean(payload, key, input, existing);
+  }
+  for (const key of ["intervalDays", "monthDay", "nthInMonth", "weekdayMon1"]) {
+    copyOptionalTaskInteger(payload, key, input, existing);
+  }
+  return payload;
+}
+
+function localTaskProjectSummaries(state: DaemonState): Record<string, unknown>[] {
+  const byProject = new Map<string, { projectId: string; projectName?: string; taskCount: number; latestUpdatedAt: string }>();
+  for (const task of listLocalRemoteDomainItems(state, "tasks")) {
+    const projectId = typeof task.context === "string" && task.context.trim()
+      ? task.context
+      : typeof task.projectId === "string" && task.projectId.trim()
+        ? task.projectId
+        : localProjectId(state);
+    const projectName = typeof task.contextName === "string" ? task.contextName : undefined;
+    const updatedAt = typeof task.updatedAt === "string" ? task.updatedAt : new Date().toISOString();
+    const existing = byProject.get(projectId);
+    if (!existing) {
+      byProject.set(projectId, { projectId, projectName, taskCount: 1, latestUpdatedAt: updatedAt });
+    } else {
+      existing.taskCount += 1;
+      if (!existing.projectName && projectName) existing.projectName = projectName;
+      if (existing.latestUpdatedAt < updatedAt) existing.latestUpdatedAt = updatedAt;
+    }
+  }
+  return [...byProject.values()].sort((a, b) => b.latestUpdatedAt.localeCompare(a.latestUpdatedAt));
+}
+
+function localTaskPinnedIds(state: DaemonState): string[] {
+  return listLocalRemoteDomainItems(state, "tasks")
+    .filter((task) => task.isPinned === true)
+    .map((task) => asString(task.id))
+    .filter((id): id is string => Boolean(id));
+}
+
+function taskRelationPayload(item: OutboxItem): { relation: string; taskId: string } | undefined {
+  if (item.domain !== "tasks") return undefined;
+  const relation = asString(item.payload.relation);
+  if (!relation) return undefined;
+  const taskId = asString(item.payload.taskId) ?? item.resourceId ?? asString(item.payload.id);
+  return taskId ? { relation, taskId } : undefined;
+}
+
+function shouldDeferTaskOutboxItem(state: DaemonState, item: OutboxItem): boolean {
+  const relationPayload = taskRelationPayload(item);
+  if (!relationPayload || !isLocalTaskId(relationPayload.taskId)) return false;
+  return listOpenOutboxForResource(state.manifestStore, relationPayload.taskId).some(
+    (candidate) => candidate.domain === "tasks"
+      && candidate.action === "create"
+      && !asString(candidate.payload.relation)
+  );
+}
+
+function retargetOpenTaskOutboxReferences(state: DaemonState, oldResourceId: string, newResourceId: string, updatedAt: string): void {
+  for (const item of listOpenOutboxForResource(state.manifestStore, oldResourceId)) {
+    if (item.domain !== "tasks") continue;
+    markOutboxSuperseded(
+      state.manifestStore,
+      item.id,
+      "Local task received a cloud id; pending task operation was retargeted.",
+      updatedAt
+    );
+    enqueueManifestOutbox(state.manifestStore, {
+      relativePath: item.relativePath.replace(oldResourceId, newResourceId),
+      domain: item.domain,
+      action: item.action,
+      resourceId: newResourceId,
+      payload: {
+        ...item.payload,
+        id: asString(item.payload.id) === oldResourceId ? newResourceId : item.payload.id,
+        taskId: asString(item.payload.taskId) === oldResourceId ? newResourceId : item.payload.taskId
+      }
+    });
+  }
+}
+
+function applyTaskPinPushResult(
+  state: DaemonState,
+  item: OutboxItem,
+  appliedItem: NonNullable<SyncPushResponse["applied"]>[number],
+  now: string
+): boolean {
+  const relationPayload = taskRelationPayload(item);
+  if (!relationPayload || relationPayload.relation !== "pin") return false;
+  const result = resultRecord(appliedItem.result);
+  const taskId = appliedItem.resourceId ?? asString(result?.taskId) ?? relationPayload.taskId;
+  const pinned = typeof result?.pinned === "boolean" ? result.pinned : normalizeTaskBoolean(item.payload.pinned, undefined, false) ?? false;
+  const existing = localRemoteDomainItem(state, "tasks", taskId, { includeDeleted: true });
+  if (existing) {
+    const payload = {
+      ...existing,
+      id: taskId,
+      isPinned: pinned,
+      updatedAt: now
+    };
+    upsertRemoteResource(state.manifestStore, {
+      domain: "tasks",
+      resourceId: taskId,
+      version: appliedItem.version,
+      payload,
+      updatedAt: now,
+      lastSyncedAt: now
+    });
+  }
+  return true;
+}
+
+function enqueueLocalTaskPinOutbox(state: DaemonState, id: string, pinned: boolean, now: string): void {
+  const outboxPath = taskRelationOutboxPath(id, "pin");
+  supersedeOpenOutboxForPath(
+    state,
+    outboxPath,
+    () => true,
+    "Local task pin was changed through daemon facade; stale pin operation was superseded.",
+    now
+  );
+  enqueueManifestOutbox(state.manifestStore, {
+    relativePath: outboxPath,
+    domain: "tasks",
+    action: "update",
+    resourceId: id,
+    payload: {
+      relation: "pin",
+      taskId: id,
+      pinned
+    }
+  });
+}
+
+export async function createLocalTask(state: DaemonState, input: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const id = `${LOCAL_TASK_ID_PREFIX}${randomUUID()}`;
+  const payload: Record<string, unknown> = {
+    ...normalizeLocalTaskPayload(state, input),
+    id
+  };
+  const now = new Date().toISOString();
+  const outboxPath = taskOutboxPath(id);
+  supersedeOpenOutboxForPath(
+    state,
+    outboxPath,
+    () => true,
+    "Local task was recreated through daemon facade; stale task operation was superseded.",
+    now
+  );
+  enqueueManifestOutbox(state.manifestStore, {
+    relativePath: outboxPath,
+    domain: "tasks",
+    action: "create",
+    resourceId: id,
+    payload
+  });
+  upsertRemoteResource(state.manifestStore, {
+    domain: "tasks",
+    resourceId: id,
+    payload,
+    updatedAt: asString(payload.updatedAt) ?? now
+  });
+  if (payload.isPinned === true) {
+    enqueueLocalTaskPinOutbox(state, id, true, now);
+  }
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
+  await refreshManifestStats(state);
+  return payload;
+}
+
+export async function updateLocalTask(
+  state: DaemonState,
+  id: string,
+  input: Record<string, unknown>
+): Promise<Record<string, unknown> | undefined> {
+  const existing = localRemoteDomainItem(state, "tasks", id);
+  if (!existing) return undefined;
+  const now = new Date().toISOString();
+  const payload: Record<string, unknown> = {
+    ...normalizeLocalTaskPayload(state, input, existing),
+    id
+  };
+  const outboxPath = taskOutboxPath(id);
+  const action = isLocalTaskId(id) ? "create" : "update";
+  supersedeOpenOutboxForPath(
+    state,
+    outboxPath,
+    () => true,
+    "Local task was updated through daemon facade; stale task operation was superseded.",
+    now
+  );
+  enqueueManifestOutbox(state.manifestStore, {
+    relativePath: outboxPath,
+    domain: "tasks",
+    action,
+    resourceId: id,
+    payload
+  });
+  upsertRemoteResource(state.manifestStore, {
+    domain: "tasks",
+    resourceId: id,
+    version: asNumber(existing.version),
+    payload,
+    updatedAt: asString(payload.updatedAt) ?? now,
+    lastSyncedAt: asString(existing.lastSyncedAt)
+  });
+  if (typeof input.isPinned === "boolean") {
+    enqueueLocalTaskPinOutbox(state, id, input.isPinned, now);
+  }
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
+  await refreshManifestStats(state);
+  return payload;
+}
+
+export async function deleteLocalTask(state: DaemonState, id: string): Promise<boolean> {
+  const existing = localRemoteDomainItem(state, "tasks", id);
+  if (!existing) return false;
+  const now = new Date().toISOString();
+  const outboxPath = taskOutboxPath(id);
+  supersedeOpenOutboxForPath(
+    state,
+    outboxPath,
+    () => true,
+    "Local task was deleted through daemon facade; stale task operation was superseded.",
+    now
+  );
+  for (const item of listOpenOutboxForResource(state.manifestStore, id)) {
+    if (item.domain === "tasks" && asString(item.payload.relation)) {
+      markOutboxSuperseded(
+        state.manifestStore,
+        item.id,
+        "Local task was deleted before a related task operation synced; stale relation operation was superseded.",
+        now
+      );
+    }
+  }
+
+  if (isLocalTaskId(id)) {
+    removeRemoteResource(state.manifestStore, "tasks", id);
+  } else {
+    enqueueManifestOutbox(state.manifestStore, {
+      relativePath: outboxPath,
+      domain: "tasks",
+      action: "delete",
+      resourceId: id,
+      payload: existing
+    });
+    markRemoteResourceDeleted(state.manifestStore, {
+      domain: "tasks",
+      resourceId: id,
+      version: asNumber(existing.version),
+      payload: existing,
+      deletedAt: now,
+      lastSyncedAt: asString(existing.lastSyncedAt)
+    });
+  }
+
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
+  await refreshManifestStats(state);
+  return true;
+}
+
+export async function setLocalTaskPin(state: DaemonState, id: string, pinned: boolean): Promise<Record<string, unknown> | undefined> {
+  const existing = localRemoteDomainItem(state, "tasks", id);
+  if (!existing) return undefined;
+  const now = new Date().toISOString();
+  const payload = {
+    ...existing,
+    id,
+    isPinned: pinned,
+    updatedAt: now
+  };
+  enqueueLocalTaskPinOutbox(state, id, pinned, now);
+  upsertRemoteResource(state.manifestStore, {
+    domain: "tasks",
+    resourceId: id,
+    version: asNumber(existing.version),
+    payload,
+    updatedAt: now,
+    lastSyncedAt: asString(existing.lastSyncedAt)
+  });
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
+  await refreshManifestStats(state);
+  return { taskId: id, pinned };
+}
+
 function getLocalArtifactResourceById(state: DaemonState, id: string): ManifestResource | undefined {
   const local = decodeLocalItemId(id);
   const resources = listResources(state.manifestStore);
@@ -3304,7 +3701,9 @@ async function writeConflictRecord(
 
 async function pushOutbox(state: DaemonState): Promise<void> {
   if (!state.identity) return;
-  const pending = listPendingOutbox(state.manifestStore, 20).filter((item) => !shouldDeferProjectOutboxItem(state, item));
+  const pending = listPendingOutbox(state.manifestStore, 20).filter((item) =>
+    !shouldDeferProjectOutboxItem(state, item) && !shouldDeferTaskOutboxItem(state, item)
+  );
   if (pending.length === 0) {
     await refreshManifestStats(state);
     return;
@@ -3331,10 +3730,15 @@ async function pushOutbox(state: DaemonState): Promise<void> {
       if (applyProjectDefaultPushResult(state, item, appliedItem, now)) {
         continue;
       }
+      if (applyTaskPinPushResult(state, item, appliedItem, now)) {
+        continue;
+      }
       if (item.resourceId && item.resourceId !== nextResourceId) {
         removeRemoteResource(state.manifestStore, domain, item.resourceId);
         if (domain === "projects") {
           retargetOpenProjectOutboxReferences(state, item.resourceId, nextResourceId, now);
+        } else if (domain === "tasks") {
+          retargetOpenTaskOutboxReferences(state, item.resourceId, nextResourceId, now);
         }
       }
       if (item.action === "delete") {
@@ -3837,7 +4241,8 @@ function startStatusServer(state: DaemonState): void {
     if (remoteDomainListMatch && req.method === "GET") {
       const domain = remoteDomainListMatch[1] as Exclude<RemoteResourceDomain, "artifacts">;
       const includeDeleted = parseBooleanQuery(url.searchParams.get("includeDeleted"));
-      const limitRaw = Number(url.searchParams.get("limit") ?? "");
+      const limitParam = url.searchParams.get("limit");
+      const limitRaw = limitParam ? Number(limitParam) : undefined;
       const limit = Number.isFinite(limitRaw) ? limitRaw : undefined;
       let items = listLocalRemoteDomainItems(state, domain, { includeDeleted, limit });
       if (domain === "projects") {
@@ -3881,6 +4286,16 @@ function startStatusServer(state: DaemonState): void {
       return;
     }
 
+    if (url.pathname === "/api/tasks/projects" && req.method === "GET") {
+      writeJson(res, localTaskProjectSummaries(state));
+      return;
+    }
+
+    if (url.pathname === "/api/tasks/pins" && req.method === "GET") {
+      writeJson(res, { taskIds: localTaskPinnedIds(state) });
+      return;
+    }
+
     if (url.pathname === "/api/projects" && req.method === "POST") {
       try {
         const body = await readRequestJson(req);
@@ -3899,6 +4314,18 @@ function startStatusServer(state: DaemonState): void {
         const note = await createLocalNote(state, body);
         scheduleTick(state, 0);
         writeJson(res, note, 201);
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/tasks" && req.method === "POST") {
+      try {
+        const body = await readRequestJson(req);
+        const task = await createLocalTask(state, body);
+        scheduleTick(state, 0);
+        writeJson(res, task, 201);
       } catch (error) {
         writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
       }
@@ -3937,6 +4364,27 @@ function startStatusServer(state: DaemonState): void {
     }
 
     const remoteDomainItemMatch = url.pathname.match(/^\/api\/(projects|notes|tasks)\/([^/]+)$/);
+    const taskPinMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/pin$/);
+    if (taskPinMatch && req.method === "PUT") {
+      try {
+        const body = await readRequestJson(req);
+        if (typeof body.pinned !== "boolean") {
+          writeJson(res, { message: "pinned(boolean) is required" }, 400);
+          return;
+        }
+        const result = await setLocalTaskPin(state, decodeURIComponent(taskPinMatch[1]), body.pinned);
+        if (!result) {
+          writeJson(res, { message: "Local task not found" }, 404);
+          return;
+        }
+        scheduleTick(state, 0);
+        writeJson(res, result);
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+      }
+      return;
+    }
+
     if (remoteDomainItemMatch && remoteDomainItemMatch[1] === "projects" && req.method === "PATCH") {
       try {
         const body = await readRequestJson(req);
@@ -3958,6 +4406,38 @@ function startStatusServer(state: DaemonState): void {
         const deleted = await deleteLocalProject(state, decodeURIComponent(remoteDomainItemMatch[2]));
         if (!deleted) {
           writeJson(res, { message: "Local project not found" }, 404);
+          return;
+        }
+        scheduleTick(state, 0);
+        res.statusCode = 204;
+        res.end();
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+      }
+      return;
+    }
+
+    if (remoteDomainItemMatch && remoteDomainItemMatch[1] === "tasks" && req.method === "PATCH") {
+      try {
+        const body = await readRequestJson(req);
+        const task = await updateLocalTask(state, decodeURIComponent(remoteDomainItemMatch[2]), body);
+        if (!task) {
+          writeJson(res, { message: "Local task not found" }, 404);
+          return;
+        }
+        scheduleTick(state, 0);
+        writeJson(res, task);
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+      }
+      return;
+    }
+
+    if (remoteDomainItemMatch && remoteDomainItemMatch[1] === "tasks" && req.method === "DELETE") {
+      try {
+        const deleted = await deleteLocalTask(state, decodeURIComponent(remoteDomainItemMatch[2]));
+        if (!deleted) {
+          writeJson(res, { message: "Local task not found" }, 404);
           return;
         }
         scheduleTick(state, 0);

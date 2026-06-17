@@ -456,6 +456,10 @@ function projectsFacadeEnabled(): boolean {
   return getWorkbenchLocalModeEnabled();
 }
 
+function tasksFacadeEnabled(): boolean {
+  return getWorkbenchLocalModeEnabled();
+}
+
 function coreArtifactPath(path: string): string {
   return `${coreBaseUrl()}${path}`;
 }
@@ -480,6 +484,13 @@ async function fetchNotesFacadeJson<T>(path: string, options?: RequestInit): Pro
 
 async function fetchProjectsFacadeJson<T>(path: string, options?: RequestInit): Promise<T> {
   if (projectsFacadeEnabled()) {
+    return requestLocalDaemonJson<T>(path, options);
+  }
+  return fetchJson<T>(coreApiPath(path), options);
+}
+
+async function fetchTasksFacadeJson<T>(path: string, options?: RequestInit): Promise<T> {
+  if (tasksFacadeEnabled()) {
     return requestLocalDaemonJson<T>(path, options);
   }
   return fetchJson<T>(coreApiPath(path), options);
@@ -898,11 +909,12 @@ export const tasksApi = {
     if (context) params.set("context", context);
     if (status) params.set("status", status);
     if (limit) params.set("limit", String(limit));
-    return fetchJson<Task[]>(`${coreBaseUrl()}/api/tasks?${params.toString()}`);
+    const query = params.toString();
+    return fetchTasksFacadeJson<Task[]>(`/api/tasks${query ? `?${query}` : ""}`);
   },
-  get: (id: string): Promise<Task> => fetchJson<Task>(`${coreBaseUrl()}/api/tasks/${encodeURIComponent(id)}`),
+  get: (id: string): Promise<Task> => fetchTasksFacadeJson<Task>(`/api/tasks/${encodeURIComponent(id)}`),
   create: (payload: Omit<Task, "id" | "createdAt" | "updatedAt">): Promise<Task> =>
-    fetchJson<Task>(`${coreBaseUrl()}/api/tasks`, {
+    fetchTasksFacadeJson<Task>("/api/tasks", {
       method: "POST",
       body: JSON.stringify(payload)
     }),
@@ -910,18 +922,18 @@ export const tasksApi = {
     id: string,
     payload: Partial<Omit<Task, "id" | "createdAt" | "updatedAt">>
   ): Promise<Task> =>
-    fetchJson<Task>(`${coreBaseUrl()}/api/tasks/${encodeURIComponent(id)}`, {
+    fetchTasksFacadeJson<Task>(`/api/tasks/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(payload)
     }),
   remove: (id: string): Promise<void> =>
-    fetchJson<void>(`${coreBaseUrl()}/api/tasks/${encodeURIComponent(id)}`, {
+    fetchTasksFacadeJson<void>(`/api/tasks/${encodeURIComponent(id)}`, {
       method: "DELETE"
     }),
-  projects: (): Promise<TaskProjectSummary[]> => fetchJson<TaskProjectSummary[]>(`${coreBaseUrl()}/api/tasks/projects`),
-  pins: (): Promise<{ taskIds: string[] }> => fetchJson<{ taskIds: string[] }>(`${coreBaseUrl()}/api/tasks/pins`),
+  projects: (): Promise<TaskProjectSummary[]> => fetchTasksFacadeJson<TaskProjectSummary[]>("/api/tasks/projects"),
+  pins: (): Promise<{ taskIds: string[] }> => fetchTasksFacadeJson<{ taskIds: string[] }>("/api/tasks/pins"),
   setPin: (id: string, pinned: boolean): Promise<{ taskId: string; pinned: boolean }> =>
-    fetchJson<{ taskId: string; pinned: boolean }>(`${coreBaseUrl()}/api/tasks/${encodeURIComponent(id)}/pin`, {
+    fetchTasksFacadeJson<{ taskId: string; pinned: boolean }>(`/api/tasks/${encodeURIComponent(id)}/pin`, {
       method: "PUT",
       body: JSON.stringify({ pinned })
     }),
