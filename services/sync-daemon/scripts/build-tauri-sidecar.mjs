@@ -145,6 +145,24 @@ function makeSidecarEntry() {
     '} from "../../src/manifestStore.ts";',
     "manifestStore import"
   );
+  source = replaceOnce(
+    source,
+    '} from "./identityStorage.js";',
+    '} from "../../src/identityStorage.ts";',
+    "identityStorage import"
+  );
+  source = replaceOnce(
+    source,
+    'export { readIdentity } from "./identityStorage.js";',
+    'export { readIdentity } from "../../src/identityStorage.ts";',
+    "identityStorage value export"
+  );
+  source = replaceOnce(
+    source,
+    'export type { ClientIdentity, SecureIdentityMode } from "./identityStorage.js";',
+    'export type { ClientIdentity, SecureIdentityMode } from "../../src/identityStorage.ts";',
+    "identityStorage type export"
+  );
 
   const mainBlockPattern = /if \(process\.argv\[1\] && resolve\(process\.argv\[1\]\) === __filename\) \{\r?\n  await main\(\);\r?\n\}\s*$/;
   if (!mainBlockPattern.test(source)) {

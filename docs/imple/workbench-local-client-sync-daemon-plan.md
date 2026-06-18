@@ -209,6 +209,7 @@ npm run build
   - Covers backward-compatible identity file persistence with restrictive file mode where the OS supports it.
   - Covers opt-in secure identity storage modes.
   - Covers secure backend persistence, auto fallback, required secure-storage failure, and plaintext-file migration into secure storage.
+  - Covers clearing secure identity storage through the shared identity storage abstraction.
 - `[implemented]` Sync daemon sync error classification tests were added.
   - Covers version conflict, network failure, and path rejection classification.
   - Covers SQLite persistence of outbox/conflict `errorCode`, `errorCategory`, and `retryable`.
@@ -431,6 +432,7 @@ npm run build
   - `npm run sidecar:build --workspace services/sync-daemon` builds TypeScript, creates a Node SEA sidecar executable at `services/sync-daemon/dist/tauri-sidecar/workbench-sync-daemon-$TARGET_TRIPLE(.exe)`, and writes a sidecar manifest.
   - `npm run tauri:build --workspace native/desktop` runs the sidecar build before Tauri packaging.
   - `prepare-tauri-config.mjs` still honors explicit `WORKBENCH_DAEMON_EXTERNAL_BIN`; when it is unset, it reads the generated sidecar manifest and emits the Tauri `bundle.externalBin` base path.
+  - Sidecar bundling rewrites both `manifestStore` and `identityStorage` imports/re-exports so the standalone executable includes secure identity storage.
 - `[implemented]` Add optional auto-start.
   - Desktop Settings exposes an Auto-start Daemon toggle.
   - Preference is stored in Tauri app config as `daemon-preferences.json`.
@@ -447,6 +449,9 @@ npm run build
   - Standalone Linux daemon storage uses `secret-tool` / libsecret when available.
   - `required` fails instead of writing plaintext when secure storage is unavailable; `auto` uses secure storage when available and falls back to the identity file.
   - Enabling standalone secure storage migrates an existing `.workbench/client-identity.json` into the secure backend and removes the plaintext file when the secure write succeeds.
+  - `clearIdentity` removes plaintext identity files and secure backend entries for smoke tests and cleanup.
+  - `npm run secure-identity:smoke --workspace services/sync-daemon` builds the daemon and verifies write/read/cleanup against the current OS secure backend.
+  - Windows DPAPI smoke coverage has been verified locally; the same script is available for macOS Keychain and Linux `secret-tool` validation on those OSes.
   - Standalone daemon identity file persistence can be disabled with `WORKBENCH_PERSIST_CLIENT_IDENTITY=0` or `WORKBENCH_LOCAL_CLIENT_IDENTITY_FILE=0`.
   - Persisted standalone identity files are written with restrictive permissions where the OS supports it.
   - Non-desktop standalone daemon startup and first registration still use `.workbench/client-identity.json` by default for backward compatibility unless secure identity storage is explicitly enabled.
@@ -482,8 +487,8 @@ npm run build
 
 ## Recommended Next Implementation Order
 
-1. Decide whether packaged standalone daemon builds should default `WORKBENCH_SECURE_CLIENT_IDENTITY=auto` after OS-level QA.
-2. Add OS-level smoke coverage for macOS Keychain and Linux `secret-tool` secure identity backends.
+1. Decide whether packaged standalone daemon builds should default `WORKBENCH_SECURE_CLIENT_IDENTITY=auto` after macOS/Linux smoke runs.
+2. Add CI or release-check execution for `secure-identity:smoke` on macOS and Linux runners with unlocked secure storage.
 3. Keep the Core-origin mutation guard audit updated when new domain services or route registration files are introduced.
 
 ## Current Daemon Usage
@@ -504,6 +509,7 @@ If desktop-managed startup finds an existing `.workbench/client-identity.json` a
 Set `WORKBENCH_PERSIST_CLIENT_IDENTITY=0` to keep the registered identity only in memory for the current daemon process; on restart, provide secure env credentials or a normal access token for re-registration.
 Set `WORKBENCH_SECURE_CLIENT_IDENTITY=required` to make standalone daemon registration fail rather than writing a plaintext identity file when secure storage is unavailable.
 Set `WORKBENCH_SECURE_CLIENT_IDENTITY=auto` to use standalone secure storage when available and fall back to `.workbench/client-identity.json` otherwise.
+Run `npm run secure-identity:smoke --workspace services/sync-daemon` to verify the active OS secure identity backend.
 Set `WORKBENCH_LOCAL_JOB_CONFIRMATION=downloads` to require local approval before daemon jobs write to the configured downloads folder.
 Set `WORKBENCH_LOCAL_JOB_CONFIRMATION=all` to require approval for both downloads and sync-folder materialization jobs.
 

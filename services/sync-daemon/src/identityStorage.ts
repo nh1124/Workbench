@@ -26,6 +26,7 @@ export type SecureIdentityBackend = {
   name: string;
   read(config: IdentityStorageConfig): Promise<ClientIdentity | undefined>;
   write(config: IdentityStorageConfig, identity: ClientIdentity): Promise<void>;
+  clear(config: IdentityStorageConfig): Promise<void>;
 };
 
 type CommandResult = {
@@ -185,6 +186,9 @@ const windowsDpapiBackend: SecureIdentityBackend = {
       mode: 0o600
     });
     await fs.chmod(pathValue, 0o600).catch(() => undefined);
+  },
+  async clear(config) {
+    await fs.rm(windowsProtectedIdentityPath(config), { force: true }).catch(() => undefined);
   }
 };
 
@@ -215,6 +219,13 @@ const macosKeychainBackend: SecureIdentityBackend = {
     ]);
     if (result.code !== 0) {
       throw new Error(result.stderr.trim() || "macOS Keychain write failed");
+    }
+  },
+  async clear(config) {
+    const key = secureIdentityKey(config);
+    const result = await runCommand("security", ["delete-generic-password", "-s", key, "-a", "Workbench"]);
+    if (result.code !== 0 && !/could not be found|not found/i.test(result.stderr)) {
+      throw new Error(result.stderr.trim() || "macOS Keychain delete failed");
     }
   }
 };
@@ -253,6 +264,20 @@ const linuxSecretToolBackend: SecureIdentityBackend = {
     ], serializeIdentity(identity));
     if (result.code !== 0) {
       throw new Error(result.stderr.trim() || "secret-tool store failed");
+    }
+  },
+  async clear(config) {
+    const result = await runCommand("secret-tool", [
+      "clear",
+      "application",
+      "workbench",
+      "kind",
+      "local-daemon-client",
+      "sync-root-key",
+      secureIdentityKey(config)
+    ]);
+    if (result.code !== 0 && !/not found|no such/i.test(result.stderr)) {
+      throw new Error(result.stderr.trim() || "secret-tool clear failed");
     }
   }
 };
@@ -391,4 +416,13 @@ export async function writeIdentity(config: IdentityStorageConfig, identity: Cli
     return "file";
   }
   return "memory";
+}
+
+export async function clearIdentity(config: IdentityStorageConfig): Promise<void> {
+  await removeIdentityFile(config);
+  await fs.rm(windowsProtectedIdentityPath(config), { force: true }).catch(() => undefined);
+  const backend = secureIdentityBackend();
+  if (backend) {
+    await backend.clear(config);
+  }
 }

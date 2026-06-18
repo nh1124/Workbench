@@ -11,6 +11,7 @@ import {
   type DaemonConfig
 } from "../index.js";
 import {
+  clearIdentity,
   parseSecureIdentityMode,
   setSecureIdentityBackendForTest,
   type ClientIdentity,
@@ -54,6 +55,9 @@ function memorySecureBackend(): { backend: SecureIdentityBackend; stored: Client
       },
       async write(_config, identity) {
         state.stored = identity;
+      },
+      async clear() {
+        state.stored = undefined;
       }
     },
     get stored() {
@@ -228,5 +232,20 @@ describe("sync-daemon client identity persistence", () => {
     assert.equal(migrated?.localClientToken, "secret-token");
     assert.equal(secure.stored?.localClientToken, "secret-token");
     assert.equal(existsSync(join(root, ".workbench", "client-identity.json")), false);
+  });
+
+  it("clears secure identity storage", async () => {
+    const root = await createRoot();
+    const secure = memorySecureBackend();
+    setSecureIdentityBackendForTest(secure.backend);
+    const config = configFor(root, true, "required");
+
+    await withRegisterFetch(() => registerIfNeeded(config));
+    assert.equal(secure.stored?.localClientToken, "secret-token");
+
+    await clearIdentity(config);
+
+    assert.equal(secure.stored, undefined);
+    assert.equal(await readIdentity(config), undefined);
   });
 });
