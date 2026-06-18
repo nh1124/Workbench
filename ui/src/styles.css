@@ -101,7 +101,7 @@ button, input, select, textarea { font: inherit; }
   display: flex; align-items: center; gap: 0.55rem; color: #cbd5e1;
   text-align: left;
 }
-.sidebar-footer.collapsed .nav-label, .sidebar-footer.collapsed strong, .sidebar-footer.collapsed p, .sidebar-footer.collapsed .user-chevron { display: none; }
+.sidebar-footer.collapsed .nav-label, .sidebar-footer.collapsed strong, .sidebar-footer.collapsed p { display: none; }
 .sidebar-footer strong {
   display: block;
   font-size: 0.73rem;
@@ -125,8 +125,6 @@ button, input, select, textarea { font: inherit; }
   font-weight: 700;
   flex-shrink: 0;
 }
-.user-chevron { margin-left: auto; color: #64748b; }
-
 .user-menu {
   position: absolute;
   left: 2px;
@@ -869,8 +867,7 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
     width: 100%; border: 1px solid var(--line); background: rgba(15,23,42,0.9);
     padding: 0.45rem 0.55rem; gap: 0.55rem; justify-content: flex-start; box-shadow: none;
   }
-  .app-shell.sidebar-collapsed .sidebar-footer strong,
-  .app-shell.sidebar-collapsed .sidebar-footer .user-chevron { display: block; }
+  .app-shell.sidebar-collapsed .sidebar-footer strong { display: block; }
 
   /* Misc layout fixes */
   .split-grid { grid-template-columns: 1fr; }

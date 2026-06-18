@@ -388,9 +388,6 @@ export function Layout() {
             <div>
               <strong>{shortName}</strong>
             </div>
-            <span className="user-chevron" aria-hidden="true">
-              ^
-            </span>
           </button>
         </div>
       </aside>

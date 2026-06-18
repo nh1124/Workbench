@@ -214,6 +214,8 @@ export function SettingsPage() {
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [totpEnabled, setTotpEnabled] = useState(false);
+  const [totpCode, setTotpCode] = useState("");
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [accountMessage, setAccountMessage] = useState("");
   const [localClients, setLocalClients] = useState<LocalClientRecord[]>([]);
@@ -398,6 +400,22 @@ export function SettingsPage() {
     setNewPassword("");
     setConfirmPassword("");
     setAccountMessage("Password updated locally.");
+  };
+
+  const enableTotp = () => {
+    if (!/^\d{6}$/.test(totpCode.trim())) {
+      setAccountMessage("Enter a 6-digit TOTP code.");
+      return;
+    }
+    setTotpEnabled(true);
+    setTotpCode("");
+    setAccountMessage("TOTP MFA enabled locally.");
+  };
+
+  const disableTotp = () => {
+    setTotpEnabled(false);
+    setTotpCode("");
+    setAccountMessage("TOTP MFA disabled locally.");
   };
 
   const deleteAccount = async () => {
@@ -1031,7 +1049,6 @@ export function SettingsPage() {
         {activeTab === "general" ? (
           <article className="panel services-manifest-panel general-localization-panel">
             <h3>General &amp; Localization</h3>
-            <p className="integration-subtitle">Language, timezone and location preferences.</p>
             <div className="general-localization-fields">
               <label>
                 LANGUAGE
@@ -1074,11 +1091,6 @@ export function SettingsPage() {
                     </option>
                   ))}
                 </select>
-                <small className="general-localization-hint">
-                  {settings.locationMode === "auto"
-                    ? `Current: ${settings.location}`
-                    : `Selected: ${settings.location}`}
-                </small>
               </label>
             </div>
             <div className="general-localization-actions">
@@ -1092,8 +1104,6 @@ export function SettingsPage() {
 
         {activeTab === "services" ? (
           <article className="panel services-manifest-panel">
-            <p className="integration-subtitle">Connect external tools and services. Toggle to enable, then expand to configure.</p>
-
             <div className="integration-category-chips">
               {categoryChips.map((chip) => (
                 <button
@@ -1162,7 +1172,7 @@ export function SettingsPage() {
                           aria-label={isExpanded ? "Collapse configuration" : "Expand configuration"}
                           onClick={() => setExpandedServiceId((prev) => (prev === manifest.id ? null : manifest.id))}
                         >
-                          <span aria-hidden="true">&gt;</span>
+                          {isExpanded ? "Close" : "Configure"}
                         </button>
                       </div>
                     </header>
@@ -1273,24 +1283,24 @@ export function SettingsPage() {
 
         {activeTab === "account" ? (
           <article className="panel services-manifest-panel account-page-panel">
-            <p className="integration-subtitle">Profile and security settings.</p>
-
             <div className="account-tiles">
               <section className="account-tile">
                 <h3>Profile</h3>
-                <label>
-                  USERNAME
-                  <input value={profileUsername} onChange={(event) => setProfileUsername(event.target.value)} />
-                </label>
-                <label>
-                  EMAIL
-                  <input
-                    type="email"
-                    value={profileEmail}
-                    onChange={(event) => setProfileEmail(event.target.value)}
-                    placeholder="name@example.com"
-                  />
-                </label>
+                <div className="account-tile-body">
+                  <label>
+                    USERNAME
+                    <input value={profileUsername} onChange={(event) => setProfileUsername(event.target.value)} />
+                  </label>
+                  <label>
+                    EMAIL
+                    <input
+                      type="email"
+                      value={profileEmail}
+                      onChange={(event) => setProfileEmail(event.target.value)}
+                      placeholder="name@example.com"
+                    />
+                  </label>
+                </div>
                 <div className="account-tile-actions">
                   <button type="button" className="account-primary-action" onClick={saveProfile}>Save Profile</button>
                 </div>
@@ -1298,46 +1308,74 @@ export function SettingsPage() {
 
               <section className="account-tile">
                 <h3>Change Password</h3>
-                <label>
-                  CURRENT PASSWORD
-                  <input
-                    type="password"
-                    value={currentPassword}
-                    onChange={(event) => setCurrentPassword(event.target.value)}
-                  />
-                </label>
-                <label>
-                  NEW PASSWORD
-                  <input
-                    type="password"
-                    value={newPassword}
-                    onChange={(event) => setNewPassword(event.target.value)}
-                  />
-                </label>
-                <label>
-                  CONFIRM PASSWORD
-                  <input
-                    type="password"
-                    value={confirmPassword}
-                    onChange={(event) => setConfirmPassword(event.target.value)}
-                  />
-                </label>
+                <div className="account-tile-body">
+                  <label>
+                    CURRENT PASSWORD
+                    <input
+                      type="password"
+                      value={currentPassword}
+                      onChange={(event) => setCurrentPassword(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    NEW PASSWORD
+                    <input
+                      type="password"
+                      value={newPassword}
+                      onChange={(event) => setNewPassword(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    CONFIRM PASSWORD
+                    <input
+                      type="password"
+                      value={confirmPassword}
+                      onChange={(event) => setConfirmPassword(event.target.value)}
+                    />
+                  </label>
+                </div>
                 <div className="account-tile-actions">
                   <button type="button" className="account-primary-action" onClick={changePassword}>Change Password</button>
                 </div>
               </section>
 
               <section className="account-tile">
+                <h3>MFA</h3>
+                <div className="account-tile-body">
+                  <div className="account-security-status">
+                    <span className={totpEnabled ? "enabled" : "disabled"}>
+                      {totpEnabled ? "TOTP enabled" : "TOTP off"}
+                    </span>
+                  </div>
+                  <label>
+                    AUTHENTICATOR CODE
+                    <input
+                      inputMode="numeric"
+                      maxLength={6}
+                      value={totpCode}
+                      onChange={(event) => setTotpCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                      placeholder="000000"
+                    />
+                  </label>
+                </div>
+                <div className="account-tile-actions">
+                  <button type="button" className="account-primary-action" onClick={enableTotp}>Enable TOTP</button>
+                  <button type="button" onClick={disableTotp} disabled={!totpEnabled}>Disable</button>
+                </div>
+              </section>
+
+              <section className="account-tile">
                 <h3>Account Delete</h3>
-                <p className="muted">Type DELETE to confirm account session removal.</p>
-                <label>
-                  CONFIRMATION
-                  <input
-                    value={deleteConfirmation}
-                    onChange={(event) => setDeleteConfirmation(event.target.value)}
-                    placeholder="DELETE"
-                  />
-                </label>
+                <div className="account-tile-body">
+                  <label>
+                    CONFIRMATION
+                    <input
+                      value={deleteConfirmation}
+                      onChange={(event) => setDeleteConfirmation(event.target.value)}
+                      placeholder="DELETE"
+                    />
+                  </label>
+                </div>
                 <div className="account-tile-actions">
                   <button type="button" className="danger-button" onClick={() => void deleteAccount()}>Delete Account</button>
                 </div>
@@ -1408,14 +1446,11 @@ export function SettingsPage() {
 
         {activeTab === "activity" ? (
           <article className="panel services-manifest-panel account-page-panel settings-wide-panel">
-            <p className="integration-subtitle">Recent local client, daemon and file job events.</p>
-
             <div className="settings-tile-grid">
             <section className="account-local-audit">
               <div className="account-local-clients-header">
                 <div>
                   <h3>Local Client Audit</h3>
-                  <p className="muted">Recent local client and daemon job lifecycle events.</p>
                 </div>
               </div>
               {localClientAuditEvents.length === 0 ? (
@@ -1449,7 +1484,6 @@ export function SettingsPage() {
               <div className="account-local-clients-header">
                 <div>
                   <h3>Local Job History</h3>
-                  <p className="muted">Recent daemon-claimed download and materialization jobs.</p>
                 </div>
               </div>
               {localJobs.length === 0 ? (
@@ -1495,69 +1529,93 @@ export function SettingsPage() {
                 </button>
               </div>
 
-              <div className="account-local-mode-control">
-                <div>
-                  <div className="settings-title-with-info">
-                    <strong>Routing Mode</strong>
-                    <InfoHint label="Auto uses Core while online and falls back to the local daemon when Core is unreachable. Core always uses the cloud API. Local uses daemon-backed routes where supported." />
-                  </div>
-                </div>
-                <div className="account-local-routing-segmented" role="radiogroup" aria-label="Workbench routing mode">
-                  {(["auto", "core", "local"] as WorkbenchLocalRoutingMode[]).map((mode) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      role="radio"
-                      aria-checked={localRoutingMode === mode}
-                      className={localRoutingMode === mode ? "active" : ""}
-                      onClick={() => changeLocalRoutingMode(mode)}
-                    >
-                      {mode === "core" ? "Core" : mode === "auto" ? "Auto" : "Local"}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="account-local-mode-control">
-                <div>
-                  <div className="settings-title-with-info">
-                    <strong>Background Resident</strong>
-                    <InfoHint label="Keeps Workbench available from the tray when the last main window is closed. Desktop runtime only." />
-                  </div>
-                </div>
-                <label className="integration-switch">
-                  <input
-                    type="checkbox"
-                    checked={localDaemonResidentMode}
-                    disabled={!nativeRuntimeAvailable}
-                    onChange={(event) => void toggleNativeDaemonResidentMode(event.target.checked)}
-                  />
-                  <span className="integration-switch-slider" aria-hidden="true" />
-                  <span className="sr-only">
-                    {localDaemonResidentMode ? "Disable background resident mode" : "Enable background resident mode"}
+              {localDaemonStatus ? (
+                <div className="account-local-daemon-status">
+                  <span className={localDaemonStatus.watcherActive ? "online" : "offline"}>
+                    {localDaemonStatus.watcherActive ? "Watcher On" : "Watcher Off"}
                   </span>
-                </label>
-              </div>
+                  <span>{localDaemonStatus.outboxPending ?? 0} pending</span>
+                  <span>{localDaemonStatus.outboxFailed ?? 0} failed</span>
+                  <span>{localDaemonStatus.conflictsOpen ?? 0} conflicts</span>
+                  <span>{localDaemonStatus.localJobConfirmationsPending ?? 0} approvals</span>
+                  {localDaemonStatus.lastError ? (
+                    <small>
+                      {localDaemonStatus.lastErrorCategory
+                        ? `${formatSyncErrorCategory(localDaemonStatus.lastErrorCategory)}${localDaemonStatus.lastErrorRetryable ? " retryable" : ""}: `
+                        : ""}
+                      {localDaemonStatus.lastError}
+                    </small>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="info">Local daemon status is not loaded.</p>
+              )}
 
-              <div className="account-local-mode-control">
-                <div>
-                  <div className="settings-title-with-info">
-                    <strong>Auto-start Daemon</strong>
-                    <InfoHint label="Starts the local sync daemon automatically when the desktop app launches. Desktop runtime only." />
+              <div className="account-local-controls-grid">
+                <div className="account-local-mode-control">
+                  <div>
+                    <div className="settings-title-with-info">
+                      <strong>Routing Mode</strong>
+                      <InfoHint label="Auto uses Core while online and falls back to the local daemon when Core is unreachable. Core always uses the cloud API. Local uses daemon-backed routes where supported." />
+                    </div>
+                  </div>
+                  <div className="account-local-routing-segmented" role="radiogroup" aria-label="Workbench routing mode">
+                    {(["auto", "core", "local"] as WorkbenchLocalRoutingMode[]).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        role="radio"
+                        aria-checked={localRoutingMode === mode}
+                        className={localRoutingMode === mode ? "active" : ""}
+                        onClick={() => changeLocalRoutingMode(mode)}
+                      >
+                        {mode === "core" ? "Core" : mode === "auto" ? "Auto" : "Local"}
+                      </button>
+                    ))}
                   </div>
                 </div>
-                <label className="integration-switch">
-                  <input
-                    type="checkbox"
-                    checked={localDaemonAutoStart}
-                    disabled={!nativeRuntimeAvailable}
-                    onChange={(event) => void toggleNativeDaemonAutoStart(event.target.checked)}
-                  />
-                  <span className="integration-switch-slider" aria-hidden="true" />
-                  <span className="sr-only">
-                    {localDaemonAutoStart ? "Disable daemon auto-start" : "Enable daemon auto-start"}
-                  </span>
-                </label>
+
+                <div className="account-local-mode-control">
+                  <div>
+                    <div className="settings-title-with-info">
+                      <strong>Background Resident</strong>
+                      <InfoHint label="Keeps Workbench available from the tray when the last main window is closed. Desktop runtime only." />
+                    </div>
+                  </div>
+                  <label className="integration-switch">
+                    <input
+                      type="checkbox"
+                      checked={localDaemonResidentMode}
+                      disabled={!nativeRuntimeAvailable}
+                      onChange={(event) => void toggleNativeDaemonResidentMode(event.target.checked)}
+                    />
+                    <span className="integration-switch-slider" aria-hidden="true" />
+                    <span className="sr-only">
+                      {localDaemonResidentMode ? "Disable background resident mode" : "Enable background resident mode"}
+                    </span>
+                  </label>
+                </div>
+
+                <div className="account-local-mode-control">
+                  <div>
+                    <div className="settings-title-with-info">
+                      <strong>Auto-start Daemon</strong>
+                      <InfoHint label="Starts the local sync daemon automatically when the desktop app launches. Desktop runtime only." />
+                    </div>
+                  </div>
+                  <label className="integration-switch">
+                    <input
+                      type="checkbox"
+                      checked={localDaemonAutoStart}
+                      disabled={!nativeRuntimeAvailable}
+                      onChange={(event) => void toggleNativeDaemonAutoStart(event.target.checked)}
+                    />
+                    <span className="integration-switch-slider" aria-hidden="true" />
+                    <span className="sr-only">
+                      {localDaemonAutoStart ? "Disable daemon auto-start" : "Enable daemon auto-start"}
+                    </span>
+                  </label>
+                </div>
               </div>
 
               <div className="account-local-folder-grid">
@@ -1651,14 +1709,14 @@ export function SettingsPage() {
               </div>
 
               {nativeRuntimeAvailable ? (
-                <div className="account-local-native-managed">
-                  <div className="account-local-native-managed-head">
+                <details className="account-local-native-managed">
+                  <summary>
                     <div className="settings-title-with-info">
-                      <strong>Desktop Link</strong>
+                      <strong>Diagnostics</strong>
                       <InfoHint label="The desktop app manages daemon startup and the local endpoint automatically. Cloud sync uses the current Workbench Core URL from sign-in." />
                     </div>
                     <span className="account-local-native-badge">Automatic</span>
-                  </div>
+                  </summary>
                   <div className="account-local-native-actions">
                     <button
                       type="button"
@@ -1674,7 +1732,7 @@ export function SettingsPage() {
                       Stop
                     </button>
                   </div>
-                </div>
+                </details>
               ) : (
                 <div className="account-local-daemon-url">
                   <input
@@ -1684,29 +1742,6 @@ export function SettingsPage() {
                   />
                   <button type="button" onClick={saveLocalDaemonUrl}>Save URL</button>
                 </div>
-              )}
-
-              {localDaemonStatus ? (
-                <div className="account-local-daemon-status">
-                  <span className={localDaemonStatus.watcherActive ? "online" : "offline"}>
-                    {localDaemonStatus.watcherActive ? "Watcher On" : "Watcher Off"}
-                  </span>
-                  <span>{localDaemonStatus.outboxPending ?? 0} pending</span>
-                  <span>{localDaemonStatus.outboxFailed ?? 0} failed</span>
-                  <span>{localDaemonStatus.conflictsOpen ?? 0} conflicts</span>
-                  <span>{localDaemonStatus.localJobConfirmationPolicy ?? "off"} confirmation</span>
-                  <span>{localDaemonStatus.localJobConfirmationsPending ?? 0} approvals</span>
-                  {localDaemonStatus.lastError ? (
-                    <small>
-                      {localDaemonStatus.lastErrorCategory
-                        ? `${formatSyncErrorCategory(localDaemonStatus.lastErrorCategory)}${localDaemonStatus.lastErrorRetryable ? " retryable" : ""}: `
-                        : ""}
-                      {localDaemonStatus.lastError}
-                    </small>
-                  ) : null}
-                </div>
-              ) : (
-                <p className="info">Local daemon status is not loaded.</p>
               )}
 
               <div className="account-local-confirmations">

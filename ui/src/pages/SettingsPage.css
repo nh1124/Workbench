@@ -29,7 +29,7 @@
 .settings-tab {
   display: flex;
   align-items: center;
-  gap: 0.36rem;
+  gap: 0.42rem;
   width: 100%;
   border: 1px solid transparent;
   border-radius: 9px;
@@ -37,7 +37,7 @@
   background: transparent;
   text-align: left;
   padding: 0.62rem 0.56rem;
-  font-size: 0.88rem;
+  font-size: 0.84rem;
   font-weight: 500;
 }
 
@@ -53,8 +53,8 @@
 }
 
 .settings-tab-icon {
-  width: 1.35rem;
-  height: 1.35rem;
+  width: 1.05rem;
+  height: 1.05rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -108,16 +108,16 @@
 
 .general-localization-panel h3 {
   margin: 0;
-  font-size: 2rem;
-  font-weight: 700;
-  letter-spacing: -0.01em;
+  font-size: 1.35rem;
+  font-weight: 650;
+  letter-spacing: 0;
 }
 
 .general-localization-fields {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 0.86rem;
-  margin-top: 0.15rem;
+  grid-template-columns: minmax(0, 520px);
+  gap: 0.72rem;
+  margin-top: 0.9rem;
 }
 
 .general-localization-fields > label {
@@ -131,24 +131,16 @@
 
 .general-localization-fields input,
 .general-localization-fields select {
-  height: 2.65rem;
-  border-radius: 12px;
+  height: 2.45rem;
+  border-radius: 10px;
   background: #17243d;
   border: 1px solid #334155;
   color: #e5eefb;
-  font-size: 0.95rem;
-  padding: 0 1rem;
+  font-size: 0.9rem;
+  padding: 0 0.86rem;
   text-transform: none;
   letter-spacing: 0;
   font-weight: 500;
-}
-
-.general-localization-hint {
-  color: #71839f;
-  font-size: 0.72rem;
-  font-weight: 500;
-  letter-spacing: 0;
-  text-transform: none;
 }
 
 .general-localization-actions {
@@ -336,27 +328,14 @@
 }
 
 .integration-expand-toggle {
-  width: 1.8rem;
-  height: 1.8rem;
-  border: 0;
+  min-height: 1.9rem;
   border-radius: 8px;
   background: transparent;
+  border: 1px solid rgba(71, 85, 105, 0.65);
   color: #94a3b8;
-  display: grid;
-  place-items: center;
-  padding: 0;
-}
-
-.integration-expand-toggle span {
-  display: inline-block;
-  font-size: 1.05rem;
-  line-height: 1;
-  transform: rotate(0deg);
-  transition: transform 0.16s ease;
-}
-
-.integration-expand-toggle.expanded span {
-  transform: rotate(90deg);
+  padding: 0 0.62rem;
+  font-size: 0.68rem;
+  font-weight: 800;
 }
 
 .integration-expand-toggle:hover {
@@ -487,35 +466,44 @@
 
 .account-tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 0.78rem;
   width: 100%;
-  align-items: start;
+  align-items: stretch;
 }
 
 .account-tile {
   border: 1px solid rgba(51, 65, 85, 0.78);
-  border-radius: 14px;
+  border-radius: 12px;
   background: linear-gradient(180deg, #111827 0%, #0f172a 100%);
-  padding: 1rem 1.05rem 0.95rem;
+  padding: 0.9rem 0.95rem;
   display: grid;
-  gap: 0.58rem;
+  grid-template-rows: auto 1fr auto;
+  gap: 0.62rem;
+  min-height: 17rem;
 }
 
 .account-tile:last-child {
-  margin-bottom: 0.38rem;
+  margin-bottom: 0;
 }
 
 .account-tile h3 {
   margin: 0;
-  font-size: 1.05rem;
+  font-size: 0.98rem;
   font-weight: 650;
 }
 
-.account-tile > label {
+.account-tile-body {
+  display: grid;
+  align-content: start;
+  gap: 0.58rem;
+}
+
+.account-tile label {
+  display: grid;
   gap: 0.32rem;
   color: #7f8ea5;
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -524,28 +512,50 @@
 .account-tile input {
   width: 100%;
   max-width: none;
-  height: 2.5rem;
-  border-radius: 12px;
+  height: 2.38rem;
+  border-radius: 10px;
   background: #1f2a41;
   border: 1px solid #334155;
   color: #e5eefb;
-  font-size: 0.92rem;
-  padding: 0 0.9rem;
+  font-size: 0.88rem;
+  padding: 0 0.82rem;
   text-transform: none;
   letter-spacing: 0;
 }
 
-.account-tile .muted {
-  margin: 0;
-  font-size: 0.8rem;
-}
-
 .account-tile-actions {
-  margin-top: 0.35rem;
+  margin-top: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.42rem;
+  align-items: center;
 }
 
 .account-primary-action {
   color: #ffffff;
+}
+
+.account-security-status {
+  display: flex;
+  align-items: center;
+}
+
+.account-security-status span {
+  border: 1px solid rgba(71, 85, 105, 0.85);
+  border-radius: 999px;
+  color: #cbd5e1;
+  font-size: 0.68rem;
+  font-weight: 800;
+  padding: 0.18rem 0.54rem;
+}
+
+.account-security-status .enabled {
+  border-color: rgba(74, 222, 128, 0.45);
+  color: #86efac;
+}
+
+.account-security-status .disabled {
+  color: #94a3b8;
 }
 
 .account-local-clients,
@@ -554,11 +564,11 @@
 .account-local-daemon {
   margin-top: 0.9rem;
   border: 1px solid rgba(51, 65, 85, 0.78);
-  border-radius: 14px;
+  border-radius: 12px;
   background: linear-gradient(180deg, #111827 0%, #0f172a 100%);
-  padding: 1rem 1.05rem;
+  padding: 0.86rem 0.9rem;
   display: grid;
-  gap: 0.72rem;
+  gap: 0.62rem;
 }
 
 .settings-wide-panel {
@@ -603,7 +613,7 @@
 
 .settings-tile-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
   gap: 0.78rem;
   align-items: start;
 }
@@ -624,7 +634,7 @@
 
 .account-local-clients-header h3 {
   margin: 0;
-  font-size: 1.05rem;
+  font-size: 0.98rem;
 }
 
 .account-local-client-list {
@@ -813,11 +823,17 @@
   color: #fca5a5;
 }
 
+.account-local-controls-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 1.1fr) repeat(2, minmax(220px, 0.7fr));
+  gap: 0.5rem;
+}
+
 .account-local-mode-control {
   border: 1px solid rgba(51, 65, 85, 0.68);
-  border-radius: 10px;
+  border-radius: 9px;
   background: rgba(15, 23, 42, 0.58);
-  padding: 0.66rem 0.72rem;
+  padding: 0.58rem 0.64rem;
   display: flex;
   justify-content: space-between;
   gap: 0.75rem;
@@ -827,14 +843,7 @@
 .account-local-mode-control strong {
   display: block;
   color: #e5eefb;
-  font-size: 0.88rem;
-}
-
-.account-local-mode-control small {
-  display: block;
-  margin-top: 0.12rem;
-  color: #94a3b8;
-  font-size: 0.72rem;
+  font-size: 0.82rem;
 }
 
 .account-local-routing-segmented {
@@ -845,7 +854,7 @@
   border: 1px solid rgba(51, 65, 85, 0.72);
   border-radius: 8px;
   background: rgba(2, 6, 23, 0.38);
-  min-width: min(100%, 15rem);
+  min-width: min(100%, 13rem);
 }
 
 .account-local-routing-segmented button {
@@ -855,10 +864,10 @@
   color: #94a3b8;
   cursor: pointer;
   font: inherit;
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   font-weight: 800;
   line-height: 1;
-  min-height: 2rem;
+  min-height: 1.8rem;
   padding: 0 0.58rem;
 }
 
@@ -875,23 +884,25 @@
 .account-local-folder-grid {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 0.62rem;
+  gap: 0.5rem;
 }
 
 .account-local-folder-card {
   border: 1px solid rgba(51, 65, 85, 0.68);
-  border-radius: 10px;
+  border-radius: 9px;
   background: rgba(15, 23, 42, 0.58);
-  padding: 0.72rem;
+  padding: 0.58rem 0.64rem;
   display: grid;
-  gap: 0.52rem;
+  grid-template-columns: minmax(10rem, 12rem) minmax(0, 1fr) auto;
+  gap: 0.58rem;
+  align-items: center;
   min-width: 0;
 }
 
 .account-local-folder-card strong {
   display: block;
   color: #e5eefb;
-  font-size: 0.88rem;
+  font-size: 0.82rem;
 }
 
 .account-local-folder-card small {
@@ -906,9 +917,9 @@
   border-radius: 8px;
   background: rgba(2, 6, 23, 0.42);
   color: #dbeafe;
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   line-height: 1.35;
-  padding: 0.46rem 0.52rem;
+  padding: 0.42rem 0.5rem;
   overflow-wrap: anywhere;
   white-space: normal;
 }
@@ -916,12 +927,14 @@
 .account-local-folder-next {
   color: #67e8f9;
   overflow-wrap: anywhere;
+  grid-column: 2;
 }
 
 .account-local-folder-meta {
   display: flex;
   flex-wrap: wrap;
   gap: 0.34rem;
+  grid-column: 2;
 }
 
 .account-local-folder-meta span {
@@ -937,6 +950,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 0.42rem;
+  justify-content: flex-end;
 }
 
 .account-local-daemon-url {
@@ -958,25 +972,32 @@
 
 .account-local-native-managed {
   border: 1px solid rgba(51, 65, 85, 0.68);
-  border-radius: 10px;
+  border-radius: 9px;
   background: rgba(15, 23, 42, 0.58);
-  padding: 0.66rem 0.72rem;
+  padding: 0;
   display: grid;
-  gap: 0.64rem;
+  gap: 0;
 }
 
-.account-local-native-managed-head {
+.account-local-native-managed summary {
   display: flex;
   justify-content: space-between;
   gap: 0.75rem;
   align-items: center;
   min-width: 0;
+  padding: 0.58rem 0.64rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.account-local-native-managed summary::-webkit-details-marker {
+  display: none;
 }
 
 .account-local-native-managed strong {
   display: block;
   color: #e5eefb;
-  font-size: 0.88rem;
+  font-size: 0.82rem;
 }
 
 .account-local-native-badge {
@@ -994,16 +1015,17 @@
 .account-local-native-actions button,
 .account-local-confirmation-actions button,
 .account-local-conflict-actions button {
-  min-height: 2.1rem;
-  border-radius: 10px;
-  font-size: 0.75rem;
-  padding: 0.42rem 0.66rem;
+  min-height: 1.95rem;
+  border-radius: 9px;
+  font-size: 0.72rem;
+  padding: 0.36rem 0.58rem;
 }
 
 .account-local-native-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.42rem;
+  padding: 0 0.64rem 0.62rem;
 }
 
 .account-local-daemon-status {
@@ -1016,9 +1038,9 @@
 .account-local-daemon-status span {
   border: 1px solid #334155;
   border-radius: 999px;
-  padding: 0.16rem 0.5rem;
+  padding: 0.14rem 0.48rem;
   color: #cbd5e1;
-  font-size: 0.68rem;
+  font-size: 0.66rem;
   font-weight: 800;
 }
 
@@ -1219,6 +1241,10 @@
     align-items: stretch;
   }
 
+  .account-local-controls-grid {
+    grid-template-columns: 1fr;
+  }
+
   .account-local-routing-segmented {
     width: 100%;
     min-width: 0;
@@ -1226,6 +1252,18 @@
 
   .account-local-folder-grid {
     grid-template-columns: 1fr;
+  }
+
+  .account-local-folder-card {
+    grid-template-columns: 1fr;
+  }
+
+  .account-local-folder-meta {
+    grid-column: auto;
+  }
+
+  .account-local-folder-next {
+    grid-column: auto;
   }
 
   .account-local-native-actions {
