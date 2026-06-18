@@ -2,8 +2,12 @@ const CORE_URL_STORAGE_KEY = "workbench-core-url";
 const LOCAL_DAEMON_URL_STORAGE_KEY = "workbench-local-daemon-url";
 const LOCAL_DAEMON_TOKEN_STORAGE_KEY = "workbench-local-daemon-token";
 const LOCAL_MODE_ENABLED_STORAGE_KEY = "workbench-local-mode-enabled";
+const LOCAL_ROUTING_MODE_STORAGE_KEY = "workbench-local-routing-mode";
 export const WORKBENCH_LOCAL_DAEMON_URL_CHANGED_EVENT = "workbench-local-daemon-url-changed";
 export const WORKBENCH_LOCAL_MODE_CHANGED_EVENT = "workbench-local-mode-changed";
+
+export type WorkbenchLocalRoutingMode = "core" | "auto" | "local";
+export type WorkbenchLocalRoutingTarget = "core" | "local";
 
 function readViteEnv(
   name: "VITE_WORKBENCH_CORE_URL" | "VITE_WORKBENCH_LOCAL_DAEMON_URL" | "VITE_WORKBENCH_LOCAL_DAEMON_TOKEN"
@@ -67,7 +71,7 @@ const envWorkbenchLocalDaemonUrl = (() => {
 let workbenchCoreUrlCache: string | undefined;
 let workbenchLocalDaemonUrlCache: string | undefined;
 let workbenchLocalDaemonTokenCache: string | undefined;
-let workbenchLocalModeEnabledCache: boolean | undefined;
+let workbenchLocalRoutingModeCache: WorkbenchLocalRoutingMode | undefined;
 
 function isServedByWorkbenchCore(): boolean {
   if (typeof window === "undefined") return false;
@@ -156,9 +160,20 @@ function readStoredWorkbenchLocalModeEnabled(): boolean {
   return window.localStorage.getItem(LOCAL_MODE_ENABLED_STORAGE_KEY) === "true";
 }
 
-function persistWorkbenchLocalModeEnabled(enabled: boolean): void {
+function normalizeWorkbenchLocalRoutingMode(value: string | null | undefined): WorkbenchLocalRoutingMode | undefined {
+  return value === "core" || value === "auto" || value === "local" ? value : undefined;
+}
+
+function readStoredWorkbenchLocalRoutingMode(): WorkbenchLocalRoutingMode {
+  if (typeof window === "undefined") return "core";
+  return normalizeWorkbenchLocalRoutingMode(window.localStorage.getItem(LOCAL_ROUTING_MODE_STORAGE_KEY))
+    ?? (readStoredWorkbenchLocalModeEnabled() ? "local" : "core");
+}
+
+function persistWorkbenchLocalRoutingMode(mode: WorkbenchLocalRoutingMode): void {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(LOCAL_MODE_ENABLED_STORAGE_KEY, enabled ? "true" : "false");
+  window.localStorage.setItem(LOCAL_ROUTING_MODE_STORAGE_KEY, mode);
+  window.localStorage.setItem(LOCAL_MODE_ENABLED_STORAGE_KEY, mode === "local" ? "true" : "false");
 }
 
 export function getWorkbenchCoreUrl(): string {
@@ -181,10 +196,23 @@ export function getWorkbenchLocalDaemonToken(): string {
   return workbenchLocalDaemonTokenCache;
 }
 
+export function getWorkbenchLocalRoutingMode(): WorkbenchLocalRoutingMode {
+  if (workbenchLocalRoutingModeCache !== undefined) return workbenchLocalRoutingModeCache;
+  workbenchLocalRoutingModeCache = readStoredWorkbenchLocalRoutingMode();
+  return workbenchLocalRoutingModeCache;
+}
+
+export function resolveWorkbenchLocalRoutingTarget(
+  mode: WorkbenchLocalRoutingMode,
+  online: boolean
+): WorkbenchLocalRoutingTarget {
+  if (mode === "local") return "local";
+  if (mode === "auto" && !online) return "local";
+  return "core";
+}
+
 export function getWorkbenchLocalModeEnabled(): boolean {
-  if (workbenchLocalModeEnabledCache !== undefined) return workbenchLocalModeEnabledCache;
-  workbenchLocalModeEnabledCache = readStoredWorkbenchLocalModeEnabled();
-  return workbenchLocalModeEnabledCache;
+  return getWorkbenchLocalRoutingMode() === "local";
 }
 
 export function setWorkbenchCoreUrl(raw: string): string {
@@ -211,12 +239,17 @@ export function setWorkbenchLocalDaemonToken(raw: string): string {
   return normalized;
 }
 
-export function setWorkbenchLocalModeEnabled(enabled: boolean): boolean {
-  workbenchLocalModeEnabledCache = enabled;
-  persistWorkbenchLocalModeEnabled(enabled);
+export function setWorkbenchLocalRoutingMode(mode: WorkbenchLocalRoutingMode): WorkbenchLocalRoutingMode {
+  workbenchLocalRoutingModeCache = mode;
+  persistWorkbenchLocalRoutingMode(mode);
   if (typeof window !== "undefined") {
     window.dispatchEvent(new Event(WORKBENCH_LOCAL_MODE_CHANGED_EVENT));
   }
+  return mode;
+}
+
+export function setWorkbenchLocalModeEnabled(enabled: boolean): boolean {
+  setWorkbenchLocalRoutingMode(enabled ? "local" : "core");
   return enabled;
 }
 

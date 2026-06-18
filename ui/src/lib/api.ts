@@ -2,7 +2,8 @@ import {
   getWorkbenchCoreUrl,
   getWorkbenchLocalDaemonToken,
   getWorkbenchLocalDaemonUrl,
-  getWorkbenchLocalModeEnabled
+  getWorkbenchLocalRoutingMode,
+  resolveWorkbenchLocalRoutingTarget
 } from "../config/services";
 import { pushErrorNotification } from "./notificationService";
 import type {
@@ -62,6 +63,10 @@ const NATIVE_SESSION_COMMANDS = {
   read: "secure_session_read",
   clear: "secure_session_clear"
 } as const;
+
+type RequestNotificationOptions = {
+  suppressConnectionError?: boolean;
+};
 
 type StoredAuthSession = {
   user: WorkbenchUserSession;
@@ -284,20 +289,27 @@ function isDeepResearchHistoryRoute(url: string): boolean {
   return /\/api\/deep-research\/jobs(?:\?|$)/.test(url);
 }
 
-async function requestJson<T>(url: string, options?: RequestInit, withSessionAuth = true): Promise<T> {
+async function requestJson<T>(
+  url: string,
+  options?: RequestInit,
+  withSessionAuth = true,
+  notificationOptions: RequestNotificationOptions = {}
+): Promise<T> {
   let response: Response;
   try {
     response = await fetch(url, {
+      ...options,
       headers: {
         "Content-Type": "application/json",
         ...(withSessionAuth ? authHeaders(options?.headers) : (options?.headers ?? {}))
-      },
-      ...options
+      }
     });
   } catch (error) {
     const detail = error instanceof Error ? error.message : "network error";
     const message = `Connection failed for ${url}: ${detail}`;
-    pushErrorNotification(message, "Connection Error");
+    if (!notificationOptions.suppressConnectionError) {
+      pushErrorNotification(message, "Connection Error");
+    }
     throw new Error(message);
   }
 
@@ -432,10 +444,40 @@ async function requestLocalDaemonJson<T>(path: string, options?: RequestInit): P
   return JSON.parse(text) as T;
 }
 
+async function requestArtifactFacade(path: string, options?: RequestInit): Promise<Response> {
+  if (artifactsFacadeEnabled()) {
+    return requestLocalDaemon(path, options);
+  }
+  try {
+    return await fetchWithSessionAuth(coreArtifactPath(path), options, {
+      suppressConnectionError: getWorkbenchLocalRoutingMode() === "auto"
+    });
+  } catch (error) {
+    if (autoRoutingCanFallbackToLocal(error, options)) {
+      return requestLocalDaemon(path, options);
+    }
+    throw error;
+  }
+}
+
+async function requestTasksFacade(path: string, options?: RequestInit): Promise<Response> {
+  if (tasksFacadeEnabled()) {
+    return requestLocalDaemon(path, options);
+  }
+  try {
+    return await fetchWithSessionAuth(coreApiPath(path), options, {
+      suppressConnectionError: getWorkbenchLocalRoutingMode() === "auto"
+    });
+  } catch (error) {
+    if (autoRoutingCanFallbackToLocal(error, options)) {
+      return requestLocalDaemon(path, options);
+    }
+    throw error;
+  }
+}
+
 async function fetchArtifactFacadeBlob(path: string): Promise<Blob> {
-  const response = artifactsFacadeEnabled()
-    ? await requestLocalDaemon(path)
-    : await fetchWithSessionAuth(coreArtifactPath(path));
+  const response = await requestArtifactFacade(path);
 
   if (!response.ok) {
     const message = `Download failed: ${response.status}`;
@@ -446,20 +488,35 @@ async function fetchArtifactFacadeBlob(path: string): Promise<Blob> {
   return response.blob();
 }
 
+function browserReportsOnline(): boolean {
+  if (typeof navigator === "undefined" || typeof navigator.onLine !== "boolean") return true;
+  return navigator.onLine;
+}
+
+function localRoutingTarget(): "core" | "local" {
+  return resolveWorkbenchLocalRoutingTarget(getWorkbenchLocalRoutingMode(), browserReportsOnline());
+}
+
+function autoRoutingCanFallbackToLocal(error: unknown, options?: RequestInit): boolean {
+  if (getWorkbenchLocalRoutingMode() !== "auto") return false;
+  if (options?.signal?.aborted) return false;
+  return error instanceof Error && error.message.startsWith("Connection failed for ");
+}
+
 function artifactsFacadeEnabled(): boolean {
-  return getWorkbenchLocalModeEnabled();
+  return localRoutingTarget() === "local";
 }
 
 function notesFacadeEnabled(): boolean {
-  return getWorkbenchLocalModeEnabled();
+  return localRoutingTarget() === "local";
 }
 
 function projectsFacadeEnabled(): boolean {
-  return getWorkbenchLocalModeEnabled();
+  return localRoutingTarget() === "local";
 }
 
 function tasksFacadeEnabled(): boolean {
-  return getWorkbenchLocalModeEnabled();
+  return localRoutingTarget() === "local";
 }
 
 function coreArtifactPath(path: string): string {
@@ -474,28 +531,56 @@ async function fetchArtifactFacadeJson<T>(path: string, options?: RequestInit): 
   if (artifactsFacadeEnabled()) {
     return requestLocalDaemonJson<T>(path, options);
   }
-  return fetchJson<T>(coreArtifactPath(path), options);
+  try {
+    return await fetchJson<T>(coreArtifactPath(path), options, { suppressConnectionError: getWorkbenchLocalRoutingMode() === "auto" });
+  } catch (error) {
+    if (autoRoutingCanFallbackToLocal(error, options)) {
+      return requestLocalDaemonJson<T>(path, options);
+    }
+    throw error;
+  }
 }
 
 async function fetchNotesFacadeJson<T>(path: string, options?: RequestInit): Promise<T> {
   if (notesFacadeEnabled()) {
     return requestLocalDaemonJson<T>(path, options);
   }
-  return fetchJson<T>(coreApiPath(path), options);
+  try {
+    return await fetchJson<T>(coreApiPath(path), options, { suppressConnectionError: getWorkbenchLocalRoutingMode() === "auto" });
+  } catch (error) {
+    if (autoRoutingCanFallbackToLocal(error, options)) {
+      return requestLocalDaemonJson<T>(path, options);
+    }
+    throw error;
+  }
 }
 
 async function fetchProjectsFacadeJson<T>(path: string, options?: RequestInit): Promise<T> {
   if (projectsFacadeEnabled()) {
     return requestLocalDaemonJson<T>(path, options);
   }
-  return fetchJson<T>(coreApiPath(path), options);
+  try {
+    return await fetchJson<T>(coreApiPath(path), options, { suppressConnectionError: getWorkbenchLocalRoutingMode() === "auto" });
+  } catch (error) {
+    if (autoRoutingCanFallbackToLocal(error, options)) {
+      return requestLocalDaemonJson<T>(path, options);
+    }
+    throw error;
+  }
 }
 
 async function fetchTasksFacadeJson<T>(path: string, options?: RequestInit): Promise<T> {
   if (tasksFacadeEnabled()) {
     return requestLocalDaemonJson<T>(path, options);
   }
-  return fetchJson<T>(coreApiPath(path), options);
+  try {
+    return await fetchJson<T>(coreApiPath(path), options, { suppressConnectionError: getWorkbenchLocalRoutingMode() === "auto" });
+  } catch (error) {
+    if (autoRoutingCanFallbackToLocal(error, options)) {
+      return requestLocalDaemonJson<T>(path, options);
+    }
+    throw error;
+  }
 }
 
 async function fileToBase64(file: File): Promise<string> {
@@ -532,10 +617,14 @@ async function refreshAccessToken(refreshToken: string): Promise<void> {
   await saveWorkbenchSession(refreshed);
 }
 
-async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
+async function fetchJson<T>(
+  url: string,
+  options?: RequestInit,
+  notificationOptions: RequestNotificationOptions = {}
+): Promise<T> {
   await initializeSessionStorage();
   try {
-    return await requestJson<T>(url, options, true);
+    return await requestJson<T>(url, options, true, notificationOptions);
   } catch (error) {
     if (!(error instanceof ApiError) || error.status !== 401 || isAuthRefreshRoute(url)) {
       throw error;
@@ -548,7 +637,7 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
 
     try {
       await refreshAccessToken(session.refreshToken);
-      return await requestJson<T>(url, options, true);
+      return await requestJson<T>(url, options, true, notificationOptions);
     } catch {
       await clearWorkbenchSession();
       throw error;
@@ -556,7 +645,11 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   }
 }
 
-async function fetchWithSessionAuth(url: string, options?: RequestInit): Promise<Response> {
+async function fetchWithSessionAuth(
+  url: string,
+  options?: RequestInit,
+  notificationOptions: RequestNotificationOptions = {}
+): Promise<Response> {
   await initializeSessionStorage();
 
   const requestOnce = async (): Promise<Response> => {
@@ -568,7 +661,9 @@ async function fetchWithSessionAuth(url: string, options?: RequestInit): Promise
     } catch (error) {
       const detail = error instanceof Error ? error.message : "network error";
       const message = `Connection failed for ${url}: ${detail}`;
-      pushErrorNotification(message, "Connection Error");
+      if (!notificationOptions.suppressConnectionError) {
+        pushErrorNotification(message, "Connection Error");
+      }
       throw new Error(message);
     }
   };
@@ -697,15 +792,10 @@ export const artifactsApi = {
     if (payload.tags?.length) formData.append("tags", JSON.stringify(payload.tags));
     formData.append("file", payload.file);
 
-    const response = artifactsFacadeEnabled()
-      ? await requestLocalDaemon("/api/artifacts/upload", {
-          method: "POST",
-          body: formData
-        })
-      : await fetchWithSessionAuth(`${coreBaseUrl()}/api/artifacts/upload`, {
-          method: "POST",
-          body: formData
-        });
+    const response = await requestArtifactFacade("/api/artifacts/upload", {
+      method: "POST",
+      body: formData
+    });
 
     const text = await response.text();
     if (!response.ok) {
@@ -1031,33 +1121,9 @@ export const tasksApi = {
   history: (id: string): Promise<TaskHistoryEntry[]> =>
     fetchTasksFacadeJson<TaskHistoryEntry[]>(`/api/tasks/${encodeURIComponent(id)}/history`),
   exportCsv: async (): Promise<Blob> => {
-    if (tasksFacadeEnabled()) {
-      const response = await requestLocalDaemon("/api/tasks/export", {
-        headers: { Accept: "text/csv" }
-      });
-      if (!response.ok) {
-        throw new Error(`Export failed: ${response.status}`);
-      }
-      return response.blob();
-    }
-
-    await initializeSessionStorage();
-    const requestExport = async (): Promise<Response> =>
-      fetch(`${coreBaseUrl()}/api/tasks/export`, {
-        headers: {
-          Accept: "text/csv",
-          ...authHeaders()
-        }
-      });
-
-    let response = await requestExport();
-    if (response.status === 401) {
-      const session = readStoredSession();
-      if (session?.refreshToken) {
-        await refreshAccessToken(session.refreshToken);
-        response = await requestExport();
-      }
-    }
+    const response = await requestTasksFacade("/api/tasks/export", {
+      headers: { Accept: "text/csv" }
+    });
 
     if (!response.ok) {
       throw new Error(`Export failed: ${response.status}`);
@@ -1065,23 +1131,8 @@ export const tasksApi = {
     return response.blob();
   },
   importCsv: (file: File): Promise<{ imported: number }> => {
-    if (tasksFacadeEnabled()) {
-      return file.text().then(async (text) => {
-        const response = await requestLocalDaemon("/api/tasks/import", {
-          method: "POST",
-          headers: { "Content-Type": "text/csv" },
-          body: text
-        });
-        const responseText = await response.text();
-        if (!response.ok) {
-          throw new Error(responseText || `Import failed: ${response.status}`);
-        }
-        return JSON.parse(responseText) as { imported: number };
-      });
-    }
-
     return file.text().then((text) =>
-      fetchJson<{ imported: number }>(`${coreBaseUrl()}/api/tasks/import`, {
+      fetchTasksFacadeJson<{ imported: number }>("/api/tasks/import", {
         method: "POST",
         headers: { "Content-Type": "text/csv" },
         body: text
@@ -1092,9 +1143,7 @@ export const tasksApi = {
 
 export const taskAttachmentsApi = {
   list: (taskId: string): Promise<TaskAttachment[]> =>
-    tasksFacadeEnabled()
-      ? fetchTasksFacadeJson<TaskAttachment[]>(`/api/tasks/${encodeURIComponent(taskId)}/attachments`)
-      : fetchJson<TaskAttachment[]>(`${coreBaseUrl()}/api/tasks/${encodeURIComponent(taskId)}/attachments`),
+    fetchTasksFacadeJson<TaskAttachment[]>(`/api/tasks/${encodeURIComponent(taskId)}/attachments`),
 
   upload: async (taskId: string, file: File): Promise<TaskAttachment> => {
     if (tasksFacadeEnabled()) {
@@ -1108,24 +1157,27 @@ export const taskAttachmentsApi = {
       });
     }
 
-    await initializeSessionStorage();
     const formData = new FormData();
     formData.append("file", file);
 
-    const requestUpload = async (): Promise<Response> =>
-      fetch(`${coreBaseUrl()}/api/tasks/${encodeURIComponent(taskId)}/attachments`, {
+    let response: Response;
+    try {
+      response = await fetchWithSessionAuth(`${coreBaseUrl()}/api/tasks/${encodeURIComponent(taskId)}/attachments`, {
         method: "POST",
-        headers: authHeaders(),
         body: formData
-      });
-
-    let response = await requestUpload();
-    if (response.status === 401) {
-      const session = readStoredSession();
-      if (session?.refreshToken) {
-        await refreshAccessToken(session.refreshToken);
-        response = await requestUpload();
+      }, { suppressConnectionError: getWorkbenchLocalRoutingMode() === "auto" });
+    } catch (error) {
+      if (autoRoutingCanFallbackToLocal(error)) {
+        return fetchTasksFacadeJson<TaskAttachment>(`/api/tasks/${encodeURIComponent(taskId)}/attachments`, {
+          method: "POST",
+          body: JSON.stringify({
+            filename: file.name,
+            mimeType: file.type || "application/octet-stream",
+            contentBase64: await fileToBase64(file)
+          })
+        });
       }
+      throw error;
     }
 
     if (!response.ok) {
@@ -1143,45 +1195,9 @@ export const taskAttachmentsApi = {
   },
 
   download: async (taskId: string, attachmentId: string, inline = false): Promise<void> => {
-    if (tasksFacadeEnabled()) {
-      const suffix = inline ? "" : "?download=1";
-      const response = await requestLocalDaemon(
-        `/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}/download${suffix}`
-      );
-      if (!response.ok) {
-        throw new Error(`Download failed: ${response.status}`);
-      }
-      const blob = await response.blob();
-      const filename = filenameFromDisposition(response.headers.get("content-disposition"), attachmentId);
-      if (inline) {
-        const objectUrl = URL.createObjectURL(blob);
-        window.open(objectUrl, "_blank");
-        setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
-      } else {
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = filename;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(a.href), 60000);
-      }
-      return;
-    }
-
-    await initializeSessionStorage();
     const suffix = inline ? "" : "?download=1";
-    const url = `${coreBaseUrl()}/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}/download${suffix}`;
-
-    const requestDownload = async (): Promise<Response> =>
-      fetch(url, { headers: authHeaders() });
-
-    let response = await requestDownload();
-    if (response.status === 401) {
-      const session = readStoredSession();
-      if (session?.refreshToken) {
-        await refreshAccessToken(session.refreshToken);
-        response = await requestDownload();
-      }
-    }
+    const path = `/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}/download${suffix}`;
+    const response = await requestTasksFacade(path);
 
     if (!response.ok) {
       throw new Error(`Download failed: ${response.status}`);
@@ -1204,28 +1220,9 @@ export const taskAttachmentsApi = {
   },
 
   fetchBlob: async (taskId: string, attachmentId: string): Promise<{ blob: Blob; filename: string; mimeType: string }> => {
-    if (tasksFacadeEnabled()) {
-      const response = await requestLocalDaemon(
-        `/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}/download`
-      );
-      if (!response.ok) throw new Error(`Fetch failed: ${response.status}`);
-      const blob = await response.blob();
-      const filename = filenameFromDisposition(response.headers.get("content-disposition"), attachmentId);
-      const mimeType = (response.headers.get("content-type") ?? blob.type ?? "").split(";")[0].trim();
-      return { blob, filename, mimeType };
-    }
-
-    await initializeSessionStorage();
-    const url = `${coreBaseUrl()}/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}/download`;
-    const requestFetch = async (): Promise<Response> => fetch(url, { headers: authHeaders() });
-    let response = await requestFetch();
-    if (response.status === 401) {
-      const session = readStoredSession();
-      if (session?.refreshToken) {
-        await refreshAccessToken(session.refreshToken);
-        response = await requestFetch();
-      }
-    }
+    const response = await requestTasksFacade(
+      `/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}/download`
+    );
     if (!response.ok) throw new Error(`Fetch failed: ${response.status}`);
     const blob = await response.blob();
     const filename = filenameFromDisposition(response.headers.get("content-disposition"), attachmentId);
@@ -1234,15 +1231,10 @@ export const taskAttachmentsApi = {
   },
 
   remove: (taskId: string, attachmentId: string): Promise<void> =>
-    tasksFacadeEnabled()
-      ? fetchTasksFacadeJson<void>(
-        `/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}`,
-        { method: "DELETE" }
-      )
-      : fetchJson<void>(
-        `${coreBaseUrl()}/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}`,
-        { method: "DELETE" }
-      )
+    fetchTasksFacadeJson<void>(
+      `/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}`,
+      { method: "DELETE" }
+    )
 };
 
 export const taskSubtasksApi = {

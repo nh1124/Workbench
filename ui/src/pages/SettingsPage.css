@@ -767,6 +767,41 @@
   font-size: 0.72rem;
 }
 
+.account-local-routing-segmented {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(4.25rem, 1fr));
+  gap: 0.18rem;
+  padding: 0.2rem;
+  border: 1px solid rgba(51, 65, 85, 0.72);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.38);
+  min-width: min(100%, 15rem);
+}
+
+.account-local-routing-segmented button {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 800;
+  line-height: 1;
+  min-height: 2rem;
+  padding: 0 0.58rem;
+}
+
+.account-local-routing-segmented button:hover {
+  background: rgba(30, 41, 59, 0.78);
+  color: #dbeafe;
+}
+
+.account-local-routing-segmented button.active {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
 .account-local-folder-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1083,6 +1118,11 @@
   .account-local-daemon-token {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .account-local-routing-segmented {
+    width: 100%;
+    min-width: 0;
   }
 
   .account-local-folder-grid {

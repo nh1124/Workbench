@@ -9,6 +9,7 @@ const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "../../../..");
 
 const uiApiSource = readFileSync(path.join(repoRoot, "ui/src/lib/api.ts"), "utf8");
+const uiServicesSource = readFileSync(path.join(repoRoot, "ui/src/config/services.ts"), "utf8");
 const daemonSource = readFileSync(path.join(repoRoot, "services/sync-daemon/src/index.ts"), "utf8");
 const coreHttpSource = readFileSync(path.join(repoRoot, "services/workbench-core/src/httpServer.ts"), "utf8");
 const coreSyncStoreSource = readFileSync(path.join(repoRoot, "services/workbench-core/src/syncStore.ts"), "utf8");
@@ -28,10 +29,14 @@ function assertRoutePair(label: string, uiNeedles: string[], daemonNeedles: stri
 
 describe("local mode route coverage", () => {
   it("keeps Tasks UI routes mirrored by the daemon loopback facade", () => {
+    assertIncludes(uiServicesSource, "export type WorkbenchLocalRoutingMode = \"core\" | \"auto\" | \"local\";", "Local routing modes");
+    assertIncludes(uiServicesSource, "export function resolveWorkbenchLocalRoutingTarget", "Local routing target resolver");
+    assertIncludes(uiServicesSource, "if (mode === \"auto\" && !online) return \"local\";", "Auto offline routing rule");
     assertIncludes(uiApiSource, "function tasksFacadeEnabled(): boolean", "Tasks Local Mode flag");
     assertIncludes(uiApiSource, "async function fetchTasksFacadeJson<T>", "Tasks facade fetch helper");
     assertIncludes(uiApiSource, "requestLocalDaemonJson<T>(path, options)", "Tasks daemon JSON fetch path");
-    assertIncludes(uiApiSource, "fetchJson<T>(coreApiPath(path), options)", "Tasks Core fallback fetch path");
+    assertIncludes(uiApiSource, "fetchJson<T>(coreApiPath(path), options, { suppressConnectionError: getWorkbenchLocalRoutingMode() === \"auto\" })", "Tasks Core fallback fetch path");
+    assertIncludes(uiApiSource, "if (autoRoutingCanFallbackToLocal(error, options))", "Tasks Auto connection fallback path");
 
     const sharedDomainListRoute = "const remoteDomainListMatch = url.pathname.match(/^\\/api\\/(projects|notes|tasks)$/);";
     const sharedDomainItemRoute = "const remoteDomainItemMatch = url.pathname.match(/^\\/api\\/(projects|notes|tasks)\\/([^/]+)$/);";

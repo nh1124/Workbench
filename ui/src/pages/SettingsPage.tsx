@@ -10,12 +10,13 @@ import {
   readWorkbenchSession
 } from "../lib/api";
 import {
-  getWorkbenchLocalModeEnabled,
   getWorkbenchLocalDaemonTokenInitialValue,
   getWorkbenchLocalDaemonUrlInitialValue,
-  setWorkbenchLocalModeEnabled,
+  getWorkbenchLocalRoutingMode,
+  setWorkbenchLocalRoutingMode,
   setWorkbenchLocalDaemonToken,
-  setWorkbenchLocalDaemonUrl
+  setWorkbenchLocalDaemonUrl,
+  type WorkbenchLocalRoutingMode
 } from "../config/services";
 import {
   getDefaultLocationPreset,
@@ -193,7 +194,7 @@ export function SettingsPage() {
   const [localJobs, setLocalJobs] = useState<LocalJobRecord[]>([]);
   const [localClientsMessage, setLocalClientsMessage] = useState("");
   const [localClientsLoading, setLocalClientsLoading] = useState(false);
-  const [localModeEnabled, setLocalModeEnabled] = useState(getWorkbenchLocalModeEnabled());
+  const [localRoutingMode, setLocalRoutingMode] = useState<WorkbenchLocalRoutingMode>(getWorkbenchLocalRoutingMode());
   const [localDaemonUrlInput, setLocalDaemonUrlInput] = useState(getWorkbenchLocalDaemonUrlInitialValue());
   const [localDaemonTokenInput, setLocalDaemonTokenInput] = useState(getWorkbenchLocalDaemonTokenInitialValue());
   const [localDaemonStatus, setLocalDaemonStatus] = useState<LocalDaemonStatus | undefined>(undefined);
@@ -436,7 +437,11 @@ export function SettingsPage() {
     try {
       const normalized = setWorkbenchLocalDaemonUrl(localDaemonUrlInput);
       setLocalDaemonUrlInput(normalized);
-      setLocalDaemonMessage(localModeEnabled ? "Local daemon URL saved. Local mode is active." : "Local daemon URL saved.");
+      setLocalDaemonMessage(
+        localRoutingMode === "core"
+          ? "Local daemon URL saved."
+          : "Local daemon URL saved. Local routing can use this daemon."
+      );
       void refreshLocalDaemon(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Invalid local daemon URL";
@@ -455,20 +460,21 @@ export function SettingsPage() {
     void refreshLocalDaemon(false);
   };
 
-  const toggleLocalMode = (enabled: boolean) => {
+  const changeLocalRoutingMode = (mode: WorkbenchLocalRoutingMode) => {
     try {
-      if (enabled) {
+      if (mode !== "core") {
         const normalized = setWorkbenchLocalDaemonUrl(localDaemonUrlInput);
         setLocalDaemonUrlInput(normalized);
       }
-      const persisted = setWorkbenchLocalModeEnabled(enabled);
-      setLocalModeEnabled(persisted);
-      setLocalDaemonMessage(
-        persisted
-          ? "Local mode enabled for supported artifact routes."
-          : "Local mode disabled. Core API is active."
-      );
-      if (persisted) {
+      const persisted = setWorkbenchLocalRoutingMode(mode);
+      setLocalRoutingMode(persisted);
+      const messages: Record<WorkbenchLocalRoutingMode, string> = {
+        core: "Core API mode enabled.",
+        auto: "Auto mode enabled. Core is used online; the daemon is used offline.",
+        local: "Local mode enabled. Supported routes use the daemon."
+      };
+      setLocalDaemonMessage(messages[persisted]);
+      if (persisted !== "core") {
         void refreshLocalDaemon(false);
       }
     } catch (error) {
@@ -1410,18 +1416,29 @@ export function SettingsPage() {
 
               <div className="account-local-mode-control">
                 <div>
-                  <strong>Local Mode</strong>
-                  <small>{localModeEnabled ? "Supported artifacts, notes, projects, and tasks use daemon" : "Core API active"}</small>
+                  <strong>Routing Mode</strong>
+                  <small>
+                    {localRoutingMode === "auto"
+                      ? "Core online, daemon offline"
+                      : localRoutingMode === "local"
+                        ? "Daemon for supported routes"
+                        : "Core API for supported routes"}
+                  </small>
                 </div>
-                <label className="integration-switch">
-                  <input
-                    type="checkbox"
-                    checked={localModeEnabled}
-                    onChange={(event) => toggleLocalMode(event.target.checked)}
-                  />
-                  <span className="integration-switch-slider" aria-hidden="true" />
-                  <span className="sr-only">{localModeEnabled ? "Disable local mode" : "Enable local mode"}</span>
-                </label>
+                <div className="account-local-routing-segmented" role="radiogroup" aria-label="Workbench routing mode">
+                  {(["core", "auto", "local"] as WorkbenchLocalRoutingMode[]).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      role="radio"
+                      aria-checked={localRoutingMode === mode}
+                      className={localRoutingMode === mode ? "active" : ""}
+                      onClick={() => changeLocalRoutingMode(mode)}
+                    >
+                      {mode === "core" ? "Core" : mode === "auto" ? "Auto" : "Local"}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div className="account-local-mode-control">

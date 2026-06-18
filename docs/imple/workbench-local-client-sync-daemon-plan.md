@@ -412,6 +412,11 @@ npm run build
   - Today, schedule, occurrence, subtask, and attachment routes route through the daemon.
   - Import, export, and history routes route through the daemon.
   - Existing Core route remains active when Local Mode is disabled.
+- `[implemented]` Add automatic routing mode for supported local-first routes.
+  - `Core` mode always uses Core.
+  - `Local` mode always uses the daemon.
+  - `Auto` mode uses Core while the browser reports online and uses the daemon while offline.
+  - `Auto` also falls back to the daemon on Core connection failures, but not on normal Core HTTP/API errors.
 - `[implemented]` Add Settings UI display/actions for daemon status and open conflicts.
 - `[implemented]` Add offline/sync/conflict status display in the main app shell.
 
