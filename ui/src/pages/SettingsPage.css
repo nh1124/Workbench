@@ -857,6 +857,7 @@
 .account-local-daemon-token button,
 .account-local-folder-actions button,
 .account-local-native-actions button,
+.account-local-confirmation-actions button,
 .account-local-conflict-actions button {
   min-height: 2.1rem;
   border-radius: 10px;
@@ -900,6 +901,55 @@
   color: #fca5a5;
   font-size: 0.72rem;
   overflow-wrap: anywhere;
+}
+
+.account-local-confirmations {
+  display: grid;
+  gap: 0.48rem;
+}
+
+.account-local-confirmation-list {
+  display: grid;
+  gap: 0.48rem;
+}
+
+.account-local-confirmation-row {
+  border: 1px solid rgba(251, 191, 36, 0.32);
+  border-radius: 10px;
+  background: rgba(113, 63, 18, 0.14);
+  padding: 0.66rem 0.72rem;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.account-local-confirmation-row strong {
+  color: #fef3c7;
+  font-size: 0.84rem;
+}
+
+.account-local-confirmation-row p {
+  margin: 0.2rem 0 0;
+  color: #fde68a;
+  font-size: 0.74rem;
+  overflow-wrap: anywhere;
+}
+
+.account-local-confirmation-row small {
+  display: block;
+  margin-top: 0.16rem;
+  color: #cbd5e1;
+  font-size: 0.68rem;
+  overflow-wrap: anywhere;
+}
+
+.account-local-confirmation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.34rem;
+  flex-shrink: 0;
 }
 
 .account-local-conflicts {
@@ -1014,6 +1064,7 @@
 
   .account-local-client-card,
   .account-local-job-row,
+  .account-local-confirmation-row,
   .account-local-conflict-row,
   .account-local-mode-control,
   .account-local-clients-header {
@@ -1022,6 +1073,7 @@
 
   .account-local-client-actions,
   .account-local-job-status,
+  .account-local-confirmation-actions,
   .account-local-conflict-actions {
     justify-content: flex-start;
     justify-items: start;

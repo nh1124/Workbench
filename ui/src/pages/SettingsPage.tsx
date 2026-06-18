@@ -32,6 +32,7 @@ import type {
   LocalClientAuditEventRecord,
   LocalClientRecord,
   LocalDaemonConflictRecord,
+  LocalDaemonPendingJobConfirmation,
   LocalDaemonPreferences,
   LocalDaemonStatus,
   LocalJobRecord,
@@ -66,6 +67,14 @@ function normalizeCategoryKey(category: string): string {
 function formatSyncErrorCategory(category?: LocalDaemonStatus["lastErrorCategory"]): string {
   if (!category) return "Unknown";
   return category
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function formatLocalJobKind(kind: LocalJobRecord["kind"] | LocalDaemonPendingJobConfirmation["kind"]): string {
+  return kind
     .split("_")
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
@@ -189,9 +198,13 @@ export function SettingsPage() {
   const [localDaemonTokenInput, setLocalDaemonTokenInput] = useState(getWorkbenchLocalDaemonTokenInitialValue());
   const [localDaemonStatus, setLocalDaemonStatus] = useState<LocalDaemonStatus | undefined>(undefined);
   const [localDaemonConflicts, setLocalDaemonConflicts] = useState<LocalDaemonConflictRecord[]>([]);
+  const [localDaemonPendingJobConfirmations, setLocalDaemonPendingJobConfirmations] = useState<
+    LocalDaemonPendingJobConfirmation[]
+  >([]);
   const [localDaemonMessage, setLocalDaemonMessage] = useState("");
   const [localDaemonLoading, setLocalDaemonLoading] = useState(false);
   const [localDaemonResolving, setLocalDaemonResolving] = useState<Record<string, boolean>>({});
+  const [localDaemonConfirmingJob, setLocalDaemonConfirmingJob] = useState<Record<string, boolean>>({});
   const [localDaemonAutoStart, setLocalDaemonAutoStart] = useState(false);
   const [localDaemonPreferences, setLocalDaemonPreferences] = useState<LocalDaemonPreferences | undefined>(undefined);
 
@@ -388,22 +401,30 @@ export function SettingsPage() {
     }
   };
 
+  const loadLocalDaemonState = async () => {
+    const [status, conflicts, pendingJobs] = await Promise.all([
+      localDaemonApi.status(),
+      localDaemonApi.listConflicts({ status: "open", limit: 25 }),
+      localDaemonApi.listPendingJobConfirmations()
+    ]);
+    setLocalDaemonStatus(status);
+    setLocalDaemonConflicts(conflicts.items);
+    setLocalDaemonPendingJobConfirmations(pendingJobs.items);
+    return { status, conflicts, pendingJobs };
+  };
+
   const refreshLocalDaemon = async (showSuccess = true) => {
     setLocalDaemonLoading(true);
     setLocalDaemonMessage("");
     try {
-      const [status, conflicts] = await Promise.all([
-        localDaemonApi.status(),
-        localDaemonApi.listConflicts({ status: "open", limit: 25 })
-      ]);
-      setLocalDaemonStatus(status);
-      setLocalDaemonConflicts(conflicts.items);
+      await loadLocalDaemonState();
       if (showSuccess) {
         setLocalDaemonMessage("Local daemon refreshed.");
       }
     } catch (error) {
       setLocalDaemonStatus(undefined);
       setLocalDaemonConflicts([]);
+      setLocalDaemonPendingJobConfirmations([]);
       const message = error instanceof Error ? error.message : "Failed to reach local daemon";
       setLocalDaemonMessage(message);
     } finally {
@@ -569,6 +590,12 @@ export function SettingsPage() {
     try {
       const status = await nativeDaemonApi.readStatus();
       setLocalDaemonStatus(status);
+      try {
+        const pendingJobs = await localDaemonApi.listPendingJobConfirmations();
+        setLocalDaemonPendingJobConfirmations(pendingJobs.items);
+      } catch {
+        setLocalDaemonPendingJobConfirmations([]);
+      }
       setLocalDaemonMessage("Native daemon status loaded.");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to read native daemon status";
@@ -610,18 +637,49 @@ export function SettingsPage() {
     setLocalDaemonMessage("");
     try {
       await localDaemonApi.resolveConflict(conflict.id, { resolution });
-      const [status, conflicts] = await Promise.all([
-        localDaemonApi.status(),
-        localDaemonApi.listConflicts({ status: "open", limit: 25 })
-      ]);
-      setLocalDaemonStatus(status);
-      setLocalDaemonConflicts(conflicts.items);
+      await loadLocalDaemonState();
       setLocalDaemonMessage(resolution === "retry" ? "Conflict requeued." : "Conflict updated.");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to update conflict";
       setLocalDaemonMessage(message);
     } finally {
       setLocalDaemonResolving((current) => ({ ...current, [conflict.id]: false }));
+    }
+  };
+
+  const approveLocalDaemonJobConfirmation = async (job: LocalDaemonPendingJobConfirmation) => {
+    setLocalDaemonConfirmingJob((current) => ({ ...current, [job.jobId]: true }));
+    setLocalDaemonMessage("");
+    try {
+      await localDaemonApi.approveJobConfirmation(job.jobId);
+      await loadLocalDaemonState();
+      if (session) {
+        void refreshLocalClients();
+      }
+      setLocalDaemonMessage("Local job approved.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to approve local job";
+      setLocalDaemonMessage(message);
+    } finally {
+      setLocalDaemonConfirmingJob((current) => ({ ...current, [job.jobId]: false }));
+    }
+  };
+
+  const rejectLocalDaemonJobConfirmation = async (job: LocalDaemonPendingJobConfirmation) => {
+    setLocalDaemonConfirmingJob((current) => ({ ...current, [job.jobId]: true }));
+    setLocalDaemonMessage("");
+    try {
+      await localDaemonApi.rejectJobConfirmation(job.jobId);
+      await loadLocalDaemonState();
+      if (session) {
+        void refreshLocalClients();
+      }
+      setLocalDaemonMessage("Local job rejected.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to reject local job";
+      setLocalDaemonMessage(message);
+    } finally {
+      setLocalDaemonConfirmingJob((current) => ({ ...current, [job.jobId]: false }));
     }
   };
 
@@ -1500,6 +1558,8 @@ export function SettingsPage() {
                   <span>{localDaemonStatus.outboxPending ?? 0} pending</span>
                   <span>{localDaemonStatus.outboxFailed ?? 0} failed</span>
                   <span>{localDaemonStatus.conflictsOpen ?? 0} conflicts</span>
+                  <span>{localDaemonStatus.localJobConfirmationPolicy ?? "off"} confirmation</span>
+                  <span>{localDaemonStatus.localJobConfirmationsPending ?? 0} approvals</span>
                   {localDaemonStatus.lastError ? (
                     <small>
                       {localDaemonStatus.lastErrorCategory
@@ -1512,6 +1572,50 @@ export function SettingsPage() {
               ) : (
                 <p className="info">Local daemon status is not loaded.</p>
               )}
+
+              <div className="account-local-confirmations">
+                <div className="account-local-conflicts-head">
+                  <strong>Pending Local Jobs</strong>
+                  <small>{localDaemonPendingJobConfirmations.length} items</small>
+                </div>
+                {localDaemonPendingJobConfirmations.length === 0 ? (
+                  <p className="info">No local jobs are waiting for approval.</p>
+                ) : (
+                  <div className="account-local-confirmation-list">
+                    {localDaemonPendingJobConfirmations.map((job) => (
+                      <article key={job.jobId} className="account-local-confirmation-row">
+                        <div>
+                          <strong>{formatLocalJobKind(job.kind)}</strong>
+                          <p>{job.requestedFilename ?? job.payload.filename ?? job.jobId}</p>
+                          <div className="account-local-conflict-meta">
+                            <span>{job.target}</span>
+                            <span>{new Date(job.requestedAt).toLocaleString()}</span>
+                          </div>
+                          <small>{job.destinationRoot}</small>
+                          <small>{job.reason}</small>
+                        </div>
+                        <div className="account-local-confirmation-actions">
+                          <button
+                            type="button"
+                            disabled={localDaemonConfirmingJob[job.jobId]}
+                            onClick={() => void approveLocalDaemonJobConfirmation(job)}
+                          >
+                            Approve
+                          </button>
+                          <button
+                            type="button"
+                            className="danger-button"
+                            disabled={localDaemonConfirmingJob[job.jobId]}
+                            onClick={() => void rejectLocalDaemonJobConfirmation(job)}
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </div>
 
               <div className="account-local-conflicts">
                 <div className="account-local-conflicts-head">

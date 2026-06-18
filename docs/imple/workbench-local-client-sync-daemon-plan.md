@@ -158,6 +158,8 @@ Last updated: 2026-06-18
 - `[implemented]` Settings account page displays recent local job history and result paths.
 - `[implemented]` Settings account page displays local daemon status and open sync conflicts.
 - `[implemented]` Settings account page can resolve local conflicts with retry, ignore, or close.
+- `[implemented]` Settings account page displays local daemon jobs waiting for approval.
+- `[implemented]` Settings account page can approve or reject pending local daemon jobs.
 - `[implemented]` Settings account page has a Local Mode toggle that routes supported artifact reads/writes to the daemon.
 - `[implemented]` Desktop Settings can call native daemon commands to choose/open folders, read daemon status, and request start/stop.
 - `[implemented]` Settings can open the Account tab and Sync Daemon section from `/settings?tab=account&section=sync-daemon`.
@@ -475,12 +477,13 @@ npm run build
   - Pending jobs are visible through `GET /api/local-jobs/pending-confirmations`.
   - Local callers can approve with `POST /api/local-jobs/:jobId/approve`.
   - Local callers can reject with `POST /api/local-jobs/:jobId/reject`, which reports the job as failed to Core.
+  - Settings displays pending confirmations and exposes approve/reject actions.
   - `/status` includes `localJobConfirmationPolicy` and `localJobConfirmationsPending`.
 
 ## Recommended Next Implementation Order
 
 1. Decide whether packaged standalone daemon builds should default `WORKBENCH_SECURE_CLIENT_IDENTITY=auto` after OS-level QA.
-2. Add Settings UI for pending local job confirmations if users need approve/reject controls outside raw loopback API.
+2. Add OS-level smoke coverage for macOS Keychain and Linux `secret-tool` secure identity backends.
 3. Keep the Core-origin mutation guard audit updated when new domain services or route registration files are introduced.
 
 ## Current Daemon Usage
