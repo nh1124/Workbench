@@ -23,6 +23,14 @@ const DEFAULT_DAEMON_SIDECAR_NAME: &str = "workbench-sync-daemon";
 const LOCAL_CLIENT_ID_ENV: &str = "WORKBENCH_LOCAL_CLIENT_ID";
 const LOCAL_CLIENT_TOKEN_ENV: &str = "WORKBENCH_LOCAL_CLIENT_TOKEN";
 const PERSIST_CLIENT_IDENTITY_ENV: &str = "WORKBENCH_PERSIST_CLIENT_IDENTITY";
+const SECURE_CLIENT_IDENTITY_ENV: &str = "WORKBENCH_SECURE_CLIENT_IDENTITY";
+
+#[derive(Debug, Clone)]
+struct ActiveWorkbenchAccount {
+  user_id: String,
+  username: String,
+  access_token: Option<String>,
+}
 
 struct ManagedDaemon {
   child: Child,
@@ -43,7 +51,11 @@ fn managed_daemon() -> &'static Mutex<Option<ManagedDaemon>> {
 fn sanitize_temp_filename(default_name: &str) -> String {
   let trimmed = default_name.trim();
   let fallback = "document.docx";
-  let source = if trimmed.is_empty() { fallback } else { trimmed };
+  let source = if trimmed.is_empty() {
+    fallback
+  } else {
+    trimmed
+  };
   let sanitized: String = source
     .chars()
     .map(|ch| match ch {
@@ -106,15 +118,119 @@ fn env_path(name: &str) -> Option<PathBuf> {
     .map(PathBuf::from)
 }
 
+fn parse_active_workbench_account(raw: &str) -> Option<ActiveWorkbenchAccount> {
+  let parsed = serde_json::from_str::<serde_json::Value>(raw).ok()?;
+  let user = parsed.get("user")?;
+  let user_id = user
+    .get("id")
+    .and_then(serde_json::Value::as_str)
+    .map(str::trim)
+    .filter(|value| !value.is_empty())?
+    .to_string();
+  let username = user
+    .get("username")
+    .and_then(serde_json::Value::as_str)
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .unwrap_or("user")
+    .to_string();
+  let access_token = parsed
+    .get("accessToken")
+    .and_then(serde_json::Value::as_str)
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .map(ToString::to_string);
+
+  Some(ActiveWorkbenchAccount {
+    user_id,
+    username,
+    access_token,
+  })
+}
+
+fn active_workbench_account() -> Option<ActiveWorkbenchAccount> {
+  secure_storage::read()
+    .ok()
+    .flatten()
+    .and_then(|raw| parse_active_workbench_account(&raw))
+}
+
+fn sanitize_folder_segment(raw: &str) -> String {
+  let mut sanitized = String::new();
+  let mut previous_separator = false;
+  for ch in raw.trim().chars() {
+    let replacement = match ch {
+      '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => Some('_'),
+      c if c.is_control() => Some('_'),
+      c if c.is_whitespace() => Some('-'),
+      c => Some(c),
+    };
+    let Some(next) = replacement else {
+      continue;
+    };
+    let is_separator = next == '_' || next == '-' || next == '.';
+    if is_separator && previous_separator {
+      continue;
+    }
+    sanitized.push(next);
+    previous_separator = is_separator;
+    if sanitized.chars().count() >= 64 {
+      break;
+    }
+  }
+
+  let trimmed = sanitized
+    .trim_matches(|ch| ch == '_' || ch == '-' || ch == '.')
+    .to_string();
+  if trimmed.is_empty() {
+    "user".to_string()
+  } else {
+    trimmed
+  }
+}
+
+fn take_segment_prefix(raw: &str, max_chars: usize) -> String {
+  raw.chars().take(max_chars).collect()
+}
+
+fn account_folder_segment(account: Option<&ActiveWorkbenchAccount>) -> String {
+  let Some(account) = account else {
+    return "guest".to_string();
+  };
+  let username = sanitize_folder_segment(&account.username);
+  let user_id = sanitize_folder_segment(&account.user_id);
+  format!("{}-{}", username, take_segment_prefix(&user_id, 12))
+}
+
+fn account_sync_root_id(account: Option<&ActiveWorkbenchAccount>) -> String {
+  let Some(account) = account else {
+    return "guest".to_string();
+  };
+  format!(
+    "account-{}",
+    take_segment_prefix(&sanitize_folder_segment(&account.user_id), 32)
+  )
+}
+
+fn account_label(account: Option<&ActiveWorkbenchAccount>) -> String {
+  account
+    .map(|account| account.username.trim())
+    .filter(|value| !value.is_empty())
+    .unwrap_or("Guest")
+    .to_string()
+}
+
 fn default_sync_folder(app: &tauri::AppHandle) -> Result<PathBuf, String> {
   if let Some(path) = env_path("WORKBENCH_SYNC_ROOT") {
     return Ok(path);
   }
 
+  let account = active_workbench_account();
+  let account_segment = account_folder_segment(account.as_ref());
   app
     .path()
     .home_dir()
-    .map(|path| path.join("WorkbenchSync"))
+    .map(|path| path.join("WorkbenchSync").join(account_segment))
     .map_err(|error| format!("failed to resolve home directory: {error}"))
 }
 
@@ -123,10 +239,13 @@ fn default_downloads_folder(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     return Ok(path);
   }
 
+  let account = active_workbench_account();
+  let account_segment = account_folder_segment(account.as_ref());
   app
     .path()
     .download_dir()
     .or_else(|_| app.path().home_dir().map(|path| path.join("Downloads")))
+    .map(|path| path.join("Workbench").join(account_segment))
     .map_err(|error| format!("failed to resolve downloads directory: {error}"))
 }
 
@@ -156,7 +275,9 @@ fn configured_daemon_port(port: Option<u16>) -> Result<u16, String> {
         format!("WORKBENCH_DAEMON_HTTP_PORT must be between 1 and 65535, got {trimmed}")
       })?;
       if parsed == 0 {
-        Err("sync daemon status server is disabled because WORKBENCH_DAEMON_HTTP_PORT=0".to_string())
+        Err(
+          "sync daemon status server is disabled because WORKBENCH_DAEMON_HTTP_PORT=0".to_string(),
+        )
       } else {
         Ok(parsed)
       }
@@ -217,7 +338,9 @@ fn read_loopback_status(port: u16) -> Result<serde_json::Value, String> {
   if status_code != "200" {
     let detail = body.trim();
     if detail.is_empty() {
-      return Err(format!("sync daemon status request failed with HTTP {status_code}"));
+      return Err(format!(
+        "sync daemon status request failed with HTTP {status_code}"
+      ));
     }
     return Err(format!(
       "sync daemon status request failed with HTTP {status_code}: {detail}"
@@ -430,8 +553,12 @@ fn resolve_daemon_command(app: Option<&tauri::AppHandle>) -> Result<DaemonComman
   })
 }
 
-fn configure_daemon_env(command: &mut Command, app: Option<&tauri::AppHandle>) -> Result<(), String> {
+fn configure_daemon_env(
+  command: &mut Command,
+  app: Option<&tauri::AppHandle>,
+) -> Result<(), String> {
   let mut sync_root_for_identity: Option<PathBuf> = None;
+  let active_account = active_workbench_account();
   if std::env::var_os("WORKBENCH_DAEMON_HTTP_PORT").is_none() {
     command.env(
       "WORKBENCH_DAEMON_HTTP_PORT",
@@ -448,11 +575,46 @@ fn configure_daemon_env(command: &mut Command, app: Option<&tauri::AppHandle>) -
     command.env("WORKBENCH_DOWNLOADS_DIR", path_to_string(downloads_dir));
   }
 
-  configure_daemon_client_identity_env(command, sync_root_for_identity.as_deref());
+  if std::env::var_os("WORKBENCH_ACCESS_TOKEN").is_none() {
+    if let Some(access_token) = active_account
+      .as_ref()
+      .and_then(|account| account.access_token.as_ref())
+    {
+      command.env("WORKBENCH_ACCESS_TOKEN", access_token);
+    }
+  }
+  if std::env::var_os("WORKBENCH_SYNC_ROOT_ID").is_none() {
+    command.env(
+      "WORKBENCH_SYNC_ROOT_ID",
+      account_sync_root_id(active_account.as_ref()),
+    );
+  }
+  if std::env::var_os("WORKBENCH_SYNC_ROOT_LABEL").is_none() {
+    command.env(
+      "WORKBENCH_SYNC_ROOT_LABEL",
+      format!(
+        "Workbench Sync ({})",
+        account_label(active_account.as_ref())
+      ),
+    );
+  }
+  if std::env::var_os(SECURE_CLIENT_IDENTITY_ENV).is_none() {
+    command.env(SECURE_CLIENT_IDENTITY_ENV, "auto");
+  }
+
+  configure_daemon_client_identity_env(
+    command,
+    sync_root_for_identity.as_deref(),
+    active_account.as_ref(),
+  );
   Ok(())
 }
 
-fn configure_daemon_client_identity_env(command: &mut Command, sync_root: Option<&Path>) {
+fn configure_daemon_client_identity_env(
+  command: &mut Command,
+  sync_root: Option<&Path>,
+  active_account: Option<&ActiveWorkbenchAccount>,
+) {
   let has_parent_client_id = std::env::var_os(LOCAL_CLIENT_ID_ENV).is_some();
   let has_parent_client_token = std::env::var_os(LOCAL_CLIENT_TOKEN_ENV).is_some();
 
@@ -467,6 +629,11 @@ fn configure_daemon_client_identity_env(command: &mut Command, sync_root: Option
     eprintln!(
       "[workbench-native] not injecting secure local daemon client credentials because parent env is incomplete"
     );
+    return;
+  }
+
+  if active_account.is_some() {
+    let _ = sync_root;
     return;
   }
 
@@ -546,10 +713,17 @@ fn normalize_daemon_preferences(value: serde_json::Value) -> serde_json::Value {
     .get("autoStart")
     .and_then(serde_json::Value::as_bool)
     .unwrap_or(false);
+  let resident_mode = value
+    .get("residentMode")
+    .and_then(serde_json::Value::as_bool)
+    .unwrap_or(true);
   serde_json::json!({
     "autoStart": auto_start,
+    "residentMode": resident_mode,
     "syncRoot": normalized_optional_path_string(&value, "syncRoot"),
-    "downloadsDir": normalized_optional_path_string(&value, "downloadsDir")
+    "downloadsDir": normalized_optional_path_string(&value, "downloadsDir"),
+    "syncRootBase": normalized_optional_path_string(&value, "syncRootBase"),
+    "downloadsDirBase": normalized_optional_path_string(&value, "downloadsDirBase")
   })
 }
 
@@ -562,13 +736,29 @@ fn configured_preference_path(preferences: &serde_json::Value, key: &str) -> Opt
     .map(PathBuf::from)
 }
 
-fn configured_sync_folder(app: &tauri::AppHandle, preferences: &serde_json::Value) -> Result<PathBuf, String> {
+fn configured_sync_folder(
+  app: &tauri::AppHandle,
+  preferences: &serde_json::Value,
+) -> Result<PathBuf, String> {
+  if let Some(base) = configured_preference_path(preferences, "syncRootBase") {
+    let account = active_workbench_account();
+    return Ok(base.join(account_folder_segment(account.as_ref())));
+  }
+
   configured_preference_path(preferences, "syncRoot")
     .map(Ok)
     .unwrap_or_else(|| default_sync_folder(app))
 }
 
-fn configured_downloads_folder(app: &tauri::AppHandle, preferences: &serde_json::Value) -> Result<PathBuf, String> {
+fn configured_downloads_folder(
+  app: &tauri::AppHandle,
+  preferences: &serde_json::Value,
+) -> Result<PathBuf, String> {
+  if let Some(base) = configured_preference_path(preferences, "downloadsDirBase") {
+    let account = active_workbench_account();
+    return Ok(base.join(account_folder_segment(account.as_ref())));
+  }
+
   configured_preference_path(preferences, "downloadsDir")
     .map(Ok)
     .unwrap_or_else(|| default_downloads_folder(app))
@@ -630,6 +820,7 @@ fn daemon_preferences_response(
 ) -> Result<serde_json::Value, String> {
   let effective_sync_root = configured_sync_folder(app, &preferences)?;
   let effective_downloads_dir = configured_downloads_folder(app, &preferences)?;
+  let active_account = active_workbench_account();
   let mut response = preferences.as_object().cloned().unwrap_or_default();
   response.insert(
     "effectiveSyncRoot".to_string(),
@@ -638,6 +829,14 @@ fn daemon_preferences_response(
   response.insert(
     "effectiveDownloadsDir".to_string(),
     serde_json::Value::String(path_to_string(effective_downloads_dir)),
+  );
+  response.insert(
+    "accountFolderSegment".to_string(),
+    serde_json::Value::String(account_folder_segment(active_account.as_ref())),
+  );
+  response.insert(
+    "accountLabel".to_string(),
+    serde_json::Value::String(account_label(active_account.as_ref())),
   );
   Ok(serde_json::Value::Object(response))
 }
@@ -648,10 +847,18 @@ fn read_daemon_preferences_from_disk(app: &tauri::AppHandle) -> Result<serde_jso
     return Ok(normalize_daemon_preferences(serde_json::json!({})));
   }
 
-  let raw = fs::read_to_string(&path)
-    .map_err(|error| format!("failed to read daemon preferences {}: {error}", path.display()))?;
-  let parsed = serde_json::from_str::<serde_json::Value>(&raw)
-    .map_err(|error| format!("failed to parse daemon preferences {}: {error}", path.display()))?;
+  let raw = fs::read_to_string(&path).map_err(|error| {
+    format!(
+      "failed to read daemon preferences {}: {error}",
+      path.display()
+    )
+  })?;
+  let parsed = serde_json::from_str::<serde_json::Value>(&raw).map_err(|error| {
+    format!(
+      "failed to parse daemon preferences {}: {error}",
+      path.display()
+    )
+  })?;
   Ok(normalize_daemon_preferences(parsed))
 }
 
@@ -663,12 +870,20 @@ fn write_daemon_preferences_to_disk(
   let parent = path
     .parent()
     .ok_or_else(|| format!("daemon preferences path has no parent: {}", path.display()))?;
-  fs::create_dir_all(parent)
-    .map_err(|error| format!("failed to create daemon preferences directory {}: {error}", parent.display()))?;
+  fs::create_dir_all(parent).map_err(|error| {
+    format!(
+      "failed to create daemon preferences directory {}: {error}",
+      parent.display()
+    )
+  })?;
   let serialized = serde_json::to_string_pretty(preferences)
     .map_err(|error| format!("failed to serialize daemon preferences: {error}"))?;
-  fs::write(&path, format!("{serialized}\n"))
-    .map_err(|error| format!("failed to write daemon preferences {}: {error}", path.display()))
+  fs::write(&path, format!("{serialized}\n")).map_err(|error| {
+    format!(
+      "failed to write daemon preferences {}: {error}",
+      path.display()
+    )
+  })
 }
 
 fn set_daemon_preference_path(
@@ -682,11 +897,30 @@ fn set_daemon_preference_path(
     .ok_or_else(|| "daemon preferences were not an object".to_string())?;
   match path {
     Some(path) => {
-      object.insert(key.to_string(), serde_json::Value::String(path_to_string(path)));
+      object.insert(
+        key.to_string(),
+        serde_json::Value::String(path_to_string(path)),
+      );
     }
     None => {
       object.insert(key.to_string(), serde_json::Value::Null);
     }
+  }
+  let preferences = normalize_daemon_preferences(preferences);
+  write_daemon_preferences_to_disk(app, &preferences)?;
+  daemon_preferences_response(app, preferences)
+}
+
+fn reset_daemon_preference_paths(
+  app: &tauri::AppHandle,
+  keys: &[&str],
+) -> Result<serde_json::Value, String> {
+  let mut preferences = read_daemon_preferences_from_disk(app)?;
+  let object = preferences
+    .as_object_mut()
+    .ok_or_else(|| "daemon preferences were not an object".to_string())?;
+  for key in keys {
+    object.insert((*key).to_string(), serde_json::Value::Null);
   }
   let preferences = normalize_daemon_preferences(preferences);
   write_daemon_preferences_to_disk(app, &preferences)?;
@@ -831,7 +1065,7 @@ pub async fn choose_sync_folder(app: tauri::AppHandle) -> Result<Option<String>,
         .into_path()
         .map_err(|error| format!("invalid folder path: {error}"))?;
       let selected = path_to_string(path.clone());
-      set_daemon_preference_path(&app, "syncRoot", Some(path))?;
+      set_daemon_preference_path(&app, "syncRootBase", Some(path))?;
       Ok(Some(selected))
     }
     None => Ok(None),
@@ -848,7 +1082,7 @@ pub async fn choose_downloads_folder(app: tauri::AppHandle) -> Result<Option<Str
         .into_path()
         .map_err(|error| format!("invalid folder path: {error}"))?;
       let selected = path_to_string(path.clone());
-      set_daemon_preference_path(&app, "downloadsDir", Some(path))?;
+      set_daemon_preference_path(&app, "downloadsDirBase", Some(path))?;
       Ok(Some(selected))
     }
     None => Ok(None),
@@ -857,12 +1091,12 @@ pub async fn choose_downloads_folder(app: tauri::AppHandle) -> Result<Option<Str
 
 #[tauri::command]
 pub fn reset_sync_folder(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-  set_daemon_preference_path(&app, "syncRoot", None)
+  reset_daemon_preference_paths(&app, &["syncRoot", "syncRootBase"])
 }
 
 #[tauri::command]
 pub fn reset_downloads_folder(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-  set_daemon_preference_path(&app, "downloadsDir", None)
+  reset_daemon_preference_paths(&app, &["downloadsDir", "downloadsDirBase"])
 }
 
 #[tauri::command]
@@ -901,6 +1135,35 @@ pub fn set_daemon_auto_start(
   let preferences = normalize_daemon_preferences(preferences);
   write_daemon_preferences_to_disk(&app, &preferences)?;
   daemon_preferences_response(&app, preferences)
+}
+
+#[tauri::command]
+pub fn set_daemon_resident_mode(
+  app: tauri::AppHandle,
+  resident_mode: bool,
+) -> Result<serde_json::Value, String> {
+  let mut preferences = read_daemon_preferences_from_disk(&app)?;
+  let object = preferences
+    .as_object_mut()
+    .ok_or_else(|| "daemon preferences were not an object".to_string())?;
+  object.insert(
+    "residentMode".to_string(),
+    serde_json::Value::Bool(resident_mode),
+  );
+  let preferences = normalize_daemon_preferences(preferences);
+  write_daemon_preferences_to_disk(&app, &preferences)?;
+  daemon_preferences_response(&app, preferences)
+}
+
+pub fn daemon_resident_mode_enabled(app: &tauri::AppHandle) -> bool {
+  read_daemon_preferences_from_disk(app)
+    .ok()
+    .and_then(|preferences| {
+      preferences
+        .get("residentMode")
+        .and_then(serde_json::Value::as_bool)
+    })
+    .unwrap_or(true)
 }
 
 #[tauri::command]
@@ -981,6 +1244,37 @@ mod tests {
     assert!(identity.is_none());
     fs::remove_dir_all(root).ok();
   }
+
+  #[test]
+  fn builds_account_scoped_folder_segments() {
+    let account = ActiveWorkbenchAccount {
+      user_id: "user-1234567890abcdef".to_string(),
+      username: "Hayato Nakanishi".to_string(),
+      access_token: None,
+    };
+
+    assert_eq!(
+      account_folder_segment(Some(&account)),
+      "Hayato-Nakanishi-user-1234567"
+    );
+    assert_eq!(
+      account_sync_root_id(Some(&account)),
+      "account-user-1234567890abcdef"
+    );
+    assert_eq!(account_folder_segment(None), "guest");
+  }
+
+  #[test]
+  fn parses_active_workbench_account_from_session_json() {
+    let account = parse_active_workbench_account(
+      r#"{"user":{"id":"core-user-1","username":"alice"},"accessToken":"access-1"}"#,
+    )
+    .expect("account should parse");
+
+    assert_eq!(account.user_id, "core-user-1");
+    assert_eq!(account.username, "alice");
+    assert_eq!(account.access_token.as_deref(), Some("access-1"));
+  }
 }
 
 /// Open a native Save-As dialog and write `bytes` to the chosen path.
@@ -1002,8 +1296,7 @@ pub async fn save_file_with_dialog(
       let path_buf = file_path
         .into_path()
         .map_err(|e| format!("invalid path: {e}"))?;
-      std::fs::write(&path_buf, &bytes)
-        .map_err(|e| format!("failed to write file: {e}"))?;
+      std::fs::write(&path_buf, &bytes).map_err(|e| format!("failed to write file: {e}"))?;
       Ok(true)
     }
     None => Ok(false), // user cancelled

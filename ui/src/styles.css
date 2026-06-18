@@ -15,6 +15,34 @@ body {
   color: var(--text);
 }
 
+* {
+  scrollbar-color: rgba(124, 145, 174, 0.72) rgba(8, 16, 35, 0.84);
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: rgba(8, 16, 35, 0.84);
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 2px solid rgba(8, 16, 35, 0.84);
+  border-radius: 999px;
+  background: rgba(124, 145, 174, 0.72);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.86);
+}
+
+*::-webkit-scrollbar-button {
+  display: none;
+}
+
 a { color: #67e8f9; text-decoration: none; }
 a:hover { text-decoration: underline; }
 button, input, select, textarea { font: inherit; }

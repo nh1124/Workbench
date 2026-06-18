@@ -375,10 +375,15 @@ export interface LocalJobRecord {
 
 export interface LocalDaemonPreferences {
   autoStart: boolean;
+  residentMode?: boolean;
   syncRoot?: string | null;
   downloadsDir?: string | null;
+  syncRootBase?: string | null;
+  downloadsDirBase?: string | null;
   effectiveSyncRoot?: string;
   effectiveDownloadsDir?: string;
+  accountFolderSegment?: string;
+  accountLabel?: string;
 }
 
 export interface LocalJobEventRecord {

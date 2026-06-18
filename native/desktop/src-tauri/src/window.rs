@@ -57,6 +57,9 @@ pub fn open_new_main_window(app: &tauri::AppHandle) -> Result<(), String> {
           if let WindowEvent::CloseRequested { api, .. } = event {
             // Keep exactly one resident main window alive.
             // If this is the last main window, hide it instead of closing.
+            if !crate::commands::daemon_resident_mode_enabled(event_window.app_handle()) {
+              return;
+            }
             let main_window_count = event_window
               .app_handle()
               .webview_windows()

@@ -1,6 +1,6 @@
 .settings-shell {
   display: grid;
-  grid-template-columns: 164px minmax(0, 1fr);
+  grid-template-columns: 188px minmax(0, 1fr);
   gap: 0.64rem;
   min-height: 0;
 }
@@ -70,6 +70,8 @@
 
 .settings-content {
   min-width: 0;
+  width: 100%;
+  max-width: 1360px;
 }
 
 .services-page-title {
@@ -91,8 +93,8 @@
 }
 
 .general-localization-panel {
-  width: min(620px, 47vw);
-  min-width: 430px;
+  width: 100%;
+  min-width: 0;
   max-width: none;
 }
 
@@ -105,6 +107,7 @@
 
 .general-localization-fields {
   display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 0.86rem;
   margin-top: 0.15rem;
 }
@@ -197,13 +200,15 @@
   border-radius: 0;
   background: transparent;
   padding: 0;
-  width: min(620px, 47vw);
-  min-width: 430px;
+  width: 100%;
+  min-width: 0;
 }
 
 .integration-list {
   display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 0.78rem;
+  align-items: start;
 }
 
 .integration-card {
@@ -467,15 +472,17 @@
 }
 
 .account-page-panel {
-  width: min(560px, 42vw);
-  min-width: 390px;
+  width: 100%;
+  min-width: 0;
   padding-bottom: 1rem;
 }
 
 .account-tiles {
   display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 0.78rem;
-  width: 96%;
+  width: 100%;
+  align-items: start;
 }
 
 .account-tile {
@@ -507,8 +514,8 @@
 }
 
 .account-tile input {
-  width: 93%;
-  max-width: 460px;
+  width: 100%;
+  max-width: none;
   height: 2.5rem;
   border-radius: 12px;
   background: #1f2a41;
@@ -534,6 +541,7 @@
 }
 
 .account-local-clients,
+.account-local-audit,
 .account-local-jobs,
 .account-local-daemon {
   margin-top: 0.9rem;
@@ -543,6 +551,24 @@
   padding: 1rem 1.05rem;
   display: grid;
   gap: 0.72rem;
+}
+
+.settings-wide-panel {
+  max-width: none;
+}
+
+.settings-tile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 0.78rem;
+  align-items: start;
+}
+
+.settings-tile-grid > .account-local-clients,
+.settings-tile-grid > .account-local-audit,
+.settings-tile-grid > .account-local-jobs,
+.settings-wide-panel > .account-local-daemon {
+  margin-top: 0;
 }
 
 .account-local-clients-header {
@@ -869,15 +895,13 @@
   gap: 0.42rem;
 }
 
-.account-local-daemon-url,
-.account-local-daemon-token {
+.account-local-daemon-url {
   display: flex;
   gap: 0.5rem;
   align-items: center;
 }
 
-.account-local-daemon-url input,
-.account-local-daemon-token input {
+.account-local-daemon-url input {
   flex: 1;
   min-width: 0;
   height: 2.2rem;
@@ -889,7 +913,6 @@
 }
 
 .account-local-daemon-url button,
-.account-local-daemon-token button,
 .account-local-folder-actions button,
 .account-local-native-actions button,
 .account-local-confirmation-actions button,
@@ -1114,8 +1137,7 @@
     justify-items: start;
   }
 
-  .account-local-daemon-url,
-  .account-local-daemon-token {
+  .account-local-daemon-url {
     flex-direction: column;
     align-items: stretch;
   }

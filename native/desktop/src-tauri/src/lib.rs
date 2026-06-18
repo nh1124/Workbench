@@ -117,6 +117,7 @@ pub fn run() {
       commands::read_daemon_status,
       commands::read_daemon_preferences,
       commands::set_daemon_auto_start,
+      commands::set_daemon_resident_mode,
       commands::start_daemon,
       commands::stop_daemon,
       commands::save_file_with_dialog,

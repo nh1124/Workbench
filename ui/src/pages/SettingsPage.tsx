@@ -10,11 +10,9 @@ import {
   readWorkbenchSession
 } from "../lib/api";
 import {
-  getWorkbenchLocalDaemonTokenInitialValue,
   getWorkbenchLocalDaemonUrlInitialValue,
   getWorkbenchLocalRoutingMode,
   setWorkbenchLocalRoutingMode,
-  setWorkbenchLocalDaemonToken,
   setWorkbenchLocalDaemonUrl,
   type WorkbenchLocalRoutingMode
 } from "../config/services";
@@ -42,10 +40,10 @@ import type {
 } from "../types/models";
 import "./SettingsPage.css";
 
-type SettingsTab = "general" | "services" | "account";
+type SettingsTab = "general" | "services" | "account" | "sync" | "activity";
 type CategoryChip = "all" | string;
 const LOCAL_INTEGRATIONS_KEY = "workbench-integration-configs";
-const SETTINGS_TABS: SettingsTab[] = ["general", "services", "account"];
+const SETTINGS_TABS: SettingsTab[] = ["general", "services", "account", "sync", "activity"];
 
 function parseSettingsTab(search: string): SettingsTab | undefined {
   const value = new URLSearchParams(search).get("tab");
@@ -112,6 +110,25 @@ const settingsTabIconMap: Record<SettingsTab, ReactNode> = {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
       <circle cx="12" cy="8" r="3.2" />
       <path d="M5 19c1.4-2.6 4-4 7-4s5.6 1.4 7 4" />
+    </svg>
+  ),
+  sync: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <path d="M7 7h9.5a3.5 3.5 0 0 1 0 7H15" />
+      <path d="m10 4-3 3 3 3" />
+      <path d="M17 17H7.5a3.5 3.5 0 0 1 0-7H9" />
+      <path d="m14 20 3-3-3-3" />
+    </svg>
+  ),
+  activity: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <path d="M4 19h16" />
+      <path d="M7 16V8" />
+      <path d="M12 16V5" />
+      <path d="M17 16v-6" />
+      <circle cx="7" cy="8" r="1.4" />
+      <circle cx="12" cy="5" r="1.4" />
+      <circle cx="17" cy="10" r="1.4" />
     </svg>
   )
 };
@@ -196,7 +213,6 @@ export function SettingsPage() {
   const [localClientsLoading, setLocalClientsLoading] = useState(false);
   const [localRoutingMode, setLocalRoutingMode] = useState<WorkbenchLocalRoutingMode>(getWorkbenchLocalRoutingMode());
   const [localDaemonUrlInput, setLocalDaemonUrlInput] = useState(getWorkbenchLocalDaemonUrlInitialValue());
-  const [localDaemonTokenInput, setLocalDaemonTokenInput] = useState(getWorkbenchLocalDaemonTokenInitialValue());
   const [localDaemonStatus, setLocalDaemonStatus] = useState<LocalDaemonStatus | undefined>(undefined);
   const [localDaemonConflicts, setLocalDaemonConflicts] = useState<LocalDaemonConflictRecord[]>([]);
   const [localDaemonPendingJobConfirmations, setLocalDaemonPendingJobConfirmations] = useState<
@@ -206,6 +222,7 @@ export function SettingsPage() {
   const [localDaemonLoading, setLocalDaemonLoading] = useState(false);
   const [localDaemonResolving, setLocalDaemonResolving] = useState<Record<string, boolean>>({});
   const [localDaemonConfirmingJob, setLocalDaemonConfirmingJob] = useState<Record<string, boolean>>({});
+  const [localDaemonResidentMode, setLocalDaemonResidentMode] = useState(true);
   const [localDaemonAutoStart, setLocalDaemonAutoStart] = useState(false);
   const [localDaemonPreferences, setLocalDaemonPreferences] = useState<LocalDaemonPreferences | undefined>(undefined);
 
@@ -237,7 +254,12 @@ export function SettingsPage() {
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
-    if (activeTab !== "account" || params.get("section") !== "sync-daemon") {
+    if (params.get("section") !== "sync-daemon") {
+      return;
+    }
+
+    if (activeTab !== "sync") {
+      setActiveTab("sync");
       return;
     }
 
@@ -256,6 +278,7 @@ export function SettingsPage() {
     nativeDaemonApi.readPreferences()
       .then((preferences) => {
         if (!cancelled) {
+          setLocalDaemonResidentMode(preferences.residentMode ?? true);
           setLocalDaemonAutoStart(preferences.autoStart);
           setLocalDaemonPreferences(preferences);
         }
@@ -317,7 +340,9 @@ export function SettingsPage() {
   const tabItems: Array<{ id: SettingsTab; label: string }> = [
     { id: "general", label: "General" },
     { id: "services", label: "Services" },
-    { id: "account", label: "Account" }
+    { id: "account", label: "Account" },
+    { id: "sync", label: "Local Sync" },
+    { id: "activity", label: "Activity" }
   ];
 
   const sortedManifests = useMemo(
@@ -449,17 +474,6 @@ export function SettingsPage() {
     }
   };
 
-  const saveLocalDaemonToken = () => {
-    const normalized = setWorkbenchLocalDaemonToken(localDaemonTokenInput);
-    setLocalDaemonTokenInput(normalized);
-    setLocalDaemonMessage(
-      normalized
-        ? "Local daemon token saved."
-        : "Local daemon token cleared. Unauthenticated dev mode is active when the daemon has no token."
-    );
-    void refreshLocalDaemon(false);
-  };
-
   const changeLocalRoutingMode = (mode: WorkbenchLocalRoutingMode) => {
     try {
       if (mode !== "core") {
@@ -483,10 +497,29 @@ export function SettingsPage() {
     }
   };
 
+  const toggleNativeDaemonResidentMode = async (enabled: boolean) => {
+    setLocalDaemonMessage("");
+    try {
+      const preferences = await nativeDaemonApi.setResidentMode(enabled);
+      setLocalDaemonResidentMode(preferences.residentMode ?? true);
+      setLocalDaemonAutoStart(preferences.autoStart);
+      setLocalDaemonPreferences(preferences);
+      setLocalDaemonMessage(
+        preferences.residentMode === false
+          ? "Background resident mode disabled."
+          : "Workbench will stay available from the tray."
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to update resident mode";
+      setLocalDaemonMessage(message);
+    }
+  };
+
   const toggleNativeDaemonAutoStart = async (enabled: boolean) => {
     setLocalDaemonMessage("");
     try {
       const preferences = await nativeDaemonApi.setAutoStart(enabled);
+      setLocalDaemonResidentMode(preferences.residentMode ?? true);
       setLocalDaemonAutoStart(preferences.autoStart);
       setLocalDaemonPreferences(preferences);
       setLocalDaemonMessage(preferences.autoStart ? "Daemon auto-start enabled." : "Daemon auto-start disabled.");
@@ -501,6 +534,7 @@ export function SettingsPage() {
       return undefined;
     }
     const preferences = await nativeDaemonApi.readPreferences();
+    setLocalDaemonResidentMode(preferences.residentMode ?? true);
     setLocalDaemonAutoStart(preferences.autoStart);
     setLocalDaemonPreferences(preferences);
     return preferences;
@@ -515,7 +549,7 @@ export function SettingsPage() {
       }
       setLocalDaemonMessage(
         path
-          ? `Sync folder saved: ${path}. Restart the daemon if it is already running.`
+          ? `Sync folder base saved: ${path}. The account folder is created under it. Restart the daemon if it is already running.`
           : "Sync folder selection cancelled."
       );
     } catch (error) {
@@ -533,7 +567,7 @@ export function SettingsPage() {
       }
       setLocalDaemonMessage(
         path
-          ? `Downloads folder saved: ${path}. Restart the daemon if it is already running.`
+          ? `Downloads folder base saved: ${path}. The account folder is created under it. Restart the daemon if it is already running.`
           : "Downloads folder selection cancelled."
       );
     } catch (error) {
@@ -547,6 +581,7 @@ export function SettingsPage() {
     try {
       const preferences = await nativeDaemonApi.resetSyncFolder();
       setLocalDaemonPreferences(preferences);
+      setLocalDaemonResidentMode(preferences.residentMode ?? true);
       setLocalDaemonAutoStart(preferences.autoStart);
       setLocalDaemonMessage("Sync folder reset to the per-user default. Restart the daemon if it is already running.");
     } catch (error) {
@@ -560,6 +595,7 @@ export function SettingsPage() {
     try {
       const preferences = await nativeDaemonApi.resetDownloadsFolder();
       setLocalDaemonPreferences(preferences);
+      setLocalDaemonResidentMode(preferences.residentMode ?? true);
       setLocalDaemonAutoStart(preferences.autoStart);
       setLocalDaemonMessage("Downloads folder reset to the per-user default. Restart the daemon if it is already running.");
     } catch (error) {
@@ -930,13 +966,18 @@ export function SettingsPage() {
     }
   };
 
-  const savedSyncRoot = localDaemonPreferences?.syncRoot || "";
-  const savedDownloadsDir = localDaemonPreferences?.downloadsDir || "";
+  const savedSyncRootBase = localDaemonPreferences?.syncRootBase || "";
+  const savedDownloadsDirBase = localDaemonPreferences?.downloadsDirBase || "";
+  const legacySavedSyncRoot = localDaemonPreferences?.syncRoot || "";
+  const legacySavedDownloadsDir = localDaemonPreferences?.downloadsDir || "";
+  const savedSyncRoot = savedSyncRootBase || legacySavedSyncRoot;
+  const savedDownloadsDir = savedDownloadsDirBase || legacySavedDownloadsDir;
   const effectiveSyncRoot =
     localDaemonStatus?.syncRoot || localDaemonPreferences?.effectiveSyncRoot || savedSyncRoot || "WorkbenchSync";
   const effectiveDownloadsDir =
     localDaemonStatus?.downloadsDir || localDaemonPreferences?.effectiveDownloadsDir || savedDownloadsDir || "Downloads";
   const folderPathSource = localDaemonStatus ? "Current daemon" : "Next daemon start";
+  const accountFolderLabel = localDaemonPreferences?.accountLabel || session?.username || "Guest";
 
   return (
     <section className="settings-shell">
@@ -1288,6 +1329,16 @@ export function SettingsPage() {
               </section>
             </div>
 
+            {session ? <p className="info">Signed in as {session.username}</p> : null}
+            {accountMessage ? <p className="info">{accountMessage}</p> : null}
+          </article>
+        ) : null}
+
+        {activeTab === "sync" ? (
+          <article className="panel services-manifest-panel account-page-panel settings-wide-panel">
+            <p className="integration-subtitle">Local client registration, daemon routing and sync folder controls.</p>
+
+            <div className="settings-tile-grid">
             <section className="account-local-clients">
               <div className="account-local-clients-header">
                 <div>
@@ -1336,7 +1387,15 @@ export function SettingsPage() {
               )}
               {localClientsMessage ? <p className="info">{localClientsMessage}</p> : null}
             </section>
+            </div>
+          </article>
+        ) : null}
 
+        {activeTab === "activity" ? (
+          <article className="panel services-manifest-panel account-page-panel settings-wide-panel">
+            <p className="integration-subtitle">Recent local client, daemon and file job events.</p>
+
+            <div className="settings-tile-grid">
             <section className="account-local-audit">
               <div className="account-local-clients-header">
                 <div>
@@ -1402,7 +1461,12 @@ export function SettingsPage() {
                 </div>
               )}
             </section>
+            </div>
+          </article>
+        ) : null}
 
+        {activeTab === "sync" ? (
+          <article className="panel services-manifest-panel account-page-panel settings-wide-panel">
             <section className="account-local-daemon" ref={localDaemonSectionRef}>
               <div className="account-local-clients-header">
                 <div>
@@ -1443,6 +1507,25 @@ export function SettingsPage() {
 
               <div className="account-local-mode-control">
                 <div>
+                  <strong>Background Resident</strong>
+                  <small>{nativeRuntimeAvailable ? "Keep Workbench available from the tray" : "Desktop runtime only"}</small>
+                </div>
+                <label className="integration-switch">
+                  <input
+                    type="checkbox"
+                    checked={localDaemonResidentMode}
+                    disabled={!nativeRuntimeAvailable}
+                    onChange={(event) => void toggleNativeDaemonResidentMode(event.target.checked)}
+                  />
+                  <span className="integration-switch-slider" aria-hidden="true" />
+                  <span className="sr-only">
+                    {localDaemonResidentMode ? "Disable background resident mode" : "Enable background resident mode"}
+                  </span>
+                </label>
+              </div>
+
+              <div className="account-local-mode-control">
+                <div>
                   <strong>Auto-start Daemon</strong>
                   <small>{nativeRuntimeAvailable ? "Starts with desktop app" : "Desktop runtime only"}</small>
                 </div>
@@ -1464,15 +1547,23 @@ export function SettingsPage() {
                 <article className="account-local-folder-card">
                   <div>
                     <strong>Sync Folder</strong>
-                    <small>{savedSyncRoot ? "Custom folder" : "Per-user default"}</small>
+                    <small>
+                      {savedSyncRootBase
+                        ? `Custom base / ${accountFolderLabel}`
+                        : legacySavedSyncRoot
+                          ? "Legacy custom folder"
+                          : `Per-account default / ${accountFolderLabel}`}
+                    </small>
                   </div>
                   <code>{effectiveSyncRoot}</code>
-                  {localDaemonStatus && savedSyncRoot && localDaemonStatus.syncRoot !== savedSyncRoot ? (
-                    <small className="account-local-folder-next">Next start: {savedSyncRoot}</small>
+                  {savedSyncRootBase ? <small className="account-local-folder-next">Base: {savedSyncRootBase}</small> : null}
+                  {localDaemonStatus && localDaemonStatus.syncRoot !== effectiveSyncRoot ? (
+                    <small className="account-local-folder-next">Next start: {effectiveSyncRoot}</small>
                   ) : null}
                   <div className="account-local-folder-meta">
                     <span>{folderPathSource}</span>
-                    {localDaemonStatus && savedSyncRoot && localDaemonStatus.syncRoot !== savedSyncRoot ? (
+                    <span>{localDaemonPreferences?.accountFolderSegment ?? "account-scoped"}</span>
+                    {localDaemonStatus && localDaemonStatus.syncRoot !== effectiveSyncRoot ? (
                       <span>Restart pending</span>
                     ) : null}
                   </div>
@@ -1496,15 +1587,23 @@ export function SettingsPage() {
                 <article className="account-local-folder-card">
                   <div>
                     <strong>Downloads Folder</strong>
-                    <small>{savedDownloadsDir ? "Custom folder" : "Per-user default"}</small>
+                    <small>
+                      {savedDownloadsDirBase
+                        ? `Custom base / ${accountFolderLabel}`
+                        : legacySavedDownloadsDir
+                          ? "Legacy custom folder"
+                          : `Per-account default / ${accountFolderLabel}`}
+                    </small>
                   </div>
                   <code>{effectiveDownloadsDir}</code>
-                  {localDaemonStatus && savedDownloadsDir && localDaemonStatus.downloadsDir !== savedDownloadsDir ? (
-                    <small className="account-local-folder-next">Next start: {savedDownloadsDir}</small>
+                  {savedDownloadsDirBase ? <small className="account-local-folder-next">Base: {savedDownloadsDirBase}</small> : null}
+                  {localDaemonStatus && localDaemonStatus.downloadsDir !== effectiveDownloadsDir ? (
+                    <small className="account-local-folder-next">Next start: {effectiveDownloadsDir}</small>
                   ) : null}
                   <div className="account-local-folder-meta">
                     <span>{folderPathSource}</span>
-                    {localDaemonStatus && savedDownloadsDir && localDaemonStatus.downloadsDir !== savedDownloadsDir ? (
+                    <span>{localDaemonPreferences?.accountFolderSegment ?? "account-scoped"}</span>
+                    {localDaemonStatus && localDaemonStatus.downloadsDir !== effectiveDownloadsDir ? (
                       <span>Restart pending</span>
                     ) : null}
                   </div>
@@ -1537,18 +1636,6 @@ export function SettingsPage() {
                   placeholder="http://127.0.0.1:35780"
                 />
                 <button type="button" onClick={saveLocalDaemonUrl}>Save URL</button>
-              </div>
-
-              <div className="account-local-daemon-token">
-                <input
-                  type="password"
-                  value={localDaemonTokenInput}
-                  onChange={(event) => setLocalDaemonTokenInput(event.target.value)}
-                  placeholder="Local daemon API token"
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-                <button type="button" onClick={saveLocalDaemonToken}>Save Token</button>
               </div>
 
               <div className="account-local-native-actions">
@@ -1689,9 +1776,6 @@ export function SettingsPage() {
               </div>
               {localDaemonMessage ? <p className="info">{localDaemonMessage}</p> : null}
             </section>
-
-            {session ? <p className="info">Signed in as {session.username}</p> : null}
-            {accountMessage ? <p className="info">{accountMessage}</p> : null}
           </article>
         ) : null}
       </div>
