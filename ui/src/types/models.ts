@@ -391,6 +391,26 @@ export interface LocalJobEventRecord {
   createdAt: string;
 }
 
+export type LocalJobConfirmationPolicy = "off" | "downloads" | "all";
+
+export interface LocalDaemonPendingJobConfirmation {
+  jobId: string;
+  kind: LocalJobRecord["kind"];
+  target: LocalJobRecord["target"];
+  status: "pending_confirmation";
+  requestedAt: string;
+  reason: string;
+  destinationRoot: string;
+  requestedFilename?: string;
+  payload: {
+    artifactItemId?: string;
+    taskId?: string;
+    attachmentId?: string;
+    domain?: string;
+    filename?: string;
+  };
+}
+
 export interface LocalDaemonStatus {
   status: string;
   coreUrl: string;
@@ -400,6 +420,8 @@ export interface LocalDaemonStatus {
   watchEnabled?: boolean;
   watcherActive?: boolean;
   watchDebounceMs?: number;
+  localJobConfirmationPolicy?: LocalJobConfirmationPolicy;
+  localJobConfirmationsPending?: number;
   localClientId?: string;
   lastHeartbeatAt?: string;
   lastClaimAt?: string;

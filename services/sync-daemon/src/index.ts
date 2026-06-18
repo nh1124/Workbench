@@ -61,12 +61,20 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 loadEnv({ path: resolve(__dirname, "../.env") });
 
-type LocalJob = {
+export type LocalJob = {
   id: string;
   kind: "download_artifact" | "download_task_attachment" | "materialize_resource";
   target: "downloads" | "sync-folder";
   payload: Record<string, unknown>;
   status: string;
+};
+
+export type LocalJobConfirmationPolicy = "off" | "downloads" | "all";
+
+type PendingLocalJobConfirmation = {
+  job: LocalJob;
+  requestedAt: string;
+  reason: string;
 };
 
 type LocalArtifactItem = {
@@ -105,6 +113,7 @@ export type DaemonConfig = {
   watchDebounceMs: number;
   persistClientIdentity?: boolean;
   secureClientIdentity?: SecureIdentityMode;
+  localJobConfirmationPolicy?: LocalJobConfirmationPolicy;
 };
 
 export type DaemonState = {
@@ -130,6 +139,7 @@ export type DaemonState = {
   tickQueued: boolean;
   tickTimer?: ReturnType<typeof setTimeout>;
   watcher?: FSWatcher;
+  pendingJobConfirmations?: Map<string, PendingLocalJobConfirmation>;
 };
 
 function env(name: string): string | undefined {
@@ -145,6 +155,20 @@ function envBoolean(value: string | undefined, fallback: boolean): boolean {
   return fallback;
 }
 
+export function parseLocalJobConfirmationPolicy(value: string | undefined): LocalJobConfirmationPolicy {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized || normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off") {
+    return "off";
+  }
+  if (normalized === "downloads" || normalized === "download" || normalized === "outside-sync-folder") {
+    return "downloads";
+  }
+  if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on" || normalized === "all") {
+    return "all";
+  }
+  return "off";
+}
+
 function readConfig(): DaemonConfig {
   const syncRoot = resolve(env("WORKBENCH_SYNC_ROOT") ?? join(homedir(), "WorkbenchSync"));
   const downloadsDir = resolve(env("WORKBENCH_DOWNLOADS_DIR") ?? join(homedir(), "Downloads"));
@@ -155,6 +179,7 @@ function readConfig(): DaemonConfig {
   const watchEnabledRaw = env("WORKBENCH_SYNC_WATCH")?.toLowerCase();
   const persistIdentityRaw = env("WORKBENCH_PERSIST_CLIENT_IDENTITY") ?? env("WORKBENCH_LOCAL_CLIENT_IDENTITY_FILE");
   const secureIdentityRaw = env("WORKBENCH_SECURE_CLIENT_IDENTITY") ?? env("WORKBENCH_LOCAL_CLIENT_SECURE_STORAGE");
+  const localJobConfirmationRaw = env("WORKBENCH_LOCAL_JOB_CONFIRMATION") ?? env("WORKBENCH_LOCAL_JOB_CONFIRMATION_POLICY");
   return {
     coreUrl: (env("WORKBENCH_CORE_URL") ?? "http://localhost:3000").replace(/\/+$/, ""),
     accessToken: env("WORKBENCH_ACCESS_TOKEN"),
@@ -174,7 +199,8 @@ function readConfig(): DaemonConfig {
     watchEnabled: watchEnabledRaw !== "0" && watchEnabledRaw !== "false" && watchEnabledRaw !== "off",
     watchDebounceMs: Number.isFinite(watchDebounceRaw) ? Math.max(100, watchDebounceRaw) : 800,
     persistClientIdentity: envBoolean(persistIdentityRaw, true),
-    secureClientIdentity: parseSecureIdentityMode(secureIdentityRaw)
+    secureClientIdentity: parseSecureIdentityMode(secureIdentityRaw),
+    localJobConfirmationPolicy: parseLocalJobConfirmationPolicy(localJobConfirmationRaw)
   };
 }
 
@@ -4884,6 +4910,75 @@ async function failJob(state: DaemonState, job: LocalJob, error: unknown): Promi
   });
 }
 
+function pendingJobConfirmations(state: DaemonState): Map<string, PendingLocalJobConfirmation> {
+  if (!state.pendingJobConfirmations) {
+    state.pendingJobConfirmations = new Map();
+  }
+  return state.pendingJobConfirmations;
+}
+
+export function localJobRequiresConfirmation(config: DaemonConfig, job: LocalJob): boolean {
+  const policy = config.localJobConfirmationPolicy ?? "off";
+  if (policy === "off") return false;
+  if (policy === "all") return true;
+  return job.target === "downloads";
+}
+
+function localJobConfirmationReason(job: LocalJob): string {
+  if (job.target === "downloads") {
+    return "This job saves a file to the configured downloads folder.";
+  }
+  return "This job saves a file on this device.";
+}
+
+function destinationRootForLocalJob(config: DaemonConfig, job: LocalJob): string {
+  return job.target === "sync-folder" ? config.syncRoot : config.downloadsDir;
+}
+
+function pendingLocalJobConfirmationPayload(
+  state: DaemonState,
+  pending: PendingLocalJobConfirmation
+): Record<string, unknown> {
+  const requestedFilename = typeof pending.job.payload.filename === "string"
+    ? sanitizeFileName(pending.job.payload.filename)
+    : undefined;
+  return {
+    jobId: pending.job.id,
+    kind: pending.job.kind,
+    target: pending.job.target,
+    status: "pending_confirmation",
+    requestedAt: pending.requestedAt,
+    reason: pending.reason,
+    destinationRoot: destinationRootForLocalJob(state.config, pending.job),
+    requestedFilename,
+    payload: {
+      artifactItemId: typeof pending.job.payload.artifactItemId === "string" ? pending.job.payload.artifactItemId : undefined,
+      taskId: typeof pending.job.payload.taskId === "string" ? pending.job.payload.taskId : undefined,
+      attachmentId: typeof pending.job.payload.attachmentId === "string" ? pending.job.payload.attachmentId : undefined,
+      domain: typeof pending.job.payload.domain === "string" ? pending.job.payload.domain : undefined,
+      filename: typeof pending.job.payload.filename === "string" ? pending.job.payload.filename : undefined
+    }
+  };
+}
+
+export function listPendingLocalJobConfirmations(state: DaemonState): Record<string, unknown>[] {
+  return [...pendingJobConfirmations(state).values()]
+    .sort((left, right) => left.requestedAt.localeCompare(right.requestedAt))
+    .map((pending) => pendingLocalJobConfirmationPayload(state, pending));
+}
+
+function queueLocalJobConfirmation(state: DaemonState, job: LocalJob): void {
+  const pending = pendingJobConfirmations(state);
+  if (pending.has(job.id)) {
+    return;
+  }
+  pending.set(job.id, {
+    job,
+    requestedAt: new Date().toISOString(),
+    reason: localJobConfirmationReason(job)
+  });
+}
+
 async function recordManifestJob(state: DaemonState, job: LocalJob, result: Record<string, unknown>): Promise<void> {
   const completedAt = new Date().toISOString();
   recordLocalJob(state.manifestStore, {
@@ -4917,7 +5012,16 @@ async function recordManifestJob(state: DaemonState, job: LocalJob, result: Reco
   await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
 }
 
-async function processJob(state: DaemonState, job: LocalJob): Promise<void> {
+export async function processJob(
+  state: DaemonState,
+  job: LocalJob,
+  options: { skipConfirmation?: boolean } = {}
+): Promise<Record<string, unknown> | undefined> {
+  if (!options.skipConfirmation && localJobRequiresConfirmation(state.config, job)) {
+    queueLocalJobConfirmation(state, job);
+    return undefined;
+  }
+
   try {
     if (job.kind !== "download_artifact" && job.kind !== "download_task_attachment" && job.kind !== "materialize_resource") {
       throw new Error(`Unsupported local job kind: ${job.kind}`);
@@ -4926,10 +5030,37 @@ async function processJob(state: DaemonState, job: LocalJob): Promise<void> {
     await recordManifestJob(state, job, result);
     await completeJob(state, job, result);
     state.processedJobs += 1;
+    return result;
   } catch (error) {
     await failJob(state, job, error);
     throw error;
   }
+}
+
+export async function approvePendingLocalJobConfirmation(
+  state: DaemonState,
+  jobId: string
+): Promise<Record<string, unknown> | undefined> {
+  const pending = pendingJobConfirmations(state).get(jobId);
+  if (!pending) {
+    return undefined;
+  }
+  pendingJobConfirmations(state).delete(jobId);
+  return processJob(state, pending.job, { skipConfirmation: true });
+}
+
+export async function rejectPendingLocalJobConfirmation(
+  state: DaemonState,
+  jobId: string,
+  reason?: string
+): Promise<boolean> {
+  const pending = pendingJobConfirmations(state).get(jobId);
+  if (!pending) {
+    return false;
+  }
+  pendingJobConfirmations(state).delete(jobId);
+  await failJob(state, pending.job, new Error(reason?.trim() || "Local job rejected by user confirmation policy."));
+  return true;
 }
 
 async function performTick(state: DaemonState): Promise<void> {
@@ -5209,6 +5340,8 @@ function daemonStatusPayload(state: DaemonState): Record<string, unknown> {
     watchEnabled: state.config.watchEnabled,
     watcherActive: state.watcherActive,
     watchDebounceMs: state.config.watchDebounceMs,
+    localJobConfirmationPolicy: state.config.localJobConfirmationPolicy ?? "off",
+    localJobConfirmationsPending: pendingJobConfirmations(state).size,
     localClientId: state.identity?.localClientId,
     lastHeartbeatAt: state.lastHeartbeatAt,
     lastClaimAt: state.lastClaimAt,
@@ -5284,6 +5417,51 @@ function startStatusServer(state: DaemonState): void {
     if (url.pathname === "/status" || url.pathname === "/api/sync/status") {
       writeJson(res, daemonStatusPayload(state));
       return;
+    }
+
+    if (url.pathname === "/api/local-jobs/pending-confirmations" && req.method === "GET") {
+      writeJson(res, {
+        policy: state.config.localJobConfirmationPolicy ?? "off",
+        items: listPendingLocalJobConfirmations(state)
+      });
+      return;
+    }
+
+    const localJobApproveMatch = url.pathname.match(/^\/api\/local-jobs\/([^/]+)\/approve$/);
+    if (localJobApproveMatch && req.method === "POST") {
+      try {
+        const result = await approvePendingLocalJobConfirmation(state, decodeURIComponent(localJobApproveMatch[1]));
+        if (!result) {
+          writeJson(res, { message: "Pending local job confirmation not found" }, 404);
+          return;
+        }
+        writeJson(res, { status: "completed", result });
+        return;
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+        return;
+      }
+    }
+
+    const localJobRejectMatch = url.pathname.match(/^\/api\/local-jobs\/([^/]+)\/reject$/);
+    if (localJobRejectMatch && req.method === "POST") {
+      try {
+        const body = await readRequestJson(req);
+        const rejected = await rejectPendingLocalJobConfirmation(
+          state,
+          decodeURIComponent(localJobRejectMatch[1]),
+          typeof body.reason === "string" ? body.reason : undefined
+        );
+        if (!rejected) {
+          writeJson(res, { message: "Pending local job confirmation not found" }, 404);
+          return;
+        }
+        writeJson(res, { status: "rejected" });
+        return;
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+        return;
+      }
     }
 
     if (url.pathname === "/api/sync/snapshot" && req.method === "GET") {

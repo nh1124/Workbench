@@ -123,6 +123,7 @@ Last updated: 2026-06-18
   - push local outbox changes to Core through `POST /api/sync/push`,
   - expose local status at `http://127.0.0.1:<port>/status`.
   - expose local conflict list/resolve endpoints under `http://127.0.0.1:<port>/conflicts`.
+  - expose opt-in local job confirmation endpoints under `http://127.0.0.1:<port>/api/local-jobs/pending-confirmations`.
   - recover stale local outbox entries when files are changed, removed, or restored before a pending sync push finishes.
   - reuse a memory-held local client identity during the daemon process lifetime when plaintext identity persistence is disabled.
   - pull remote snapshot/incremental events before local scan/push,
@@ -209,6 +210,10 @@ npm run build
 - `[implemented]` Sync daemon sync error classification tests were added.
   - Covers version conflict, network failure, and path rejection classification.
   - Covers SQLite persistence of outbox/conflict `errorCode`, `errorCategory`, and `retryable`.
+- `[implemented]` Sync daemon local job confirmation policy tests were added.
+  - Covers `off`, `downloads`, `outside-sync-folder`, and `all` policy parsing.
+  - Covers target-based confirmation decisions.
+  - Covers queuing downloads jobs for approval without downloading bytes.
 - `[implemented]` Core-origin mutation guard audit tests were added in `services/tasks/src/__tests__/coreMutationGuardAudit.test.ts`.
   - Covers Notes, Projects, Artifacts, and Tasks service HTTP route ordering.
   - Fails if a user-facing `POST` / `PUT` / `PATCH` / `DELETE` route is mounted before `requireCoreMutationOriginMiddleware`.
@@ -463,12 +468,19 @@ npm run build
 - `[implemented]` Avoid returning local client tokens from the daemon MCP `workbench.local.clients.current` tool.
   - The tool reports whether a token is present and whether identity came from env or file.
   - It no longer includes the raw `localClientToken`.
-- `[pending]` Add per-job user confirmation policy for downloads outside sync folder if that behavior is later allowed.
+- `[implemented]` Add per-job user confirmation policy for downloads outside sync folder.
+  - Default remains `off` for backward compatibility.
+  - `WORKBENCH_LOCAL_JOB_CONFIRMATION=downloads` or `outside-sync-folder` queues `downloads` target jobs for approval before any bytes are written.
+  - `WORKBENCH_LOCAL_JOB_CONFIRMATION=all` queues both `downloads` and `sync-folder` jobs for approval.
+  - Pending jobs are visible through `GET /api/local-jobs/pending-confirmations`.
+  - Local callers can approve with `POST /api/local-jobs/:jobId/approve`.
+  - Local callers can reject with `POST /api/local-jobs/:jobId/reject`, which reports the job as failed to Core.
+  - `/status` includes `localJobConfirmationPolicy` and `localJobConfirmationsPending`.
 
 ## Recommended Next Implementation Order
 
-1. Add per-job user confirmation policy if downloads outside the sync folder become allowed.
-2. Decide whether packaged standalone daemon builds should default `WORKBENCH_SECURE_CLIENT_IDENTITY=auto` after OS-level QA.
+1. Decide whether packaged standalone daemon builds should default `WORKBENCH_SECURE_CLIENT_IDENTITY=auto` after OS-level QA.
+2. Add Settings UI for pending local job confirmations if users need approve/reject controls outside raw loopback API.
 3. Keep the Core-origin mutation guard audit updated when new domain services or route registration files are introduced.
 
 ## Current Daemon Usage
@@ -489,6 +501,8 @@ If desktop-managed startup finds an existing `.workbench/client-identity.json` a
 Set `WORKBENCH_PERSIST_CLIENT_IDENTITY=0` to keep the registered identity only in memory for the current daemon process; on restart, provide secure env credentials or a normal access token for re-registration.
 Set `WORKBENCH_SECURE_CLIENT_IDENTITY=required` to make standalone daemon registration fail rather than writing a plaintext identity file when secure storage is unavailable.
 Set `WORKBENCH_SECURE_CLIENT_IDENTITY=auto` to use standalone secure storage when available and fall back to `.workbench/client-identity.json` otherwise.
+Set `WORKBENCH_LOCAL_JOB_CONFIRMATION=downloads` to require local approval before daemon jobs write to the configured downloads folder.
+Set `WORKBENCH_LOCAL_JOB_CONFIRMATION=all` to require approval for both downloads and sync-folder materialization jobs.
 
 Desktop `start_daemon` now launches a managed background process. By default it runs:
 

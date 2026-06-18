@@ -27,9 +27,11 @@ import type {
   LocalClientAuditEventRecord,
   LocalClientRecord,
   LocalDaemonConflictRecord,
+  LocalDaemonPendingJobConfirmation,
   LocalDaemonPreferences,
   LocalDaemonStatus,
   LocalJobRecord,
+  LocalJobResultRecord,
   Note,
   NoteProjectSummary,
   ProjectDefaultSelection,
@@ -1429,6 +1431,27 @@ export const coreApi = {
 export const localDaemonApi = {
   status: (): Promise<LocalDaemonStatus> =>
     requestLocalDaemonJson<LocalDaemonStatus>("/status"),
+  listPendingJobConfirmations: (): Promise<{
+    policy: LocalDaemonStatus["localJobConfirmationPolicy"];
+    items: LocalDaemonPendingJobConfirmation[];
+  }> =>
+    requestLocalDaemonJson<{
+      policy: LocalDaemonStatus["localJobConfirmationPolicy"];
+      items: LocalDaemonPendingJobConfirmation[];
+    }>("/api/local-jobs/pending-confirmations"),
+  approveJobConfirmation: (jobId: string): Promise<{ status: "completed"; result: LocalJobResultRecord }> =>
+    requestLocalDaemonJson<{ status: "completed"; result: LocalJobResultRecord }>(
+      `/api/local-jobs/${encodeURIComponent(jobId)}/approve`,
+      { method: "POST" }
+    ),
+  rejectJobConfirmation: (jobId: string, reason?: string): Promise<{ status: "rejected" }> =>
+    requestLocalDaemonJson<{ status: "rejected" }>(
+      `/api/local-jobs/${encodeURIComponent(jobId)}/reject`,
+      {
+        method: "POST",
+        body: JSON.stringify({ reason })
+      }
+    ),
   listConflicts: (
     options: { status?: LocalDaemonConflictRecord["status"] | "all"; limit?: number } = {}
   ): Promise<{ items: LocalDaemonConflictRecord[] }> => {
