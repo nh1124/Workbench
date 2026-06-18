@@ -7,6 +7,17 @@ import { fileURLToPath } from "node:url";
 import { promises as fs, watch, type FSWatcher } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import {
+  parseSecureIdentityMode,
+  readIdentity,
+  writeIdentity,
+  type ClientIdentity,
+  type SecureIdentityMode
+} from "./identityStorage.js";
+
+export { readIdentity } from "./identityStorage.js";
+export type { ClientIdentity, SecureIdentityMode } from "./identityStorage.js";
+
+import {
   enqueueOutbox as enqueueManifestOutbox,
   getMeta,
   getRemoteResource,
@@ -76,13 +87,6 @@ type LocalArtifactItem = {
   updatedAt: string;
 };
 
-type ClientIdentity = {
-  localClientId: string;
-  localClientToken: string;
-  deviceId: string;
-  syncRootId: string;
-};
-
 export type DaemonConfig = {
   coreUrl: string;
   accessToken?: string;
@@ -100,6 +104,7 @@ export type DaemonConfig = {
   watchEnabled: boolean;
   watchDebounceMs: number;
   persistClientIdentity?: boolean;
+  secureClientIdentity?: SecureIdentityMode;
 };
 
 export type DaemonState = {
@@ -149,6 +154,7 @@ function readConfig(): DaemonConfig {
   const watchDebounceRaw = Number(env("WORKBENCH_SYNC_WATCH_DEBOUNCE_MS") ?? "800");
   const watchEnabledRaw = env("WORKBENCH_SYNC_WATCH")?.toLowerCase();
   const persistIdentityRaw = env("WORKBENCH_PERSIST_CLIENT_IDENTITY") ?? env("WORKBENCH_LOCAL_CLIENT_IDENTITY_FILE");
+  const secureIdentityRaw = env("WORKBENCH_SECURE_CLIENT_IDENTITY") ?? env("WORKBENCH_LOCAL_CLIENT_SECURE_STORAGE");
   return {
     coreUrl: (env("WORKBENCH_CORE_URL") ?? "http://localhost:3000").replace(/\/+$/, ""),
     accessToken: env("WORKBENCH_ACCESS_TOKEN"),
@@ -167,7 +173,8 @@ function readConfig(): DaemonConfig {
     maxSyncFileBytes: Number.isFinite(maxSyncFileBytesRaw) ? Math.max(1024, maxSyncFileBytesRaw) : 10 * 1024 * 1024,
     watchEnabled: watchEnabledRaw !== "0" && watchEnabledRaw !== "false" && watchEnabledRaw !== "off",
     watchDebounceMs: Number.isFinite(watchDebounceRaw) ? Math.max(100, watchDebounceRaw) : 800,
-    persistClientIdentity: envBoolean(persistIdentityRaw, true)
+    persistClientIdentity: envBoolean(persistIdentityRaw, true),
+    secureClientIdentity: parseSecureIdentityMode(secureIdentityRaw)
   };
 }
 
@@ -176,42 +183,6 @@ async function ensureDirs(config: DaemonConfig): Promise<void> {
   await fs.mkdir(config.downloadsDir, { recursive: true });
   await fs.mkdir(join(config.syncRoot, ".workbench"), { recursive: true });
   await fs.mkdir(join(config.syncRoot, ".workbench", "conflicts"), { recursive: true });
-}
-
-function identityPath(config: DaemonConfig): string {
-  return join(config.syncRoot, ".workbench", "client-identity.json");
-}
-
-async function readJsonFile<T>(pathValue: string): Promise<T | undefined> {
-  try {
-    return JSON.parse(await fs.readFile(pathValue, "utf8")) as T;
-  } catch {
-    return undefined;
-  }
-}
-
-async function writeIdentityFile(config: DaemonConfig, identity: ClientIdentity): Promise<void> {
-  const pathValue = identityPath(config);
-  await fs.mkdir(dirname(pathValue), { recursive: true });
-  await fs.writeFile(pathValue, `${JSON.stringify(identity, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-  await fs.chmod(pathValue, 0o600).catch(() => undefined);
-}
-
-export async function readIdentity(config: DaemonConfig): Promise<ClientIdentity | undefined> {
-  const envClientId = env("WORKBENCH_LOCAL_CLIENT_ID");
-  const envClientToken = env("WORKBENCH_LOCAL_CLIENT_TOKEN");
-  if (envClientId && envClientToken) {
-    return {
-      localClientId: envClientId,
-      localClientToken: envClientToken,
-      deviceId: config.deviceId,
-      syncRootId: config.syncRootId
-    };
-  }
-  if (config.persistClientIdentity === false) {
-    return undefined;
-  }
-  return readJsonFile<ClientIdentity>(identityPath(config));
 }
 
 async function coreJson<T>(
@@ -276,9 +247,7 @@ export async function registerIfNeeded(config: DaemonConfig): Promise<ClientIden
     deviceId: result.client.deviceId,
     syncRootId: result.client.syncRootId
   };
-  if (config.persistClientIdentity !== false) {
-    await writeIdentityFile(config, identity);
-  }
+  await writeIdentity(config, identity);
   return identity;
 }
 

@@ -13,22 +13,46 @@ import {
   type ConflictResolution,
   type ConflictStatus
 } from "./manifestStore.js";
+import {
+  parseSecureIdentityMode,
+  readIdentityWithSource,
+  type ClientIdentity,
+  type IdentityStorageConfig
+} from "./identityStorage.js";
 
 function env(name: string): string | undefined {
   const value = process.env[name]?.trim();
   return value && value.length > 0 ? value : undefined;
 }
 
+function envBoolean(value: string | undefined, fallback: boolean): boolean {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) return fallback;
+  if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on") return true;
+  if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off") return false;
+  return fallback;
+}
+
 const syncRoot = resolve(env("WORKBENCH_SYNC_ROOT") ?? join(homedir(), "WorkbenchSync"));
 const downloadsDir = resolve(env("WORKBENCH_DOWNLOADS_DIR") ?? join(homedir(), "Downloads"));
 const coreUrl = (env("WORKBENCH_CORE_URL") ?? "http://localhost:3000").replace(/\/+$/, "");
+const persistIdentityRaw = env("WORKBENCH_PERSIST_CLIENT_IDENTITY") ?? env("WORKBENCH_LOCAL_CLIENT_IDENTITY_FILE");
+const identityConfig: IdentityStorageConfig = {
+  syncRoot,
+  deviceId: env("WORKBENCH_DEVICE_ID") ?? hostname(),
+  syncRootId: env("WORKBENCH_SYNC_ROOT_ID") ?? "default",
+  persistClientIdentity: envBoolean(persistIdentityRaw, true),
+  secureClientIdentity: parseSecureIdentityMode(
+    env("WORKBENCH_SECURE_CLIENT_IDENTITY") ?? env("WORKBENCH_LOCAL_CLIENT_SECURE_STORAGE")
+  )
+};
 const manifestStore = openManifestStore(syncRoot);
 
 function asText(value: unknown): { content: Array<{ type: "text"; text: string }> } {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
 }
 
-function redactIdentity(identity: Record<string, unknown>, source: string): Record<string, unknown> {
+function redactIdentity(identity: ClientIdentity, source: string): Record<string, unknown> {
   const { localClientToken: _localClientToken, ...safeIdentity } = identity;
   return {
     ...safeIdentity,
@@ -38,23 +62,8 @@ function redactIdentity(identity: Record<string, unknown>, source: string): Reco
 }
 
 async function readIdentity(): Promise<Record<string, unknown> | undefined> {
-  const envClientId = env("WORKBENCH_LOCAL_CLIENT_ID");
-  const envClientToken = env("WORKBENCH_LOCAL_CLIENT_TOKEN");
-  if (envClientId && envClientToken) {
-    return redactIdentity({
-      localClientId: envClientId,
-      localClientToken: envClientToken,
-      syncRootId: env("WORKBENCH_SYNC_ROOT_ID") ?? "default"
-    }, "env");
-  }
-  try {
-    return redactIdentity(
-      JSON.parse(await fs.readFile(join(syncRoot, ".workbench", "client-identity.json"), "utf8")) as Record<string, unknown>,
-      "file"
-    );
-  } catch {
-    return undefined;
-  }
+  const currentIdentity = await readIdentityWithSource(identityConfig);
+  return currentIdentity ? redactIdentity(currentIdentity.identity, currentIdentity.source) : undefined;
 }
 
 const server = new McpServer({

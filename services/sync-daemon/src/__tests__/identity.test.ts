@@ -10,10 +10,21 @@ import {
   registerIfNeeded,
   type DaemonConfig
 } from "../index.js";
+import {
+  parseSecureIdentityMode,
+  setSecureIdentityBackendForTest,
+  type ClientIdentity,
+  type SecureIdentityBackend,
+  type SecureIdentityMode
+} from "../identityStorage.js";
 
 const tempRoots: string[] = [];
 
-function configFor(root: string, persistClientIdentity?: boolean): DaemonConfig {
+function configFor(
+  root: string,
+  persistClientIdentity?: boolean,
+  secureClientIdentity: SecureIdentityMode = "off"
+): DaemonConfig {
   return {
     coreUrl: "http://127.0.0.1:3000",
     accessToken: "access-token",
@@ -28,7 +39,26 @@ function configFor(root: string, persistClientIdentity?: boolean): DaemonConfig 
     maxSyncFileBytes: 10 * 1024 * 1024,
     watchEnabled: false,
     watchDebounceMs: 100,
-    persistClientIdentity
+    persistClientIdentity,
+    secureClientIdentity
+  };
+}
+
+function memorySecureBackend(): { backend: SecureIdentityBackend; stored: ClientIdentity | undefined } {
+  const state: { stored: ClientIdentity | undefined } = { stored: undefined };
+  return {
+    backend: {
+      name: "memory-secure-storage",
+      async read() {
+        return state.stored;
+      },
+      async write(_config, identity) {
+        state.stored = identity;
+      }
+    },
+    get stored() {
+      return state.stored;
+    }
   };
 }
 
@@ -84,6 +114,7 @@ async function withCountingRegisterFetch<T>(fn: () => Promise<T>): Promise<{ res
 }
 
 afterEach(async () => {
+  setSecureIdentityBackendForTest(undefined);
   while (tempRoots.length > 0) {
     const root = tempRoots.pop();
     if (root) {
@@ -93,6 +124,14 @@ afterEach(async () => {
 });
 
 describe("sync-daemon client identity persistence", () => {
+  it("parses secure identity storage modes", () => {
+    assert.equal(parseSecureIdentityMode(undefined), "off");
+    assert.equal(parseSecureIdentityMode("0"), "off");
+    assert.equal(parseSecureIdentityMode("auto"), "auto");
+    assert.equal(parseSecureIdentityMode("1"), "required");
+    assert.equal(parseSecureIdentityMode("required"), "required");
+  });
+
   it("can register without writing a plaintext client identity file", async () => {
     const root = await createRoot();
     const config = configFor(root, false);
@@ -138,5 +177,56 @@ describe("sync-daemon client identity persistence", () => {
       const mode = (await stat(path)).mode & 0o777;
       assert.equal(mode & 0o077, 0);
     }
+  });
+
+  it("stores and reads identity through configured secure storage", async () => {
+    const root = await createRoot();
+    const secure = memorySecureBackend();
+    setSecureIdentityBackendForTest(secure.backend);
+    const config = configFor(root, true, "required");
+
+    const identity = await withRegisterFetch(() => registerIfNeeded(config));
+    const restored = await readIdentity(config);
+
+    assert.equal(identity.localClientId, "local-client-1");
+    assert.equal(secure.stored?.localClientToken, "secret-token");
+    assert.equal(restored?.localClientToken, "secret-token");
+    assert.equal(existsSync(join(root, ".workbench", "client-identity.json")), false);
+  });
+
+  it("falls back to the identity file when secure storage is auto and unavailable", async () => {
+    const root = await createRoot();
+    setSecureIdentityBackendForTest(null);
+    const config = configFor(root, true, "auto");
+
+    await withRegisterFetch(() => registerIfNeeded(config));
+
+    assert.equal(existsSync(join(root, ".workbench", "client-identity.json")), true);
+  });
+
+  it("fails required secure storage instead of writing a plaintext identity file when unavailable", async () => {
+    const root = await createRoot();
+    setSecureIdentityBackendForTest(null);
+    const config = configFor(root, true, "required");
+
+    await assert.rejects(
+      () => registerIfNeeded(config),
+      /Secure local client identity storage is not available/
+    );
+    assert.equal(existsSync(join(root, ".workbench", "client-identity.json")), false);
+  });
+
+  it("migrates an existing identity file into secure storage when enabled", async () => {
+    const root = await createRoot();
+    await withRegisterFetch(() => registerIfNeeded(configFor(root)));
+    assert.equal(existsSync(join(root, ".workbench", "client-identity.json")), true);
+
+    const secure = memorySecureBackend();
+    setSecureIdentityBackendForTest(secure.backend);
+    const migrated = await readIdentity(configFor(root, true, "required"));
+
+    assert.equal(migrated?.localClientToken, "secret-token");
+    assert.equal(secure.stored?.localClientToken, "secret-token");
+    assert.equal(existsSync(join(root, ".workbench", "client-identity.json")), false);
   });
 });

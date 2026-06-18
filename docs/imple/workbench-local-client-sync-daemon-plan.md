@@ -105,6 +105,7 @@ Last updated: 2026-06-18
   - create sync/download folders,
   - register itself with Core when `WORKBENCH_ACCESS_TOKEN` is provided,
   - persist local client identity under `.workbench/client-identity.json` by default,
+  - persist standalone local client identity in OS-backed secure storage when `WORKBENCH_SECURE_CLIENT_IDENTITY=auto|required` is set,
   - run without writing `.workbench/client-identity.json` when `WORKBENCH_PERSIST_CLIENT_IDENTITY=0` or `WORKBENCH_LOCAL_CLIENT_IDENTITY_FILE=0` is set,
   - heartbeat to Core,
   - claim local jobs,
@@ -203,9 +204,15 @@ npm run build
   - Covers optional no-plaintext identity persistence.
   - Covers in-memory identity reuse while no-plaintext persistence is enabled.
   - Covers backward-compatible identity file persistence with restrictive file mode where the OS supports it.
+  - Covers opt-in secure identity storage modes.
+  - Covers secure backend persistence, auto fallback, required secure-storage failure, and plaintext-file migration into secure storage.
 - `[implemented]` Sync daemon sync error classification tests were added.
   - Covers version conflict, network failure, and path rejection classification.
   - Covers SQLite persistence of outbox/conflict `errorCode`, `errorCategory`, and `retryable`.
+- `[implemented]` Core-origin mutation guard audit tests were added in `services/tasks/src/__tests__/coreMutationGuardAudit.test.ts`.
+  - Covers Notes, Projects, Artifacts, and Tasks service HTTP route ordering.
+  - Fails if a user-facing `POST` / `PUT` / `PATCH` / `DELETE` route is mounted before `requireCoreMutationOriginMiddleware`.
+  - Keeps `/internal/*` routes on the existing internal API key path.
 
 ## Pending / Partial Work
 
@@ -330,6 +337,7 @@ npm run build
   - If `WORKBENCH_CORE_MUTATION_TOKEN` is configured, Core also attaches `x-workbench-core-mutation-token`.
   - Notes, Artifacts, Tasks, and Projects services reject user-facing `POST` / `PUT` / `PATCH` / `DELETE` requests unless the Core-origin header is present when `WORKBENCH_REQUIRE_CORE_MUTATION_ORIGIN=true`.
   - `/internal/*` routes remain governed by their existing internal API key checks.
+  - `services/tasks/src/__tests__/coreMutationGuardAudit.test.ts` audits current Notes, Projects, Artifacts, and Tasks mutation route ordering so newly added direct write routes cannot silently bypass the guard.
 
 ### Blob Upload / Replacement
 
@@ -420,15 +428,21 @@ npm run build
   - Desktop Settings exposes an Auto-start Daemon toggle.
   - Preference is stored in Tauri app config as `daemon-preferences.json`.
   - On desktop startup, the native shell starts the daemon if auto-start is enabled.
-- `[partial]` Store local client token in OS secure storage instead of plain `.workbench/client-identity.json`.
+- `[implemented]` Store local client token in OS-backed secure storage instead of plain `.workbench/client-identity.json` when enabled.
   - Windows native secure storage now has a separate `Workbench.LocalDaemonClient` target for daemon `localClientId` / `localClientToken`, distinct from `Workbench.Session`.
   - Tauri-managed daemon startup injects stored credentials as `WORKBENCH_LOCAL_CLIENT_ID` and `WORKBENCH_LOCAL_CLIENT_TOKEN` when neither env var is already set.
   - Native commands can save, inspect non-secret status, and clear the secure daemon client credential.
   - Desktop-managed daemon startup now migrates an existing `.workbench/client-identity.json` from the configured sync folder into OS secure storage when secure storage is supported.
   - After secure credential injection or successful migration, desktop-managed startup sets `WORKBENCH_PERSIST_CLIENT_IDENTITY=0` for the daemon unless the parent env already overrides it.
+  - Standalone daemon secure identity storage is opt-in with `WORKBENCH_SECURE_CLIENT_IDENTITY=auto|required` or `WORKBENCH_LOCAL_CLIENT_SECURE_STORAGE=auto|required`.
+  - Standalone Windows daemon storage uses DPAPI-protected `.workbench/client-identity.dpapi`.
+  - Standalone macOS daemon storage uses the `security` Keychain CLI.
+  - Standalone Linux daemon storage uses `secret-tool` / libsecret when available.
+  - `required` fails instead of writing plaintext when secure storage is unavailable; `auto` uses secure storage when available and falls back to the identity file.
+  - Enabling standalone secure storage migrates an existing `.workbench/client-identity.json` into the secure backend and removes the plaintext file when the secure write succeeds.
   - Standalone daemon identity file persistence can be disabled with `WORKBENCH_PERSIST_CLIENT_IDENTITY=0` or `WORKBENCH_LOCAL_CLIENT_IDENTITY_FILE=0`.
   - Persisted standalone identity files are written with restrictive permissions where the OS supports it.
-  - Non-desktop standalone daemon startup and first registration still use `.workbench/client-identity.json` as the default fallback, and there is not yet a cross-platform daemon-side secure storage writer.
+  - Non-desktop standalone daemon startup and first registration still use `.workbench/client-identity.json` by default for backward compatibility unless secure identity storage is explicitly enabled.
 
 ### Security Hardening
 
@@ -453,9 +467,9 @@ npm run build
 
 ## Recommended Next Implementation Order
 
-1. Audit remaining direct domain mutation routes as new Projects/Notes/Artifacts/Tasks endpoints are added.
-2. Add cross-platform daemon-side secure storage if standalone non-desktop mode must avoid `.workbench/client-identity.json` by default.
-3. Add per-job user confirmation policy if downloads outside the sync folder become allowed.
+1. Add per-job user confirmation policy if downloads outside the sync folder become allowed.
+2. Decide whether packaged standalone daemon builds should default `WORKBENCH_SECURE_CLIENT_IDENTITY=auto` after OS-level QA.
+3. Keep the Core-origin mutation guard audit updated when new domain services or route registration files are introduced.
 
 ## Current Daemon Usage
 
@@ -473,6 +487,8 @@ After registration, the standalone daemon reuses `.workbench/client-identity.jso
 Desktop-managed startup can also inject the local client ID/token from Windows Credential Manager when saved through the native secure daemon client commands.
 If desktop-managed startup finds an existing `.workbench/client-identity.json` and secure storage is supported, it migrates that identity into secure storage, removes the plaintext file, injects env credentials, and disables further daemon identity-file persistence for that process.
 Set `WORKBENCH_PERSIST_CLIENT_IDENTITY=0` to keep the registered identity only in memory for the current daemon process; on restart, provide secure env credentials or a normal access token for re-registration.
+Set `WORKBENCH_SECURE_CLIENT_IDENTITY=required` to make standalone daemon registration fail rather than writing a plaintext identity file when secure storage is unavailable.
+Set `WORKBENCH_SECURE_CLIENT_IDENTITY=auto` to use standalone secure storage when available and fall back to `.workbench/client-identity.json` otherwise.
 
 Desktop `start_daemon` now launches a managed background process. By default it runs:
 
