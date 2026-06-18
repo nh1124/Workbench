@@ -1,70 +1,47 @@
-type ShortcutSection = {
-  title: string;
-  items: Array<{
-    label: string;
-    keys: string[];
-  }>;
-};
-
-const shortcutSections: ShortcutSection[] = [
-  {
-    title: "General",
-    items: [{ label: "Close / Cancel", keys: ["Esc"] }]
-  },
-  {
-    title: "Window",
-    items: [
-      { label: "New Window", keys: ["Ctrl", "Shift", "N"] },
-      { label: "New Window (Taskbar icon)", keys: ["Shift", "Click"] }
-    ]
-  },
-  {
-    title: "Notes",
-    items: [
-      { label: "Quick Note", keys: ["Win", "Alt", "N"] },
-      { label: "Quick Note (Alt)", keys: ["Ctrl", "Alt", "N"] },
-      { label: "Undo Delete", keys: ["Ctrl", "Z"] }
-    ]
-  },
-  {
-    title: "Chat",
-    items: [
-      { label: "Send Message", keys: ["Enter"] },
-      { label: "New Line", keys: ["Shift", "Enter"] },
-      { label: "Switch Chat Session", keys: ["Ctrl", "Up / Down"] }
-    ]
-  },
-  {
-    title: "Navigation",
-    items: [
-      { label: "Open Home", keys: ["G", "H"] },
-      { label: "Open Project", keys: ["G", "P"] },
-      { label: "Open Tasks", keys: ["G", "T"] },
-      { label: "Open Notes", keys: ["G", "N"] },
-      { label: "Open Artifacts", keys: ["G", "A"] },
-      { label: "Open Settings", keys: ["G", "S"] }
-    ]
-  }
-];
+import { useEffect, useMemo, useState } from "react";
+import {
+  SHORTCUT_DEFINITIONS,
+  WORKBENCH_KEYBOARD_SHORTCUTS_CHANGED_EVENT,
+  loadShortcutBindings,
+  shortcutTokens
+} from "../lib/keyboardShortcuts";
 
 export function ShortcutsPage() {
+  const [bindings, setBindings] = useState(() => loadShortcutBindings());
+  const sections = useMemo(() => {
+    const sectionMap = new Map<string, typeof SHORTCUT_DEFINITIONS>();
+    for (const definition of SHORTCUT_DEFINITIONS) {
+      sectionMap.set(definition.section, [...(sectionMap.get(definition.section) ?? []), definition]);
+    }
+    return Array.from(sectionMap.entries());
+  }, []);
+
+  useEffect(() => {
+    const reloadShortcuts = () => setBindings(loadShortcutBindings());
+    window.addEventListener(WORKBENCH_KEYBOARD_SHORTCUTS_CHANGED_EVENT, reloadShortcuts);
+    window.addEventListener("storage", reloadShortcuts);
+    return () => {
+      window.removeEventListener(WORKBENCH_KEYBOARD_SHORTCUTS_CHANGED_EVENT, reloadShortcuts);
+      window.removeEventListener("storage", reloadShortcuts);
+    };
+  }, []);
+
   return (
     <section className="stack">
       <header className="page-header">
-        <p className="eyebrow">Keyboard Shortcuts</p>
         <h2>Keyboard Shortcuts</h2>
       </header>
 
       <article className="panel">
-        {shortcutSections.map((section) => (
-          <section key={section.title} className="shortcut-section">
-            <p>{section.title}</p>
-            {section.items.map((item) => (
-              <div key={item.label} className="shortcut-row">
+        {sections.map(([sectionTitle, items]) => (
+          <section key={sectionTitle} className="shortcut-section">
+            <p>{sectionTitle}</p>
+            {items.map((item) => (
+              <div key={item.id} className="shortcut-row">
                 <span>{item.label}</span>
                 <div className="shortcut-keys" aria-label={`${item.label} shortcut`}>
-                  {item.keys.map((key, index) => (
-                    <span key={`${item.label}-${key}`}>
+                  {shortcutTokens(bindings[item.id], item.fixedKeys).map((key, index) => (
+                    <span key={`${item.id}-${key}`}>
                       {index > 0 ? <em>+</em> : null}
                       <kbd>{key}</kbd>
                     </span>

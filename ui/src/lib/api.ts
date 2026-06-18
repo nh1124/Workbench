@@ -5,6 +5,10 @@ import {
   getWorkbenchLocalRoutingMode,
   resolveWorkbenchLocalRoutingTarget
 } from "../config/services";
+import {
+  getNativeGlobalShortcutRegistrations,
+  type ShortcutBindings
+} from "./keyboardShortcuts";
 import { pushErrorNotification } from "./notificationService";
 import type {
   Artifact,
@@ -120,6 +124,32 @@ export async function closeQuickNoteWindow(): Promise<void> {
   if (typeof window !== "undefined") {
     window.close();
   }
+}
+
+export async function openQuickNoteWindow(): Promise<boolean> {
+  if (!isTauriNativeRuntime()) {
+    return false;
+  }
+  await invokeNative<void>("open_quick_note_window");
+  return true;
+}
+
+export async function openMainWindow(): Promise<boolean> {
+  if (!isTauriNativeRuntime()) {
+    return false;
+  }
+  await invokeNative<void>("open_main_window");
+  return true;
+}
+
+export async function syncNativeGlobalShortcuts(bindings: ShortcutBindings): Promise<boolean> {
+  if (!isTauriNativeRuntime()) {
+    return false;
+  }
+  await invokeNative<void>("set_global_shortcuts", {
+    shortcuts: getNativeGlobalShortcutRegistrations(bindings)
+  });
+  return true;
 }
 
 /**

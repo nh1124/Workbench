@@ -1139,6 +1139,11 @@ pub fn secure_local_daemon_client_clear() -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn open_main_window(app: tauri::AppHandle) -> Result<(), String> {
+  window::open_new_main_window(&app)
+}
+
+#[tauri::command]
 pub fn open_quick_note_window(app: tauri::AppHandle) -> Result<(), String> {
   window::open_new_quick_note_window(&app)
 }

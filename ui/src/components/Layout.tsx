@@ -1,7 +1,22 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { NavLink, Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { WORKBENCH_LOCAL_DAEMON_URL_CHANGED_EVENT, navItems } from "../config/services";
-import { clearWorkbenchSession, localDaemonApi, readWorkbenchSession } from "../lib/api";
+import {
+  WORKBENCH_KEYBOARD_SHORTCUTS_CHANGED_EVENT,
+  isTextEditingTarget,
+  loadShortcutBindings,
+  shortcutMatchesEvent,
+  type ShortcutActionId,
+  type ShortcutBindings
+} from "../lib/keyboardShortcuts";
+import {
+  clearWorkbenchSession,
+  localDaemonApi,
+  openMainWindow,
+  openQuickNoteWindow,
+  readWorkbenchSession,
+  syncNativeGlobalShortcuts
+} from "../lib/api";
 import { useNotifications } from "../lib/notificationService";
 import type { LocalDaemonStatus } from "../types/models";
 import { QuickNoteModal } from "./QuickNoteModal";
@@ -80,6 +95,7 @@ export function Layout() {
   const [daemonStatus, setDaemonStatus] = useState<LocalDaemonStatus | undefined>(undefined);
   const [daemonStatusChecked, setDaemonStatusChecked] = useState(false);
   const [daemonStatusError, setDaemonStatusError] = useState(false);
+  const [shortcutBindings, setShortcutBindings] = useState<ShortcutBindings>(() => loadShortcutBindings());
   const [isCompactSidebarMode, setIsCompactSidebarMode] = useState(() =>
     typeof window !== "undefined" ? window.innerWidth <= COMPACT_SIDEBAR_BREAKPOINT : false
   );
@@ -213,6 +229,22 @@ export function Layout() {
   }, [isCompactSidebarMode]);
 
   useEffect(() => {
+    const reloadShortcuts = () => setShortcutBindings(loadShortcutBindings());
+    window.addEventListener(WORKBENCH_KEYBOARD_SHORTCUTS_CHANGED_EVENT, reloadShortcuts);
+    window.addEventListener("storage", reloadShortcuts);
+    return () => {
+      window.removeEventListener(WORKBENCH_KEYBOARD_SHORTCUTS_CHANGED_EVENT, reloadShortcuts);
+      window.removeEventListener("storage", reloadShortcuts);
+    };
+  }, []);
+
+  useEffect(() => {
+    void syncNativeGlobalShortcuts(shortcutBindings).catch((error) => {
+      console.warn("[workbench] failed to sync native global shortcuts", error);
+    });
+  }, [shortcutBindings]);
+
+  useEffect(() => {
     const onMouseDown = (event: MouseEvent) => {
       if (!userMenuRef.current?.contains(event.target as Node)) {
         setIsUserMenuOpen(false);
@@ -223,11 +255,27 @@ export function Layout() {
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
-      const key = event.key.toLowerCase();
-      const isQuickNoteShortcut = key === "n" && event.altKey && (event.metaKey || event.ctrlKey);
+      const matchesShortcut = (actionId: ShortcutActionId) =>
+        shortcutMatchesEvent(shortcutBindings[actionId], event);
+
+      if (matchesShortcut("close_cancel")) {
+        event.preventDefault();
+        setIsShortcutsOpen(false);
+        setIsNotificationOpen(false);
+        setIsUserMenuOpen(false);
+        setIsQuickNoteOpen(false);
+        return;
+      }
+
+      if (isTextEditingTarget(event.target)) {
+        return;
+      }
+
+      const isQuickNoteShortcut = matchesShortcut("quick_note") || matchesShortcut("quick_note_alt");
       if (isQuickNoteShortcut) {
         event.preventDefault();
         if (isNativeRuntime) {
+          void openQuickNoteWindow();
           return;
         }
         const width = 560;
@@ -242,17 +290,34 @@ export function Layout() {
         } else {
           setIsQuickNoteOpen(true);
         }
+        setIsUserMenuOpen(false);
         setIsShortcutsOpen(false);
         setIsNotificationOpen(false);
-        setIsUserMenuOpen(false);
         return;
       }
 
-      if (event.key === "Escape") {
-        setIsUserMenuOpen(false);
-        setIsShortcutsOpen(false);
-        setIsQuickNoteOpen(false);
-        setIsNotificationOpen(false);
+      if (matchesShortcut("new_window")) {
+        event.preventDefault();
+        if (isNativeRuntime) {
+          void openMainWindow();
+        } else {
+          window.open("/", "_blank", "noopener,noreferrer");
+        }
+        return;
+      }
+
+      const navigationShortcuts: Array<[ShortcutActionId, string]> = [
+        ["open_home", "/"],
+        ["open_project", "/projects"],
+        ["open_tasks", "/tasks"],
+        ["open_notes", "/notes"],
+        ["open_artifacts", "/artifacts"],
+        ["open_settings", "/settings"]
+      ];
+      const matchedNavigation = navigationShortcuts.find(([actionId]) => matchesShortcut(actionId));
+      if (matchedNavigation) {
+        event.preventDefault();
+        navigate(matchedNavigation[1]);
       }
     };
 
@@ -263,7 +328,7 @@ export function Layout() {
       document.removeEventListener("mousedown", onMouseDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [isNativeRuntime]);
+  }, [isNativeRuntime, navigate, shortcutBindings]);
 
   const logout = async () => {
     await clearWorkbenchSession();
