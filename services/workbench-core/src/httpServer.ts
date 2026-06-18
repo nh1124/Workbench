@@ -3689,6 +3689,7 @@ app.get("/api/sync/blobs/:blobId", async (req, res) => {
     if (contentType) res.setHeader("Content-Type", contentType);
     if (disposition) res.setHeader("Content-Disposition", disposition);
     if (length) res.setHeader("Content-Length", length);
+    if (upstream.ok) res.setHeader("X-Workbench-Content-Checksum", sha256Checksum(buffer));
     return res.status(upstream.status).send(buffer);
   } catch (error) {
     return respondInternalError(res, error);

@@ -1,0 +1,173 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, it } from "node:test";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const repoRoot = path.resolve(__dirname, "../../../..");
+
+const uiApiSource = readFileSync(path.join(repoRoot, "ui/src/lib/api.ts"), "utf8");
+const daemonSource = readFileSync(path.join(repoRoot, "services/sync-daemon/src/index.ts"), "utf8");
+const coreHttpSource = readFileSync(path.join(repoRoot, "services/workbench-core/src/httpServer.ts"), "utf8");
+const coreSyncStoreSource = readFileSync(path.join(repoRoot, "services/workbench-core/src/syncStore.ts"), "utf8");
+
+function assertIncludes(source: string, needle: string, label: string): void {
+  assert.ok(source.includes(needle), `${label} must include: ${needle}`);
+}
+
+function assertRoutePair(label: string, uiNeedles: string[], daemonNeedles: string[]): void {
+  for (const needle of uiNeedles) {
+    assertIncludes(uiApiSource, needle, `${label} UI route`);
+  }
+  for (const needle of daemonNeedles) {
+    assertIncludes(daemonSource, needle, `${label} daemon route`);
+  }
+}
+
+describe("local mode route coverage", () => {
+  it("keeps Tasks UI routes mirrored by the daemon loopback facade", () => {
+    assertIncludes(uiApiSource, "function tasksFacadeEnabled(): boolean", "Tasks Local Mode flag");
+    assertIncludes(uiApiSource, "async function fetchTasksFacadeJson<T>", "Tasks facade fetch helper");
+    assertIncludes(uiApiSource, "requestLocalDaemonJson<T>(path, options)", "Tasks daemon JSON fetch path");
+    assertIncludes(uiApiSource, "fetchJson<T>(coreApiPath(path), options)", "Tasks Core fallback fetch path");
+
+    const sharedDomainListRoute = "const remoteDomainListMatch = url.pathname.match(/^\\/api\\/(projects|notes|tasks)$/);";
+    const sharedDomainItemRoute = "const remoteDomainItemMatch = url.pathname.match(/^\\/api\\/(projects|notes|tasks)\\/([^/]+)$/);";
+
+    const routePairs: Array<{ label: string; ui: string[]; daemon: string[] }> = [
+      {
+        label: "task list",
+        ui: ["fetchTasksFacadeJson<Task[]>(`/api/tasks"],
+        daemon: [sharedDomainListRoute]
+      },
+      {
+        label: "task item read/update/delete",
+        ui: ["/api/tasks/${encodeURIComponent(id)}"],
+        daemon: [
+          sharedDomainItemRoute,
+          "remoteDomainItemMatch[1] === \"tasks\" && req.method === \"PATCH\"",
+          "remoteDomainItemMatch[1] === \"tasks\" && req.method === \"DELETE\"",
+          "if (remoteDomainItemMatch && req.method === \"GET\")"
+        ]
+      },
+      {
+        label: "task create",
+        ui: ["fetchTasksFacadeJson<Task>(\"/api/tasks\""],
+        daemon: ["if (url.pathname === \"/api/tasks\" && req.method === \"POST\")"]
+      },
+      {
+        label: "task projects and pins",
+        ui: ["/api/tasks/projects", "/api/tasks/pins", "/api/tasks/${encodeURIComponent(id)}/pin"],
+        daemon: [
+          "url.pathname === \"/api/tasks/projects\"",
+          "url.pathname === \"/api/tasks/pins\"",
+          "const taskPinMatch = url.pathname.match(/^\\/api\\/tasks\\/([^/]+)\\/pin$/);"
+        ]
+      },
+      {
+        label: "today routes",
+        ui: ["/api/tasks/today?date=", "\"/api/tasks/today\"", "/api/tasks/today/${encodeURIComponent(taskId)}"],
+        daemon: [
+          "url.pathname === \"/api/tasks/today\"",
+          "const taskTodayDeleteMatch = url.pathname.match(/^\\/api\\/tasks\\/today\\/([^/]+)$/);"
+        ]
+      },
+      {
+        label: "schedule routes",
+        ui: [
+          "/api/tasks/schedule-calendar?",
+          "/api/tasks/schedule?${params.toString()}",
+          "/api/tasks/schedule-items/${scheduleId}",
+          "/api/tasks/${encodeURIComponent(taskId)}/schedule-items"
+        ],
+        daemon: [
+          "url.pathname === \"/api/tasks/schedule-calendar\"",
+          "url.pathname === \"/api/tasks/schedule\"",
+          "const taskScheduleItemMatch = url.pathname.match(/^\\/api\\/tasks\\/schedule-items\\/(-?\\d+)$/);",
+          "const taskScheduleItemsMatch = url.pathname.match(/^\\/api\\/tasks\\/([^/]+)\\/schedule-items$/);"
+        ]
+      },
+      {
+        label: "occurrence routes",
+        ui: [
+          "/api/tasks/${encodeURIComponent(id)}/occurrences/complete",
+          "/api/tasks/${encodeURIComponent(id)}/occurrences/move",
+          "/api/tasks/${encodeURIComponent(id)}/occurrences/skip-exception"
+        ],
+        daemon: [
+          "const taskOccurrenceMatch = url.pathname.match(/^\\/api\\/tasks\\/([^/]+)\\/occurrences\\/(complete|move|skip-exception)$/);"
+        ]
+      },
+      {
+        label: "subtask routes",
+        ui: [
+          "/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(occurrenceDate)}/subtasks",
+          "/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(occurrenceDate)}/subtasks/${encodeURIComponent(subtaskId)}"
+        ],
+        daemon: [
+          "const taskSubtasksListMatch = url.pathname.match(/^\\/api\\/tasks\\/([^/]+)\\/occurrences\\/([^/]+)\\/subtasks$/);",
+          "const taskSubtaskItemMatch = url.pathname.match(/^\\/api\\/tasks\\/([^/]+)\\/occurrences\\/([^/]+)\\/subtasks\\/([^/]+)$/);"
+        ]
+      },
+      {
+        label: "attachment routes",
+        ui: [
+          "/api/tasks/${encodeURIComponent(taskId)}/attachments",
+          "/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}/download",
+          "/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}"
+        ],
+        daemon: [
+          "const taskAttachmentsMatch = url.pathname.match(/^\\/api\\/tasks\\/([^/]+)\\/attachments$/);",
+          "const taskAttachmentDownloadMatch = url.pathname.match(/^\\/api\\/tasks\\/([^/]+)\\/attachments\\/([^/]+)\\/download$/);",
+          "const taskAttachmentItemMatch = url.pathname.match(/^\\/api\\/tasks\\/([^/]+)\\/attachments\\/([^/]+)$/);"
+        ]
+      },
+      {
+        label: "task import export and history",
+        ui: ["/api/tasks/export", "/api/tasks/import", "/api/tasks/${encodeURIComponent(id)}/history"],
+        daemon: [
+          "url.pathname === \"/api/tasks/export\"",
+          "url.pathname === \"/api/tasks/import\"",
+          "const taskHistoryMatch = url.pathname.match(/^\\/api\\/tasks\\/([^/]+)\\/history$/);"
+        ]
+      }
+    ];
+
+    for (const routePair of routePairs) {
+      assertRoutePair(routePair.label, routePair.ui, routePair.daemon);
+    }
+  });
+
+  it("keeps Core sync endpoints, event store, blob ids, and checksum contracts wired", () => {
+    for (const route of [
+      "app.get(\"/api/sync/snapshot\"",
+      "app.get(\"/api/sync/pull\"",
+      "app.get(\"/api/sync/blobs/:blobId\"",
+      "app.put(\"/api/sync/blobs/:blobId\"",
+      "app.post(\"/api/sync/push\""
+    ]) {
+      assertIncludes(coreHttpSource, route, "Core sync route");
+    }
+
+    for (const blobContract of [
+      "blobId.startsWith(\"artifact:\")",
+      "blobId.startsWith(\"task-attachment:\")",
+      "res.setHeader(\"X-Workbench-Content-Checksum\", sha256Checksum(buffer));",
+      "code: \"SYNC_BLOB_CHECKSUM_MISMATCH\""
+    ]) {
+      assertIncludes(coreHttpSource, blobContract, "Core sync blob contract");
+    }
+
+    for (const storeContract of [
+      "INSERT INTO sync_resource_versions",
+      "INSERT INTO sync_events",
+      "deleted_at",
+      "export async function listSyncEvents",
+      "export async function listSyncResourceVersions"
+    ]) {
+      assertIncludes(coreSyncStoreSource, storeContract, "Core sync event store");
+    }
+  });
+});

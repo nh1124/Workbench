@@ -394,7 +394,7 @@ export function normalizeSha256Checksum(value: string | null | undefined): strin
   const trimmed = value.trim().toLowerCase();
   const hex = trimmed.startsWith("sha256:") ? trimmed.slice("sha256:".length) : trimmed;
   if (!/^[a-f0-9]{64}$/.test(hex)) {
-    throw new Error("Invalid local job download checksum header");
+    throw new Error("Invalid download checksum header");
   }
   return hex;
 }
@@ -402,7 +402,7 @@ export function normalizeSha256Checksum(value: string | null | undefined): strin
 function assertExpectedDownloadChecksum(expected: string | null, actualHex: string): void {
   const expectedHex = normalizeSha256Checksum(expected);
   if (expectedHex && expectedHex !== actualHex.toLowerCase()) {
-    throw new Error("Local job download checksum mismatch");
+    throw new Error("Download checksum mismatch");
   }
 }
 
@@ -4109,6 +4109,8 @@ async function fetchRemoteArtifactBlob(state: DaemonState, artifactId: string): 
   if (!response.ok) {
     throw new Error(buffer.toString("utf8") || `HTTP ${response.status}`);
   }
+  const checksum = createHash("sha256").update(buffer).digest("hex");
+  assertExpectedDownloadChecksum(response.headers.get("x-workbench-content-checksum"), checksum);
   return buffer.byteLength <= state.config.maxSyncFileBytes ? buffer : undefined;
 }
 

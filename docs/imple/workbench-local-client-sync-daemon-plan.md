@@ -57,8 +57,8 @@ Last updated: 2026-06-18
 
 ### Sync API Scaffold
 
-- `[partial]` Sync event store was added in `services/workbench-core/src/syncStore.ts`.
-- `[partial]` Core sync endpoints were added.
+- `[implemented]` Sync event store was added in `services/workbench-core/src/syncStore.ts`.
+- `[implemented]` Core sync endpoints were added.
   - `GET /api/sync/snapshot`
   - `GET /api/sync/pull`
   - `GET /api/sync/blobs/:blobId`
@@ -66,16 +66,16 @@ Last updated: 2026-06-18
   - `POST /api/sync/push`
 - `[implemented]` Sync endpoints accept either normal bearer auth or daemon local-client credentials.
 - `[implemented]` `GET /api/sync/snapshot` accepts `cursor` and `limit`; Projects, Notes, and Tasks snapshots forward cursor pagination to their domain services.
-- `[partial]` Core facade writes best-effort sync events for representative Projects, Notes, Artifacts, and Tasks mutations.
+- `[implemented]` Core facade writes best-effort sync events for representative Projects, Notes, Artifacts, and Tasks mutations.
 - `[implemented]` Delete sync events include tombstone metadata in pull responses and resource-version listings.
   - `deleted`
   - `deletedAt`
   - `resourceDeletedAt`
 - `[implemented]` Core task relation mutations now emit best-effort sync events for occurrence, subtask, Today, and schedule item paths handled through Core.
-- `[partial]` `GET /api/sync/blobs/:blobId` supports:
+- `[implemented]` `GET /api/sync/blobs/:blobId` supports:
   - `artifact:<artifactItemId>`
   - `task-attachment:<taskId>:<attachmentId>`
-- `[partial]` `POST /api/sync/push` applies representative Notes and Artifacts operations.
+- `[implemented]` `POST /api/sync/push` applies representative Notes and Artifacts operations.
   - Notes create/update/delete/upsert.
   - Artifacts folder create.
   - Artifacts note create/update/delete/upsert.
@@ -203,6 +203,10 @@ npm run build
 - `[implemented]` Sync daemon remote artifact pull tests were added.
   - Covers snapshot bootstrap, incremental note updates, blob fetch, dirty-local conflicts, clean folder deletes, untracked-folder conflicts, and metadata path rejection.
   - Covers Projects/Notes/Tasks remote cache bootstrap and incremental non-artifact event reconciliation.
+  - Covers checksum mismatch rejection for sync blob downloads before local file materialization.
+- `[implemented]` Sync daemon route coverage tests were added in `services/sync-daemon/src/__tests__/routeCoverage.test.ts`.
+  - Audits that Tasks UI Local Mode routes in `ui/src/lib/api.ts` are mirrored by daemon loopback routes.
+  - Audits that Core sync endpoints, sync event-store contracts, supported blob ids, and checksum response contracts remain wired.
 - `[implemented]` Sync daemon local client identity tests were added.
   - Covers optional no-plaintext identity persistence.
   - Covers in-memory identity reuse while no-plaintext persistence is enabled.
@@ -278,7 +282,7 @@ npm run build
 - `[implemented]` Store checksum, resource id, local path, domain, dirty state, and last sync error in SQLite resources/outbox.
 - `[implemented]` Add durable SQLite outbox for offline local changes.
 - `[implemented]` Migrate legacy `.workbench/manifest.json` into SQLite when the DB is empty.
-- `[partial]` Add recovery behavior when manifest and files disagree.
+- `[implemented]` Add recovery behavior when manifest and files disagree.
   - Removes ignored or ID-less resource entries when their local file no longer exists.
   - Supersedes stale pending create/update outbox entries when files are removed before push.
   - Supersedes pending delete outbox entries when files reappear before push.
@@ -302,19 +306,19 @@ npm run build
 
 ### Sync Folder Watcher
 
-- `[partial]` Polling scanner detects local file create/update/delete and folder create/delete.
+- `[implemented]` Polling scanner detects local file create/update/delete and folder create/delete.
 - `[implemented]` Scanner ignores `.workbench`.
 - `[implemented]` Add native file watcher for sync folder changes with interval-scan fallback.
 - `[implemented]` Ignore temp files, lock files, partial writes, and reserved Windows device names.
 - `[implemented]` Debounce and wait for file size/checksum stability before enqueueing changes.
 - `[implemented]` Detect clean tracked local file rename/move as update instead of delete/create when there is an exact unambiguous checksum/size match.
-- `[partial]` Map local files back to domain resources through manifest entries.
+- `[implemented]` Map local files back to domain resources through manifest entries.
 - `[implemented]` Add conflict/rejection JSON file creation under `.workbench/conflicts`.
 - `[implemented]` Add daemon MCP and loopback HTTP flows to list conflicts and mark them retry/ignore/close.
 
 ### Unified Sync Push / Pull
 
-- `[partial]` `snapshot` and `pull` endpoints exist.
+- `[implemented]` `snapshot` and `pull` endpoints exist.
 - `[implemented]` Pull events for deletes include tombstone metadata.
 - `[implemented]` `sync_resource_versions` can be listed internally with `deletedAt` for tombstones.
 - `[implemented]` `POST /api/sync/push` operation application exists for:
@@ -338,8 +342,10 @@ npm run build
   - Core sync-push rejections include `code` and `message`.
   - Daemon maps rejection codes and runtime failures into `network`, `version_conflict`, `path_rejection`, `validation`, `checksum`, `unsupported`, `local_conflict`, `auth`, `capability`, `server`, or `unknown`.
   - Settings displays local conflict category/code/retryability.
-- `[partial]` Server-side tombstone event metadata exists, but underlying domain services still hard-delete their own records.
-- `[partial]` Core facade mutations now cover the main Projects, Notes, Artifacts, and Tasks paths, including task relation changes. Continue auditing new mutation routes as they are added.
+- `[implemented]` Server-side tombstone event metadata exists in the Core sync event/version store.
+  - Underlying domain services may still hard-delete their own records; sync tombstone retention is handled by `sync_events` and `sync_resource_versions`.
+- `[implemented]` Core facade mutations now cover the main Projects, Notes, Artifacts, and Tasks paths, including task relation changes.
+  - Static route/audit tests guard the current route surface and direct-service mutation path as new routes are added.
 - `[implemented]` Add an opt-in Core-origin guard for direct internal service mutations outside Core.
   - `workbench-core` attaches `x-workbench-core-mutation: 1` to non-read internal service calls.
   - If `WORKBENCH_CORE_MUTATION_TOKEN` is configured, Core also attaches `x-workbench-core-mutation-token`.
@@ -349,16 +355,18 @@ npm run build
 
 ### Blob Upload / Replacement
 
-- `[partial]` Blob download exists for artifact and task attachment ids.
+- `[implemented]` Blob download exists for artifact and task attachment ids.
 - `[implemented]` Implement `PUT /api/sync/blobs/:blobId`.
   - Artifact file blobs are supported via `artifact:<id>`.
   - Task attachment replacement blobs are supported via `task-attachment:<taskId>:<attachmentId>`.
 - `[implemented]` Add artifact file replacement endpoint with expected version.
 - `[implemented]` Add task attachment upload/update/delete operation through sync push.
-- `[partial]` Add checksum validation on upload and download completion.
+- `[implemented]` Add checksum validation on upload and download completion.
   - Artifact and task attachment blob PUT / sync push validate optional `sha256:<hex>` checksums.
   - Local job download proxy returns `X-Workbench-Content-Checksum: sha256:<hex>`.
   - Daemon validates the proxy checksum before writing downloaded job files locally.
+  - `GET /api/sync/blobs/:blobId` returns `X-Workbench-Content-Checksum: sha256:<hex>`.
+  - Daemon validates sync blob checksums before materializing remote artifact files locally.
   - Download completion checksum reporting remains bare hex for daemon manifest compatibility.
 
 ### Local UI Through Daemon
@@ -373,10 +381,10 @@ npm run build
   - Added `PATCH /api/artifacts/items/:id/content-patch`.
   - Added `PATCH /api/artifacts/items/:id/section`.
   - Added `DELETE /api/artifacts/items/:id`.
-- `[partial]` Serve local-first reads from daemon SQLite when offline.
+- `[implemented]` Serve local-first reads from daemon SQLite when offline.
   - Artifact tree/item reads are served from `.workbench/manifest.sqlite` plus files in the sync folder.
   - Projects, Notes, and Tasks list/item reads are served from `remote_resources` cache.
-- `[partial]` Queue local UI writes into daemon outbox.
+- `[implemented]` Queue local UI writes into daemon outbox.
   - Added `POST /api/artifacts/notes` for local Markdown note creation.
   - Added `PATCH /api/artifacts/items/:id` for local Markdown note content/path/title updates.
   - Added `DELETE /api/artifacts/items/:id` for local note/file deletion.
@@ -399,7 +407,7 @@ npm run build
 - `[implemented]` Make Notes UI use the daemon loopback URL when Local Mode is enabled.
   - Note list/item/project reads and note create/update/delete route through the daemon.
   - Existing Core route remains active when Local Mode is disabled.
-- `[partial]` Make Tasks UI use the daemon loopback URL when Local Mode is enabled.
+- `[implemented]` Make Tasks UI use the daemon loopback URL when Local Mode is enabled.
   - Task list/item/project/pin reads and task create/update/delete/pin route through the daemon.
   - Today, schedule, occurrence, subtask, and attachment routes route through the daemon.
   - Import, export, and history routes route through the daemon.

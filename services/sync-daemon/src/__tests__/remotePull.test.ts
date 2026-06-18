@@ -490,6 +490,57 @@ describe("remote artifact pull reconciliation", () => {
     }
   });
 
+  it("rejects remote file blobs when the Core checksum header does not match", async () => {
+    const { root, store, state } = await createState();
+    try {
+      setMeta(store, "remoteArtifactCursor", "25");
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "http://core.test/api/sync/pull?cursor=25&limit=100") {
+          return jsonResponse({
+            events: [
+              {
+                cursor: "26",
+                domain: "artifacts",
+                resourceId: "file-bad-checksum",
+                action: "update",
+                createdAt: "2026-06-16T00:02:30.000Z",
+                payload: {
+                  resource: {
+                    id: "file-bad-checksum",
+                    kind: "file",
+                    title: "asset.txt",
+                    path: "assets/bad.txt",
+                    mimeType: "text/plain",
+                    sizeBytes: 5
+                  }
+                }
+              }
+            ],
+            nextCursor: "26"
+          });
+        }
+        if (url === "http://core.test/api/sync/blobs/artifact%3Afile-bad-checksum") {
+          return new Response(Buffer.from("asset"), {
+            status: 200,
+            headers: {
+              "Content-Type": "text/plain",
+              "Content-Length": "5",
+              "X-Workbench-Content-Checksum": `sha256:${"0".repeat(64)}`
+            }
+          });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      }) as typeof fetch;
+
+      await assert.rejects(() => pullRemoteArtifactSyncState(state), /Download checksum mismatch/);
+      await assert.rejects(readFile(join(root, "assets", "bad.txt"), "utf8"));
+      assert.equal(readManifestFromStore(store).resources?.length ?? 0, 0);
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
   it("opens a conflict instead of overwriting dirty local artifact work", async () => {
     const { root, store, state } = await createState();
     try {
