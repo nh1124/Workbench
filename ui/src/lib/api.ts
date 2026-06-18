@@ -58,6 +58,7 @@ import type {
 
 const SESSION_KEY = "workbench-session";
 const LOCAL_DAEMON_REQUEST_TIMEOUT_MS = 2500;
+const NATIVE_LOCAL_DAEMON_URL = "http://127.0.0.1:35780";
 const NATIVE_SESSION_COMMANDS = {
   save: "secure_session_save",
   read: "secure_session_read",
@@ -171,9 +172,18 @@ export const nativeDaemonApi = {
     invokeNative<LocalDaemonPreferences>("set_daemon_auto_start", { autoStart }),
   setResidentMode: (residentMode: boolean): Promise<LocalDaemonPreferences> =>
     invokeNative<LocalDaemonPreferences>("set_daemon_resident_mode", { residentMode }),
+  setCoreUrl: (coreUrl: string): Promise<LocalDaemonPreferences> =>
+    invokeNative<LocalDaemonPreferences>("set_daemon_core_url", { coreUrl }),
   start: (): Promise<boolean> => invokeNative<boolean>("start_daemon"),
   stop: (): Promise<boolean> => invokeNative<boolean>("stop_daemon")
 };
+
+export async function syncNativeDaemonCoreUrl(): Promise<LocalDaemonPreferences | undefined> {
+  if (!isTauriNativeRuntime()) return undefined;
+  const coreUrl = getWorkbenchCoreUrl();
+  if (!coreUrl) return undefined;
+  return nativeDaemonApi.setCoreUrl(coreUrl);
+}
 
 async function loadSessionFromStorage(): Promise<StoredAuthSession | undefined> {
   if (isTauriNativeRuntime()) {
@@ -226,6 +236,9 @@ function coreBaseUrl(): string {
 }
 
 function localDaemonBaseUrl(): string {
+  if (isTauriNativeRuntime()) {
+    return NATIVE_LOCAL_DAEMON_URL;
+  }
   const configuredUrl = getWorkbenchLocalDaemonUrl();
   if (!configuredUrl) {
     throw new Error("Workbench local daemon URL is not configured.");
@@ -1476,6 +1489,11 @@ export async function saveWorkbenchSession(session: WorkbenchAuthResponse | Work
   };
   sessionCache = stored;
   await persistSessionToStorage(stored);
+  try {
+    await syncNativeDaemonCoreUrl();
+  } catch (error) {
+    console.warn("Failed to sync native daemon Core URL", error);
+  }
 }
 
 export async function clearWorkbenchSession(): Promise<void> {

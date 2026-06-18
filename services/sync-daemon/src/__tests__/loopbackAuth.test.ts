@@ -11,6 +11,7 @@ import {
   parseLoopbackAllowedOrigins,
   requestHasValidLoopbackToken
 } from "../index.js";
+import { normalizeCoreUrl } from "../coreUrl.js";
 
 function requestWithHeaders(headers: IncomingMessage["headers"]): IncomingMessage {
   return { headers } as IncomingMessage;
@@ -85,5 +86,18 @@ describe("loopback API token auth", () => {
     assert.equal(isLoopbackOriginAllowed("https://app.example.com", allowed), true);
     assert.equal(LOOPBACK_CORS_ERROR_CODE, "WORKBENCH_DAEMON_CORS_DENIED");
     assert.equal(LOOPBACK_CORS_ERROR_MESSAGE, "Origin is not allowed for the local daemon API.");
+  });
+});
+
+describe("Core URL security", () => {
+  it("requires HTTPS for remote Core URLs", () => {
+    assert.equal(normalizeCoreUrl("https://core.example.com/"), "https://core.example.com");
+    assert.throws(() => normalizeCoreUrl("http://core.example.com"), /https/);
+  });
+
+  it("allows HTTP only for local development Core URLs", () => {
+    assert.equal(normalizeCoreUrl("http://localhost:3000/"), "http://localhost:3000");
+    assert.equal(normalizeCoreUrl("http://127.0.0.1:3000/"), "http://127.0.0.1:3000");
+    assert.equal(normalizeCoreUrl("http://[::1]:3000/"), "http://[::1]:3000");
   });
 });

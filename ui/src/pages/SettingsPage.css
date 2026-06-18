@@ -92,6 +92,14 @@
   padding: 0;
 }
 
+.settings-content > .services-manifest-panel {
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+
 .general-localization-panel {
   width: 100%;
   min-width: 0;
@@ -557,6 +565,42 @@
   max-width: none;
 }
 
+.settings-title-with-info {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  min-width: 0;
+}
+
+.settings-title-with-info h3,
+.settings-title-with-info strong {
+  margin: 0;
+}
+
+.settings-info-icon {
+  width: 1rem;
+  height: 1rem;
+  border: 1px solid rgba(103, 232, 249, 0.44);
+  border-radius: 999px;
+  color: #67e8f9;
+  background: rgba(8, 145, 178, 0.14);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  font-size: 0.66rem;
+  font-weight: 900;
+  line-height: 1;
+  cursor: help;
+}
+
+.settings-info-icon:hover,
+.settings-info-icon:focus-visible {
+  border-color: rgba(103, 232, 249, 0.82);
+  color: #cffafe;
+  outline: none;
+}
+
 .settings-tile-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
@@ -579,7 +623,7 @@
 }
 
 .account-local-clients-header h3 {
-  margin: 0 0 0.18rem;
+  margin: 0;
   font-size: 1.05rem;
 }
 
@@ -830,7 +874,7 @@
 
 .account-local-folder-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 0.62rem;
 }
 
@@ -910,6 +954,39 @@
   background: #1f2a41;
   color: #e5eefb;
   padding: 0 0.72rem;
+}
+
+.account-local-native-managed {
+  border: 1px solid rgba(51, 65, 85, 0.68);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.58);
+  padding: 0.66rem 0.72rem;
+  display: grid;
+  gap: 0.64rem;
+}
+
+.account-local-native-managed-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: center;
+  min-width: 0;
+}
+
+.account-local-native-managed strong {
+  display: block;
+  color: #e5eefb;
+  font-size: 0.88rem;
+}
+
+.account-local-native-badge {
+  border: 1px solid rgba(34, 211, 238, 0.48);
+  border-radius: 999px;
+  color: #67e8f9;
+  flex: 0 0 auto;
+  font-size: 0.68rem;
+  font-weight: 900;
+  padding: 0.18rem 0.58rem;
 }
 
 .account-local-daemon-url button,

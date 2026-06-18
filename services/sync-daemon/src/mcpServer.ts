@@ -19,6 +19,7 @@ import {
   type ClientIdentity,
   type IdentityStorageConfig
 } from "./identityStorage.js";
+import { normalizeCoreUrl } from "./coreUrl.js";
 
 function env(name: string): string | undefined {
   const value = process.env[name]?.trim();
@@ -35,7 +36,7 @@ function envBoolean(value: string | undefined, fallback: boolean): boolean {
 
 const syncRoot = resolve(env("WORKBENCH_SYNC_ROOT") ?? join(homedir(), "WorkbenchSync"));
 const downloadsDir = resolve(env("WORKBENCH_DOWNLOADS_DIR") ?? join(homedir(), "Downloads"));
-const coreUrl = (env("WORKBENCH_CORE_URL") ?? "http://localhost:3000").replace(/\/+$/, "");
+const coreUrl = normalizeCoreUrl(env("WORKBENCH_CORE_URL") ?? "http://localhost:3000");
 const persistIdentityRaw = env("WORKBENCH_PERSIST_CLIENT_IDENTITY") ?? env("WORKBENCH_LOCAL_CLIENT_IDENTITY_FILE");
 const identityConfig: IdentityStorageConfig = {
   syncRoot,

@@ -6,6 +6,7 @@ import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { promises as fs, watch, type FSWatcher } from "node:fs";
 import { config as loadEnv } from "dotenv";
+import { normalizeCoreUrl } from "./coreUrl.js";
 import {
   parseSecureIdentityMode,
   readIdentity,
@@ -181,7 +182,7 @@ function readConfig(): DaemonConfig {
   const secureIdentityRaw = env("WORKBENCH_SECURE_CLIENT_IDENTITY") ?? env("WORKBENCH_LOCAL_CLIENT_SECURE_STORAGE");
   const localJobConfirmationRaw = env("WORKBENCH_LOCAL_JOB_CONFIRMATION") ?? env("WORKBENCH_LOCAL_JOB_CONFIRMATION_POLICY");
   return {
-    coreUrl: (env("WORKBENCH_CORE_URL") ?? "http://localhost:3000").replace(/\/+$/, ""),
+    coreUrl: normalizeCoreUrl(env("WORKBENCH_CORE_URL") ?? "http://localhost:3000"),
     accessToken: env("WORKBENCH_ACCESS_TOKEN"),
     apiToken: env("WORKBENCH_DAEMON_API_TOKEN") ?? env("WORKBENCH_LOCAL_DAEMON_TOKEN"),
     syncRoot,

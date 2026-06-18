@@ -7,7 +7,8 @@ import {
   isTauriNativeRuntime,
   localDaemonApi,
   nativeDaemonApi,
-  readWorkbenchSession
+  readWorkbenchSession,
+  syncNativeDaemonCoreUrl
 } from "../lib/api";
 import {
   getWorkbenchLocalDaemonUrlInitialValue,
@@ -93,6 +94,15 @@ function serviceEmoji(manifestId: string, manifestIcon?: string): string {
   if (id.includes("chat") || id.includes("message")) return "💬";
   return "⚙️";
 }
+
+function InfoHint({ label }: { label: string }) {
+  return (
+    <span className="settings-info-icon" tabIndex={0} role="img" aria-label={label} title={label}>
+      i
+    </span>
+  );
+}
+
 const settingsTabIconMap: Record<SettingsTab, ReactNode> = {
   general: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
@@ -275,7 +285,10 @@ export function SettingsPage() {
     }
 
     let cancelled = false;
-    nativeDaemonApi.readPreferences()
+    (async () => {
+      await syncNativeDaemonCoreUrl().catch(() => undefined);
+      return nativeDaemonApi.readPreferences();
+    })()
       .then((preferences) => {
         if (!cancelled) {
           setLocalDaemonResidentMode(preferences.residentMode ?? true);
@@ -476,7 +489,7 @@ export function SettingsPage() {
 
   const changeLocalRoutingMode = (mode: WorkbenchLocalRoutingMode) => {
     try {
-      if (mode !== "core") {
+      if (mode !== "core" && !nativeRuntimeAvailable) {
         const normalized = setWorkbenchLocalDaemonUrl(localDaemonUrlInput);
         setLocalDaemonUrlInput(normalized);
       }
@@ -533,6 +546,7 @@ export function SettingsPage() {
     if (!nativeRuntimeAvailable) {
       return undefined;
     }
+    await syncNativeDaemonCoreUrl();
     const preferences = await nativeDaemonApi.readPreferences();
     setLocalDaemonResidentMode(preferences.residentMode ?? true);
     setLocalDaemonAutoStart(preferences.autoStart);
@@ -650,6 +664,7 @@ export function SettingsPage() {
   const startNativeDaemon = async () => {
     setLocalDaemonMessage("");
     try {
+      await syncNativeDaemonCoreUrl();
       const started = await nativeDaemonApi.start();
       setLocalDaemonMessage(started ? "Daemon started." : "Daemon is already running.");
       void refreshLocalDaemon(false);
@@ -1336,14 +1351,14 @@ export function SettingsPage() {
 
         {activeTab === "sync" ? (
           <article className="panel services-manifest-panel account-page-panel settings-wide-panel">
-            <p className="integration-subtitle">Local client registration, daemon routing and sync folder controls.</p>
-
             <div className="settings-tile-grid">
             <section className="account-local-clients">
               <div className="account-local-clients-header">
                 <div>
-                  <h3>Local Clients</h3>
-                  <p className="muted">Registered sync daemons for this account.</p>
+                  <div className="settings-title-with-info">
+                    <h3>Local Clients</h3>
+                    <InfoHint label="Registered sync daemons that can receive local jobs and keep this account's local workspace in sync." />
+                  </div>
                 </div>
                 <button type="button" onClick={() => void refreshLocalClients()} disabled={localClientsLoading}>
                   {localClientsLoading ? "Refreshing..." : "Refresh"}
@@ -1470,8 +1485,10 @@ export function SettingsPage() {
             <section className="account-local-daemon" ref={localDaemonSectionRef}>
               <div className="account-local-clients-header">
                 <div>
-                  <h3>Sync Daemon</h3>
-                  <p className="muted">Loopback status and local sync conflict handling.</p>
+                  <div className="settings-title-with-info">
+                    <h3>Sync Daemon</h3>
+                    <InfoHint label="Controls the local resident daemon, routing mode, sync folder, downloads folder and local conflict handling." />
+                  </div>
                 </div>
                 <button type="button" onClick={() => void refreshLocalDaemon()} disabled={localDaemonLoading}>
                   {localDaemonLoading ? "Refreshing..." : "Refresh"}
@@ -1480,17 +1497,13 @@ export function SettingsPage() {
 
               <div className="account-local-mode-control">
                 <div>
-                  <strong>Routing Mode</strong>
-                  <small>
-                    {localRoutingMode === "auto"
-                      ? "Core online, daemon offline"
-                      : localRoutingMode === "local"
-                        ? "Daemon for supported routes"
-                        : "Core API for supported routes"}
-                  </small>
+                  <div className="settings-title-with-info">
+                    <strong>Routing Mode</strong>
+                    <InfoHint label="Auto uses Core while online and falls back to the local daemon when Core is unreachable. Core always uses the cloud API. Local uses daemon-backed routes where supported." />
+                  </div>
                 </div>
                 <div className="account-local-routing-segmented" role="radiogroup" aria-label="Workbench routing mode">
-                  {(["core", "auto", "local"] as WorkbenchLocalRoutingMode[]).map((mode) => (
+                  {(["auto", "core", "local"] as WorkbenchLocalRoutingMode[]).map((mode) => (
                     <button
                       key={mode}
                       type="button"
@@ -1507,8 +1520,10 @@ export function SettingsPage() {
 
               <div className="account-local-mode-control">
                 <div>
-                  <strong>Background Resident</strong>
-                  <small>{nativeRuntimeAvailable ? "Keep Workbench available from the tray" : "Desktop runtime only"}</small>
+                  <div className="settings-title-with-info">
+                    <strong>Background Resident</strong>
+                    <InfoHint label="Keeps Workbench available from the tray when the last main window is closed. Desktop runtime only." />
+                  </div>
                 </div>
                 <label className="integration-switch">
                   <input
@@ -1526,8 +1541,10 @@ export function SettingsPage() {
 
               <div className="account-local-mode-control">
                 <div>
-                  <strong>Auto-start Daemon</strong>
-                  <small>{nativeRuntimeAvailable ? "Starts with desktop app" : "Desktop runtime only"}</small>
+                  <div className="settings-title-with-info">
+                    <strong>Auto-start Daemon</strong>
+                    <InfoHint label="Starts the local sync daemon automatically when the desktop app launches. Desktop runtime only." />
+                  </div>
                 </div>
                 <label className="integration-switch">
                   <input
@@ -1546,23 +1563,25 @@ export function SettingsPage() {
               <div className="account-local-folder-grid">
                 <article className="account-local-folder-card">
                   <div>
-                    <strong>Sync Folder</strong>
-                    <small>
-                      {savedSyncRootBase
-                        ? `Custom base / ${accountFolderLabel}`
-                        : legacySavedSyncRoot
-                          ? "Legacy custom folder"
-                          : `Per-account default / ${accountFolderLabel}`}
-                    </small>
+                    <div className="settings-title-with-info">
+                      <strong>Sync Folder</strong>
+                      <InfoHint
+                        label={
+                          savedSyncRootBase
+                            ? `Custom base: ${savedSyncRootBase}. Workbench uses an account folder for ${accountFolderLabel} under that base.`
+                            : legacySavedSyncRoot
+                              ? `Legacy custom folder for ${accountFolderLabel}.`
+                              : `Per-account default folder for ${accountFolderLabel}.`
+                        }
+                      />
+                    </div>
                   </div>
                   <code>{effectiveSyncRoot}</code>
-                  {savedSyncRootBase ? <small className="account-local-folder-next">Base: {savedSyncRootBase}</small> : null}
                   {localDaemonStatus && localDaemonStatus.syncRoot !== effectiveSyncRoot ? (
                     <small className="account-local-folder-next">Next start: {effectiveSyncRoot}</small>
                   ) : null}
                   <div className="account-local-folder-meta">
                     <span>{folderPathSource}</span>
-                    <span>{localDaemonPreferences?.accountFolderSegment ?? "account-scoped"}</span>
                     {localDaemonStatus && localDaemonStatus.syncRoot !== effectiveSyncRoot ? (
                       <span>Restart pending</span>
                     ) : null}
@@ -1586,23 +1605,25 @@ export function SettingsPage() {
 
                 <article className="account-local-folder-card">
                   <div>
-                    <strong>Downloads Folder</strong>
-                    <small>
-                      {savedDownloadsDirBase
-                        ? `Custom base / ${accountFolderLabel}`
-                        : legacySavedDownloadsDir
-                          ? "Legacy custom folder"
-                          : `Per-account default / ${accountFolderLabel}`}
-                    </small>
+                    <div className="settings-title-with-info">
+                      <strong>Downloads Folder</strong>
+                      <InfoHint
+                        label={
+                          savedDownloadsDirBase
+                            ? `Custom base: ${savedDownloadsDirBase}. Workbench uses an account folder for ${accountFolderLabel} under that base.`
+                            : legacySavedDownloadsDir
+                              ? `Legacy custom downloads folder for ${accountFolderLabel}.`
+                              : `Per-account default downloads folder for ${accountFolderLabel}.`
+                        }
+                      />
+                    </div>
                   </div>
                   <code>{effectiveDownloadsDir}</code>
-                  {savedDownloadsDirBase ? <small className="account-local-folder-next">Base: {savedDownloadsDirBase}</small> : null}
                   {localDaemonStatus && localDaemonStatus.downloadsDir !== effectiveDownloadsDir ? (
                     <small className="account-local-folder-next">Next start: {effectiveDownloadsDir}</small>
                   ) : null}
                   <div className="account-local-folder-meta">
                     <span>{folderPathSource}</span>
-                    <span>{localDaemonPreferences?.accountFolderSegment ?? "account-scoped"}</span>
                     {localDaemonStatus && localDaemonStatus.downloadsDir !== effectiveDownloadsDir ? (
                       <span>Restart pending</span>
                     ) : null}
@@ -1629,30 +1650,41 @@ export function SettingsPage() {
                 </article>
               </div>
 
-              <div className="account-local-daemon-url">
-                <input
-                  value={localDaemonUrlInput}
-                  onChange={(event) => setLocalDaemonUrlInput(event.target.value)}
-                  placeholder="http://127.0.0.1:35780"
-                />
-                <button type="button" onClick={saveLocalDaemonUrl}>Save URL</button>
-              </div>
-
-              <div className="account-local-native-actions">
-                <button
-                  type="button"
-                  onClick={() => void readNativeDaemonStatus()}
-                  disabled={!nativeRuntimeAvailable || localDaemonLoading}
-                >
-                  Native Status
-                </button>
-                <button type="button" onClick={() => void startNativeDaemon()} disabled={!nativeRuntimeAvailable}>
-                  Start
-                </button>
-                <button type="button" onClick={() => void stopNativeDaemon()} disabled={!nativeRuntimeAvailable}>
-                  Stop
-                </button>
-              </div>
+              {nativeRuntimeAvailable ? (
+                <div className="account-local-native-managed">
+                  <div className="account-local-native-managed-head">
+                    <div className="settings-title-with-info">
+                      <strong>Desktop Link</strong>
+                      <InfoHint label="The desktop app manages daemon startup and the local endpoint automatically. Cloud sync uses the current Workbench Core URL from sign-in." />
+                    </div>
+                    <span className="account-local-native-badge">Automatic</span>
+                  </div>
+                  <div className="account-local-native-actions">
+                    <button
+                      type="button"
+                      onClick={() => void readNativeDaemonStatus()}
+                      disabled={!nativeRuntimeAvailable || localDaemonLoading}
+                    >
+                      Native Status
+                    </button>
+                    <button type="button" onClick={() => void startNativeDaemon()} disabled={!nativeRuntimeAvailable}>
+                      Start
+                    </button>
+                    <button type="button" onClick={() => void stopNativeDaemon()} disabled={!nativeRuntimeAvailable}>
+                      Stop
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="account-local-daemon-url">
+                  <input
+                    value={localDaemonUrlInput}
+                    onChange={(event) => setLocalDaemonUrlInput(event.target.value)}
+                    placeholder="http://127.0.0.1:35780"
+                  />
+                  <button type="button" onClick={saveLocalDaemonUrl}>Save URL</button>
+                </div>
+              )}
 
               {localDaemonStatus ? (
                 <div className="account-local-daemon-status">

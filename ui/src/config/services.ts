@@ -36,12 +36,28 @@ function normalizeHttpUrl(raw: string, label: string): string {
   return parsed.toString().replace(/\/+$/, "");
 }
 
-function normalizeWorkbenchCoreUrl(raw: string): string {
-  return normalizeHttpUrl(raw, "Server");
+export function normalizeWorkbenchCoreUrl(raw: string): string {
+  const normalized = normalizeHttpUrl(raw, "Server");
+  const parsed = new URL(normalized);
+  if (parsed.protocol === "http:" && !isLoopbackHostname(parsed.hostname)) {
+    throw new Error("Server URL must use https:// unless it points to localhost.");
+  }
+  return normalized;
 }
 
 function normalizeWorkbenchLocalDaemonUrl(raw: string): string {
   return normalizeHttpUrl(raw, "Local daemon");
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  return (
+    normalized === "localhost" ||
+    normalized === "127.0.0.1" ||
+    normalized === "::1" ||
+    normalized === "tauri.localhost" ||
+    normalized.endsWith(".localhost")
+  );
 }
 
 const envWorkbenchCoreUrlFallback = readViteEnv("VITE_WORKBENCH_CORE_URL");

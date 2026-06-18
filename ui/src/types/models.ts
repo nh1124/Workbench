@@ -380,8 +380,10 @@ export interface LocalDaemonPreferences {
   downloadsDir?: string | null;
   syncRootBase?: string | null;
   downloadsDirBase?: string | null;
+  coreUrl?: string | null;
   effectiveSyncRoot?: string;
   effectiveDownloadsDir?: string;
+  effectiveCoreUrl?: string | null;
   accountFolderSegment?: string;
   accountLabel?: string;
 }

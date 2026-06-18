@@ -24,6 +24,7 @@ const LOCAL_CLIENT_ID_ENV: &str = "WORKBENCH_LOCAL_CLIENT_ID";
 const LOCAL_CLIENT_TOKEN_ENV: &str = "WORKBENCH_LOCAL_CLIENT_TOKEN";
 const PERSIST_CLIENT_IDENTITY_ENV: &str = "WORKBENCH_PERSIST_CLIENT_IDENTITY";
 const SECURE_CLIENT_IDENTITY_ENV: &str = "WORKBENCH_SECURE_CLIENT_IDENTITY";
+const CORE_URL_ENV: &str = "WORKBENCH_CORE_URL";
 
 #[derive(Debug, Clone)]
 struct ActiveWorkbenchAccount {
@@ -558,6 +559,7 @@ fn configure_daemon_env(
   app: Option<&tauri::AppHandle>,
 ) -> Result<(), String> {
   let mut sync_root_for_identity: Option<PathBuf> = None;
+  let mut configured_core_url: Option<String> = None;
   let active_account = active_workbench_account();
   if std::env::var_os("WORKBENCH_DAEMON_HTTP_PORT").is_none() {
     command.env(
@@ -568,11 +570,18 @@ fn configure_daemon_env(
 
   if let Some(app) = app {
     let preferences = read_daemon_preferences_from_disk(app)?;
+    configured_core_url = configured_daemon_core_url(&preferences);
     let sync_root = configured_sync_folder(app, &preferences)?;
     let downloads_dir = configured_downloads_folder(app, &preferences)?;
     sync_root_for_identity = Some(sync_root.clone());
     command.env("WORKBENCH_SYNC_ROOT", path_to_string(sync_root));
     command.env("WORKBENCH_DOWNLOADS_DIR", path_to_string(downloads_dir));
+  }
+
+  if std::env::var_os(CORE_URL_ENV).is_none() {
+    if let Some(core_url) = configured_core_url {
+      command.env(CORE_URL_ENV, core_url);
+    }
   }
 
   if std::env::var_os("WORKBENCH_ACCESS_TOKEN").is_none() {
@@ -708,6 +717,68 @@ fn normalized_optional_path_string(value: &serde_json::Value, key: &str) -> Opti
     .map(|value| path_to_string(PathBuf::from(value)))
 }
 
+fn normalize_daemon_core_url(raw: &str) -> Result<String, String> {
+  let trimmed = raw.trim();
+  if trimmed.is_empty() {
+    return Err("Core URL is required.".to_string());
+  }
+  if trimmed.chars().any(char::is_whitespace) {
+    return Err("Core URL must not contain whitespace.".to_string());
+  }
+  if trimmed.starts_with("https://") {
+    return Ok(trimmed.trim_end_matches('/').to_string());
+  }
+  if trimmed.starts_with("http://") {
+    if is_loopback_core_url(trimmed) {
+      return Ok(trimmed.trim_end_matches('/').to_string());
+    }
+    return Err("Core URL must use https:// unless it points to localhost.".to_string());
+  }
+  Err("Core URL must start with http:// or https://.".to_string())
+}
+
+fn is_loopback_core_url(raw: &str) -> bool {
+  let Some(hostname) = http_url_hostname(raw) else {
+    return false;
+  };
+  let hostname = hostname
+    .trim_matches(|ch| ch == '[' || ch == ']')
+    .to_ascii_lowercase();
+  hostname == "localhost"
+    || hostname == "127.0.0.1"
+    || hostname == "::1"
+    || hostname == "tauri.localhost"
+    || hostname.ends_with(".localhost")
+}
+
+fn http_url_hostname(raw: &str) -> Option<String> {
+  let rest = raw.strip_prefix("http://")?;
+  let authority = rest
+    .split(|ch| ch == '/' || ch == '?' || ch == '#')
+    .next()
+    .unwrap_or("");
+  if authority.is_empty() || authority.contains('@') {
+    return None;
+  }
+  if let Some(stripped) = authority.strip_prefix('[') {
+    let end = stripped.find(']')?;
+    return Some(stripped[..end].to_string());
+  }
+  authority
+    .split(':')
+    .next()
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .map(ToString::to_string)
+}
+
+fn normalized_optional_url_string(value: &serde_json::Value, key: &str) -> Option<String> {
+  value
+    .get(key)
+    .and_then(serde_json::Value::as_str)
+    .and_then(|value| normalize_daemon_core_url(value).ok())
+}
+
 fn normalize_daemon_preferences(value: serde_json::Value) -> serde_json::Value {
   let auto_start = value
     .get("autoStart")
@@ -723,7 +794,8 @@ fn normalize_daemon_preferences(value: serde_json::Value) -> serde_json::Value {
     "syncRoot": normalized_optional_path_string(&value, "syncRoot"),
     "downloadsDir": normalized_optional_path_string(&value, "downloadsDir"),
     "syncRootBase": normalized_optional_path_string(&value, "syncRootBase"),
-    "downloadsDirBase": normalized_optional_path_string(&value, "downloadsDirBase")
+    "downloadsDirBase": normalized_optional_path_string(&value, "downloadsDirBase"),
+    "coreUrl": normalized_optional_url_string(&value, "coreUrl")
   })
 }
 
@@ -762,6 +834,23 @@ fn configured_downloads_folder(
   configured_preference_path(preferences, "downloadsDir")
     .map(Ok)
     .unwrap_or_else(|| default_downloads_folder(app))
+}
+
+fn configured_daemon_core_url(preferences: &serde_json::Value) -> Option<String> {
+  preferences
+    .get("coreUrl")
+    .and_then(serde_json::Value::as_str)
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .map(ToString::to_string)
+}
+
+fn effective_daemon_core_url(preferences: &serde_json::Value) -> Option<String> {
+  configured_daemon_core_url(preferences).or_else(|| {
+    std::env::var(CORE_URL_ENV)
+      .ok()
+      .and_then(|value| normalize_daemon_core_url(&value).ok())
+  })
 }
 
 fn local_daemon_identity_file(sync_root: &Path) -> PathBuf {
@@ -837,6 +926,12 @@ fn daemon_preferences_response(
   response.insert(
     "accountLabel".to_string(),
     serde_json::Value::String(account_label(active_account.as_ref())),
+  );
+  response.insert(
+    "effectiveCoreUrl".to_string(),
+    effective_daemon_core_url(&preferences)
+      .map(serde_json::Value::String)
+      .unwrap_or(serde_json::Value::Null),
   );
   Ok(serde_json::Value::Object(response))
 }
@@ -1155,6 +1250,22 @@ pub fn set_daemon_resident_mode(
   daemon_preferences_response(&app, preferences)
 }
 
+#[tauri::command]
+pub fn set_daemon_core_url(
+  app: tauri::AppHandle,
+  core_url: String,
+) -> Result<serde_json::Value, String> {
+  let normalized = normalize_daemon_core_url(&core_url)?;
+  let mut preferences = read_daemon_preferences_from_disk(&app)?;
+  let object = preferences
+    .as_object_mut()
+    .ok_or_else(|| "daemon preferences were not an object".to_string())?;
+  object.insert("coreUrl".to_string(), serde_json::Value::String(normalized));
+  let preferences = normalize_daemon_preferences(preferences);
+  write_daemon_preferences_to_disk(&app, &preferences)?;
+  daemon_preferences_response(&app, preferences)
+}
+
 pub fn daemon_resident_mode_enabled(app: &tauri::AppHandle) -> bool {
   read_daemon_preferences_from_disk(app)
     .ok()
@@ -1262,6 +1373,38 @@ mod tests {
       "account-user-1234567890abcdef"
     );
     assert_eq!(account_folder_segment(None), "guest");
+  }
+
+  #[test]
+  fn normalizes_daemon_core_url() {
+    assert_eq!(
+      normalize_daemon_core_url(" https://example.com/core/// ").unwrap(),
+      "https://example.com/core"
+    );
+    assert_eq!(
+      normalize_daemon_core_url(" http://localhost:3000/// ").unwrap(),
+      "http://localhost:3000"
+    );
+    assert!(normalize_daemon_core_url("ftp://example.com").is_err());
+    assert!(normalize_daemon_core_url("http://example.com").is_err());
+    assert!(normalize_daemon_core_url("https://exa mple.com").is_err());
+  }
+
+  #[test]
+  fn stores_core_url_in_normalized_daemon_preferences() {
+    let preferences = normalize_daemon_preferences(serde_json::json!({
+      "coreUrl": "http://localhost:3000/",
+      "autoStart": true
+    }));
+
+    assert_eq!(
+      preferences.get("coreUrl").and_then(serde_json::Value::as_str),
+      Some("http://localhost:3000")
+    );
+    assert_eq!(
+      configured_daemon_core_url(&preferences).as_deref(),
+      Some("http://localhost:3000")
+    );
   }
 
   #[test]
