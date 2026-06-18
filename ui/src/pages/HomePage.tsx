@@ -221,8 +221,10 @@ export function HomePage() {
   });
   const [isWeatherOpen, setIsWeatherOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isCalendarListView, setIsCalendarListView] = useState(false);
   const [calendarStatusMap, setCalendarStatusMap] = useState<Map<string, Map<string, TaskStatus>>>(new Map());
   const weatherPanelRef = useRef<HTMLDivElement | null>(null);
+  const calendarPanelRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 1000);
@@ -302,6 +304,26 @@ export function HomePage() {
     return () => {
       window.removeEventListener("storage", reloadSettings);
       window.removeEventListener("workbench-ui-settings-changed", reloadSettings);
+    };
+  }, []);
+
+  useEffect(() => {
+    const updateCalendarLayout = () => {
+      const rect = calendarPanelRef.current?.getBoundingClientRect();
+      const panelWidth = rect?.width ?? window.innerWidth;
+      const shouldUseList = panelWidth < 680 || window.innerHeight < 760;
+      setIsCalendarListView(shouldUseList);
+    };
+
+    updateCalendarLayout();
+    const observer = new ResizeObserver(updateCalendarLayout);
+    if (calendarPanelRef.current) {
+      observer.observe(calendarPanelRef.current);
+    }
+    window.addEventListener("resize", updateCalendarLayout);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updateCalendarLayout);
     };
   }, []);
 
@@ -476,6 +498,20 @@ export function HomePage() {
     return map;
   }, [allTasks, monthCells, calendarStatusMap]);
 
+  const calendarListRows = useMemo(() => {
+    return monthCells
+      .filter((cell) => cell.inCurrentMonth)
+      .map((cell) => {
+        const key = `${cell.date.getFullYear()}-${cell.date.getMonth()}-${cell.date.getDate()}`;
+        return {
+          key: cell.key,
+          date: cell.date,
+          isToday: isSameDay(cell.date, now),
+          tasks: tasksByDay.get(key) || []
+        };
+      });
+  }, [monthCells, now, tasksByDay]);
+
   if (isLoading) {
     return <p className="info">Loading dashboard...</p>;
   }
@@ -592,7 +628,10 @@ export function HomePage() {
           </div>
         </article>
 
-        <article className="panel home-panel home-panel-calendar">
+        <article
+          className={`panel home-panel home-panel-calendar${isCalendarListView ? " is-list" : ""}`}
+          ref={calendarPanelRef}
+        >
           <div className="panel-heading compact">
             <div className="panel-title-group">
               <span className="panel-title-icon" aria-hidden="true">
@@ -667,10 +706,37 @@ export function HomePage() {
               })}
             </div>
           </div>
+
+          <div className="mini-calendar-list" aria-label="Calendar list">
+            {calendarListRows.map((row) => (
+              <div key={row.key} className={`mini-calendar-list-row${row.isToday ? " is-today" : ""}`}>
+                <div className="mini-calendar-list-date">
+                  <strong>{row.date.getDate()}</strong>
+                  <span>{row.date.toLocaleDateString("en-US", { weekday: "short" })}</span>
+                </div>
+                <div className="mini-calendar-list-body">
+                  {row.tasks.length === 0 ? (
+                    <span className="mini-calendar-list-empty">No tasks</span>
+                  ) : row.tasks.slice(0, 3).map((task) => (
+                    <button
+                      key={task.id}
+                      type="button"
+                      className={`mini-calendar-list-task${task.status === "done" ? " done" : ""}`}
+                      onClick={() => navigate("/tasks", { state: { openTaskId: task.id, occurrenceStatus: task.status } })}
+                    >
+                      {task.title}
+                    </button>
+                  ))}
+                  {row.tasks.length > 3 ? (
+                    <span className="mini-calendar-list-more">+{row.tasks.length - 3} more</span>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+          </div>
         </article>
       </div>
     </section>
   );
 }
-
 
