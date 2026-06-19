@@ -192,6 +192,7 @@ button, input, select, textarea { font: inherit; }
 .app-shell.sidebar-collapsed .sidebar {
   padding-left: 0.35rem;
   padding-right: 0.35rem;
+  overflow: visible;
 }
 
 .app-shell.sidebar-collapsed .sidebar-top {
@@ -214,6 +215,7 @@ button, input, select, textarea { font: inherit; }
 .app-shell.sidebar-collapsed .sidebar-footer-wrap {
   display: flex;
   justify-content: center;
+  width: 100%;
 }
 
 .app-shell.sidebar-collapsed .sidebar-footer {
@@ -229,6 +231,26 @@ button, input, select, textarea { font: inherit; }
 .app-shell.sidebar-collapsed .sidebar-footer:hover {
   border-color: transparent;
   background: transparent;
+}
+
+.app-shell.sidebar-collapsed .user-menu {
+  left: calc(100% + 0.55rem);
+  right: auto;
+  bottom: 0;
+  width: min(230px, calc(100vw - 96px));
+}
+
+.app-shell.sidebar-collapsed .user-menu-item {
+  min-height: 46px;
+  padding: 0.64rem 0.78rem;
+  white-space: nowrap;
+}
+
+.app-shell.sidebar-collapsed .user-menu-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .workspace-main { display: grid; grid-template-rows: 56px minmax(0,1fr); min-width: 0; min-height: 0; overflow: hidden; }
