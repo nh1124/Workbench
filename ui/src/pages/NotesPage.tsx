@@ -544,11 +544,6 @@ export function NotesPage() {
                   onChange={(event) => setDraft((prev) => ({ ...prev, title: event.target.value }))}
                   placeholder="Title (optional)"
                 />
-                {modalMode === "edit" && editingNote ? (
-                  <span title={`Created ${formatDateTime(editingNote.createdAt)} / Updated ${formatDateTime(editingNote.updatedAt)}`}>
-                    Updated {formatDateTime(editingNote.updatedAt)}
-                  </span>
-                ) : null}
               </div>
 
               <select

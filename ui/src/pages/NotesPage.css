@@ -416,17 +416,6 @@
 .notes-compact-title-wrap {
   flex: 1 1 260px;
   min-width: 180px;
-  display: grid;
-  gap: 0.08rem;
-}
-
-.notes-compact-title-wrap span {
-  color: rgba(245, 245, 245, 0.48);
-  font-size: 0.62rem;
-  line-height: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .notes-compact-toolbar input,
