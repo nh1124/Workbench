@@ -1262,12 +1262,22 @@ pub fn set_daemon_core_url(
 ) -> Result<serde_json::Value, String> {
   let normalized = normalize_daemon_core_url(&core_url)?;
   let mut preferences = read_daemon_preferences_from_disk(&app)?;
+  let previous = configured_daemon_core_url(&preferences);
+  let changed = previous.as_deref() != Some(normalized.as_str());
   let object = preferences
     .as_object_mut()
     .ok_or_else(|| "daemon preferences were not an object".to_string())?;
-  object.insert("coreUrl".to_string(), serde_json::Value::String(normalized));
+  object.insert(
+    "coreUrl".to_string(),
+    serde_json::Value::String(normalized),
+  );
   let preferences = normalize_daemon_preferences(preferences);
   write_daemon_preferences_to_disk(&app, &preferences)?;
+
+  if changed && stop_daemon()? {
+    start_daemon_with_app(Some(&app))?;
+  }
+
   daemon_preferences_response(&app, preferences)
 }
 
