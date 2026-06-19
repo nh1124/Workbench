@@ -873,10 +873,37 @@ export function ArtifactsPage() {
     event.stopPropagation();
     setTableContextMenu(null);
     setEditorContextMenu(null);
+    setOutlineContextMenu(null);
     setContextMenu({
       x: event.clientX,
       y: event.clientY,
       target
+    });
+  };
+
+  const handleArtifactSurfaceContextMenu = (event: MouseEvent<HTMLElement>) => {
+    if (event.defaultPrevented) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    setTableContextMenu(null);
+    setEditorContextMenu(null);
+    setOutlineContextMenu(null);
+
+    if (hasDetailSelection) {
+      setContextMenu(null);
+      return;
+    }
+
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      target: {
+        type: "background",
+        folderPath: currentFolderPath
+      }
     });
   };
 
@@ -2343,7 +2370,6 @@ export function ArtifactsPage() {
       <section
         className={[
           "va-shell",
-          "panel",
           hasDetailSelection ? "edit-mode" : "directory-mode",
           editSidebarCollapsed ? "edit-sidebar-collapsed" : ""
         ]
@@ -2411,7 +2437,7 @@ export function ArtifactsPage() {
           </header>
         ) : null}
 
-        <div className="va-shell-content">
+        <div className="va-shell-content" onContextMenu={handleArtifactSurfaceContextMenu}>
           {error ? <p className="va-inline-error">{error}</p> : null}
 
           {!hasDetailSelection ? (

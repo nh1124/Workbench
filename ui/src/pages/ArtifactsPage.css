@@ -13,10 +13,10 @@
   max-height: 100%;
   min-height: 0;
   padding: 0;
-  border-radius: 20px;
-  border: 1px solid rgba(42, 62, 93, 0.75);
-  background: radial-gradient(120% 180% at 0% 0%, rgba(6, 15, 33, 0.95) 0%, rgba(4, 10, 23, 0.98) 65%, rgba(2, 8, 21, 1) 100%);
-  box-shadow: 0 20px 42px rgba(1, 5, 14, 0.35), inset 0 1px 0 rgba(97, 139, 197, 0.08);
+  border-radius: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
@@ -42,7 +42,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 0.7rem;
-  padding: 0.68rem 0.78rem;
+  padding: 0.72rem 1.1rem;
   border-bottom: 1px solid rgba(47, 65, 93, 0.8);
   background: linear-gradient(180deg, rgba(8, 17, 35, 0.96), rgba(5, 12, 25, 0.95));
 }
@@ -237,6 +237,7 @@
 }
 
 .va-directory-pane {
+  grid-row: 2;
   min-height: 0;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
@@ -344,6 +345,7 @@
 }
 
 .va-edit-layout {
+  grid-row: 2;
   min-height: 0;
   overflow: hidden;
   display: grid;

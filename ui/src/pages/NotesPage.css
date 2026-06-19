@@ -388,14 +388,180 @@
 }
 
 .notes-modal {
-  width: min(640px, 96vw);
+  width: min(960px, 96vw);
+  height: min(760px, 90vh);
   max-height: 90vh;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  border: 1px solid rgba(51, 65, 85, 0.85);
-  border-radius: 18px;
-  background: linear-gradient(180deg, #131f36 0%, #0d1527 100%);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid rgba(71, 85, 105, 0.72);
+  border-radius: 14px;
+  background: #1f1f1f;
   overflow: hidden;
+}
+
+.notes-compact-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.55rem;
+  background: #2b2b2b;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  flex: 0 0 auto;
+}
+
+.notes-compact-title-wrap {
+  flex: 1 1 260px;
+  min-width: 180px;
+  display: grid;
+  gap: 0.08rem;
+}
+
+.notes-compact-title-wrap span {
+  color: rgba(245, 245, 245, 0.48);
+  font-size: 0.62rem;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.notes-compact-toolbar input,
+.notes-compact-toolbar select {
+  min-width: 0;
+  height: 1.95rem;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: #252525;
+  color: #f5f5f5;
+  padding: 0 0.55rem;
+  font-size: 0.78rem;
+}
+
+.notes-compact-toolbar input::placeholder {
+  color: rgba(245, 245, 245, 0.5);
+}
+
+.notes-compact-title {
+  width: 100%;
+}
+
+.notes-compact-project {
+  flex: 0 0 138px;
+}
+
+.notes-compact-tag-input {
+  flex: 0 0 122px;
+}
+
+.notes-compact-save,
+.notes-compact-delete,
+.notes-compact-close {
+  height: 1.95rem;
+  border-radius: 8px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  flex: 0 0 auto;
+}
+
+.notes-compact-save {
+  width: 90px;
+  border: 1px solid rgba(138, 195, 255, 0.4);
+  background: #2d4b66;
+  color: #e5f1ff;
+}
+
+.notes-compact-delete {
+  width: 76px;
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  background: rgba(127, 29, 29, 0.38);
+  color: #fecaca;
+}
+
+.notes-compact-close {
+  width: 2rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #252525;
+  color: rgba(245, 245, 245, 0.7);
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+
+.notes-compact-close svg {
+  width: 0.82rem;
+  height: 0.82rem;
+}
+
+.notes-compact-save:disabled,
+.notes-compact-delete:disabled {
+  opacity: 0.6;
+}
+
+.notes-compact-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  padding: 0.35rem 0.55rem 0.05rem;
+  background: #1f1f1f;
+  flex: 0 0 auto;
+}
+
+.notes-modal-error-compact {
+  margin: 0;
+  padding: 0.4rem 0.7rem 0;
+  flex: 0 0 auto;
+}
+
+.notes-editor-wrap {
+  min-height: 0;
+  flex: 1 1 auto;
+  display: flex;
+  overflow: hidden;
+}
+
+.notes-compact-editor {
+  width: 100%;
+  min-height: 0;
+  flex: 1 1 auto;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: #1f1f1f;
+  color: #f5f5f5;
+  padding: 0.95rem 0.85rem;
+  font-size: 1.02rem;
+  line-height: 1.55;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(124, 145, 174, 0.7) rgba(8, 16, 35, 0.78);
+  cursor: text;
+}
+
+.notes-compact-editor::placeholder {
+  color: rgba(245, 245, 245, 0.4);
+}
+
+.notes-compact-editor::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.notes-compact-editor::-webkit-scrollbar-track {
+  background: rgba(8, 16, 35, 0.78);
+  border-radius: 999px;
+}
+
+.notes-compact-editor::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(124, 145, 174, 0.86), rgba(88, 106, 138, 0.92));
+  border-radius: 999px;
+  border: 2px solid rgba(8, 16, 35, 0.88);
+}
+
+.notes-compact-editor::-webkit-scrollbar-button {
+  display: none;
 }
 
 .notes-modal-head {
@@ -575,5 +741,35 @@
 
   .notes-card-grid {
     grid-template-columns: 1fr;
+  }
+
+  .notes-modal {
+    width: 96vw;
+    height: 88vh;
+  }
+
+  .notes-compact-toolbar {
+    align-items: stretch;
+  }
+}
+
+@media (max-width: 620px) {
+  .notes-compact-toolbar {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    overflow-x: visible;
+  }
+
+  .notes-compact-title-wrap,
+  .notes-compact-project,
+  .notes-compact-tag-input {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .notes-compact-save,
+  .notes-compact-delete {
+    width: auto;
+    min-width: 76px;
   }
 }

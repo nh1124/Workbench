@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Link } from "react-router-dom";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { notesApi, projectsApi } from "../lib/api";
@@ -48,6 +48,18 @@ function previewContent(content: string): string {
     return "No content yet.";
   }
   return normalized.length > 160 ? `${normalized.slice(0, 157)}...` : normalized;
+}
+
+function inferNoteTitle(content: string): string {
+  const line = content
+    .split("\n")
+    .map((value) => value.trim())
+    .find(Boolean);
+  if (line) {
+    return line.slice(0, 60);
+  }
+  const now = new Date();
+  return `Note ${now.toLocaleString("ja-JP", { hour12: false })}`;
 }
 
 function mergeProjectOptions(...groups: ProjectOption[][]): ProjectOption[] {
@@ -143,6 +155,8 @@ export function NotesPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [deleteConfirmNote, setDeleteConfirmNote] = useState<{ id: string; title: string } | null>(null);
+  const contentInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const tagInputRef = useRef<HTMLInputElement | null>(null);
 
   const load = async () => {
     setIsLoading(true);
@@ -255,6 +269,14 @@ export function NotesPage() {
     setError(null);
   };
 
+  useEffect(() => {
+    if (!modalMode) return;
+    const focusTimer = window.setTimeout(() => {
+      contentInputRef.current?.focus();
+    }, 0);
+    return () => window.clearTimeout(focusTimer);
+  }, [modalMode]);
+
   const addTag = (value: string) => {
     const normalized = value.trim();
     if (!normalized) {
@@ -286,8 +308,8 @@ export function NotesPage() {
   };
 
   const handleSave = async () => {
-    if (!draft.title.trim()) {
-      setError("Title is required.");
+    if (!draft.title.trim() && !draft.content.trim()) {
+      setError("Title or content is required.");
       return;
     }
 
@@ -297,7 +319,7 @@ export function NotesPage() {
     try {
       const normalizedProjectId = draft.projectId.trim() || DEFAULT_PROJECT_ID;
       const payload = {
-        title: draft.title.trim(),
+        title: draft.title.trim() || inferNoteTitle(draft.content),
         content: draft.content,
         projectId: normalizedProjectId,
         projectName: draft.projectName.trim() || resolveProjectName(normalizedProjectId),
@@ -317,6 +339,21 @@ export function NotesPage() {
       setError(isAuthErrorMessage(message) ? "Sign-in is required to save notes." : message);
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleModalKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeModal();
+      return;
+    }
+
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      if (!isSaving) {
+        void handleSave();
+      }
     }
   };
 
@@ -497,111 +534,96 @@ export function NotesPage() {
             aria-modal="true"
             aria-label={modalMode === "edit" ? "Edit note" : "Create note"}
             onClick={(event) => event.stopPropagation()}
+            onKeyDown={handleModalKeyDown}
           >
-            <header className="notes-modal-head">
-              <div>
-                <h3>{modalMode === "edit" ? "Edit Note" : "Create Note"}</h3>
-                <p>{modalMode === "edit" ? "Update note details" : "Capture a new text note"}</p>
-              </div>
-              <button type="button" className="notes-modal-close" onClick={() => closeModal()} aria-label="Close">
-                <IcoClose />
-              </button>
-            </header>
-
-            <div className="notes-modal-body">
-              {error ? <p className="notes-modal-error">{error}</p> : null}
-
-              <label>
-                Title
+            <div className="notes-compact-toolbar">
+              <div className="notes-compact-title-wrap">
                 <input
+                  className="notes-compact-title"
                   value={draft.title}
                   onChange={(event) => setDraft((prev) => ({ ...prev, title: event.target.value }))}
-                  placeholder="Note title"
+                  placeholder="Title (optional)"
                 />
-              </label>
+                {modalMode === "edit" && editingNote ? (
+                  <span title={`Created ${formatDateTime(editingNote.createdAt)} / Updated ${formatDateTime(editingNote.updatedAt)}`}>
+                    Updated {formatDateTime(editingNote.updatedAt)}
+                  </span>
+                ) : null}
+              </div>
 
-              <label>
-                Content
-                <textarea
-                  rows={9}
-                  value={draft.content}
-                  onChange={(event) => setDraft((prev) => ({ ...prev, content: event.target.value }))}
-                  placeholder="Write note content"
-                />
-              </label>
+              <select
+                className="notes-compact-project"
+                value={draft.projectId}
+                onChange={(event) =>
+                  setDraft((prev) => ({
+                    ...prev,
+                    projectId: event.target.value,
+                    projectName: resolveProjectName(event.target.value) ?? prev.projectName
+                  }))
+                }
+              >
+                {projectOptions.map((project) => (
+                  <option key={project.projectId} value={project.projectId}>
+                    {normalizeProjectName(project.projectId, project.projectName)}
+                  </option>
+                ))}
+              </select>
 
-              <label className="notes-modal-field-label">
-                Link to Project
-                <select
-                  value={draft.projectId}
-                  onChange={(event) =>
-                    setDraft((prev) => ({
-                      ...prev,
-                      projectId: event.target.value,
-                      projectName: resolveProjectName(event.target.value) ?? prev.projectName
-                    }))
-                  }
-                >
-                  {projectOptions.map((project) => (
-                    <option key={project.projectId} value={project.projectId}>
-                      {normalizeProjectName(project.projectId, project.projectName)}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <input
+                ref={tagInputRef}
+                className="notes-compact-tag-input"
+                value={tagInput}
+                onChange={(event) => setTagInput(event.target.value)}
+                onKeyDown={handleTagInputKeyDown}
+                onBlur={() => addTag(tagInput)}
+                placeholder="Tag + Enter"
+              />
 
-              <label className="notes-modal-field-label">
-                Tags
-                <div className="note-tags-input" onClick={() => document.getElementById("note-tag-input")?.focus()}>
-                  {draft.tags.map((tag) => (
-                    <span key={tag} className="note-tag-token">
-                      {tag}
-                      <button type="button" onClick={() => removeTag(tag)} aria-label={`Remove ${tag}`}>
-                        <IcoClose />
-                      </button>
-                    </span>
-                  ))}
-                  <input
-                    id="note-tag-input"
-                    value={tagInput}
-                    onChange={(event) => setTagInput(event.target.value)}
-                    onKeyDown={handleTagInputKeyDown}
-                    onBlur={() => addTag(tagInput)}
-                    placeholder={draft.tags.length === 0 ? "Add tag and press Enter..." : "Add tag"}
-                  />
-                </div>
-              </label>
-
-              {modalMode === "edit" && editingNote ? (
-                <div className="notes-modal-meta">
-                  <small>Created {formatDateTime(editingNote.createdAt)}</small>
-                  <small>Updated {formatDateTime(editingNote.updatedAt)}</small>
-                </div>
-              ) : null}
-            </div>
-
-            <footer className="notes-modal-foot">
               {modalMode === "edit" && editingNoteId ? (
                 <button
                   type="button"
-                  className="notes-modal-delete"
+                  className="notes-compact-delete"
                   disabled={isSaving}
                   onClick={() => requestDelete(editingNoteId, editingNote?.title)}
                 >
                   Delete
                 </button>
-              ) : (
-                <span />
-              )}
-              <div className="notes-modal-actions">
-                <button type="button" className="ghost-button" onClick={() => closeModal()} disabled={isSaving}>
-                  Cancel
-                </button>
-                <button type="button" onClick={() => void handleSave()} disabled={isSaving}>
-                  {isSaving ? "Saving..." : modalMode === "edit" ? "Save Changes" : "Save"}
-                </button>
+              ) : null}
+
+              <button type="button" className="notes-compact-save" onClick={() => void handleSave()} disabled={isSaving}>
+                {isSaving ? "Saving..." : "Save"}
+              </button>
+
+              <button type="button" className="notes-compact-close" onClick={() => closeModal()} aria-label="Close">
+                <IcoClose />
+              </button>
+            </div>
+
+            {draft.tags.length > 0 ? (
+              <div className="notes-compact-tags">
+                {draft.tags.map((tag) => (
+                  <span key={tag} className="note-tag-token">
+                    {tag}
+                    <button type="button" onClick={() => removeTag(tag)} aria-label={`Remove ${tag}`}>
+                      <IcoClose />
+                    </button>
+                  </span>
+                ))}
               </div>
-            </footer>
+            ) : null}
+
+            {error ? <p className="notes-modal-error notes-modal-error-compact">{error}</p> : null}
+
+            <div className="notes-editor-wrap">
+              <textarea
+                ref={contentInputRef}
+                autoFocus
+                className="notes-compact-editor"
+                value={draft.content}
+                onChange={(event) => setDraft((prev) => ({ ...prev, content: event.target.value }))}
+                placeholder="Start typing..."
+              />
+            </div>
           </section>
         </div>
       ) : null}
