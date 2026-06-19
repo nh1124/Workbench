@@ -212,6 +212,57 @@ async function ensureDirs(config: DaemonConfig): Promise<void> {
   await fs.mkdir(join(config.syncRoot, ".workbench", "conflicts"), { recursive: true });
 }
 
+class CoreHttpError extends Error {
+  status: number;
+  code?: string;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = "CoreHttpError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+function coreHttpError(response: Response, body: string): CoreHttpError {
+  let message: string | undefined;
+  let code: string | undefined;
+  const trimmed = body.trim();
+
+  if (trimmed.startsWith("{") || response.headers.get("content-type")?.includes("application/json")) {
+    try {
+      const parsed = JSON.parse(trimmed) as { message?: unknown; error?: unknown; code?: unknown };
+      message = stringFromUnknown(parsed.message) ?? stringFromUnknown(parsed.error);
+      code = stringFromUnknown(parsed.code);
+    } catch {
+      // Fall through to the compact non-JSON response below.
+    }
+  }
+
+  const cloudflareTunnelOffline = /cloudflare tunnel error/i.test(trimmed) && (
+    /errorcode\s*:\s*1033/i.test(trimmed)
+    || /<span[^>]*>\s*1033\s*<\/span>/i.test(trimmed)
+    || /error\s+1033/i.test(trimmed)
+  );
+  if (cloudflareTunnelOffline) {
+    return new CoreHttpError(
+      `Cloud API is unavailable because its Cloudflare tunnel is offline (HTTP ${response.status}, error 1033).`,
+      response.status,
+      "CLOUDFLARE_TUNNEL_UNAVAILABLE"
+    );
+  }
+
+  if (!message && trimmed && !/^<!doctype html/i.test(trimmed) && !/^<html/i.test(trimmed)) {
+    message = trimmed.replace(/\s+/g, " ").slice(0, 500);
+  }
+
+  return new CoreHttpError(
+    message ?? `Cloud API request failed with HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}.`,
+    response.status,
+    code
+  );
+}
+
 async function coreJson<T>(
   config: DaemonConfig,
   pathValue: string,
@@ -234,7 +285,7 @@ async function coreJson<T>(
   });
   const text = await response.text();
   if (!response.ok) {
-    throw new Error(text || `HTTP ${response.status}`);
+    throw coreHttpError(response, text);
   }
   return (text.trim() ? JSON.parse(text) : undefined) as T;
 }
@@ -4704,6 +4755,13 @@ export function classifySyncError(input: unknown): SyncErrorDetails {
     || status === 400
   ) {
     return { errorMessage, errorCode, errorCategory: "validation", retryable: false };
+  }
+  if (
+    normalizedCode.includes("TUNNEL")
+    || normalizedMessage.includes("cloudflare tunnel is offline")
+    || normalizedMessage.includes("cloudflare tunnel unavailable")
+  ) {
+    return { errorMessage, errorCode, errorCategory: "network", retryable: true };
   }
   if (
     normalizedCode === "SYNC_PUSH_OPERATION_FAILED"

@@ -129,7 +129,7 @@ export function Layout() {
     const outboxFailed = daemonStatus.outboxFailed ?? 0;
     const outboxPending = daemonStatus.outboxPending ?? 0;
     const syncActive = daemonStatus.syncActive || daemonStatus.tickRunning || daemonStatus.tickQueued;
-    const snapshotComplete = daemonStatus.remoteArtifactSnapshotComplete ?? true;
+    const snapshotComplete = daemonStatus.remoteArtifactSnapshotComplete === true;
     if (conflictsOpen > 0) {
       return {
         className: "issue",
@@ -142,6 +142,13 @@ export function Layout() {
         className: "issue",
         label: `${outboxFailed} failed`,
         title: `Local daemon has ${outboxFailed} failed outbox item${outboxFailed === 1 ? "" : "s"}`
+      };
+    }
+    if (daemonStatus.lastError) {
+      return {
+        className: "issue",
+        label: "Sync issue",
+        title: `Cloud sync failed: ${daemonStatus.lastError}`
       };
     }
     if (syncActive || !snapshotComplete) {

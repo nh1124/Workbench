@@ -1551,7 +1551,9 @@ export function SettingsPage() {
                     {localDaemonStatus.watcherActive ? "Watcher On" : "Watcher Off"}
                   </span>
                   <span>
-                    {localDaemonStatus.syncActive || localDaemonStatus.tickRunning || localDaemonStatus.tickQueued || localDaemonStatus.remoteArtifactSnapshotComplete === false
+                    {localDaemonStatus.lastError
+                      ? "Sync issue"
+                      : localDaemonStatus.syncActive || localDaemonStatus.tickRunning || localDaemonStatus.tickQueued || localDaemonStatus.remoteArtifactSnapshotComplete !== true
                       ? "Syncing"
                       : "Synced"}
                   </span>

@@ -48,6 +48,14 @@ describe("sync error classification", () => {
     assert.equal(network.errorCategory, "network");
     assert.equal(network.retryable, true);
 
+    const tunnel = classifySyncError({
+      status: 530,
+      code: "CLOUDFLARE_TUNNEL_UNAVAILABLE",
+      message: "Cloud API is unavailable because its Cloudflare tunnel is offline."
+    });
+    assert.equal(tunnel.errorCategory, "network");
+    assert.equal(tunnel.retryable, true);
+
     const path = classifySyncError({
       code: "SYNC_REMOTE_PATH_UNSAFE",
       message: "Remote path resolves outside the sync root."

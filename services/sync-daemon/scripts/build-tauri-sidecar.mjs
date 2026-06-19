@@ -141,6 +141,12 @@ function makeSidecarEntry() {
   );
   source = replaceOnce(
     source,
+    'from "./coreUrl.js";',
+    'from "../../src/coreUrl.ts";',
+    "core URL import"
+  );
+  source = replaceOnce(
+    source,
     '} from "./manifestStore.js";',
     '} from "../../src/manifestStore.ts";',
     "manifestStore import"
