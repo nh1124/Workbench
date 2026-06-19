@@ -489,6 +489,22 @@ export function SettingsPage() {
     }
   };
 
+  const requestLocalDaemonRescan = async () => {
+    setLocalDaemonLoading(true);
+    setLocalDaemonMessage("");
+    try {
+      const result = await localDaemonApi.requestRescan();
+      setLocalDaemonStatus(result.status);
+      await loadLocalDaemonState();
+      setLocalDaemonMessage("Full cloud snapshot rescan scheduled.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to schedule full rescan";
+      setLocalDaemonMessage(message);
+    } finally {
+      setLocalDaemonLoading(false);
+    }
+  };
+
   const saveLocalDaemonUrl = () => {
     try {
       const normalized = setWorkbenchLocalDaemonUrl(localDaemonUrlInput);
@@ -1534,6 +1550,11 @@ export function SettingsPage() {
                   <span className={localDaemonStatus.watcherActive ? "online" : "offline"}>
                     {localDaemonStatus.watcherActive ? "Watcher On" : "Watcher Off"}
                   </span>
+                  <span>
+                    {localDaemonStatus.syncActive || localDaemonStatus.tickRunning || localDaemonStatus.tickQueued || localDaemonStatus.remoteArtifactSnapshotComplete === false
+                      ? "Syncing"
+                      : "Synced"}
+                  </span>
                   <span>{localDaemonStatus.outboxPending ?? 0} pending</span>
                   <span>{localDaemonStatus.outboxFailed ?? 0} failed</span>
                   <span>{localDaemonStatus.conflictsOpen ?? 0} conflicts</span>
@@ -1724,6 +1745,13 @@ export function SettingsPage() {
                       disabled={!nativeRuntimeAvailable || localDaemonLoading}
                     >
                       Native Status
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void requestLocalDaemonRescan()}
+                      disabled={localDaemonLoading}
+                    >
+                      Full Rescan
                     </button>
                     <button type="button" onClick={() => void startNativeDaemon()} disabled={!nativeRuntimeAvailable}>
                       Start

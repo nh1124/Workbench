@@ -4609,6 +4609,16 @@ export async function pullRemoteArtifactSyncState(state: DaemonState): Promise<v
   await refreshManifestStats(state);
 }
 
+async function requestRemoteSnapshotRescan(state: DaemonState): Promise<void> {
+  setMeta(state.manifestStore, REMOTE_SYNC_CURSOR_META_KEY, undefined);
+  setMeta(state.manifestStore, REMOTE_ARTIFACT_CURSOR_META_KEY, undefined);
+  setMeta(state.manifestStore, REMOTE_ARTIFACT_SNAPSHOT_COMPLETE_META_KEY, undefined);
+  state.remoteArtifactCursor = undefined;
+  scheduleTick(state, 0);
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
+  await refreshManifestStats(state);
+}
+
 type SyncPushResponse = {
   applied?: Array<{
     index: number;
@@ -5450,6 +5460,19 @@ function startStatusServer(state: DaemonState): void {
 
     if (url.pathname === "/status" || url.pathname === "/api/sync/status") {
       writeJson(res, daemonStatusPayload(state));
+      return;
+    }
+
+    if (url.pathname === "/api/sync/rescan" && req.method === "POST") {
+      try {
+        await requestRemoteSnapshotRescan(state);
+        writeJson(res, {
+          scheduled: true,
+          status: daemonStatusPayload(state)
+        });
+      } catch (error) {
+        writeJson(res, { message: error instanceof Error ? error.message : String(error) }, 400);
+      }
       return;
     }
 

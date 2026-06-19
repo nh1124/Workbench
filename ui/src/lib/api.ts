@@ -1468,6 +1468,10 @@ export const coreApi = {
 export const localDaemonApi = {
   status: (): Promise<LocalDaemonStatus> =>
     requestLocalDaemonJson<LocalDaemonStatus>("/status"),
+  requestRescan: (): Promise<{ scheduled: boolean; status: LocalDaemonStatus }> =>
+    requestLocalDaemonJson<{ scheduled: boolean; status: LocalDaemonStatus }>("/api/sync/rescan", {
+      method: "POST"
+    }),
   listPendingJobConfirmations: (): Promise<{
     policy: LocalDaemonStatus["localJobConfirmationPolicy"];
     items: LocalDaemonPendingJobConfirmation[];
