@@ -218,6 +218,32 @@ export const artifactsClient = {
       })}`,
       token
     ),
+  treeListPage: (
+    token: string,
+    options: {
+      projectId?: string;
+      pathPrefix?: string;
+      kinds?: string[];
+      includeContent?: boolean;
+      updatedSince?: string;
+      limit?: number;
+      cursor?: string;
+    }
+  ) =>
+    serviceRequest<unknown>(
+      artifactsService,
+      `/artifacts/tree/list${buildQuery({
+        projectId: options.projectId,
+        pathPrefix: options.pathPrefix,
+        kinds: options.kinds?.join(","),
+        includeContent: options.includeContent,
+        updatedSince: options.updatedSince,
+        limit: options.limit,
+        cursor: options.cursor,
+        page: true
+      })}`,
+      token
+    ),
   getItem: (token: string, id: string) =>
     serviceRequest<unknown>(artifactsService, `/artifacts/items/${encodeURIComponent(id)}`, token),
   createFolder: (token: string, payload: unknown) =>

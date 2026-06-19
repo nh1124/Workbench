@@ -3707,6 +3707,7 @@ type SyncSnapshotResponse = {
 const REMOTE_SYNC_DOMAINS: RemoteResourceDomain[] = ["projects", "notes", "artifacts", "tasks"];
 const REMOTE_SYNC_CURSOR_META_KEY = "remoteSyncCursor";
 const REMOTE_ARTIFACT_CURSOR_META_KEY = "remoteArtifactCursor";
+const REMOTE_ARTIFACT_SNAPSHOT_COMPLETE_META_KEY = "remoteArtifactSnapshotComplete";
 const LAST_REMOTE_PULL_AT_META_KEY = "lastRemotePullAt";
 const REMOTE_PULL_LIMIT = 100;
 const REMOTE_SNAPSHOT_PAGE_LIMIT = 100;
@@ -4509,11 +4510,35 @@ async function bootstrapPagedDomainSnapshot(
   }
 }
 
+async function bootstrapPagedArtifactSnapshot(
+  state: DaemonState,
+  firstPage: unknown,
+  initialGeneratedAt: string
+): Promise<void> {
+  let cursor = snapshotNextCursor(firstPage);
+  for (let pageIndex = 0; cursor && pageIndex < 100; pageIndex += 1) {
+    const page = await getSyncSnapshot(state, ["artifacts"], {
+      cursor,
+      limit: REMOTE_SNAPSHOT_PAGE_LIMIT
+    });
+    const generatedAt = asString(page.generatedAt) ?? initialGeneratedAt;
+    for (const item of snapshotItems(page.domains?.artifacts)) {
+      await applyRemoteArtifactSnapshotEntry(state, item, generatedAt);
+    }
+    const nextCursor = snapshotNextCursor(page.domains?.artifacts);
+    if (!nextCursor || nextCursor === cursor) {
+      return;
+    }
+    cursor = nextCursor;
+  }
+}
+
 async function bootstrapPagedDomainSnapshots(
   state: DaemonState,
   snapshot: SyncSnapshotResponse,
   initialGeneratedAt: string
 ): Promise<void> {
+  await bootstrapPagedArtifactSnapshot(state, snapshot.domains?.artifacts, initialGeneratedAt);
   for (const domain of ["projects", "notes", "tasks"] as const) {
     await bootstrapPagedDomainSnapshot(state, domain, snapshot.domains?.[domain], initialGeneratedAt);
   }
@@ -4562,8 +4587,10 @@ export async function pullRemoteArtifactSyncState(state: DaemonState): Promise<v
   let cursor = getMeta(state.manifestStore, REMOTE_SYNC_CURSOR_META_KEY)
     ?? getMeta(state.manifestStore, REMOTE_ARTIFACT_CURSOR_META_KEY)
     ?? state.remoteArtifactCursor;
-  if (!cursor) {
+  const snapshotComplete = getMeta(state.manifestStore, REMOTE_ARTIFACT_SNAPSHOT_COMPLETE_META_KEY) === "1";
+  if (!cursor || !snapshotComplete) {
     cursor = await bootstrapRemoteArtifactSnapshot(state);
+    setMeta(state.manifestStore, REMOTE_ARTIFACT_SNAPSHOT_COMPLETE_META_KEY, "1");
   } else {
     const page = await getSyncPullPage(state, cursor, REMOTE_PULL_LIMIT);
     for (const event of page.events ?? []) {
@@ -5343,6 +5370,9 @@ function daemonStatusPayload(state: DaemonState): Record<string, unknown> {
     watchEnabled: state.config.watchEnabled,
     watcherActive: state.watcherActive,
     watchDebounceMs: state.config.watchDebounceMs,
+    syncActive: state.tickRunning || state.tickQueued,
+    tickRunning: state.tickRunning,
+    tickQueued: state.tickQueued,
     localJobConfirmationPolicy: state.config.localJobConfirmationPolicy ?? "off",
     localJobConfirmationsPending: pendingJobConfirmations(state).size,
     localClientId: state.identity?.localClientId,
@@ -5353,6 +5383,7 @@ function daemonStatusPayload(state: DaemonState): Record<string, unknown> {
     lastRemotePullAt: state.lastRemotePullAt,
     remoteSyncCursor: getMeta(state.manifestStore, REMOTE_SYNC_CURSOR_META_KEY) ?? state.remoteArtifactCursor,
     remoteArtifactCursor: state.remoteArtifactCursor,
+    remoteArtifactSnapshotComplete: getMeta(state.manifestStore, REMOTE_ARTIFACT_SNAPSHOT_COMPLETE_META_KEY) === "1",
     lastError: state.lastError,
     lastErrorCode: state.lastErrorCode,
     lastErrorCategory: state.lastErrorCategory,

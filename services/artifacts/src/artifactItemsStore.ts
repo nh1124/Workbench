@@ -14,6 +14,7 @@ import type {
   ArtifactPreviewStatus,
   ArtifactItemKind,
   ArtifactProjectSummary,
+  ArtifactItemListPage,
   ArtifactItemListOptions,
   ArtifactNotePatchInput,
   ArtifactNotePatchOperation,
@@ -690,6 +691,14 @@ export async function listArtifactItemsFiltered(
   options: ArtifactItemListOptions,
   ownerUsername: string
 ): Promise<ArtifactItem[]> {
+  const page = await listArtifactItemsFilteredPage(options, ownerUsername);
+  return page.items;
+}
+
+export async function listArtifactItemsFilteredPage(
+  options: ArtifactItemListOptions,
+  ownerUsername: string
+): Promise<ArtifactItemListPage> {
   await ensureArtifactsSchema();
   const pool = getArtifactsPool();
   const owner = normalizeOwner(ownerUsername);
@@ -701,6 +710,8 @@ export async function listArtifactItemsFiltered(
   const limit = typeof requestedLimit === "number" && Number.isFinite(requestedLimit)
     ? Math.max(1, Math.min(Math.trunc(requestedLimit), 500))
     : undefined;
+  const requestedOffset = options.cursor ? Number(options.cursor) : 0;
+  const offset = Number.isFinite(requestedOffset) && requestedOffset > 0 ? Math.trunc(requestedOffset) : 0;
   const values: Array<string | string[] | number> = [owner];
   let sql = `
     SELECT
@@ -754,14 +765,21 @@ export async function listArtifactItemsFiltered(
     sql += ` AND updated_at > $${values.length}::timestamptz`;
   }
 
-  sql += " ORDER BY path ASC, updated_at DESC";
+  sql += " ORDER BY path ASC, project_id ASC, updated_at DESC, id ASC";
   if (limit) {
-    values.push(limit);
+    values.push(limit + 1);
     sql += ` LIMIT $${values.length}`;
+  }
+  if (offset > 0) {
+    values.push(offset);
+    sql += ` OFFSET $${values.length}`;
   }
 
   const result = await pool.query<ArtifactItemRow>(sql, values);
-  return result.rows.map((row) => toArtifactItem(row, Boolean(options.includeContent) && row.kind === "note"));
+  const rows = limit ? result.rows.slice(0, limit) : result.rows;
+  const items = rows.map((row) => toArtifactItem(row, Boolean(options.includeContent) && row.kind === "note"));
+  const nextCursor = limit && result.rows.length > limit ? String(offset + limit) : undefined;
+  return { items, nextCursor };
 }
 
 export async function listArtifactItemProjects(ownerUsername: string): Promise<ArtifactProjectSummary[]> {

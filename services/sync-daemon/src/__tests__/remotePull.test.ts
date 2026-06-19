@@ -121,15 +121,18 @@ describe("remote artifact pull reconciliation", () => {
                 ],
                 nextCursor: "note-cursor-2"
               },
-              artifacts: [
-                {
-                  id: "note-1",
-                  kind: "note",
-                  title: "Remote",
-                  path: "docs/remote.md",
-                  contentMarkdown: "# Remote\n"
-                }
-              ],
+              artifacts: {
+                items: [
+                  {
+                    id: "note-1",
+                    kind: "note",
+                    title: "Remote",
+                    path: "docs/remote.md",
+                    contentMarkdown: "# Remote\n"
+                  }
+                ],
+                nextCursor: "artifact-cursor-2"
+              },
               tasks: {
                 items: [
                   {
@@ -140,6 +143,24 @@ describe("remote artifact pull reconciliation", () => {
                   }
                 ],
                 nextCursor: "task-cursor-2"
+              }
+            }
+          });
+        }
+        if (url === "http://core.test/api/sync/snapshot?domains=artifacts&cursor=artifact-cursor-2&limit=100") {
+          return jsonResponse({
+            generatedAt: "2026-06-16T00:00:04.000Z",
+            domains: {
+              artifacts: {
+                items: [
+                  {
+                    id: "note-2",
+                    kind: "note",
+                    title: "Remote More",
+                    path: "docs/more.md",
+                    contentMarkdown: "# More\n"
+                  }
+                ]
               }
             }
           });
@@ -224,12 +245,14 @@ describe("remote artifact pull reconciliation", () => {
 
       assert.deepEqual(calls, [
         "http://core.test/api/sync/snapshot?domains=projects%2Cnotes%2Cartifacts%2Ctasks",
+        "http://core.test/api/sync/snapshot?domains=artifacts&cursor=artifact-cursor-2&limit=100",
         "http://core.test/api/sync/snapshot?domains=projects&cursor=project-cursor-2&limit=100",
         "http://core.test/api/sync/snapshot?domains=notes&cursor=note-cursor-2&limit=100",
         "http://core.test/api/sync/snapshot?domains=tasks&cursor=task-cursor-2&limit=100",
         "http://core.test/api/sync/pull?limit=500"
       ]);
       assert.equal(await readFile(join(root, "docs", "remote.md"), "utf8"), "# Remote\n");
+      assert.equal(await readFile(join(root, "docs", "more.md"), "utf8"), "# More\n");
       const manifest = readManifestFromStore(store);
       assert.equal(manifest.remoteResources?.find((item) => item.domain === "projects")?.resourceId, "project-1");
       assert.equal(manifest.remoteResources?.some((item) => item.domain === "projects" && item.resourceId === "project-2"), true);
@@ -239,6 +262,7 @@ describe("remote artifact pull reconciliation", () => {
       assert.equal(manifest.remoteResources?.some((item) => item.domain === "tasks" && item.resourceId === "task-2"), true);
       assert.equal(getMeta(store, "remoteSyncCursor"), "7");
       assert.equal(getMeta(store, "remoteArtifactCursor"), "7");
+      assert.equal(getMeta(store, "remoteArtifactSnapshotComplete"), "1");
       assert.ok(getMeta(store, "lastRemotePullAt"));
     } finally {
       closeManifestStore(store);
@@ -249,6 +273,7 @@ describe("remote artifact pull reconciliation", () => {
     const { store, state } = await createState();
     try {
       setMeta(store, "remoteArtifactCursor", "50");
+      setMeta(store, "remoteArtifactSnapshotComplete", "1");
       upsertRemoteResource(store, {
         domain: "tasks",
         resourceId: "task-existing",
@@ -383,6 +408,7 @@ describe("remote artifact pull reconciliation", () => {
       ]);
       assert.equal(await readFile(join(root, "fallback.md"), "utf8"), "# Fallback\n");
       assert.equal(getMeta(store, "remoteSyncCursor"), "9");
+      assert.equal(getMeta(store, "remoteArtifactSnapshotComplete"), "1");
     } finally {
       closeManifestStore(store);
     }
@@ -392,6 +418,7 @@ describe("remote artifact pull reconciliation", () => {
     const { root, store, state } = await createState();
     try {
       setMeta(store, "remoteArtifactCursor", "10");
+      setMeta(store, "remoteArtifactSnapshotComplete", "1");
       globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         assert.equal((init?.headers as Record<string, string>)["x-workbench-local-client-id"], "client-1");
         assert.equal((init?.headers as Record<string, string>)["x-workbench-local-client-token"], "token-1");
@@ -438,6 +465,7 @@ describe("remote artifact pull reconciliation", () => {
     const calls: string[] = [];
     try {
       setMeta(store, "remoteArtifactCursor", "20");
+      setMeta(store, "remoteArtifactSnapshotComplete", "1");
       globalThis.fetch = (async (input: RequestInfo | URL) => {
         const url = String(input);
         calls.push(url);
@@ -494,6 +522,7 @@ describe("remote artifact pull reconciliation", () => {
     const { root, store, state } = await createState();
     try {
       setMeta(store, "remoteArtifactCursor", "25");
+      setMeta(store, "remoteArtifactSnapshotComplete", "1");
       globalThis.fetch = (async (input: RequestInfo | URL) => {
         const url = String(input);
         if (url === "http://core.test/api/sync/pull?cursor=25&limit=100") {
@@ -555,6 +584,7 @@ describe("remote artifact pull reconciliation", () => {
         dirty: false
       });
       setMeta(store, "remoteArtifactCursor", "30");
+      setMeta(store, "remoteArtifactSnapshotComplete", "1");
       globalThis.fetch = (async () => jsonResponse({
         events: [
           {
@@ -605,6 +635,7 @@ describe("remote artifact pull reconciliation", () => {
         dirty: false
       });
       setMeta(store, "remoteArtifactCursor", "35");
+      setMeta(store, "remoteArtifactSnapshotComplete", "1");
       globalThis.fetch = (async () => jsonResponse({
         events: [
           {
@@ -643,6 +674,7 @@ describe("remote artifact pull reconciliation", () => {
       await mkdir(join(root, "docs"), { recursive: true });
       await writeFile(join(root, "docs", "local.txt"), "local-only", "utf8");
       setMeta(store, "remoteArtifactCursor", "37");
+      setMeta(store, "remoteArtifactSnapshotComplete", "1");
       globalThis.fetch = (async () => jsonResponse({
         events: [
           {
@@ -681,6 +713,7 @@ describe("remote artifact pull reconciliation", () => {
     const { root, store, state } = await createState();
     try {
       setMeta(store, "remoteArtifactCursor", "40");
+      setMeta(store, "remoteArtifactSnapshotComplete", "1");
       globalThis.fetch = (async () => jsonResponse({
         events: [
           {

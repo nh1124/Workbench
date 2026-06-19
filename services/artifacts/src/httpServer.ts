@@ -16,6 +16,7 @@ import {
   listArtifactItemProjects,
   listArtifactItems,
   listArtifactItemsFiltered,
+  listArtifactItemsFilteredPage,
   patchArtifactNoteContent,
   readArtifactPreviewPdfData,
   readArtifactFileData,
@@ -545,21 +546,26 @@ app.get("/artifacts/tree/list", requireUserAuth, async (req, res) => {
   const pathPrefix = typeof req.query.pathPrefix === "string" ? req.query.pathPrefix : undefined;
   const updatedSince = typeof req.query.updatedSince === "string" ? req.query.updatedSince : undefined;
   const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
+  const cursor = typeof req.query.cursor === "string" ? req.query.cursor : undefined;
+  const page = parseBooleanQuery(req.query.page);
   const includeContent = parseBooleanQuery(req.query.includeContent);
   const kinds = parseKindsQuery(req.query.kinds);
 
   try {
-    const items = await listArtifactItemsFiltered(
-      {
-        projectId,
-        pathPrefix,
-        kinds,
-        includeContent,
-        updatedSince,
-        limit: Number.isFinite(limit) ? limit : undefined
-      },
-      owner
-    );
+    const options = {
+      projectId,
+      pathPrefix,
+      kinds,
+      includeContent,
+      updatedSince,
+      limit: Number.isFinite(limit) ? limit : undefined,
+      cursor
+    };
+    if (page || cursor) {
+      const result = await listArtifactItemsFilteredPage(options, owner);
+      return res.json(result);
+    }
+    const items = await listArtifactItemsFiltered(options, owner);
     return res.json(items);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Artifact tree list failed";

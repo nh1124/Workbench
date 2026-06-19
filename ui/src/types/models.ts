@@ -427,6 +427,9 @@ export interface LocalDaemonStatus {
   watchEnabled?: boolean;
   watcherActive?: boolean;
   watchDebounceMs?: number;
+  syncActive?: boolean;
+  tickRunning?: boolean;
+  tickQueued?: boolean;
   localJobConfirmationPolicy?: LocalJobConfirmationPolicy;
   localJobConfirmationsPending?: number;
   localClientId?: string;
@@ -434,6 +437,10 @@ export interface LocalDaemonStatus {
   lastClaimAt?: string;
   lastScanAt?: string;
   lastPushAt?: string;
+  lastRemotePullAt?: string;
+  remoteSyncCursor?: string;
+  remoteArtifactCursor?: string;
+  remoteArtifactSnapshotComplete?: boolean;
   lastError?: string;
   lastErrorCode?: string;
   lastErrorCategory?: LocalDaemonSyncErrorCategory;

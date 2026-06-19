@@ -105,6 +105,12 @@ export interface ArtifactItemListOptions {
   includeContent?: boolean;
   updatedSince?: string;
   limit?: number;
+  cursor?: string;
+}
+
+export interface ArtifactItemListPage {
+  items: ArtifactItem[];
+  nextCursor?: string;
 }
 
 export type ArtifactNotePatchOperation =
