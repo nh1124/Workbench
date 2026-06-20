@@ -1,6 +1,6 @@
 # Project Agent Context / Network / Skill Implementation Plan
 
-Status: Draft  
+Status: MVP implemented; local sync / export deferred
 Last updated: 2026-06-20
 
 関連設計: [Project Agent Context / Network / Skill 設計草案](../project-agent-context-design.md)
@@ -12,6 +12,7 @@ Last updated: 2026-06-20
 - `[review]`: root agentの承認待ち
 - `[approved]`: review / verification済み、commit可能
 - `[implemented]`: commit済み
+- `[deferred]`: 初期releaseの対象外としてfollow-upへ移動
 - `[blocked]`: contractまたは依存実装待ち
 
 ## 2. 実装方針
@@ -171,7 +172,7 @@ projects.links.remove
 ## 4. Workstream A: Projects domain
 
 Branch: `codex/project-context-domain`  
-Status: `[pending]`
+Status: `[implemented]`
 
 ### 4.1 Scope
 
@@ -282,7 +283,7 @@ Projects packageに`test` scriptがないため、Node test runnerまたは既�
 ## 5. Workstream B: Core HTTP facade / MCP
 
 Branch: `codex/project-context-core`  
-Status: `[pending]`
+Status: `[implemented]`
 
 ### 5.1 Scope
 
@@ -406,7 +407,7 @@ npm run test --workspace services/workbench-core
 ## 6. Workstream C: UI
 
 Branch: `codex/project-context-ui`  
-Status: `[blocked]` until Gate 0 and Core response shape approval
+Status: `[implemented]`
 
 ### 6.1 Scope
 
@@ -488,7 +489,7 @@ npm run build --workspace ui
 ## 7. Workstream D: Workbench Project skill
 
 Branch: `codex/workbench-project-skill`  
-Status: `[pending]`
+Status: `[implemented]`
 
 ### 7.1 Scope
 
@@ -564,7 +565,7 @@ validatorのhost pathは開発環境依存なので、commitする文書やskill
 ## 8. Workstream E: Local sync / export
 
 Branch: `codex/project-context-sync`  
-Status: `[blocked]` until Core contracts are implemented
+Status: `[deferred]`（初期releaseではremote Coreを利用）
 
 ### 8.1 Initial release recommendation
 
@@ -748,3 +749,33 @@ manual acceptance:
 - high-risk test（owner isolation、membership lifecycle、Project delete guard、brief conflict、relation integrity、index drift）が成功する。
 - docsと実装済みtool schemaが一致する。
 - root agentが各feature commitを作成し、未解決事項をfollow-upとして記録する。
+
+## 15. Implementation result
+
+2026-06-20時点で、MVPのProjects domain、Core HTTP / MCP、Artifact multi-project membership、index maintenance / rebuild、Project network、UI、repo-scoped skill、API E2Eシナリオを実装した。
+
+主要commit:
+
+```text
+42e3ea2 feat(projects): add project context domain model
+b957512 feat(core): expose project context and artifact memberships
+ee747b3 feat(skills): add Workbench project workflow
+d21b761 feat(ui): add project context management
+43cddb8 fix(skills): preserve agent provenance in fallback guidance
+81d480d test: cover project context integration
+0d0d28a fix(projects): enforce context character budget
+```
+
+verification result:
+
+- Projects: build成功、unit test 4件成功。DB依存2件はPostgreSQL未起動のためskip。
+- Core: build成功、project-contextを含むtest 12件成功。既存DB依存12件はPostgreSQL未起動のためskip。
+- UI: test 73件成功、build成功。
+- full workspace build成功。
+- `$workbench-project`: `quick_validate.py`成功。実装済みMCP schemaとのforward compatibility review済み。
+- API E2E: lifecycleシナリオ追加、syntax checkと独立contract review成功。Docker daemon未起動のためlive runは未実施。
+
+follow-up:
+
+- PostgreSQL / Dockerを起動した環境でDB integration testと`npm run test:e2e:api`を実行する。
+- local sync cacheと`.workbench` exportは、MVP利用実績を確認してからWorkstream Eとして別途contractを定義する。
