@@ -15,6 +15,10 @@ docs/
 ├── README.md                    ← このファイル（インデックス）
 ├── artifacts.md                 ← Artifacts ページの設計・PDF ビューアー・ショートカット
 ├── artifacts-local-sync-design.md ← Artifacts のローカル運用・同期設計
+├── project-agent-context-design.md ← Project index / memory / network / agent skill 設計草案
+├── imple/
+│   ├── project-agent-context-implementation-plan.md ← 並列実装・承認・統合計画
+│   └── workbench-local-client-sync-daemon-plan.md ← Local client / sync daemon 実装計画
 ├── native/
 │   ├── overview.md              ← Tauri デスクトップアプリ全体の説明・モジュール構成
 │   ├── window-management.md     ← マルチウィンドウ・マルチインスタンスの設計
@@ -34,6 +38,13 @@ docs/
 | [artifacts.md](artifacts.md) | Artifacts ページの設計・PDF ビューアー・ページ別コメント・ショートカット |
 | [artifacts-local-sync-design.md](artifacts-local-sync-design.md) | Artifacts の Local-First 化（ローカル管理・同期・競合解決・段階実装計画） |
 | [pdf-comments-server-design.md](pdf-comments-server-design.md) | PDF コメントのサーバー移行設計（DB スキーマ・API・同期戦略・マイグレーション） |
+
+### Agent / Project context
+
+| ドキュメント | 内容 |
+|---|---|
+| [project-agent-context-design.md](project-agent-context-design.md) | Artifactのprimary / secondary Project所属、Projectごとのindex・memory、Project network、agent skillの設計草案 |
+| [imple/project-agent-context-implementation-plan.md](imple/project-agent-context-implementation-plan.md) | Artifact複数Project所属を含む、複数agentのbranch分割・担当境界・承認gate・test・commit計画 |
 
 ### ネイティブデスクトップ (`native/`)
 
