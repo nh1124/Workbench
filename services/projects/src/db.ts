@@ -153,6 +153,143 @@ export async function ensureProjectsSchema(): Promise<void> {
         `);
 
         await pool.query(`
+          CREATE INDEX IF NOT EXISTS idx_project_links_target_relation_lookup
+          ON project_links(target_service, target_resource_type, target_resource_id, relation_type, linked_at DESC, id DESC)
+          WHERE is_deleted = FALSE;
+        `);
+
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS project_briefs (
+            project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+            content_markdown TEXT NOT NULL DEFAULT '',
+            version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+            updated_by_kind TEXT NOT NULL CHECK (updated_by_kind IN ('user', 'agent')),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          );
+        `);
+
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS project_memory_entries (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL CHECK (kind IN ('decision', 'fact', 'preference', 'pitfall', 'observation')),
+            body_markdown TEXT NOT NULL,
+            authority TEXT NOT NULL CHECK (authority IN ('user_confirmed', 'agent_observed', 'imported')),
+            source_service TEXT,
+            source_resource_type TEXT,
+            source_resource_id TEXT,
+            confidence DOUBLE PRECISION CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
+            status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'superseded', 'archived')),
+            supersedes_id TEXT REFERENCES project_memory_entries(id) ON DELETE SET NULL,
+            created_by_kind TEXT NOT NULL CHECK (created_by_kind IN ('user', 'agent', 'system')),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          );
+        `);
+
+        await pool.query(`
+          CREATE INDEX IF NOT EXISTS idx_project_memory_project_status_updated
+          ON project_memory_entries(project_id, status, updated_at DESC, id DESC);
+        `);
+
+        await pool.query(`
+          CREATE INDEX IF NOT EXISTS idx_project_memory_project_kind_authority
+          ON project_memory_entries(project_id, kind, authority, updated_at DESC)
+          WHERE status = 'active';
+        `);
+
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS project_index_entries (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            source_service TEXT NOT NULL,
+            resource_type TEXT NOT NULL,
+            resource_id TEXT NOT NULL,
+            association_kind TEXT NOT NULL CHECK (association_kind IN ('primary', 'secondary')),
+            association_id TEXT,
+            path TEXT,
+            title TEXT NOT NULL,
+            summary_text TEXT NOT NULL,
+            summary_source TEXT NOT NULL DEFAULT 'deterministic',
+            source_version TEXT,
+            content_hash TEXT,
+            source_updated_at TIMESTAMPTZ NOT NULL,
+            indexed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+            is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
+            CHECK (
+              (association_kind = 'primary' AND association_id IS NULL)
+              OR (association_kind = 'secondary' AND association_id IS NOT NULL)
+            )
+          );
+        `);
+
+        await pool.query(`
+          CREATE UNIQUE INDEX IF NOT EXISTS ux_project_index_entries_active_resource
+          ON project_index_entries(project_id, source_service, resource_type, resource_id)
+          WHERE is_deleted = FALSE;
+        `);
+
+        await pool.query(`
+          CREATE INDEX IF NOT EXISTS idx_project_index_project_indexed
+          ON project_index_entries(project_id, indexed_at DESC, id DESC)
+          WHERE is_deleted = FALSE;
+        `);
+
+        await pool.query(`
+          CREATE INDEX IF NOT EXISTS idx_project_index_association
+          ON project_index_entries(association_id)
+          WHERE is_deleted = FALSE AND association_id IS NOT NULL;
+        `);
+
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS project_relations (
+            id TEXT PRIMARY KEY,
+            source_project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            target_project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            relation_type TEXT NOT NULL CHECK (relation_type IN ('related', 'depends_on', 'supports', 'informs', 'overlaps')),
+            directionality TEXT NOT NULL DEFAULT 'directed' CHECK (directionality IN ('directed', 'bidirectional')),
+            note TEXT NOT NULL DEFAULT '',
+            origin TEXT NOT NULL DEFAULT 'manual' CHECK (origin IN ('manual', 'inferred')),
+            strength DOUBLE PRECISION CHECK (strength IS NULL OR (strength >= 0 AND strength <= 1)),
+            created_by_kind TEXT NOT NULL CHECK (created_by_kind IN ('user', 'agent', 'system')),
+            version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
+            CHECK (source_project_id <> target_project_id)
+          );
+        `);
+
+        await pool.query(`
+          CREATE UNIQUE INDEX IF NOT EXISTS ux_project_relations_active_directed
+          ON project_relations(source_project_id, target_project_id, relation_type)
+          WHERE is_deleted = FALSE AND directionality = 'directed';
+        `);
+
+        await pool.query(`
+          CREATE UNIQUE INDEX IF NOT EXISTS ux_project_relations_active_bidirectional
+          ON project_relations(
+            LEAST(source_project_id, target_project_id),
+            GREATEST(source_project_id, target_project_id),
+            relation_type
+          )
+          WHERE is_deleted = FALSE AND directionality = 'bidirectional';
+        `);
+
+        await pool.query(`
+          CREATE INDEX IF NOT EXISTS idx_project_relations_source_updated
+          ON project_relations(source_project_id, updated_at DESC, id DESC)
+          WHERE is_deleted = FALSE;
+        `);
+
+        await pool.query(`
+          CREATE INDEX IF NOT EXISTS idx_project_relations_target_updated
+          ON project_relations(target_project_id, updated_at DESC, id DESC)
+          WHERE is_deleted = FALSE;
+        `);
+
+        await pool.query(`
           CREATE TABLE IF NOT EXISTS project_context_summaries (
             id TEXT PRIMARY KEY,
             project_id TEXT NOT NULL UNIQUE REFERENCES projects(id) ON DELETE CASCADE,

@@ -22,6 +22,8 @@ export type ListProjectsOptions = {
 export type ListProjectLinksOptions = {
   targetService?: string;
   targetResourceType?: string;
+  targetResourceId?: string;
+  relationType?: string;
   limit?: number;
   cursor?: string;
 };
@@ -483,10 +485,10 @@ export async function deleteProject(id: string, ownerAccountId: string): Promise
 
   await ensureProjectsSchema();
   const pool = getProjectsPool();
-
-  await pool.query("BEGIN");
+  const client = await pool.connect();
   try {
-    const deleted = await pool.query(
+    await client.query("BEGIN");
+    const deleted = await client.query(
       `
         DELETE FROM projects
         WHERE id = $1
@@ -497,11 +499,11 @@ export async function deleteProject(id: string, ownerAccountId: string): Promise
     );
 
     if ((deleted.rowCount ?? 0) === 0) {
-      await pool.query("ROLLBACK");
+      await client.query("ROLLBACK");
       return false;
     }
 
-    await pool.query(
+    await client.query(
       `
         UPDATE project_user_preferences
         SET
@@ -512,11 +514,17 @@ export async function deleteProject(id: string, ownerAccountId: string): Promise
       [owner, id, fallback.id]
     );
 
-    await pool.query("COMMIT");
+    await client.query("COMMIT");
     return true;
   } catch (error) {
-    await pool.query("ROLLBACK");
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+      // Preserve the original error.
+    }
     throw error;
+  } finally {
+    client.release();
   }
 }
 
@@ -550,6 +558,16 @@ export async function listProjectLinks(
   if (options?.targetResourceType) {
     values.push(options.targetResourceType);
     sql += ` AND target_resource_type = $${values.length}`;
+  }
+
+  if (options?.targetResourceId) {
+    values.push(options.targetResourceId);
+    sql += ` AND target_resource_id = $${values.length}`;
+  }
+
+  if (options?.relationType) {
+    values.push(options.relationType);
+    sql += ` AND relation_type = $${values.length}`;
   }
 
   if (parsedCursor) {

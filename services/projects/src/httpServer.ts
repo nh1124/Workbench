@@ -21,7 +21,40 @@ import {
   unlinkResourceFromProject,
   updateProject
 } from "./store.js";
-import { PROJECT_STATUSES } from "./types.js";
+import { getProjectBrief, updateProjectBrief } from "./projectBriefStore.js";
+import { appendProjectMemory, listProjectMemories, updateProjectMemory } from "./projectMemoryStore.js";
+import {
+  bulkUpsertProjectIndexEntries,
+  searchProjectIndex,
+  tombstoneProjectIndexEntry,
+  upsertProjectIndexEntry
+} from "./projectIndexStore.js";
+import { getProjectLink, listProjectLinksByTarget } from "./projectLinksStore.js";
+import {
+  createProjectRelation,
+  deleteProjectRelation,
+  listProjectRelations,
+  updateProjectRelation
+} from "./projectRelationsStore.js";
+import { getProjectContext } from "./projectContextStore.js";
+import {
+  DuplicateRelationError,
+  InvalidCursorError,
+  InvalidRelationError,
+  VersionConflictError
+} from "./projectStoreUtils.js";
+import {
+  CREATED_BY_KINDS,
+  PROJECT_INDEX_ASSOCIATION_KINDS,
+  PROJECT_MEMORY_AUTHORITIES,
+  PROJECT_MEMORY_KINDS,
+  PROJECT_MEMORY_STATUSES,
+  PROJECT_RELATION_DIRECTIONS,
+  PROJECT_RELATION_ORIGINS,
+  PROJECT_RELATION_TYPES,
+  PROJECT_STATUSES,
+  type ProjectContextSection
+} from "./types.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -95,7 +128,7 @@ function sanitizeLimit(value: string | undefined): number | undefined {
   return parsed;
 }
 
-const app = express();
+export const app = express();
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 
@@ -114,6 +147,78 @@ const projectLinkInputSchema = z.object({
   titleSnapshot: z.string().optional(),
   summarySnapshot: z.string().optional(),
   metadataJson: z.record(z.unknown()).optional()
+});
+
+const briefUpdateSchema = z.object({
+  contentMarkdown: z.string(),
+  expectedVersion: z.number().int().nonnegative(),
+  updatedByKind: z.enum(["user", "agent"])
+});
+
+const memoryInputSchema = z.object({
+  kind: z.enum(PROJECT_MEMORY_KINDS),
+  bodyMarkdown: z.string().min(1),
+  authority: z.enum(PROJECT_MEMORY_AUTHORITIES),
+  sourceService: z.string().min(1).optional(),
+  sourceResourceType: z.string().min(1).optional(),
+  sourceResourceId: z.string().min(1).optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  supersedesId: z.string().min(1).optional(),
+  createdByKind: z.enum(CREATED_BY_KINDS)
+});
+
+const memoryUpdateSchema = z.object({
+  bodyMarkdown: z.string().min(1).optional(),
+  status: z.enum(PROJECT_MEMORY_STATUSES).optional(),
+  authority: z.enum(PROJECT_MEMORY_AUTHORITIES).optional()
+}).refine((value) => Object.keys(value).length > 0, "At least one update is required");
+
+const indexEntryInputSchema = z.object({
+  sourceService: z.string().min(1),
+  resourceType: z.string().min(1),
+  resourceId: z.string().min(1),
+  associationKind: z.enum(PROJECT_INDEX_ASSOCIATION_KINDS),
+  associationId: z.string().min(1).optional(),
+  path: z.string().optional(),
+  title: z.string().min(1),
+  summaryText: z.string(),
+  summarySource: z.string().min(1).optional(),
+  sourceVersion: z.string().optional(),
+  contentHash: z.string().optional(),
+  sourceUpdatedAt: z.string().datetime(),
+  metadataJson: z.record(z.unknown()).optional()
+}).superRefine((value, context) => {
+  if (value.associationKind === "primary" && value.associationId) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["associationId"], message: "Primary entries cannot have associationId" });
+  }
+  if (value.associationKind === "secondary" && !value.associationId) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["associationId"], message: "Secondary entries require associationId" });
+  }
+});
+
+const indexTombstoneSchema = z.object({
+  sourceService: z.string().min(1),
+  resourceType: z.string().min(1),
+  resourceId: z.string().min(1)
+});
+
+const relationInputSchema = z.object({
+  targetProjectId: z.string().min(1),
+  relationType: z.enum(PROJECT_RELATION_TYPES),
+  directionality: z.enum(PROJECT_RELATION_DIRECTIONS).optional(),
+  note: z.string().optional(),
+  origin: z.enum(PROJECT_RELATION_ORIGINS).optional(),
+  strength: z.number().min(0).max(1).optional(),
+  createdByKind: z.enum(CREATED_BY_KINDS)
+});
+
+const relationUpdateSchema = z.object({
+  relationType: z.enum(PROJECT_RELATION_TYPES).optional(),
+  directionality: z.enum(PROJECT_RELATION_DIRECTIONS).optional(),
+  note: z.string().optional(),
+  origin: z.enum(PROJECT_RELATION_ORIGINS).optional(),
+  strength: z.number().min(0).max(1).nullable().optional(),
+  expectedVersion: z.number().int().positive()
 });
 
 const internalAccountSchema = z.object({
@@ -325,6 +430,8 @@ app.get("/projects/:projectId/links", requireUserAuth, async (req, res) => {
   const result = await listProjectLinks(projectId, owner, {
     targetService: typeof req.query.targetService === "string" ? req.query.targetService : undefined,
     targetResourceType: typeof req.query.targetResourceType === "string" ? req.query.targetResourceType : undefined,
+    targetResourceId: typeof req.query.targetResourceId === "string" ? req.query.targetResourceId : undefined,
+    relationType: typeof req.query.relationType === "string" ? req.query.relationType : undefined,
     cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
     limit: sanitizeLimit(typeof req.query.limit === "string" ? req.query.limit : undefined)
   });
@@ -367,6 +474,231 @@ app.delete("/project-links/:linkId", requireUserAuth, async (req, res) => {
   }
 
   return res.status(204).send();
+});
+
+app.get("/project-links", requireUserAuth, async (req, res) => {
+  const owner = req.authUser?.coreUserId;
+  if (!owner) return res.status(401).json({ message: "Missing auth context" });
+  const targetService = typeof req.query.targetService === "string" ? req.query.targetService.trim() : "";
+  const targetResourceType = typeof req.query.targetResourceType === "string" ? req.query.targetResourceType.trim() : "";
+  const targetResourceId = typeof req.query.targetResourceId === "string" ? req.query.targetResourceId.trim() : "";
+  if (!targetService || !targetResourceType || !targetResourceId) {
+    return res.status(400).json({ message: "targetService, targetResourceType and targetResourceId are required" });
+  }
+  try {
+    const result = await listProjectLinksByTarget({
+      targetService,
+      targetResourceType,
+      targetResourceId,
+      relationType: typeof req.query.relationType === "string" ? req.query.relationType : undefined,
+      cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
+      limit: sanitizeLimit(typeof req.query.limit === "string" ? req.query.limit : undefined)
+    }, owner);
+    return res.json(result);
+  } catch (error) {
+    if (error instanceof InvalidCursorError) return res.status(400).json({ code: "INVALID_CURSOR", message: error.message });
+    throw error;
+  }
+});
+
+app.get("/project-links/:linkId", requireUserAuth, async (req, res) => {
+  const owner = req.authUser?.coreUserId;
+  if (!owner) return res.status(401).json({ message: "Missing auth context" });
+  const link = await getProjectLink(String(req.params.linkId), owner);
+  return link ? res.json(link) : res.status(404).json({ message: "Project link not found" });
+});
+
+app.get("/projects/:projectId/brief", requireUserAuth, async (req, res) => {
+  const owner = req.authUser?.coreUserId;
+  if (!owner) return res.status(401).json({ message: "Missing auth context" });
+  const brief = await getProjectBrief(String(req.params.projectId), owner);
+  return brief ? res.json(brief) : res.status(404).json({ message: "Project not found" });
+});
+
+app.put("/projects/:projectId/brief", requireUserAuth, async (req, res) => {
+  const parsed = briefUpdateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
+  const owner = req.authUser?.coreUserId;
+  if (!owner) return res.status(401).json({ message: "Missing auth context" });
+  try {
+    const brief = await updateProjectBrief(String(req.params.projectId), parsed.data, owner);
+    return brief ? res.json(brief) : res.status(404).json({ message: "Project not found" });
+  } catch (error) {
+    if (error instanceof VersionConflictError) return res.status(409).json({ code: "VERSION_CONFLICT", message: error.message });
+    throw error;
+  }
+});
+
+app.get("/projects/:projectId/memories", requireUserAuth, async (req, res) => {
+  const owner = req.authUser?.coreUserId;
+  if (!owner) return res.status(401).json({ message: "Missing auth context" });
+  const kind = typeof req.query.kind === "string" ? req.query.kind : undefined;
+  const authority = typeof req.query.authority === "string" ? req.query.authority : undefined;
+  const status = typeof req.query.status === "string" ? req.query.status : undefined;
+  if (kind && !PROJECT_MEMORY_KINDS.includes(kind as never)) return res.status(400).json({ message: "Invalid memory kind" });
+  if (authority && !PROJECT_MEMORY_AUTHORITIES.includes(authority as never)) return res.status(400).json({ message: "Invalid memory authority" });
+  if (status && !PROJECT_MEMORY_STATUSES.includes(status as never)) return res.status(400).json({ message: "Invalid memory status" });
+  try {
+    const result = await listProjectMemories(String(req.params.projectId), owner, {
+      query: typeof req.query.q === "string" ? req.query.q : undefined,
+      kind: kind as (typeof PROJECT_MEMORY_KINDS)[number] | undefined,
+      authority: authority as (typeof PROJECT_MEMORY_AUTHORITIES)[number] | undefined,
+      status: status as (typeof PROJECT_MEMORY_STATUSES)[number] | undefined,
+      cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
+      limit: sanitizeLimit(typeof req.query.limit === "string" ? req.query.limit : undefined)
+    });
+    return result ? res.json(result) : res.status(404).json({ message: "Project not found" });
+  } catch (error) {
+    if (error instanceof InvalidCursorError) return res.status(400).json({ code: "INVALID_CURSOR", message: error.message });
+    throw error;
+  }
+});
+
+app.post("/projects/:projectId/memories", requireUserAuth, async (req, res) => {
+  const parsed = memoryInputSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
+  const owner = req.authUser?.coreUserId;
+  if (!owner) return res.status(401).json({ message: "Missing auth context" });
+  const memory = await appendProjectMemory(String(req.params.projectId), parsed.data, owner);
+  return memory ? res.status(201).json(memory) : res.status(404).json({ message: "Project or superseded memory not found" });
+});
+
+app.patch("/project-memories/:memoryId", requireUserAuth, async (req, res) => {
+  const parsed = memoryUpdateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
+  const owner = req.authUser?.coreUserId;
+  if (!owner) return res.status(401).json({ message: "Missing auth context" });
+  const memory = await updateProjectMemory(String(req.params.memoryId), parsed.data, owner);
+  return memory ? res.json(memory) : res.status(404).json({ message: "Project memory not found" });
+});
+
+app.get("/projects/:projectId/index-entries", requireUserAuth, async (req, res) => {
+  const owner = req.authUser?.coreUserId;
+  if (!owner) return res.status(401).json({ message: "Missing auth context" });
+  const associationKind = typeof req.query.associationKind === "string" ? req.query.associationKind : undefined;
+  if (associationKind && !PROJECT_INDEX_ASSOCIATION_KINDS.includes(associationKind as never)) {
+    return res.status(400).json({ message: "Invalid associationKind" });
+  }
+  try {
+    const result = await searchProjectIndex(String(req.params.projectId), owner, {
+      query: typeof req.query.q === "string" ? req.query.q : undefined,
+      sourceService: typeof req.query.sourceService === "string" ? req.query.sourceService : undefined,
+      resourceType: typeof req.query.resourceType === "string" ? req.query.resourceType : undefined,
+      associationKind: associationKind as (typeof PROJECT_INDEX_ASSOCIATION_KINDS)[number] | undefined,
+      cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
+      limit: sanitizeLimit(typeof req.query.limit === "string" ? req.query.limit : undefined)
+    });
+    return result ? res.json(result) : res.status(404).json({ message: "Project not found" });
+  } catch (error) {
+    if (error instanceof InvalidCursorError) return res.status(400).json({ code: "INVALID_CURSOR", message: error.message });
+    throw error;
+  }
+});
+
+app.post("/projects/:projectId/index-entries/upsert", requireUserAuth, async (req, res) => {
+  const raw = req.body && typeof req.body === "object" && "entry" in req.body ? req.body.entry : req.body;
+  const parsed = indexEntryInputSchema.safeParse(raw);
+  if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
+  const owner = req.authUser?.coreUserId;
+  if (!owner) return res.status(401).json({ message: "Missing auth context" });
+  const entry = await upsertProjectIndexEntry(String(req.params.projectId), parsed.data, owner);
+  return entry ? res.json(entry) : res.status(404).json({ message: "Project not found" });
+});
+
+app.post("/projects/:projectId/index-entries/tombstone", requireUserAuth, async (req, res) => {
+  const parsed = indexTombstoneSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
+  const owner = req.authUser?.coreUserId;
+  if (!owner) return res.status(401).json({ message: "Missing auth context" });
+  const tombstoned = await tombstoneProjectIndexEntry(String(req.params.projectId), parsed.data, owner);
+  return tombstoned === undefined ? res.status(404).json({ message: "Project not found" }) : res.json({ tombstoned });
+});
+
+app.post("/projects/:projectId/index-entries/bulk-upsert", requireUserAuth, async (req, res) => {
+  const parsed = z.object({ entries: z.array(indexEntryInputSchema).max(500) }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
+  const owner = req.authUser?.coreUserId;
+  if (!owner) return res.status(401).json({ message: "Missing auth context" });
+  const items = await bulkUpsertProjectIndexEntries(String(req.params.projectId), parsed.data.entries, owner);
+  return items ? res.json({ items }) : res.status(404).json({ message: "Project not found" });
+});
+
+app.get("/projects/:projectId/relations", requireUserAuth, async (req, res) => {
+  const owner = req.authUser?.coreUserId;
+  if (!owner) return res.status(401).json({ message: "Missing auth context" });
+  const relationType = typeof req.query.relationType === "string" ? req.query.relationType : undefined;
+  const directionality = typeof req.query.directionality === "string" ? req.query.directionality : undefined;
+  if (relationType && !PROJECT_RELATION_TYPES.includes(relationType as never)) return res.status(400).json({ message: "Invalid relationType" });
+  if (directionality && !PROJECT_RELATION_DIRECTIONS.includes(directionality as never)) return res.status(400).json({ message: "Invalid directionality" });
+  try {
+    const result = await listProjectRelations(String(req.params.projectId), owner, {
+      relationType: relationType as (typeof PROJECT_RELATION_TYPES)[number] | undefined,
+      directionality: directionality as (typeof PROJECT_RELATION_DIRECTIONS)[number] | undefined,
+      cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
+      limit: sanitizeLimit(typeof req.query.limit === "string" ? req.query.limit : undefined)
+    });
+    return result ? res.json(result) : res.status(404).json({ message: "Project not found" });
+  } catch (error) {
+    if (error instanceof InvalidCursorError) return res.status(400).json({ code: "INVALID_CURSOR", message: error.message });
+    throw error;
+  }
+});
+
+app.post("/projects/:projectId/relations", requireUserAuth, async (req, res) => {
+  const parsed = relationInputSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
+  const owner = req.authUser?.coreUserId;
+  if (!owner) return res.status(401).json({ message: "Missing auth context" });
+  try {
+    const relation = await createProjectRelation(String(req.params.projectId), parsed.data, owner);
+    return relation ? res.status(201).json(relation) : res.status(404).json({ message: "Source or target project not found" });
+  } catch (error) {
+    if (error instanceof InvalidRelationError) return res.status(400).json({ code: "INVALID_RELATION", message: error.message });
+    if (error instanceof DuplicateRelationError) return res.status(409).json({ code: "DUPLICATE_RELATION", message: error.message });
+    throw error;
+  }
+});
+
+app.patch("/project-relations/:relationId", requireUserAuth, async (req, res) => {
+  const parsed = relationUpdateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
+  const owner = req.authUser?.coreUserId;
+  if (!owner) return res.status(401).json({ message: "Missing auth context" });
+  try {
+    const relation = await updateProjectRelation(String(req.params.relationId), parsed.data, owner);
+    return relation ? res.json(relation) : res.status(404).json({ message: "Project relation not found" });
+  } catch (error) {
+    if (error instanceof VersionConflictError) return res.status(409).json({ code: "VERSION_CONFLICT", message: error.message });
+    if (error instanceof DuplicateRelationError) return res.status(409).json({ code: "DUPLICATE_RELATION", message: error.message });
+    throw error;
+  }
+});
+
+app.delete("/project-relations/:relationId", requireUserAuth, async (req, res) => {
+  const owner = req.authUser?.coreUserId;
+  if (!owner) return res.status(401).json({ message: "Missing auth context" });
+  const deleted = await deleteProjectRelation(String(req.params.relationId), owner);
+  return deleted ? res.status(204).send() : res.status(404).json({ message: "Project relation not found" });
+});
+
+app.get("/projects/:projectId/context", requireUserAuth, async (req, res) => {
+  const owner = req.authUser?.coreUserId;
+  if (!owner) return res.status(401).json({ message: "Missing auth context" });
+  const allowed: ProjectContextSection[] = ["brief", "summary", "memory", "index", "relations", "links"];
+  const include = typeof req.query.include === "string" ? req.query.include.split(",").map((value) => value.trim()).filter(Boolean) : undefined;
+  if (include?.some((section) => !allowed.includes(section as ProjectContextSection))) {
+    return res.status(400).json({ message: "Invalid context section" });
+  }
+  const context = await getProjectContext(String(req.params.projectId), owner, {
+    query: typeof req.query.q === "string" ? req.query.q : undefined,
+    include: include as ProjectContextSection[] | undefined,
+    memoryLimit: sanitizeLimit(typeof req.query.memoryLimit === "string" ? req.query.memoryLimit : undefined),
+    indexLimit: sanitizeLimit(typeof req.query.indexLimit === "string" ? req.query.indexLimit : undefined),
+    relationLimit: sanitizeLimit(typeof req.query.relationLimit === "string" ? req.query.relationLimit : undefined),
+    linkLimit: sanitizeLimit(typeof req.query.linkLimit === "string" ? req.query.linkLimit : undefined),
+    maxChars: sanitizeLimit(typeof req.query.maxChars === "string" ? req.query.maxChars : undefined)
+  });
+  return context ? res.json(context) : res.status(404).json({ message: "Project not found" });
 });
 
 app.get("/projects/:projectId/context-summary", requireUserAuth, async (req, res) => {
@@ -416,8 +748,11 @@ if (!Number.isFinite(port)) {
   throw new Error(`Invalid PROJECTS_SERVICE_PORT value: ${process.env.PROJECTS_SERVICE_PORT}`);
 }
 
-void ensureProjectsSchema().then(() => {
-  app.listen(port, host, () => {
-    console.log(`Projects service HTTP listening on ${host}:${port}`);
+const isDirectExecution = process.argv[1] ? path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url)) : false;
+if (isDirectExecution) {
+  void ensureProjectsSchema().then(() => {
+    app.listen(port, host, () => {
+      console.log(`Projects service HTTP listening on ${host}:${port}`);
+    });
   });
-});
+}
