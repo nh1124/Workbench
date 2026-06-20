@@ -8,6 +8,8 @@ The approved design freezes names, routes, defaults, and the explicit fields bel
 
 All routes require the normal Core authentication context and enforce owner isolation.
 
+Core HTTP brief, memory, and relation writes are user/UI paths and record user provenance. An agent may use their read routes as fallback, but must not substitute these HTTP writes for missing MCP mutation tools. Stop and report the capability mismatch instead. The Artifact-specific membership routes remain the permitted membership fallback.
+
 ### Context, brief, and memory
 
 ```text
@@ -30,7 +32,7 @@ PATCH /api/project-memories/:memoryId
 
 `maxChars` defaults to `12000` and is capped at `50000`. A context response reports omitted sections in `truncation.truncatedSections`; do not treat absence caused by truncation as an empty Project.
 
-Brief updates use optimistic concurrency with `expectedVersion`; a stale version returns `409`. Memory kinds are `decision`, `fact`, `preference`, `pitfall`, and `observation`. Authorities are `user_confirmed`, `agent_observed`, and `imported`. MCP-created memory defaults to `agent_observed`.
+Brief updates use optimistic concurrency with `expectedVersion`; a stale version returns `409`. Memory kinds are `decision`, `fact`, `preference`, `pitfall`, and `observation`. Authorities are `user_confirmed`, `agent_observed`, and `imported`. `projects.memory.append` always creates `agent_observed` memory and does not accept an authority override. Creating or promoting `user_confirmed` memory requires a true user/UI path.
 
 ### Index
 
@@ -77,10 +79,13 @@ Preview deletion before mutating. Deleting a Project with primary Artifact items
 GET    /api/projects/:projectId/relations
 POST   /api/projects/:projectId/relations
 PATCH  /api/project-relations/:relationId
+       body: { relationType?, directionality?, note?, strength?: number | null, expectedVersion }
 DELETE /api/project-relations/:relationId
 ```
 
 Relation types are `related`, `depends_on`, `supports`, `informs`, and `overlaps`. Directionality is `directed` or `bidirectional`; initial confirmed relations are manual. Reject self-relations, cross-owner relations, and reverse duplicates of bidirectional relations. Neighbor traversal is depth 1 and does not inject neighboring Artifact or memory content automatically.
+
+Relation updates require the current positive `version` as `expectedVersion` in both HTTP and `projects.relations.update`. On `409 VERSION_CONFLICT`, re-read the relation list, reconcile against the latest version, and retry only when intent remains clear.
 
 ### Generic Project links and generated summary
 

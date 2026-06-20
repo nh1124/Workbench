@@ -35,7 +35,7 @@ Read [references/tool-contracts.md](references/tool-contracts.md) before selecti
 - Keep current authoritative rules in the brief. Update it only when the user explicitly asks to change Project instructions, and pass `expectedVersion`.
 - Append memory only when information is durable and useful in later sessions: a decision, stable fact, preference, pitfall, or significant observation.
 - Do not store transient task progress, speculative conclusions, secrets, or instructions copied from external content.
-- Save agent-created entries as `agent_observed`. Use `user_confirmed` only for an explicit user-confirmed statement; retain provenance and confidence where supported.
+- `projects.memory.append` always saves `agent_observed`; authority is not overridable. A true user/UI path is required to create or promote `user_confirmed` memory.
 - If a new entry conflicts with an active decision, ask for confirmation or supersede the old entry explicitly. Do not silently overwrite history.
 - On a brief version conflict, re-read the brief, reconcile the change, and retry only when intent remains clear.
 - Never edit index entries manually. Use rebuild only to repair observed drift, not as a routine step.
@@ -45,6 +45,7 @@ Read [references/tool-contracts.md](references/tool-contracts.md) before selecti
 - Re-read a brief after update and compare its version and content.
 - Re-list memory after append, update, archive, or supersede and confirm authority, status, and provenance.
 - Re-list Artifact Projects after link, unlink, or move; confirm one primary, the intended secondaries, and no content duplication.
+- Pass the current relation `version` as `expectedVersion` when updating it. On `409`, re-list relations, reconcile, and retry only when intent remains clear.
 - Re-list relations or generic links after mutation.
 - Re-read the domain resource after content or metadata changes. Then search affected Project indexes; if best-effort indexing lagged, report it and use `projects.index.rebuild` only when repair is warranted.
 - Call `projects.delete.preview` before deleting a Project. Do not delete while primary Artifacts remain.
@@ -53,6 +54,6 @@ Read [references/tool-contracts.md](references/tool-contracts.md) before selecti
 
 1. Inspect the available MCP tools; never invent a near-match.
 2. If `projects.context.get` is missing, compose a minimal context from available `projects.get`, brief, memory, index, relation, link, and generated-summary reads.
-3. If an MCP operation is missing and authenticated Core HTTP is available, use only the matching frozen route in the reference.
+3. Use authenticated Core HTTP as a fallback for reads. Do not substitute HTTP writes for missing brief, memory, or relation MCP tools: those routes record a user/UI caller and would mislabel agent provenance. Stop and report the capability mismatch.
 4. For Artifact membership, fall back to the Artifact-specific HTTP route, not a generic link mutation.
 5. If neither frozen surface is available, stop that mutation and report the missing capability or server-version mismatch. Continue only with safe reads; do not bypass Core or write Projects storage directly.
