@@ -311,6 +311,389 @@ async function deleteNotesServiceAccount(coreUserId) {
   }
 }
 
+function responseItems(result) {
+  return Array.isArray(result?.json?.items) ? result.json.items : [];
+}
+
+async function runProjectContextLifecycle(token, stamp, state) {
+  const marker = `E2ECTX-${stamp}`;
+  let primaryProjectId;
+  let secondaryProjectId;
+  let relationId;
+  let artifactItemId;
+
+  const cleanup = async (method, url, expectedStatuses, label) => {
+    try {
+      const result = await request(method, url, { token });
+      const accepted = Array.isArray(expectedStatuses) ? expectedStatuses : [expectedStatuses];
+      if (!accepted.includes(result.status)) {
+        warn(`${label} cleanup incomplete`, `status=${result.status} body=${trimBody(result.text)}`, state);
+      }
+    } catch (error) {
+      warn(`${label} cleanup failed`, error instanceof Error ? error.message : String(error), state);
+    }
+  };
+
+  try {
+    logStep("Project context lifecycle");
+    const createPrimary = await request("POST", `${coreBaseUrl}/api/projects`, {
+      token,
+      body: {
+        name: `${marker} Primary`,
+        description: "E2E primary Project for agent context",
+        status: "active"
+      }
+    });
+    expectStatus(createPrimary, 201, "project-context create primary Project", state);
+    primaryProjectId = createPrimary.json?.id;
+    ensure(typeof primaryProjectId === "string", "project-context primary Project id present", undefined, state);
+
+    const createSecondary = await request("POST", `${coreBaseUrl}/api/projects`, {
+      token,
+      body: {
+        name: `${marker} Secondary`,
+        description: "E2E secondary Project for membership",
+        status: "active"
+      }
+    });
+    expectStatus(createSecondary, 201, "project-context create secondary Project", state);
+    secondaryProjectId = createSecondary.json?.id;
+    ensure(typeof secondaryProjectId === "string", "project-context secondary Project id present", undefined, state);
+
+    if (!primaryProjectId || !secondaryProjectId) return;
+
+    const initialBrief = await request("GET", `${coreBaseUrl}/api/projects/${primaryProjectId}/brief`, { token });
+    expectStatus(initialBrief, 200, "project-context get initial brief", state);
+    const initialBriefVersion = initialBrief.json?.version;
+    ensure(Number.isInteger(initialBriefVersion), "project-context initial brief version present", undefined, state);
+
+    const updateBrief = await request("PUT", `${coreBaseUrl}/api/projects/${primaryProjectId}/brief`, {
+      token,
+      body: {
+        contentMarkdown: `# ${marker}\n\nUse the E2E context conventions.`,
+        expectedVersion: Number.isInteger(initialBriefVersion) ? initialBriefVersion : 0
+      }
+    });
+    expectStatus(updateBrief, 200, "project-context update brief", state);
+    ensure(
+      updateBrief.json?.contentMarkdown?.includes(marker),
+      "project-context updated brief contains marker",
+      undefined,
+      state
+    );
+
+    const appendMemory = await request("POST", `${coreBaseUrl}/api/projects/${primaryProjectId}/memories`, {
+      token,
+      body: {
+        kind: "decision",
+        bodyMarkdown: `${marker} durable test decision`,
+        authority: "user_confirmed"
+      }
+    });
+    expectStatus(appendMemory, 201, "project-context append memory", state);
+    const memoryId = appendMemory.json?.id;
+    ensure(typeof memoryId === "string", "project-context memory id present", undefined, state);
+
+    const listMemory = await request(
+      "GET",
+      `${coreBaseUrl}/api/projects/${primaryProjectId}/memories?q=${encodeURIComponent(marker)}`,
+      { token }
+    );
+    expectStatus(listMemory, 200, "project-context search memory", state);
+    ensure(
+      responseItems(listMemory).some((entry) => entry.id === memoryId && entry.authority === "user_confirmed"),
+      "project-context memory search returns durable entry",
+      undefined,
+      state
+    );
+
+    const createRelation = await request("POST", `${coreBaseUrl}/api/projects/${primaryProjectId}/relations`, {
+      token,
+      body: {
+        targetProjectId: secondaryProjectId,
+        relationType: "related",
+        directionality: "bidirectional",
+        note: `${marker} relation`
+      }
+    });
+    expectStatus(createRelation, 201, "project-context create Project relation", state);
+    relationId = createRelation.json?.id;
+    ensure(typeof relationId === "string", "project-context relation id present", undefined, state);
+
+    const listRelations = await request(
+      "GET",
+      `${coreBaseUrl}/api/projects/${primaryProjectId}/relations`,
+      { token }
+    );
+    expectStatus(listRelations, 200, "project-context list Project relations", state);
+    ensure(
+      responseItems(listRelations).some(
+        (entry) => entry.id === relationId && entry.targetProjectId === secondaryProjectId
+      ),
+      "project-context relation list returns created edge",
+      undefined,
+      state
+    );
+
+    const createArtifactItem = await request("POST", `${coreBaseUrl}/api/artifacts/notes`, {
+      token,
+      body: {
+        projectId: primaryProjectId,
+        path: `/e2e/${marker}.md`,
+        title: `${marker} Artifact note`,
+        tags: ["e2e", "project-context"],
+        contentMarkdown: `# ${marker}\n\nArtifact membership lifecycle.`
+      }
+    });
+    expectStatus(createArtifactItem, 201, "project-context create primary Artifact item", state);
+    artifactItemId = createArtifactItem.json?.id;
+    const artifactVersion = createArtifactItem.json?.version;
+    ensure(typeof artifactItemId === "string", "project-context Artifact item id present", undefined, state);
+    ensure(Number.isInteger(artifactVersion), "project-context Artifact item version present", undefined, state);
+
+    if (!artifactItemId) return;
+
+    const initialMemberships = await request(
+      "GET",
+      `${coreBaseUrl}/api/artifacts/items/${artifactItemId}/projects`,
+      { token }
+    );
+    expectStatus(initialMemberships, 200, "project-context list initial Artifact memberships", state);
+    ensure(
+      Array.isArray(initialMemberships.json?.memberships) &&
+        initialMemberships.json.memberships.some(
+          (membership) => membership.projectId === primaryProjectId && membership.role === "primary"
+        ),
+      "project-context primary membership is visible",
+      undefined,
+      state
+    );
+
+    const linkSecondary = await request(
+      "POST",
+      `${coreBaseUrl}/api/artifacts/items/${artifactItemId}/projects`,
+      {
+        token,
+        body: {
+          projectId: secondaryProjectId,
+          note: `${marker} secondary membership`,
+          expectedArtifactVersion: Number.isInteger(artifactVersion) ? artifactVersion : undefined
+        }
+      }
+    );
+    expectStatus(linkSecondary, 201, "project-context add secondary Artifact membership", state);
+
+    const linkedMemberships = await request(
+      "GET",
+      `${coreBaseUrl}/api/artifacts/items/${artifactItemId}/projects`,
+      { token }
+    );
+    expectStatus(linkedMemberships, 200, "project-context list linked Artifact memberships", state);
+    ensure(
+      Array.isArray(linkedMemberships.json?.memberships) &&
+        linkedMemberships.json.memberships.some(
+          (membership) => membership.projectId === secondaryProjectId && membership.role === "secondary"
+        ),
+      "project-context secondary membership is visible",
+      undefined,
+      state
+    );
+
+    const primaryIndex = await request(
+      "GET",
+      `${coreBaseUrl}/api/projects/${primaryProjectId}/index?q=${encodeURIComponent(marker)}`,
+      { token }
+    );
+    expectStatus(primaryIndex, 200, "project-context search primary index", state);
+    ensure(
+      responseItems(primaryIndex).some(
+        (entry) => entry.resourceId === artifactItemId && entry.associationKind === "primary"
+      ),
+      "project-context primary index entry visible",
+      undefined,
+      state
+    );
+
+    const secondaryIndex = await request(
+      "GET",
+      `${coreBaseUrl}/api/projects/${secondaryProjectId}/index?q=${encodeURIComponent(marker)}`,
+      { token }
+    );
+    expectStatus(secondaryIndex, 200, "project-context search secondary index", state);
+    ensure(
+      responseItems(secondaryIndex).some(
+        (entry) => entry.resourceId === artifactItemId && entry.associationKind === "secondary"
+      ),
+      "project-context secondary index entry visible",
+      undefined,
+      state
+    );
+
+    const context = await request(
+      "GET",
+      `${coreBaseUrl}/api/projects/${primaryProjectId}/context?q=${encodeURIComponent(marker)}&include=brief,memory,index,relations,links&maxChars=20000`,
+      { token }
+    );
+    expectStatus(context, 200, "project-context get context pack", state);
+    ensure(context.json?.brief?.contentMarkdown?.includes(marker), "project-context pack includes brief", undefined, state);
+    ensure(
+      Array.isArray(context.json?.memories) && context.json.memories.some((entry) => entry.id === memoryId),
+      "project-context pack includes memory",
+      undefined,
+      state
+    );
+    ensure(
+      Array.isArray(context.json?.indexEntries) &&
+        context.json.indexEntries.some((entry) => entry.resourceId === artifactItemId),
+      "project-context pack includes Artifact index entry",
+      undefined,
+      state
+    );
+    ensure(
+      Array.isArray(context.json?.relations) && context.json.relations.some((entry) => entry.id === relationId),
+      "project-context pack includes relation",
+      undefined,
+      state
+    );
+
+    const rebuildIndex = await request(
+      "POST",
+      `${coreBaseUrl}/api/projects/${secondaryProjectId}/index/rebuild`,
+      { token, body: {} }
+    );
+    expectStatus(rebuildIndex, 200, "project-context rebuild secondary index", state);
+    ensure(
+      Number(rebuildIndex.json?.secondary) >= 1,
+      "project-context rebuild accounts for secondary membership",
+      `secondary=${rebuildIndex.json?.secondary ?? "missing"}`,
+      state
+    );
+
+    const deletionImpact = await request(
+      "GET",
+      `${coreBaseUrl}/api/projects/${primaryProjectId}/deletion-impact`,
+      { token }
+    );
+    expectStatus(deletionImpact, 200, "project-context preview primary Project deletion", state);
+    ensure(
+      deletionImpact.json?.canDelete === false && Number(deletionImpact.json?.primaryArtifactCount) >= 1,
+      "project-context deletion impact reports blocking primary Artifact",
+      undefined,
+      state
+    );
+
+    const blockedProjectDelete = await request(
+      "DELETE",
+      `${coreBaseUrl}/api/projects/${primaryProjectId}`,
+      { token }
+    );
+    expectStatus(blockedProjectDelete, 409, "project-context guard primary Project deletion", state);
+    ensure(
+      blockedProjectDelete.json?.code === "PROJECT_HAS_PRIMARY_ARTIFACTS",
+      "project-context deletion guard returns stable code",
+      trimBody(blockedProjectDelete.text),
+      state
+    );
+
+    const unlinkSecondary = await request(
+      "DELETE",
+      `${coreBaseUrl}/api/artifacts/items/${artifactItemId}/projects/${secondaryProjectId}`,
+      { token }
+    );
+    expectStatus(unlinkSecondary, 204, "project-context unlink secondary membership", state);
+
+    const artifactAfterUnlink = await request(
+      "GET",
+      `${coreBaseUrl}/api/artifacts/items/${artifactItemId}`,
+      { token }
+    );
+    expectStatus(artifactAfterUnlink, 200, "project-context unlink preserves Artifact item", state);
+
+    const membershipsAfterUnlink = await request(
+      "GET",
+      `${coreBaseUrl}/api/artifacts/items/${artifactItemId}/projects`,
+      { token }
+    );
+    expectStatus(membershipsAfterUnlink, 200, "project-context list memberships after unlink", state);
+    ensure(
+      Array.isArray(membershipsAfterUnlink.json?.memberships) &&
+        !membershipsAfterUnlink.json.memberships.some((membership) => membership.projectId === secondaryProjectId),
+      "project-context secondary membership removed",
+      undefined,
+      state
+    );
+
+    const secondaryIndexAfterUnlink = await request(
+      "GET",
+      `${coreBaseUrl}/api/projects/${secondaryProjectId}/index?q=${encodeURIComponent(marker)}`,
+      { token }
+    );
+    expectStatus(secondaryIndexAfterUnlink, 200, "project-context search secondary index after unlink", state);
+    ensure(
+      !responseItems(secondaryIndexAfterUnlink).some((entry) => entry.resourceId === artifactItemId),
+      "project-context unlink tombstones secondary index entry",
+      undefined,
+      state
+    );
+
+    const primaryIndexAfterUnlink = await request(
+      "GET",
+      `${coreBaseUrl}/api/projects/${primaryProjectId}/index?q=${encodeURIComponent(marker)}`,
+      { token }
+    );
+    expectStatus(primaryIndexAfterUnlink, 200, "project-context search primary index after unlink", state);
+    ensure(
+      responseItems(primaryIndexAfterUnlink).some(
+        (entry) => entry.resourceId === artifactItemId && entry.associationKind === "primary"
+      ),
+      "project-context unlink preserves primary index entry",
+      undefined,
+      state
+    );
+
+    const deleteArtifactItem = await request(
+      "DELETE",
+      `${coreBaseUrl}/api/artifacts/items/${artifactItemId}`,
+      { token }
+    );
+    if (expectStatus(deleteArtifactItem, 204, "project-context delete primary Artifact item", state)) {
+      artifactItemId = undefined;
+    }
+
+    if (relationId) {
+      const deleteRelation = await request("DELETE", `${coreBaseUrl}/api/project-relations/${relationId}`, { token });
+      if (expectStatus(deleteRelation, 204, "project-context delete Project relation", state)) relationId = undefined;
+    }
+
+    const deletePrimary = await request("DELETE", `${coreBaseUrl}/api/projects/${primaryProjectId}`, { token });
+    if (expectStatus(deletePrimary, 204, "project-context delete unblocked primary Project", state)) {
+      primaryProjectId = undefined;
+    }
+
+    const deleteSecondary = await request("DELETE", `${coreBaseUrl}/api/projects/${secondaryProjectId}`, { token });
+    if (expectStatus(deleteSecondary, 204, "project-context delete secondary Project", state)) {
+      secondaryProjectId = undefined;
+    }
+  } finally {
+    if (artifactItemId) {
+      await cleanup("DELETE", `${coreBaseUrl}/api/artifacts/items/${artifactItemId}`, [204, 404], "project-context Artifact");
+      artifactItemId = undefined;
+    }
+    if (relationId) {
+      await cleanup("DELETE", `${coreBaseUrl}/api/project-relations/${relationId}`, [204, 404], "project-context relation");
+      relationId = undefined;
+    }
+    if (primaryProjectId) {
+      await cleanup("DELETE", `${coreBaseUrl}/api/projects/${primaryProjectId}`, [204, 404], "project-context primary Project");
+      primaryProjectId = undefined;
+    }
+    if (secondaryProjectId) {
+      await cleanup("DELETE", `${coreBaseUrl}/api/projects/${secondaryProjectId}`, [204, 404], "project-context secondary Project");
+      secondaryProjectId = undefined;
+    }
+  }
+}
+
 async function run() {
   const state = { passes: 0, failures: 0, warnings: 0 };
 
@@ -780,6 +1163,8 @@ async function run() {
 
     const deleteArtifact = await request("DELETE", `${coreBaseUrl}/api/artifacts/${artifactId}`, { token: tokenALogin });
     expectStatus(deleteArtifact, 204, "delete artifact via core", state);
+
+    await runProjectContextLifecycle(tokenALogin, stamp, state);
 
     logStep("Forged header must not grant cross-user access");
     const registerB = await request("POST", `${coreBaseUrl}/accounts/register`, {
