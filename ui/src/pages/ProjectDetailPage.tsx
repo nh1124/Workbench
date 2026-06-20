@@ -2,24 +2,36 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { artifactsApi, notesApi, projectsApi, tasksApi } from "../lib/api";
 import { formatDateTime, normalizeProjectName } from "../lib/format";
+import { ProjectBriefPanel } from "../projects/components/ProjectBriefPanel";
+import { ProjectIndexPanel } from "../projects/components/ProjectIndexPanel";
+import { ProjectLinksPanel } from "../projects/components/ProjectLinksPanel";
+import { ProjectMemoryPanel } from "../projects/components/ProjectMemoryPanel";
+import { ProjectRelationsPanel } from "../projects/components/ProjectRelationsPanel";
+import { useProjectContext } from "../projects/hooks/useProjectContext";
+import {
+  isProjectDeletionBlocked,
+  selectStableProjectDeletionTargets,
+  selectStableProjectRenameTargets
+} from "../projects/projectContextUtils";
 import type {
   Artifact,
   ArtifactItem,
   ArtifactProjectSummary,
   Note,
   NoteProjectSummary,
+  ProjectDeletionImpact,
   ProjectRecord,
   Task,
   TaskProjectSummary
 } from "../types/models";
 import "./ProjectDetailPage.css";
 
-type DetailTab = "overview" | "tasks" | "notes" | "artifacts" | "config";
+type DetailTab = "overview" | "context" | "tasks" | "notes" | "artifacts" | "config";
 
 interface DeleteLinkedOptions {
   notes: boolean;
   tasks: boolean;
-  artifacts: boolean;
+  legacyArtifacts: boolean;
 }
 
 interface ArtifactEntry {
@@ -124,15 +136,10 @@ function collectProjectKeys(
   return Array.from(keys);
 }
 
-function artifactPathDepth(pathValue: string): number {
-  const normalized = pathValue.trim();
-  if (!normalized) return 0;
-  return normalized.split("/").filter(Boolean).length;
-}
-
 export function ProjectDetailPage() {
   const { projectId = "" } = useParams();
   const navigate = useNavigate();
+  const projectContext = useProjectContext(projectId);
 
   const [project, setProject] = useState<ProjectRecord | null>(null);
   const [notes, setNotes] = useState<Note[]>([]);
@@ -148,11 +155,31 @@ export function ProjectDetailPage() {
   const [isSavingTitle, setIsSavingTitle] = useState(false);
   const [isDeletingProject, setIsDeletingProject] = useState(false);
   const [isSavingConfig, setIsSavingConfig] = useState(false);
+  const [deletionImpact, setDeletionImpact] = useState<ProjectDeletionImpact | null>(null);
+  const [isLoadingDeletionImpact, setIsLoadingDeletionImpact] = useState(false);
+  const [deletionImpactError, setDeletionImpactError] = useState<string | null>(null);
   const [deleteLinkedOptions, setDeleteLinkedOptions] = useState<DeleteLinkedOptions>({
     notes: true,
     tasks: true,
-    artifacts: true
+    legacyArtifacts: true
   });
+
+  const loadDeletionImpact = async () => {
+    if (!projectId) return null;
+    setIsLoadingDeletionImpact(true);
+    setDeletionImpactError(null);
+    try {
+      const impact = await projectsApi.getDeletionImpact(projectId);
+      setDeletionImpact(impact);
+      return impact;
+    } catch (impactError) {
+      setDeletionImpact(null);
+      setDeletionImpactError(impactError instanceof Error ? impactError.message : "Unable to preview Project deletion.");
+      return null;
+    } finally {
+      setIsLoadingDeletionImpact(false);
+    }
+  };
 
   const load = async (showLoading = true) => {
     if (!projectId) {
@@ -250,6 +277,15 @@ export function ProjectDetailPage() {
     void load(true);
   }, [projectId]);
 
+  useEffect(() => {
+    setDeletionImpact(null);
+    setDeletionImpactError(null);
+  }, [projectId]);
+
+  useEffect(() => {
+    if (activeTab === "config") void loadDeletionImpact();
+  }, [activeTab, projectId]);
+
   const displayTitle = useMemo(() => {
     const candidate = trimOrUndefined(project?.name)
       || trimOrUndefined(notes[0]?.projectName)
@@ -292,6 +328,14 @@ export function ProjectDetailPage() {
 
   const artifactCount = artifactEntries.length;
   const isProjectActive = project?.status === "active";
+  const stableDeletionTargets = useMemo(
+    () => selectStableProjectDeletionTargets(projectId, notes, tasks, artifactRecords),
+    [artifactRecords, notes, projectId, tasks]
+  );
+  const stableRenameTargets = useMemo(
+    () => selectStableProjectRenameTargets(projectId, notes, tasks, artifactRecords, artifactItems),
+    [artifactItems, artifactRecords, notes, projectId, tasks]
+  );
 
   const handleSaveTitle = async () => {
     const nextTitle = titleDraft.trim();
@@ -314,25 +358,25 @@ export function ProjectDetailPage() {
 
       const syncRequests: Array<Promise<unknown>> = [];
 
-      for (const note of notes) {
+      for (const note of stableRenameTargets.notes) {
         if ((note.projectName ?? "") !== nextTitle) {
           syncRequests.push(notesApi.update(note.id, { projectName: nextTitle }));
         }
       }
 
-      for (const task of tasks) {
+      for (const task of stableRenameTargets.tasks) {
         if ((task.contextName ?? "") !== nextTitle) {
           syncRequests.push(tasksApi.update(task.id, { contextName: nextTitle }));
         }
       }
 
-      for (const artifact of artifactRecords) {
+      for (const artifact of stableRenameTargets.artifacts) {
         if ((artifact.projectName ?? "") !== nextTitle) {
           syncRequests.push(artifactsApi.update(artifact.id, { projectName: nextTitle }));
         }
       }
 
-      for (const item of artifactItems) {
+      for (const item of stableRenameTargets.artifactItems) {
         if ((item.projectName ?? "") !== nextTitle) {
           syncRequests.push(artifactsApi.updateItem(item.id, { projectName: nextTitle }));
         }
@@ -380,10 +424,20 @@ export function ProjectDetailPage() {
       return;
     }
 
+    const latestImpact = await loadDeletionImpact();
+    if (!latestImpact) {
+      setError("Project deletion is disabled until its impact can be verified.");
+      return;
+    }
+    if (isProjectDeletionBlocked(latestImpact)) {
+      setError("Move or delete every primary Artifact item before deleting this Project.");
+      return;
+    }
+
     const linkedDeleteTargets =
-      (deleteLinkedOptions.notes ? notes.length : 0) +
-      (deleteLinkedOptions.tasks ? tasks.length : 0) +
-      (deleteLinkedOptions.artifacts ? artifactCount : 0);
+      (deleteLinkedOptions.notes ? stableDeletionTargets.notes.length : 0) +
+      (deleteLinkedOptions.tasks ? stableDeletionTargets.tasks.length : 0) +
+      (deleteLinkedOptions.legacyArtifacts ? stableDeletionTargets.artifacts.length : 0);
     const confirmed = window.confirm(
       `Delete this project?\n\nProject: ${displayTitle}\nLinked records selected for deletion: ${linkedDeleteTargets}`
     );
@@ -398,19 +452,19 @@ export function ProjectDetailPage() {
       const linkedDeleteRequests: Array<Promise<unknown>> = [];
 
       if (deleteLinkedOptions.notes) {
-        for (const note of notes) {
+        for (const note of stableDeletionTargets.notes) {
           linkedDeleteRequests.push(notesApi.remove(note.id));
         }
       }
 
       if (deleteLinkedOptions.tasks) {
-        for (const task of tasks) {
+        for (const task of stableDeletionTargets.tasks) {
           linkedDeleteRequests.push(tasksApi.remove(task.id));
         }
       }
 
-      if (deleteLinkedOptions.artifacts) {
-        for (const artifact of artifactRecords) {
+      if (deleteLinkedOptions.legacyArtifacts) {
+        for (const artifact of stableDeletionTargets.artifacts) {
           linkedDeleteRequests.push(artifactsApi.remove(artifact.id));
         }
       }
@@ -420,26 +474,6 @@ export function ProjectDetailPage() {
         const linkedDeleteFailed = linkedDeleteResults.filter((result) => result.status === "rejected").length;
         if (linkedDeleteFailed > 0) {
           setError(`Linked records deletion failed for ${linkedDeleteFailed} item(s). Project deletion was canceled.`);
-          return;
-        }
-      }
-
-      if (deleteLinkedOptions.artifacts && artifactItems.length > 0) {
-        const sortedItems = [...artifactItems].sort(
-          (a, b) => artifactPathDepth(b.path) - artifactPathDepth(a.path)
-        );
-        let itemDeleteFailures = 0;
-        for (const item of sortedItems) {
-          try {
-            await artifactsApi.removeItem(item.id);
-          } catch (itemDeleteError) {
-            if (!isNotFoundError(itemDeleteError)) {
-              itemDeleteFailures += 1;
-            }
-          }
-        }
-        if (itemDeleteFailures > 0) {
-          setError(`Linked artifact items deletion failed for ${itemDeleteFailures} item(s). Project deletion was canceled.`);
           return;
         }
       }
@@ -531,6 +565,7 @@ export function ProjectDetailPage() {
       <nav className="project-tabs" aria-label="Project sections">
         {[
           { id: "overview" as const, label: "Overview" },
+          { id: "context" as const, label: "Context" },
           { id: "tasks" as const, label: `Tasks (${tasks.length})` },
           { id: "notes" as const, label: `Notes (${notes.length})` },
           { id: "artifacts" as const, label: `Artifacts (${artifactCount})` },
@@ -584,6 +619,31 @@ export function ProjectDetailPage() {
               {trimOrUndefined(project?.description) ?? "No description yet."}
             </p>
           </article>
+
+          {projectContext.isLoading && !projectContext.context ? <p className="info">Loading Project context...</p> : null}
+          {projectContext.context ? (
+            <ProjectBriefPanel
+              projectId={projectId}
+              brief={projectContext.context.brief}
+              generatedSummary={projectContext.context.generatedSummary}
+              onChanged={projectContext.reload}
+            />
+          ) : null}
+          {projectContext.error ? <p className="project-context-unavailable">Project context is unavailable on this server. Existing Project details remain usable.</p> : null}
+        </div>
+      ) : null}
+
+      {activeTab === "context" ? (
+        <div className="project-tab-content project-context-stack">
+          {projectContext.context?.truncation.truncatedSections.length ? (
+            <div className="project-context-warning" role="status">
+              Context was truncated: {projectContext.context.truncation.truncatedSections.join(", ")}. The panels below load their sections directly.
+            </div>
+          ) : null}
+          <ProjectMemoryPanel projectId={projectId} />
+          <ProjectIndexPanel projectId={projectId} />
+          <ProjectRelationsPanel projectId={projectId} />
+          <ProjectLinksPanel projectId={projectId} />
         </div>
       ) : null}
 
@@ -680,7 +740,7 @@ export function ProjectDetailPage() {
             <label className="project-switch-row">
               <div>
                 <strong>Delete related Notes</strong>
-                <small>{notes.length} notes will be deleted when enabled.</small>
+                <small>{stableDeletionTargets.notes.length} notes owned by this stable Project ID will be deleted when enabled.</small>
               </div>
               <button
                 type="button"
@@ -701,7 +761,7 @@ export function ProjectDetailPage() {
             <label className="project-switch-row">
               <div>
                 <strong>Delete related Tasks</strong>
-                <small>{tasks.length} tasks will be deleted when enabled.</small>
+                <small>{stableDeletionTargets.tasks.length} tasks owned by this stable Project ID will be deleted when enabled.</small>
               </div>
               <button
                 type="button"
@@ -721,24 +781,39 @@ export function ProjectDetailPage() {
 
             <label className="project-switch-row">
               <div>
-                <strong>Delete related Artifacts</strong>
-                <small>{artifactCount} artifacts will be deleted when enabled.</small>
+                <strong>Delete legacy Artifact records</strong>
+                <small>{stableDeletionTargets.artifacts.length} stable-ID legacy records will be deleted. Name-only matches, Artifact items, and secondary memberships are excluded.</small>
               </div>
               <button
                 type="button"
                 role="switch"
-                aria-checked={deleteLinkedOptions.artifacts}
-                className={deleteLinkedOptions.artifacts ? "project-switch active" : "project-switch"}
+                aria-checked={deleteLinkedOptions.legacyArtifacts}
+                className={deleteLinkedOptions.legacyArtifacts ? "project-switch active" : "project-switch"}
                 onClick={() =>
                   setDeleteLinkedOptions((prev) => ({
                     ...prev,
-                    artifacts: !prev.artifacts
+                    legacyArtifacts: !prev.legacyArtifacts
                   }))
                 }
               >
                 <span className="project-switch-thumb" />
               </button>
             </label>
+          </div>
+
+          <div className="project-deletion-impact" aria-live="polite">
+            <div className="project-context-panel-head">
+              <div><h4>Artifact deletion impact</h4><p>Primary ownership and secondary references have different deletion behavior.</p></div>
+              <button type="button" className="ghost-button" onClick={() => void loadDeletionImpact()} disabled={isLoadingDeletionImpact}>{isLoadingDeletionImpact ? "Checking..." : "Refresh impact"}</button>
+            </div>
+            {deletionImpact ? (
+              <div className="project-deletion-counts">
+                <div><strong>{deletionImpact.primaryArtifactCount}</strong><span>Primary Artifact items</span><small>Move or delete these first.</small></div>
+                <div><strong>{deletionImpact.secondaryArtifactCount}</strong><span>Secondary memberships</span><small>Only links are removed; Artifacts remain.</small></div>
+              </div>
+            ) : null}
+            {deletionImpact && isProjectDeletionBlocked(deletionImpact) ? <p className="project-context-warning">Project deletion is blocked while primary Artifact items remain. <Link to="/artifacts">Resolve them in Artifacts</Link>.</p> : null}
+            {deletionImpactError ? <p className="project-context-error">Deletion is disabled because impact could not be verified: {deletionImpactError}</p> : null}
           </div>
 
           <div className="project-config-danger">
@@ -748,7 +823,7 @@ export function ProjectDetailPage() {
               type="button"
               className="danger-button project-delete-button"
               onClick={() => void handleDeleteProject()}
-              disabled={isDeletingProject}
+              disabled={isDeletingProject || isLoadingDeletionImpact || !deletionImpact || isProjectDeletionBlocked(deletionImpact)}
             >
               {isDeletingProject ? "Deleting..." : "Delete Project"}
             </button>

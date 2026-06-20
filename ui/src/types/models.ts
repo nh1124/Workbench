@@ -231,6 +231,167 @@ export interface ProjectDefaultSelection {
   source: "user" | "fallback";
 }
 
+export interface ProjectBriefRecord {
+  projectId: string;
+  contentMarkdown: string;
+  version: number;
+  updatedByKind: "user" | "agent";
+  updatedAt: string;
+}
+
+export type ProjectMemoryKind = "decision" | "fact" | "preference" | "pitfall" | "observation";
+export type ProjectMemoryAuthority = "user_confirmed" | "agent_observed" | "imported";
+export type ProjectMemoryStatus = "active" | "superseded" | "archived";
+
+export interface ProjectMemoryEntry {
+  id: string;
+  projectId: string;
+  kind: ProjectMemoryKind;
+  bodyMarkdown: string;
+  authority: ProjectMemoryAuthority;
+  sourceService?: string;
+  sourceResourceType?: string;
+  sourceResourceId?: string;
+  confidence?: number;
+  status: ProjectMemoryStatus;
+  supersedesId?: string;
+  createdByKind: "user" | "agent" | "system";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectMemoryListResult {
+  items: ProjectMemoryEntry[];
+  nextCursor?: string;
+}
+
+export type ProjectIndexAssociationKind = "primary" | "secondary";
+
+export interface ProjectIndexEntry {
+  id: string;
+  projectId: string;
+  sourceService: string;
+  resourceType: string;
+  resourceId: string;
+  associationKind: ProjectIndexAssociationKind;
+  associationId?: string;
+  path?: string;
+  title: string;
+  summaryText: string;
+  summarySource: "deterministic" | "model" | "snapshot";
+  sourceVersion?: string;
+  contentHash?: string;
+  sourceUpdatedAt: string;
+  indexedAt: string;
+  metadataJson: Record<string, unknown>;
+  isDeleted?: boolean;
+}
+
+export interface ProjectIndexListResult {
+  items: ProjectIndexEntry[];
+  nextCursor?: string;
+}
+
+export type ProjectRelationType = "related" | "depends_on" | "supports" | "informs" | "overlaps";
+export type ProjectRelationDirectionality = "directed" | "bidirectional";
+export type ProjectRelationOrigin = "manual" | "inferred";
+
+export interface ProjectRelation {
+  id: string;
+  version: number;
+  sourceProjectId: string;
+  sourceProjectName?: string;
+  targetProjectId: string;
+  targetProjectName?: string;
+  relationType: ProjectRelationType;
+  directionality: ProjectRelationDirectionality;
+  note?: string;
+  origin: ProjectRelationOrigin;
+  strength?: number;
+  createdByKind: "user" | "agent" | "system";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectRelationListResult {
+  items: ProjectRelation[];
+  nextCursor?: string;
+}
+
+export interface ProjectLinkRecord {
+  id: string;
+  projectId: string;
+  targetService: string;
+  targetResourceType: string;
+  targetResourceId: string;
+  relationType: string;
+  titleSnapshot?: string;
+  summarySnapshot?: string;
+  linkedAt: string;
+  metadataJson: Record<string, unknown>;
+}
+
+export interface ProjectLinkListResult {
+  items: ProjectLinkRecord[];
+  nextCursor?: string;
+}
+
+export interface ProjectContextSummary {
+  id?: string;
+  projectId: string;
+  summaryText: string;
+  source: string;
+  updatedAt: string;
+}
+
+export interface ProjectContextPack {
+  project: ProjectRecord;
+  brief?: ProjectBriefRecord | null;
+  generatedSummary?: ProjectContextSummary | null;
+  memories?: ProjectMemoryEntry[];
+  indexEntries?: ProjectIndexEntry[];
+  relations?: ProjectRelation[];
+  links?: ProjectLinkRecord[];
+  truncation: {
+    maxChars: number;
+    truncatedSections: string[];
+  };
+}
+
+export interface ArtifactProjectMembership {
+  projectId: string;
+  projectName?: string;
+  role: "primary" | "secondary";
+  linkId?: string;
+  note?: string;
+}
+
+export interface ArtifactProjectMembershipsResult {
+  artifactItemId: string;
+  memberships: ArtifactProjectMembership[];
+}
+
+export interface ProjectDeletionImpactPrimaryArtifact {
+  id: string;
+  kind: ArtifactItemKind;
+  title: string;
+  path: string;
+}
+
+export interface ProjectDeletionImpactSecondaryMembership {
+  linkId: string;
+  artifactItemId: string;
+}
+
+export interface ProjectDeletionImpact {
+  projectId: string;
+  primaryArtifactCount: number;
+  secondaryArtifactCount: number;
+  canDelete: boolean;
+  primaryArtifacts?: ProjectDeletionImpactPrimaryArtifact[];
+  secondaryMemberships?: ProjectDeletionImpactSecondaryMembership[];
+}
+
 export interface ServiceHealth {
   service: string;
   status: "ok" | "error";

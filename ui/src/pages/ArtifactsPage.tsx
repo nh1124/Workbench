@@ -75,6 +75,7 @@ import {
 } from "../artifacts/components/ArtifactsIcons";
 import { DirectoryBrowser } from "../artifacts/components/DirectoryBrowser";
 import type { DirectoryViewMode } from "../artifacts/components/DirectoryBrowser";
+import { ArtifactProjectMemberships } from "../artifacts/components/ArtifactProjectMemberships";
 import { MarkdownOutlinePanel } from "../artifacts/components/MarkdownOutlinePanel";
 import { PdfViewer } from "../artifacts/components/PdfViewer";
 import "./ArtifactsPage.css";
@@ -2763,6 +2764,17 @@ export function ArtifactsPage() {
                   <span className="va-field-label">Preview</span>
                   <div className="va-empty">Word preview generation failed. Please re-upload or open via Edit.</div>
                 </div>
+              ) : null}
+
+              {selectedItemSummary ? (
+                <ArtifactProjectMemberships
+                  key={selectedItemSummary.id}
+                  item={selectedItemSummary}
+                  projects={detailProjectOptions.map((project) => ({
+                    id: project.projectId,
+                    name: normalizeProjectName(project.projectId, project.projectName)
+                  }))}
+                />
               ) : null}
 
               {(draft.createdAt || selectedItemSummary) ? (

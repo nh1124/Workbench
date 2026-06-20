@@ -1,0 +1,86 @@
+.artifact-memberships {
+  display: grid;
+  gap: 0.65rem;
+  border: 1px solid rgba(71, 85, 105, 0.68);
+  border-radius: 12px;
+  background: rgba(10, 18, 34, 0.72);
+  padding: 0.75rem;
+}
+
+.artifact-memberships-head,
+.artifact-membership-primary,
+.artifact-membership-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+}
+
+.artifact-memberships-head > div,
+.artifact-membership-list li > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.artifact-memberships small {
+  color: #94a3b8;
+}
+
+.artifact-membership-primary,
+.artifact-membership-list li {
+  border: 1px solid rgba(51, 65, 85, 0.72);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.74);
+  padding: 0.55rem 0.65rem;
+}
+
+.artifact-membership-role {
+  width: fit-content;
+  border-radius: 999px;
+  background: rgba(14, 165, 233, 0.2);
+  color: #bae6fd;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  padding: 0.18rem 0.42rem;
+  text-transform: uppercase;
+}
+
+.artifact-membership-role.secondary {
+  background: rgba(168, 85, 247, 0.2);
+  color: #e9d5ff;
+}
+
+.artifact-membership-list {
+  display: grid;
+  gap: 0.4rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.artifact-membership-list .artifact-membership-empty {
+  color: #94a3b8;
+  justify-content: flex-start;
+}
+
+.artifact-membership-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(220px, 1fr) auto;
+  gap: 0.45rem;
+}
+
+.artifact-membership-warning,
+.artifact-membership-error {
+  margin: 0;
+  font-size: 0.78rem;
+}
+
+.artifact-membership-warning { color: #fcd34d; }
+.artifact-membership-error { color: #fca5a5; }
+
+@media (max-width: 900px) {
+  .artifact-membership-form { grid-template-columns: 1fr; }
+  .artifact-membership-primary,
+  .artifact-membership-list li { align-items: flex-start; flex-direction: column; }
+}
