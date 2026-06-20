@@ -2,6 +2,16 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { artifactsClient } from "../internalClients.js";
 import { createLocalJob, getLocalJob, serializeLocalJobForOwner } from "../localClientsStore.js";
+import {
+  createArtifactNoteWithIndex,
+  getArtifactProjectMemberships,
+  linkArtifactToProject,
+  maintainArtifactIndexBestEffort,
+  reconcileArtifactMutationBestEffort,
+  removeArtifactItemWithProjectCleanup,
+  unlinkArtifactFromProject,
+  uploadArtifactFileWithIndex
+} from "../projectContext.js";
 import { asMcpText, runWithAuth, runWithAuthContext } from "./helpers.js";
 
 type ToolContext = {
@@ -47,6 +57,19 @@ function compactArtifactItemResult(value: unknown, includeContent = false): unkn
     };
   }
   return rest;
+}
+
+async function updateArtifactItemWithIndex(token: string, id: string, payload: unknown): Promise<unknown> {
+  let before: unknown;
+  try {
+    before = await artifactsClient.getItem(token, id);
+  } catch {
+    before = undefined;
+  }
+  const result = await artifactsClient.updateItem(token, id, payload);
+  if (before) await reconcileArtifactMutationBestEffort(token, before, result);
+  else await maintainArtifactIndexBestEffort(token, result);
+  return result;
 }
 
 export function registerArtifactsTools(server: McpServer, ctx: ToolContext): void;
@@ -193,6 +216,55 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
   );
 
   server.registerTool(
+    "artifacts.item.projects.list",
+    {
+      title: "List Artifact Item Projects",
+      description: "List the primary and explicit secondary Project memberships for an Artifact item.",
+      inputSchema: { artifactItemId: z.string().min(1) }
+    },
+    async ({ artifactItemId }) =>
+      asMcpText(
+        await runWithAuth(ctx.accessToken, () => getArtifactProjectMemberships(ctx.accessToken, artifactItemId))
+      )
+  );
+
+  server.registerTool(
+    "artifacts.item.projects.link",
+    {
+      title: "Link Artifact Item To Project",
+      description: "Add a validated secondary Project membership without duplicating the Artifact.",
+      inputSchema: {
+        artifactItemId: z.string().min(1),
+        projectId: z.string().min(1),
+        note: z.string().optional(),
+        expectedArtifactVersion: z.number().int().positive().optional()
+      }
+    },
+    async ({ artifactItemId, ...input }) =>
+      asMcpText(
+        await runWithAuth(ctx.accessToken, () => linkArtifactToProject(ctx.accessToken, artifactItemId, input))
+      )
+  );
+
+  server.registerTool(
+    "artifacts.item.projects.unlink",
+    {
+      title: "Unlink Artifact Item From Project",
+      description: "Remove a secondary membership. The primary Project and Artifact content are never deleted.",
+      inputSchema: {
+        artifactItemId: z.string().min(1),
+        projectId: z.string().min(1)
+      }
+    },
+    async ({ artifactItemId, projectId }) => {
+      await runWithAuth(ctx.accessToken, () =>
+        unlinkArtifactFromProject(ctx.accessToken, artifactItemId, projectId)
+      );
+      return asMcpText({ status: "ok" });
+    }
+  );
+
+  server.registerTool(
     "artifacts.folder.create",
     {
       title: "Create Artifact Folder",
@@ -207,6 +279,7 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
     },
     async (payload) => {
       const result = await runWithAuth(ctx.accessToken, () => artifactsClient.createFolder(ctx.accessToken, payload));
+      await maintainArtifactIndexBestEffort(ctx.accessToken, result);
       return asMcpText(result);
     }
   );
@@ -227,7 +300,7 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
       }
     },
     async (payload) => {
-      const result = await runWithAuth(ctx.accessToken, () => artifactsClient.createNote(ctx.accessToken, payload));
+      const result = await runWithAuth(ctx.accessToken, () => createArtifactNoteWithIndex(ctx.accessToken, payload));
       return asMcpText(result);
     }
   );
@@ -249,7 +322,7 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
       }
     },
     async ({ id, ...payload }) => {
-      const result = await runWithAuth(ctx.accessToken, () => artifactsClient.updateItem(ctx.accessToken, id, payload));
+      const result = await runWithAuth(ctx.accessToken, () => updateArtifactItemWithIndex(ctx.accessToken, id, payload));
       return asMcpText(result);
     }
   );
@@ -271,7 +344,7 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
       }
     },
     async ({ id, returnContent, ...payload }) => {
-      const result = await runWithAuth(ctx.accessToken, () => artifactsClient.updateItem(ctx.accessToken, id, payload));
+      const result = await runWithAuth(ctx.accessToken, () => updateArtifactItemWithIndex(ctx.accessToken, id, payload));
       return asMcpText(compactArtifactItemResult(result, returnContent));
     }
   );
@@ -293,7 +366,7 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
       if (!payload.path && !payload.projectId) {
         throw new Error("path or projectId is required");
       }
-      const result = await runWithAuth(ctx.accessToken, () => artifactsClient.updateItem(ctx.accessToken, id, payload));
+      const result = await runWithAuth(ctx.accessToken, () => updateArtifactItemWithIndex(ctx.accessToken, id, payload));
       return asMcpText(compactArtifactItemResult(result, returnContent));
     }
   );
@@ -311,7 +384,7 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
     },
     async ({ id, projectId, projectName }) => {
       const result = await runWithAuth(ctx.accessToken, () =>
-        artifactsClient.updateItem(ctx.accessToken, id, { projectId, projectName })
+        updateArtifactItemWithIndex(ctx.accessToken, id, { projectId, projectName })
       );
       return asMcpText(compactArtifactItemResult(result));
     }
@@ -333,6 +406,7 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
       const result = await runWithAuth(ctx.accessToken, () =>
         artifactsClient.patchNoteContent(ctx.accessToken, id, payload)
       );
+      await maintainArtifactIndexBestEffort(ctx.accessToken, result);
       return asMcpText(compactArtifactItemResult(result, returnContent));
     }
   );
@@ -357,6 +431,7 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
       const result = await runWithAuth(ctx.accessToken, () =>
         artifactsClient.updateNoteSection(ctx.accessToken, id, payload)
       );
+      await maintainArtifactIndexBestEffort(ctx.accessToken, result);
       return asMcpText(compactArtifactItemResult(result, returnContent));
     }
   );
@@ -371,7 +446,7 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
       }
     },
     async ({ id }) => {
-      await runWithAuth(ctx.accessToken, () => artifactsClient.removeItem(ctx.accessToken, id));
+      await runWithAuth(ctx.accessToken, () => removeArtifactItemWithProjectCleanup(ctx.accessToken, id));
       return asMcpText({ status: "ok" });
     }
   );
@@ -393,7 +468,7 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
       }
     },
     async (payload) => {
-      const result = await runWithAuth(ctx.accessToken, () => artifactsClient.uploadFile(ctx.accessToken, payload));
+      const result = await runWithAuth(ctx.accessToken, () => uploadArtifactFileWithIndex(ctx.accessToken, payload));
       return asMcpText(result);
     }
   );

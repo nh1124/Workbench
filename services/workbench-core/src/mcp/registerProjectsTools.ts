@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { projectsClient } from "../internalClients.js";
+import { deleteProjectWithGuard } from "../projectContext.js";
 import { asMcpText, runWithAuth } from "./helpers.js";
 
 const projectStatusSchema = z.enum(["draft", "active", "archived"]);
@@ -94,7 +95,7 @@ export function registerProjectsTools(server: McpServer, ctx?: ToolContext): voi
       }
     },
     async ({ id }) => {
-      await runWithAuth(ctx.accessToken, () => projectsClient.remove(ctx.accessToken, id));
+      await runWithAuth(ctx.accessToken, () => deleteProjectWithGuard(ctx.accessToken, id));
       return asMcpText({ status: "ok" });
     }
   );

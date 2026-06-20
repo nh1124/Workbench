@@ -888,5 +888,201 @@ export const projectsClient = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
+  },
+  getContext: (
+    token: string,
+    projectId: string,
+    options: {
+      q?: string;
+      include?: string;
+      memoryLimit?: number;
+      indexLimit?: number;
+      relationLimit?: number;
+      maxChars?: number;
+    } = {}
+  ) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(
+      projectsService,
+      `/projects/${encodeURIComponent(projectId)}/context${buildQuery(options)}`,
+      token
+    );
+  },
+  getBrief: (token: string, projectId: string) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(projectsService, `/projects/${encodeURIComponent(projectId)}/brief`, token);
+  },
+  updateBrief: (token: string, projectId: string, payload: unknown) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(projectsService, `/projects/${encodeURIComponent(projectId)}/brief`, token, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+  },
+  listMemories: (
+    token: string,
+    projectId: string,
+    options: { q?: string; kind?: string; authority?: string; status?: string; limit?: number; cursor?: string } = {}
+  ) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(
+      projectsService,
+      `/projects/${encodeURIComponent(projectId)}/memories${buildQuery(options)}`,
+      token
+    );
+  },
+  appendMemory: (token: string, projectId: string, payload: unknown) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(projectsService, `/projects/${encodeURIComponent(projectId)}/memories`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+  },
+  updateMemory: (token: string, memoryId: string, payload: unknown) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(projectsService, `/project-memories/${encodeURIComponent(memoryId)}`, token, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+  },
+  listIndexEntries: (
+    token: string,
+    projectId: string,
+    options: { q?: string; sourceService?: string; resourceType?: string; limit?: number; cursor?: string } = {}
+  ) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(
+      projectsService,
+      `/projects/${encodeURIComponent(projectId)}/index-entries${buildQuery(options)}`,
+      token
+    );
+  },
+  upsertIndexEntry: (token: string, projectId: string, payload: unknown) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(
+      projectsService,
+      `/projects/${encodeURIComponent(projectId)}/index-entries/upsert`,
+      token,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }
+    );
+  },
+  tombstoneIndexEntry: (token: string, projectId: string, payload: unknown) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(
+      projectsService,
+      `/projects/${encodeURIComponent(projectId)}/index-entries/tombstone`,
+      token,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }
+    );
+  },
+  bulkUpsertIndexEntries: (token: string, projectId: string, payload: unknown) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(
+      projectsService,
+      `/projects/${encodeURIComponent(projectId)}/index-entries/bulk-upsert`,
+      token,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }
+    );
+  },
+  listRelations: (token: string, projectId: string, options: { limit?: number; cursor?: string } = {}) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(
+      projectsService,
+      `/projects/${encodeURIComponent(projectId)}/relations${buildQuery(options)}`,
+      token
+    );
+  },
+  createRelation: (token: string, projectId: string, payload: unknown) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(projectsService, `/projects/${encodeURIComponent(projectId)}/relations`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+  },
+  updateRelation: (token: string, relationId: string, payload: unknown) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(projectsService, `/project-relations/${encodeURIComponent(relationId)}`, token, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+  },
+  removeRelation: (token: string, relationId: string) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<void>(projectsService, `/project-relations/${encodeURIComponent(relationId)}`, token, {
+      method: "DELETE"
+    });
+  },
+  listLinks: (
+    token: string,
+    projectId: string,
+    options: {
+      targetService?: string;
+      targetResourceType?: string;
+      targetResourceId?: string;
+      relationType?: string;
+      limit?: number;
+      cursor?: string;
+    } = {}
+  ) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(
+      projectsService,
+      `/projects/${encodeURIComponent(projectId)}/links${buildQuery(options)}`,
+      token
+    );
+  },
+  listLinksByTarget: (
+    token: string,
+    options: {
+      targetService: string;
+      targetResourceType: string;
+      targetResourceId: string;
+      relationType?: string;
+      limit?: number;
+      cursor?: string;
+    }
+  ) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(projectsService, `/project-links${buildQuery(options)}`, token);
+  },
+  getLink: (token: string, linkId: string) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(projectsService, `/project-links/${encodeURIComponent(linkId)}`, token);
+  },
+  createLink: (token: string, projectId: string, payload: unknown) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(projectsService, `/projects/${encodeURIComponent(projectId)}/links`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+  },
+  removeLink: (token: string, linkId: string) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<void>(projectsService, `/project-links/${encodeURIComponent(linkId)}`, token, {
+      method: "DELETE"
+    });
+  },
+  getContextSummary: (token: string, projectId: string) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(
+      projectsService,
+      `/projects/${encodeURIComponent(projectId)}/context-summary`,
+      token
+    );
+  },
+  refreshContextSummary: (token: string, projectId: string, payload: unknown = {}) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(
+      projectsService,
+      `/projects/${encodeURIComponent(projectId)}/context-summary/refresh`,
+      token,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }
+    );
   }
 };

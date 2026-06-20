@@ -1,4 +1,4 @@
-import { artifactsClient } from "../internalClients.js";
+import { createArtifactNoteWithIndex } from "../projectContext.js";
 import { getIntegrationConfig } from "../store.js";
 import { DeepResearchError } from "./errors.js";
 import { resolveProviderModel, runDeepResearchProvider } from "./providers.js";
@@ -394,7 +394,7 @@ async function saveResultToArtifacts(params: {
     tags: ["research", params.provider, params.speed],
     contentMarkdown: markdown
   };
-  const created = await artifactsClient.createNote(params.accessToken, payload);
+  const created = await createArtifactNoteWithIndex(params.accessToken, payload);
   return parseArtifactRef(created);
 }
 

@@ -5,6 +5,7 @@ import { registerAuthTools } from "./mcp/registerAuthTools.js";
 import { registerDeepResearchTools } from "./mcp/registerDeepResearchTools.js";
 import { registerNotesTools } from "./mcp/registerNotesTools.js";
 import { registerProjectsTools } from "./mcp/registerProjectsTools.js";
+import { registerProjectContextTools } from "./mcp/registerProjectContextTools.js";
 import { registerTasksTools } from "./mcp/registerTasksTools.js";
 
 const server = new McpServer({
@@ -21,6 +22,7 @@ if (accessToken) {
   registerArtifactsTools(server, ctx);
   registerTasksTools(server, ctx);
   registerProjectsTools(server, ctx);
+  registerProjectContextTools(server, ctx);
   registerDeepResearchTools(server, ctx);
 }
 

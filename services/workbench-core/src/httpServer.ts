@@ -19,10 +19,27 @@ import { registerDeepResearchTools } from "./mcp/registerDeepResearchTools.js";
 import { registerImageTools } from "./mcp/registerImageTools.js";
 import { registerNotesTools } from "./mcp/registerNotesTools.js";
 import { registerProjectsTools } from "./mcp/registerProjectsTools.js";
+import { registerProjectContextTools } from "./mcp/registerProjectContextTools.js";
 import { registerTasksTools } from "./mcp/registerTasksTools.js";
 import { ensureIntegrationLinked } from "./integrationLinking.js";
 import { artifactsClient, imagesClient, InternalServiceError, notesClient, projectsClient, serviceBaseUrls, tasksClient } from "./internalClients.js";
 import { getOAuthDynamicClient, saveOAuthDynamicClient } from "./oauthDynamicClientsStore.js";
+import {
+  createArtifactNoteWithIndex,
+  createProjectLinkWithValidation,
+  deleteProjectWithGuard,
+  getArtifactProjectMemberships,
+  getProjectDeletionImpact,
+  linkArtifactToProject,
+  maintainArtifactIndexBestEffort,
+  ProjectContextError,
+  rebuildProjectArtifactIndex,
+  reconcileArtifactMutationBestEffort,
+  removeArtifactItemWithProjectCleanup,
+  removeProjectLinkWithValidation,
+  unlinkArtifactFromProject,
+  uploadArtifactFileWithIndex
+} from "./projectContext.js";
 import {
   archiveLocalClient,
   assertLocalClientCapability,
@@ -1155,10 +1172,20 @@ function respondInternalError(res: express.Response, error: unknown): express.Re
   }
 
   if (error instanceof InternalServiceError) {
-    if (error.status === 401 || error.status === 403 || error.status === 404 || error.status === 400) {
+    if (error.status >= 400 && error.status < 500) {
+      try {
+        const body = JSON.parse(error.body) as unknown;
+        if (body && typeof body === "object") return res.status(error.status).json(body);
+      } catch {
+        // Preserve legacy message wrapping for non-JSON upstream errors.
+      }
       return res.status(error.status).json({ message: error.body || error.message });
     }
     return res.status(502).json({ message: `[${error.service}] ${error.body || error.message}` });
+  }
+
+  if (error instanceof ProjectContextError) {
+    return res.status(error.status).json({ message: error.message, code: error.code });
   }
 
   const message = error instanceof Error ? error.message : "Unexpected internal error";
@@ -1714,7 +1741,7 @@ async function applySyncPushOperation(
       if (!resourceId) {
         throw new LocalClientStoreError(400, "SYNC_RESOURCE_ID_REQUIRED", "Delete requires resourceId.");
       }
-      await projectsClient.remove(authContext.accessToken, resourceId);
+      await deleteProjectWithGuard(authContext.accessToken, resourceId);
       nextResourceId = resourceId;
       result = { id: resourceId, deleted: true };
     }
@@ -1866,6 +1893,14 @@ async function applySyncPushOperation(
     };
   }
 
+  let artifactBefore: unknown;
+  if (resourceId && action !== "delete") {
+    try {
+      artifactBefore = await artifactsClient.getItem(authContext.accessToken, resourceId);
+    } catch {
+      artifactBefore = undefined;
+    }
+  }
   let result: unknown;
   let nextResourceId = resourceId;
   if (action === "create") {
@@ -1918,9 +1953,15 @@ async function applySyncPushOperation(
     if (!resourceId) {
       throw new LocalClientStoreError(400, "SYNC_RESOURCE_ID_REQUIRED", "Delete requires resourceId.");
     }
-    await artifactsClient.removeItem(authContext.accessToken, resourceId);
+    await removeArtifactItemWithProjectCleanup(authContext.accessToken, resourceId);
     nextResourceId = resourceId;
     result = { id: resourceId, deleted: true };
+  }
+
+  if (action !== "delete" && artifactBefore) {
+    await reconcileArtifactMutationBestEffort(authContext.accessToken, artifactBefore, result);
+  } else if (action !== "delete") {
+    await maintainArtifactIndexBestEffort(authContext.accessToken, result);
   }
 
   if (!nextResourceId) {
@@ -2189,7 +2230,7 @@ async function saveImageAssetToArtifacts(
     filename ??
     `${slugifyFileName(options.artifactTitle ?? assetData.fileName.replace(/\.[^.]+$/, ""))}.${extension}`;
 
-  const created = await artifactsClient.uploadFile(authContext.accessToken, {
+  const created = await uploadArtifactFileWithIndex(authContext.accessToken, {
     projectId: options.projectId,
     projectName: options.projectName,
     directoryPath,
@@ -3782,6 +3823,7 @@ app.put("/api/sync/blobs/:blobId", async (req, res) => {
       contentBase64: compactBase64,
       expectedVersion: parsed.data.expectedVersion
     });
+    await maintainArtifactIndexBestEffort(authContext.accessToken, result);
     const event = await recordSyncEvent(authContext.userId, "artifacts", resourceId, "update", {
       source: "sync-blob-put",
       blobId,
@@ -3911,6 +3953,300 @@ app.put("/api/projects/default", async (req, res) => {
   }
 });
 
+app.get("/api/projects/:projectId/context", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  const numberQuery = (name: string): number | undefined => {
+    const value = typeof req.query[name] === "string" ? Number(req.query[name]) : undefined;
+    return Number.isFinite(value) ? value : undefined;
+  };
+  try {
+    const result = await projectsClient.getContext(authContext.accessToken, String(req.params.projectId), {
+      q: typeof req.query.q === "string" ? req.query.q : undefined,
+      include: typeof req.query.include === "string" ? req.query.include : undefined,
+      memoryLimit: numberQuery("memoryLimit"),
+      indexLimit: numberQuery("indexLimit"),
+      relationLimit: numberQuery("relationLimit"),
+      maxChars: numberQuery("maxChars")
+    });
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.get("/api/projects/:projectId/brief", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  try {
+    return res.json(await projectsClient.getBrief(authContext.accessToken, String(req.params.projectId)));
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.put("/api/projects/:projectId/brief", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  const body = asJsonRecord(req.body);
+  try {
+    const result = await projectsClient.updateBrief(authContext.accessToken, String(req.params.projectId), {
+      contentMarkdown: body.contentMarkdown,
+      expectedVersion: body.expectedVersion,
+      updatedByKind: "user"
+    });
+    recordSyncEventBestEffort(authContext.userId, "projects", String(req.params.projectId), "update", {
+      source: "core-api",
+      relation: "brief",
+      resource: result as Record<string, unknown>
+    });
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.get("/api/projects/:projectId/memories", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
+  try {
+    const result = await projectsClient.listMemories(authContext.accessToken, String(req.params.projectId), {
+      q: typeof req.query.q === "string" ? req.query.q : undefined,
+      kind: typeof req.query.kind === "string" ? req.query.kind : undefined,
+      authority: typeof req.query.authority === "string" ? req.query.authority : undefined,
+      status: typeof req.query.status === "string" ? req.query.status : undefined,
+      limit: Number.isFinite(limit) ? limit : undefined,
+      cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined
+    });
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/projects/:projectId/memories", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  try {
+    const result = await projectsClient.appendMemory(authContext.accessToken, String(req.params.projectId), {
+      ...asJsonRecord(req.body),
+      authority: asNonEmptyString(asJsonRecord(req.body).authority) ?? "user_confirmed",
+      createdByKind: "user"
+    });
+    recordSyncEventBestEffort(authContext.userId, "projects", String(req.params.projectId), "update", {
+      source: "core-api",
+      relation: "memory",
+      action: "create",
+      memoryId: objectId(result)
+    });
+    return res.status(201).json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.patch("/api/project-memories/:memoryId", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  try {
+    const result = await projectsClient.updateMemory(authContext.accessToken, String(req.params.memoryId), req.body);
+    recordSyncEventBestEffort(authContext.userId, "projects", String(req.params.memoryId), "update", {
+      source: "core-api",
+      relation: "memory",
+      patch: req.body as Record<string, unknown>
+    });
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.get("/api/projects/:projectId/index", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
+  try {
+    const result = await projectsClient.listIndexEntries(authContext.accessToken, String(req.params.projectId), {
+      q: typeof req.query.q === "string" ? req.query.q : undefined,
+      sourceService: typeof req.query.sourceService === "string" ? req.query.sourceService : undefined,
+      resourceType: typeof req.query.resourceType === "string" ? req.query.resourceType : undefined,
+      limit: Number.isFinite(limit) ? limit : undefined,
+      cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined
+    });
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/projects/:projectId/index/rebuild", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  try {
+    const result = await rebuildProjectArtifactIndex(authContext.accessToken, String(req.params.projectId));
+    recordSyncEventBestEffort(authContext.userId, "projects", String(req.params.projectId), "update", {
+      source: "core-api",
+      relation: "index",
+      action: "rebuild",
+      result
+    });
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.get("/api/projects/:projectId/deletion-impact", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  try {
+    return res.json(await getProjectDeletionImpact(authContext.accessToken, String(req.params.projectId)));
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.get("/api/projects/:projectId/relations", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
+  try {
+    return res.json(
+      await projectsClient.listRelations(authContext.accessToken, String(req.params.projectId), {
+        limit: Number.isFinite(limit) ? limit : undefined,
+        cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined
+      })
+    );
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/projects/:projectId/relations", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  try {
+    const result = await projectsClient.createRelation(authContext.accessToken, String(req.params.projectId), {
+      ...asJsonRecord(req.body),
+      createdByKind: "user"
+    });
+    recordSyncEventBestEffort(authContext.userId, "projects", String(req.params.projectId), "update", {
+      source: "core-api",
+      relation: "project-relation",
+      action: "create",
+      relationId: objectId(result)
+    });
+    return res.status(201).json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.patch("/api/project-relations/:relationId", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  try {
+    const result = await projectsClient.updateRelation(authContext.accessToken, String(req.params.relationId), req.body);
+    recordSyncEventBestEffort(authContext.userId, "projects", String(req.params.relationId), "update", {
+      source: "core-api",
+      relation: "project-relation",
+      patch: req.body as Record<string, unknown>
+    });
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.delete("/api/project-relations/:relationId", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  try {
+    await projectsClient.removeRelation(authContext.accessToken, String(req.params.relationId));
+    recordSyncEventBestEffort(authContext.userId, "projects", String(req.params.relationId), "update", {
+      source: "core-api",
+      relation: "project-relation",
+      action: "delete"
+    });
+    return res.status(204).send();
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.get("/api/projects/:projectId/links", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
+  try {
+    return res.json(
+      await projectsClient.listLinks(authContext.accessToken, String(req.params.projectId), {
+        targetService: typeof req.query.targetService === "string" ? req.query.targetService : undefined,
+        targetResourceType:
+          typeof req.query.targetResourceType === "string" ? req.query.targetResourceType : undefined,
+        targetResourceId: typeof req.query.targetResourceId === "string" ? req.query.targetResourceId : undefined,
+        relationType: typeof req.query.relationType === "string" ? req.query.relationType : undefined,
+        limit: Number.isFinite(limit) ? limit : undefined,
+        cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined
+      })
+    );
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/projects/:projectId/links", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  try {
+    const result = await createProjectLinkWithValidation(
+      authContext.accessToken,
+      String(req.params.projectId),
+      req.body
+    );
+    return res.status(201).json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.delete("/api/project-links/:linkId", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  try {
+    await removeProjectLinkWithValidation(authContext.accessToken, String(req.params.linkId));
+    return res.status(204).send();
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.get("/api/projects/:projectId/context-summary", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  try {
+    return res.json(await projectsClient.getContextSummary(authContext.accessToken, String(req.params.projectId)));
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/projects/:projectId/context-summary/refresh", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  try {
+    const result = await projectsClient.refreshContextSummary(
+      authContext.accessToken,
+      String(req.params.projectId),
+      req.body
+    );
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
 app.get("/api/projects/:projectId", async (req, res) => {
   const authContext = await requireAuthenticatedContext(req, res);
   if (!authContext) return;
@@ -3945,7 +4281,7 @@ app.delete("/api/projects/:projectId", async (req, res) => {
   if (!authContext) return;
 
   try {
-    await projectsClient.remove(authContext.accessToken, String(req.params.projectId));
+    await deleteProjectWithGuard(authContext.accessToken, String(req.params.projectId));
     recordSyncEventBestEffort(authContext.userId, "projects", String(req.params.projectId), "delete", {
       source: "core-api",
       deleted: true
@@ -4125,12 +4461,71 @@ app.get("/api/artifacts/items/:id", async (req, res) => {
   }
 });
 
+app.get("/api/artifacts/items/:artifactItemId/projects", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  try {
+    return res.json(
+      await getArtifactProjectMemberships(authContext.accessToken, String(req.params.artifactItemId))
+    );
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/artifacts/items/:artifactItemId/projects", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  const body = asJsonRecord(req.body);
+  const projectId = asNonEmptyString(body.projectId);
+  if (!projectId) return res.status(400).json({ message: "projectId is required" });
+  try {
+    const result = await linkArtifactToProject(authContext.accessToken, String(req.params.artifactItemId), {
+      projectId,
+      note: asNonEmptyString(body.note),
+      expectedArtifactVersion:
+        typeof body.expectedArtifactVersion === "number" ? body.expectedArtifactVersion : undefined
+    });
+    recordSyncEventBestEffort(authContext.userId, "artifacts", String(req.params.artifactItemId), "update", {
+      source: "core-api",
+      relation: "project-membership",
+      action: "link",
+      projectId
+    });
+    return res.status(201).json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.delete("/api/artifacts/items/:artifactItemId/projects/:projectId", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  try {
+    await unlinkArtifactFromProject(
+      authContext.accessToken,
+      String(req.params.artifactItemId),
+      String(req.params.projectId)
+    );
+    recordSyncEventBestEffort(authContext.userId, "artifacts", String(req.params.artifactItemId), "update", {
+      source: "core-api",
+      relation: "project-membership",
+      action: "unlink",
+      projectId: String(req.params.projectId)
+    });
+    return res.status(204).send();
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
 app.post("/api/artifacts/folders", async (req, res) => {
   const authContext = await requireAuthenticatedContext(req, res);
   if (!authContext) return;
 
   try {
     const result = await artifactsClient.createFolder(authContext.accessToken, req.body);
+    await maintainArtifactIndexBestEffort(authContext.accessToken, result);
     recordSyncEventBestEffort(authContext.userId, "artifacts", objectId(result), "create", {
       source: "core-api",
       resource: result as Record<string, unknown>
@@ -4146,7 +4541,7 @@ app.post("/api/artifacts/notes", async (req, res) => {
   if (!authContext) return;
 
   try {
-    const result = await artifactsClient.createNote(authContext.accessToken, req.body);
+    const result = await createArtifactNoteWithIndex(authContext.accessToken, req.body);
     recordSyncEventBestEffort(authContext.userId, "artifacts", objectId(result), "create", {
       source: "core-api",
       resource: result as Record<string, unknown>
@@ -4181,6 +4576,10 @@ app.post("/api/artifacts/upload", async (req, res) => {
       res.setHeader("Content-Type", responseContentType);
     }
 
+    if (upstream.ok && responseContentType?.includes("application/json")) {
+      await maintainArtifactIndexBestEffort(authContext.accessToken, jsonRecordFromBuffer(buffer));
+    }
+
     return res.status(upstream.status).send(buffer);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Upload proxy failed";
@@ -4194,6 +4593,7 @@ app.patch("/api/artifacts/items/:id/content-patch", async (req, res) => {
 
   try {
     const result = await artifactsClient.patchNoteContent(authContext.accessToken, String(req.params.id), req.body);
+    await maintainArtifactIndexBestEffort(authContext.accessToken, result);
     return res.json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -4206,6 +4606,7 @@ app.patch("/api/artifacts/items/:id/section", async (req, res) => {
 
   try {
     const result = await artifactsClient.updateNoteSection(authContext.accessToken, String(req.params.id), req.body);
+    await maintainArtifactIndexBestEffort(authContext.accessToken, result);
     return res.json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -4217,7 +4618,18 @@ app.patch("/api/artifacts/items/:id", async (req, res) => {
   if (!authContext) return;
 
   try {
+    let before: unknown;
+    try {
+      before = await artifactsClient.getItem(authContext.accessToken, String(req.params.id));
+    } catch {
+      before = undefined;
+    }
     const result = await artifactsClient.updateItem(authContext.accessToken, String(req.params.id), req.body);
+    if (before) {
+      await reconcileArtifactMutationBestEffort(authContext.accessToken, before, result);
+    } else {
+      await maintainArtifactIndexBestEffort(authContext.accessToken, result);
+    }
     recordSyncEventBestEffort(authContext.userId, "artifacts", String(req.params.id), "update", {
       source: "core-api",
       patch: req.body as Record<string, unknown>,
@@ -4234,7 +4646,7 @@ app.delete("/api/artifacts/items/:id", async (req, res) => {
   if (!authContext) return;
 
   try {
-    await artifactsClient.removeItem(authContext.accessToken, String(req.params.id));
+    await removeArtifactItemWithProjectCleanup(authContext.accessToken, String(req.params.id));
     recordSyncEventBestEffort(authContext.userId, "artifacts", String(req.params.id), "delete", {
       source: "core-api",
       deleted: true
@@ -5055,6 +5467,7 @@ function createMcpServerInstance(injectedContext: McpInjectedContext): McpServer
   registerArtifactsTools(server, injectedContext);
   registerTasksTools(server, injectedContext);
   registerProjectsTools(server, injectedContext);
+  registerProjectContextTools(server, injectedContext);
   registerDeepResearchTools(server, injectedContext);
   registerImageTools(server, injectedContext);
   return server;
