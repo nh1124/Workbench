@@ -44,6 +44,19 @@ type SyncResourceVersionRow = {
   deleted_at: string | null;
 };
 
+type SyncEventQueryResult<Row> = {
+  rows: Row[];
+};
+
+type SyncEventTransactionClient = {
+  query<Row = never>(text: string, values?: unknown[]): Promise<SyncEventQueryResult<Row>>;
+  release(): void;
+};
+
+type SyncEventTransactionPool = {
+  connect(): Promise<SyncEventTransactionClient>;
+};
+
 function jsonObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
@@ -93,11 +106,23 @@ export async function recordSyncEvent(
   payload: Record<string, unknown> = {}
 ): Promise<SyncEvent> {
   await ensureCoreSchema();
-  const pool = getCorePool();
+  return recordSyncEventWithPool(getCorePool(), userId, domain, resourceId, action, payload);
+}
 
-  await pool.query("BEGIN");
+/** @internal Exported only so transaction ownership can be tested without a live database. */
+export async function recordSyncEventWithPool(
+  pool: SyncEventTransactionPool,
+  userId: string,
+  domain: SyncDomain,
+  resourceId: string,
+  action: SyncAction,
+  payload: Record<string, unknown> = {}
+): Promise<SyncEvent> {
+  const client = await pool.connect();
+
   try {
-    const versionResult = await pool.query<{ version: number; deleted_at: string | null }>(
+    await client.query("BEGIN");
+    const versionResult = await client.query<{ version: number; deleted_at: string | null }>(
       `
         INSERT INTO sync_resource_versions (user_id, domain, resource_id, version, deleted_at, updated_at)
         VALUES ($1, $2, $3, 1, CASE WHEN $4 = 'delete' THEN NOW() ELSE NULL END, NOW())
@@ -124,7 +149,7 @@ export async function recordSyncEvent(
         eventPayload.resourceDeletedAt = new Date(versionRow.deleted_at).toISOString();
       }
     }
-    const eventResult = await pool.query<SyncEventRow>(
+    const eventResult = await client.query<SyncEventRow>(
       `
         INSERT INTO sync_events (user_id, domain, resource_id, action, version, payload_json)
         VALUES ($1, $2, $3, $4, $5, $6::jsonb)
@@ -132,11 +157,17 @@ export async function recordSyncEvent(
       `,
       [userId, domain, resourceId, action, version, JSON.stringify(eventPayload)]
     );
-    await pool.query("COMMIT");
+    await client.query("COMMIT");
     return toEvent(eventResult.rows[0]);
   } catch (error) {
-    await pool.query("ROLLBACK");
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+      // Preserve the mutation/commit error when rollback also fails.
+    }
     throw error;
+  } finally {
+    client.release();
   }
 }
 
