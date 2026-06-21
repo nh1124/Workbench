@@ -367,6 +367,242 @@ describe("remote artifact pull reconciliation", () => {
     }
   });
 
+  it("does not replace a cached Project with a legacy brief event", async () => {
+    const { store, state } = await createState();
+    try {
+      setMeta(store, "remoteArtifactCursor", "60");
+      setMeta(store, "remoteArtifactSnapshotComplete", "1");
+      upsertRemoteResource(store, {
+        domain: "projects",
+        resourceId: "project-brief-safe",
+        version: 7,
+        payload: {
+          id: "project-brief-safe",
+          name: "Project cache must survive",
+          description: "Base Project data",
+          status: "active"
+        }
+      });
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        assert.equal(String(input), "http://core.test/api/sync/pull?cursor=60&limit=100");
+        return jsonResponse({
+          events: [
+            {
+              cursor: "61",
+              domain: "projects",
+              resourceId: "project-brief-safe",
+              action: "update",
+              version: 8,
+              createdAt: "2026-06-16T00:08:00.000Z",
+              payload: {
+                source: "core-api",
+                relation: "brief",
+                resource: {
+                  projectId: "project-brief-safe",
+                  contentMarkdown: "# This is a brief, not a Project",
+                  version: 3
+                }
+              }
+            }
+          ],
+          nextCursor: "61"
+        });
+      }) as typeof fetch;
+
+      await pullRemoteArtifactSyncState(state);
+
+      const project = readManifestFromStore(store).remoteResources?.find(
+        (item) => item.domain === "projects" && item.resourceId === "project-brief-safe"
+      );
+      assert.equal(project?.version, 7);
+      assert.equal(project?.payload.name, "Project cache must survive");
+      assert.equal(project?.payload.contentMarkdown, undefined);
+      assert.equal(getMeta(store, "remoteSyncCursor"), "61");
+      assert.equal(getMeta(store, "remoteArtifactCursor"), "61");
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("ignores legacy context fake Project ids while applying normal CRUD and default events", async () => {
+    const { store, state } = await createState();
+    try {
+      setMeta(store, "remoteArtifactCursor", "70");
+      setMeta(store, "remoteArtifactSnapshotComplete", "1");
+      upsertRemoteResource(store, {
+        domain: "projects",
+        resourceId: "project-normal",
+        version: 1,
+        payload: { id: "project-normal", name: "Before", status: "active" }
+      });
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        assert.equal(String(input), "http://core.test/api/sync/pull?cursor=70&limit=100");
+        return jsonResponse({
+          events: [
+            {
+              cursor: "71",
+              domain: "projects",
+              resourceId: "memory-fake-project",
+              action: "update",
+              version: 1,
+              payload: { relation: "memory", patch: { bodyMarkdown: "not a Project" } }
+            },
+            {
+              cursor: "72",
+              domain: "projects",
+              resourceId: "relation-fake-project",
+              action: "update",
+              version: 1,
+              payload: { relation: "project-relation", patch: { note: "not a Project" } }
+            },
+            {
+              cursor: "73",
+              domain: "projects",
+              resourceId: "index-fake-project",
+              action: "update",
+              version: 1,
+              payload: { relation: "index", action: "rebuild" }
+            },
+            {
+              cursor: "74",
+              domain: "projects",
+              resourceId: "membership-fake-project",
+              action: "update",
+              version: 1,
+              payload: { relation: "project-membership", artifactItemId: "artifact-1" }
+            },
+            {
+              cursor: "75",
+              domain: "projects",
+              resourceId: "project-normal",
+              action: "update",
+              version: 2,
+              payload: {
+                resource: { id: "project-normal", name: "After", status: "active" }
+              }
+            },
+            {
+              cursor: "76",
+              domain: "projects",
+              resourceId: "project-created",
+              action: "create",
+              version: 1,
+              payload: {
+                resource: { id: "project-created", name: "Created", status: "draft" }
+              }
+            },
+            {
+              cursor: "77",
+              domain: "projects",
+              resourceId: "project-normal",
+              action: "update",
+              version: 3,
+              payload: {
+                relation: "default",
+                patch: { isUserDefault: true }
+              }
+            }
+          ],
+          nextCursor: "77"
+        });
+      }) as typeof fetch;
+
+      await pullRemoteArtifactSyncState(state);
+
+      const projects = readManifestFromStore(store).remoteResources?.filter((item) => item.domain === "projects") ?? [];
+      assert.equal(projects.some((item) => item.resourceId === "memory-fake-project"), false);
+      assert.equal(projects.some((item) => item.resourceId === "relation-fake-project"), false);
+      assert.equal(projects.some((item) => item.resourceId === "index-fake-project"), false);
+      assert.equal(projects.some((item) => item.resourceId === "membership-fake-project"), false);
+      assert.equal(projects.find((item) => item.resourceId === "project-normal")?.payload.name, "After");
+      assert.equal(projects.find((item) => item.resourceId === "project-normal")?.payload.isUserDefault, true);
+      assert.equal(projects.find((item) => item.resourceId === "project-created")?.payload.name, "Created");
+      assert.equal(getMeta(store, "remoteSyncCursor"), "77");
+      assert.equal(getMeta(store, "remoteArtifactCursor"), "77");
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("unwraps Core Project default selection events and updates cached default flags", async () => {
+    const { store, state } = await createState();
+    try {
+      setMeta(store, "remoteArtifactCursor", "80");
+      setMeta(store, "remoteArtifactSnapshotComplete", "1");
+      upsertRemoteResource(store, {
+        domain: "projects",
+        resourceId: "project-previous-default",
+        version: 2,
+        payload: {
+          id: "project-previous-default",
+          name: "Previous default",
+          status: "active",
+          isUserDefault: true
+        }
+      });
+      upsertRemoteResource(store, {
+        domain: "projects",
+        resourceId: "project-next-default",
+        version: 3,
+        payload: {
+          id: "project-next-default",
+          name: "Cached name",
+          description: "Preserve cached fields omitted by the selection event",
+          status: "draft",
+          isUserDefault: false
+        }
+      });
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        assert.equal(String(input), "http://core.test/api/sync/pull?cursor=80&limit=100");
+        return jsonResponse({
+          events: [
+            {
+              cursor: "81",
+              domain: "projects",
+              resourceId: "project-next-default",
+              action: "update",
+              version: 4,
+              createdAt: "2026-06-16T00:09:00.000Z",
+              payload: {
+                source: "core-api",
+                relation: "default",
+                projectId: "project-next-default",
+                resource: {
+                  project: {
+                    id: "project-next-default",
+                    name: "Selected Project",
+                    status: "active",
+                    isUserDefault: true,
+                    updatedAt: "2026-06-16T00:08:59.000Z"
+                  },
+                  source: "user"
+                }
+              }
+            }
+          ],
+          nextCursor: "81"
+        });
+      }) as typeof fetch;
+
+      await pullRemoteArtifactSyncState(state);
+
+      const projects = readManifestFromStore(store).remoteResources?.filter((item) => item.domain === "projects") ?? [];
+      const previous = projects.find((item) => item.resourceId === "project-previous-default");
+      const selected = projects.find((item) => item.resourceId === "project-next-default");
+      assert.equal(previous?.payload.isUserDefault, false);
+      assert.equal(selected?.payload.isUserDefault, true);
+      assert.equal(selected?.payload.name, "Selected Project");
+      assert.equal(selected?.payload.description, "Preserve cached fields omitted by the selection event");
+      assert.equal(selected?.payload.project, undefined);
+      assert.equal(selected?.payload.source, undefined);
+      assert.equal(selected?.version, 4);
+      assert.equal(getMeta(store, "remoteSyncCursor"), "81");
+      assert.equal(getMeta(store, "remoteArtifactCursor"), "81");
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
   it("falls back to artifact-only bootstrap when all-domain snapshots are unavailable", async () => {
     const { root, store, state } = await createState();
     const calls: string[] = [];

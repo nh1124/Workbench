@@ -3821,6 +3821,69 @@ function isRemoteResourceTombstone(event: RemoteSyncEvent): boolean {
     || typeof payload.deletedAt === "string";
 }
 
+const LEGACY_PROJECT_CONTEXT_MARKERS = new Set([
+  "brief",
+  "context",
+  "context-summary",
+  "index",
+  "link",
+  "links",
+  "membership",
+  "memory",
+  "project-brief",
+  "project-context",
+  "project-index",
+  "project-link",
+  "project-membership",
+  "project-memory",
+  "project-relation",
+  "relation",
+  "relations",
+  "secondary-membership",
+  "secondary_membership",
+  "summary"
+]);
+
+function normalizedProjectEventMarker(value: unknown): string | undefined {
+  return asString(value)?.toLowerCase().replaceAll("_", "-");
+}
+
+function recordHasLegacyProjectContextShape(value: unknown): boolean {
+  const record = asRecord(value);
+  if (!record) return false;
+  return typeof record.contentMarkdown === "string"
+    || typeof record.bodyMarkdown === "string"
+    || asString(record.memoryId) !== undefined
+    || asString(record.relationId) !== undefined
+    || asString(record.artifactItemId) !== undefined
+    || asString(record.associationKind) !== undefined
+    || (asString(record.sourceService) !== undefined && asString(record.resourceType) !== undefined)
+    || (asString(record.targetService) !== undefined && asString(record.targetResourceType) !== undefined)
+    || (asString(record.sourceProjectId) !== undefined && asString(record.targetProjectId) !== undefined);
+}
+
+function isLegacyProjectContextEvent(event: RemoteSyncEvent): boolean {
+  if (event.domain !== "projects") return false;
+  const payload = asRecord(event.payload) ?? {};
+  const relation = normalizedProjectEventMarker(payload.relation);
+
+  // Project default selection is the sole supported relation in the legacy
+  // projects sync domain. All other relation markers belong to Project context
+  // read models and must not mutate or create base Project cache rows.
+  if (relation && relation !== "default") return true;
+
+  for (const value of [payload.kind, payload.type, payload.entityType, payload.resourceType]) {
+    const marker = normalizedProjectEventMarker(value);
+    if (marker && LEGACY_PROJECT_CONTEXT_MARKERS.has(marker)) return true;
+  }
+
+  return asString(payload.memoryId) !== undefined
+    || asString(payload.relationId) !== undefined
+    || asString(payload.artifactItemId) !== undefined
+    || recordHasLegacyProjectContextShape(payload.resource)
+    || recordHasLegacyProjectContextShape(payload.patch);
+}
+
 function snapshotItems(value: unknown): unknown[] {
   if (Array.isArray(value)) return value;
   const record = asRecord(value);
@@ -4444,13 +4507,44 @@ function applyRemoteDomainSnapshotEntry(
   }));
 }
 
+function applyRemoteProjectDefaultEvent(
+  state: DaemonState,
+  event: RemoteSyncEvent,
+  payload: Record<string, unknown>,
+  createdAt: string
+): boolean {
+  if (event.domain !== "projects" || normalizedProjectEventMarker(payload.relation) !== "default") {
+    return false;
+  }
+  const selection = asRecord(payload.resource);
+  const project = asRecord(selection?.project);
+  const projectId = asString(project?.id) ?? asString(payload.projectId) ?? event.resourceId;
+  if (!project || !projectId) return false;
+
+  const existing = getRemoteResource(state.manifestStore, "projects", projectId);
+  const nextPayload = {
+    ...(existing?.payload ?? {}),
+    ...project,
+    id: projectId,
+    isUserDefault: true
+  };
+  upsertRemoteResource(state.manifestStore, remoteResourceRecord("projects", projectId, nextPayload, {
+    version: event.version ?? asNumber(project.version) ?? existing?.version,
+    timestamp: createdAt
+  }));
+  updateLocalProjectDefaultCache(state, projectId, createdAt);
+  return true;
+}
+
 function applyRemoteDomainEvent(state: DaemonState, event: RemoteSyncEvent): void {
   const domain = parseRemoteResourceDomain(event.domain);
   if (!domain || domain === "artifacts") return;
+  if (isLegacyProjectContextEvent(event)) return;
   const payload = asRecord(event.payload) ?? {};
   if (asString(payload.localClientId) === state.identity?.localClientId) return;
 
   const createdAt = asString(event.createdAt) ?? new Date().toISOString();
+  if (applyRemoteProjectDefaultEvent(state, event, payload, createdAt)) return;
   const { payload: recordPayload, merge } = remoteResourcePayloadFromEvent(event);
   const resourceId = event.resourceId ?? remoteResourceIdFromUnknown(recordPayload);
   if (!resourceId) return;
