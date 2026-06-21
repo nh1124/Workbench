@@ -18,6 +18,7 @@ docs/
 ├── project-agent-context-design.md ← Project index / memory / network / agent skill 設計草案
 ├── imple/
 │   ├── project-agent-context-implementation-plan.md ← 並列実装・承認・統合計画
+│   ├── project-context-sync-export-plan.md ← Project contextのread-only local cache / one-way export計画
 │   └── workbench-local-client-sync-daemon-plan.md ← Local client / sync daemon 実装計画
 ├── native/
 │   ├── overview.md              ← Tauri デスクトップアプリ全体の説明・モジュール構成
@@ -45,6 +46,7 @@ docs/
 |---|---|
 | [project-agent-context-design.md](project-agent-context-design.md) | Artifactのprimary / secondary Project所属、Projectごとのindex・memory、Project network、agent skillの設計草案 |
 | [imple/project-agent-context-implementation-plan.md](imple/project-agent-context-implementation-plan.md) | Artifact複数Project所属を含む、複数agentのbranch分割・担当境界・承認gate・test・commit計画 |
+| [imple/project-context-sync-export-plan.md](imple/project-context-sync-export-plan.md) | Project contextのread-only local cache、sync安全性、one-way `.workbench` exportの契約・branch・承認gate |
 
 ### ネイティブデスクトップ (`native/`)
 
