@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { budgetProjectContext, clampContextMaxChars } from "../projectContextBudget.js";
+import { InvalidCursorError, parseCursor, toCursor } from "../projectCursor.js";
 import type { ProjectContextPack } from "../types.js";
 
 const timestamp = "2026-06-20T00:00:00.000Z";
@@ -121,4 +122,33 @@ test("final truncation metadata is reserved before accepting section items", () 
   );
   assert.ok((output.memories?.length ?? 0) > 0);
   assert.equal(output.indexEntries, undefined);
+});
+
+test("cursor parser preserves emitted cursors and rejects malformed ordering data", () => {
+  const cursorTimestamp = "2026-06-22T01:02:03.456Z";
+  const cursor = toCursor(cursorTimestamp, "resource-id");
+  assert.deepEqual(parseCursor(cursor), { t: cursorTimestamp, id: "resource-id" });
+
+  const legacyCursor = Buffer.from(JSON.stringify({ t: cursorTimestamp, id: "legacy-id" }), "utf8").toString("base64url");
+  assert.deepEqual(parseCursor(legacyCursor), { t: cursorTimestamp, id: "legacy-id" });
+
+  const invalidPayloads = [
+    "not-a-cursor",
+    `${cursor}!`,
+    Buffer.from("not-json", "utf8").toString("base64url"),
+    Buffer.from(JSON.stringify([cursorTimestamp, "resource-id"]), "utf8").toString("base64url"),
+    Buffer.from(JSON.stringify({ id: "resource-id" }), "utf8").toString("base64url"),
+    Buffer.from(JSON.stringify({ t: cursorTimestamp }), "utf8").toString("base64url"),
+    Buffer.from(JSON.stringify({ t: "not-a-timestamp", id: "resource-id" }), "utf8").toString("base64url"),
+    Buffer.from(JSON.stringify({ t: "0", id: "resource-id" }), "utf8").toString("base64url"),
+    Buffer.from(JSON.stringify({ t: "2026-06-22", id: "resource-id" }), "utf8").toString("base64url"),
+    Buffer.from(JSON.stringify({ t: "2026-06-22T01:02:03.456", id: "resource-id" }), "utf8").toString("base64url"),
+    Buffer.from(JSON.stringify({ t: "2026/06/22 01:02:03", id: "resource-id" }), "utf8").toString("base64url"),
+    Buffer.from(JSON.stringify({ t: cursorTimestamp, id: 42 }), "utf8").toString("base64url"),
+    Buffer.from(JSON.stringify({ t: cursorTimestamp, id: "resource-id", extra: true }), "utf8").toString("base64url")
+  ];
+  for (const invalid of invalidPayloads) {
+    assert.throws(() => parseCursor(invalid), InvalidCursorError);
+  }
+  assert.equal(parseCursor(undefined), undefined);
 });

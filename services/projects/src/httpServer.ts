@@ -41,6 +41,7 @@ import {
   DuplicateRelationError,
   InvalidCursorError,
   InvalidRelationError,
+  parseCursor,
   VersionConflictError
 } from "./projectStoreUtils.js";
 import {
@@ -126,6 +127,19 @@ function sanitizeLimit(value: string | undefined): number | undefined {
     return undefined;
   }
   return parsed;
+}
+
+function validatedCursorQuery(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") throw new InvalidCursorError();
+  parseCursor(value);
+  return value;
+}
+
+function respondInvalidCursor(res: express.Response, error: unknown): boolean {
+  if (!(error instanceof InvalidCursorError)) return false;
+  res.status(400).json({ code: "INVALID_CURSOR", message: error.message });
+  return true;
 }
 
 export const app = express();
@@ -273,7 +287,13 @@ app.get("/projects", requireUserAuth, async (req, res) => {
 
   const status = typeof req.query.status === "string" ? req.query.status : undefined;
   const query = typeof req.query.q === "string" ? req.query.q : undefined;
-  const cursor = typeof req.query.cursor === "string" ? req.query.cursor : undefined;
+  let cursor: string | undefined;
+  try {
+    cursor = validatedCursorQuery(req.query.cursor);
+  } catch (error) {
+    if (respondInvalidCursor(res, error)) return;
+    throw error;
+  }
   const limit = sanitizeLimit(typeof req.query.limit === "string" ? req.query.limit : undefined);
   const result = await listProjects(
     {
@@ -301,7 +321,13 @@ app.get("/projects/search", requireUserAuth, async (req, res) => {
   }
 
   const status = typeof req.query.status === "string" ? req.query.status : undefined;
-  const cursor = typeof req.query.cursor === "string" ? req.query.cursor : undefined;
+  let cursor: string | undefined;
+  try {
+    cursor = validatedCursorQuery(req.query.cursor);
+  } catch (error) {
+    if (respondInvalidCursor(res, error)) return;
+    throw error;
+  }
   const limit = sanitizeLimit(typeof req.query.limit === "string" ? req.query.limit : undefined);
   const result = await searchProjects(query, owner, {
     status: PROJECT_STATUSES.includes(status as (typeof PROJECT_STATUSES)[number])
@@ -426,13 +452,21 @@ app.get("/projects/:projectId/links", requireUserAuth, async (req, res) => {
     return res.status(401).json({ message: "Missing auth context" });
   }
 
+  let cursor: string | undefined;
+  try {
+    cursor = validatedCursorQuery(req.query.cursor);
+  } catch (error) {
+    if (respondInvalidCursor(res, error)) return;
+    throw error;
+  }
+
   const projectId = String(req.params.projectId);
   const result = await listProjectLinks(projectId, owner, {
     targetService: typeof req.query.targetService === "string" ? req.query.targetService : undefined,
     targetResourceType: typeof req.query.targetResourceType === "string" ? req.query.targetResourceType : undefined,
     targetResourceId: typeof req.query.targetResourceId === "string" ? req.query.targetResourceId : undefined,
     relationType: typeof req.query.relationType === "string" ? req.query.relationType : undefined,
-    cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
+    cursor,
     limit: sanitizeLimit(typeof req.query.limit === "string" ? req.query.limit : undefined)
   });
 
@@ -486,17 +520,18 @@ app.get("/project-links", requireUserAuth, async (req, res) => {
     return res.status(400).json({ message: "targetService, targetResourceType and targetResourceId are required" });
   }
   try {
+    const cursor = validatedCursorQuery(req.query.cursor);
     const result = await listProjectLinksByTarget({
       targetService,
       targetResourceType,
       targetResourceId,
       relationType: typeof req.query.relationType === "string" ? req.query.relationType : undefined,
-      cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
+      cursor,
       limit: sanitizeLimit(typeof req.query.limit === "string" ? req.query.limit : undefined)
     }, owner);
     return res.json(result);
   } catch (error) {
-    if (error instanceof InvalidCursorError) return res.status(400).json({ code: "INVALID_CURSOR", message: error.message });
+    if (respondInvalidCursor(res, error)) return;
     throw error;
   }
 });
@@ -539,17 +574,18 @@ app.get("/projects/:projectId/memories", requireUserAuth, async (req, res) => {
   if (authority && !PROJECT_MEMORY_AUTHORITIES.includes(authority as never)) return res.status(400).json({ message: "Invalid memory authority" });
   if (status && !PROJECT_MEMORY_STATUSES.includes(status as never)) return res.status(400).json({ message: "Invalid memory status" });
   try {
+    const cursor = validatedCursorQuery(req.query.cursor);
     const result = await listProjectMemories(String(req.params.projectId), owner, {
       query: typeof req.query.q === "string" ? req.query.q : undefined,
       kind: kind as (typeof PROJECT_MEMORY_KINDS)[number] | undefined,
       authority: authority as (typeof PROJECT_MEMORY_AUTHORITIES)[number] | undefined,
       status: status as (typeof PROJECT_MEMORY_STATUSES)[number] | undefined,
-      cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
+      cursor,
       limit: sanitizeLimit(typeof req.query.limit === "string" ? req.query.limit : undefined)
     });
     return result ? res.json(result) : res.status(404).json({ message: "Project not found" });
   } catch (error) {
-    if (error instanceof InvalidCursorError) return res.status(400).json({ code: "INVALID_CURSOR", message: error.message });
+    if (respondInvalidCursor(res, error)) return;
     throw error;
   }
 });
@@ -580,17 +616,18 @@ app.get("/projects/:projectId/index-entries", requireUserAuth, async (req, res) 
     return res.status(400).json({ message: "Invalid associationKind" });
   }
   try {
+    const cursor = validatedCursorQuery(req.query.cursor);
     const result = await searchProjectIndex(String(req.params.projectId), owner, {
       query: typeof req.query.q === "string" ? req.query.q : undefined,
       sourceService: typeof req.query.sourceService === "string" ? req.query.sourceService : undefined,
       resourceType: typeof req.query.resourceType === "string" ? req.query.resourceType : undefined,
       associationKind: associationKind as (typeof PROJECT_INDEX_ASSOCIATION_KINDS)[number] | undefined,
-      cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
+      cursor,
       limit: sanitizeLimit(typeof req.query.limit === "string" ? req.query.limit : undefined)
     });
     return result ? res.json(result) : res.status(404).json({ message: "Project not found" });
   } catch (error) {
-    if (error instanceof InvalidCursorError) return res.status(400).json({ code: "INVALID_CURSOR", message: error.message });
+    if (respondInvalidCursor(res, error)) return;
     throw error;
   }
 });
@@ -631,15 +668,16 @@ app.get("/projects/:projectId/relations", requireUserAuth, async (req, res) => {
   if (relationType && !PROJECT_RELATION_TYPES.includes(relationType as never)) return res.status(400).json({ message: "Invalid relationType" });
   if (directionality && !PROJECT_RELATION_DIRECTIONS.includes(directionality as never)) return res.status(400).json({ message: "Invalid directionality" });
   try {
+    const cursor = validatedCursorQuery(req.query.cursor);
     const result = await listProjectRelations(String(req.params.projectId), owner, {
       relationType: relationType as (typeof PROJECT_RELATION_TYPES)[number] | undefined,
       directionality: directionality as (typeof PROJECT_RELATION_DIRECTIONS)[number] | undefined,
-      cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
+      cursor,
       limit: sanitizeLimit(typeof req.query.limit === "string" ? req.query.limit : undefined)
     });
     return result ? res.json(result) : res.status(404).json({ message: "Project not found" });
   } catch (error) {
-    if (error instanceof InvalidCursorError) return res.status(400).json({ code: "INVALID_CURSOR", message: error.message });
+    if (respondInvalidCursor(res, error)) return;
     throw error;
   }
 });

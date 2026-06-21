@@ -37,8 +37,26 @@ test("Projects HTTP context routes return owner-scoped 404, 409 and 400 response
       method: "PUT", headers, body: JSON.stringify({ contentMarkdown: "stale", expectedVersion: 0, updatedByKind: "agent" })
     });
     assert.equal(conflict.status, 409);
-    const invalidCursor = await fetch(`${base}/projects/${project.id}/memories?cursor=not-a-cursor`, { headers });
-    assert.equal(invalidCursor.status, 400);
+    const invalidTimestampCursor = Buffer.from(JSON.stringify({ t: "not-a-timestamp", id: "cursor-id" }), "utf8").toString("base64url");
+    const cursorRoutePaths = [
+      "/projects",
+      "/projects/search?query=HTTP",
+      `/projects/${project.id}/links`,
+      "/project-links?targetService=artifacts&targetResourceType=artifact_item&targetResourceId=artifact-a",
+      `/projects/${project.id}/memories`,
+      `/projects/${project.id}/index-entries`,
+      `/projects/${project.id}/relations`
+    ];
+    const withCursor = (path: string, cursorQuery: string) => `${path}${path.includes("?") ? "&" : "?"}${cursorQuery}`;
+    const invalidCursorPaths = cursorRoutePaths.flatMap((path) => [
+      withCursor(path, `cursor=${invalidTimestampCursor}`),
+      withCursor(path, "cursor=first&cursor=second")
+    ]);
+    for (const path of invalidCursorPaths) {
+      const invalidCursor = await fetch(`${base}${path}`, { headers });
+      assert.equal(invalidCursor.status, 400, path);
+      assert.equal((await invalidCursor.json() as { code?: string }).code, "INVALID_CURSOR", path);
+    }
     const missing = await fetch(`${base}/projects/missing/brief`, { headers });
     assert.equal(missing.status, 404);
   } finally {

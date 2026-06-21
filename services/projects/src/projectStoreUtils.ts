@@ -1,13 +1,5 @@
 import { ensureProjectsSchema, getProjectsPool } from "./db.js";
-
-export type CursorPayload = { t: string; id: string };
-
-export class InvalidCursorError extends Error {
-  constructor() {
-    super("Invalid cursor");
-    this.name = "InvalidCursorError";
-  }
-}
+export { InvalidCursorError, parseCursor, toCursor } from "./projectCursor.js";
 
 export class VersionConflictError extends Error {
   constructor(message = "Version conflict") {
@@ -40,26 +32,6 @@ export function clampLimit(limit: number | undefined, defaultLimit = 20, maxLimi
   if (limit === undefined) return defaultLimit;
   if (!Number.isFinite(limit)) return defaultLimit;
   return Math.max(1, Math.min(maxLimit, Math.floor(limit)));
-}
-
-export function parseCursor(cursor: string | undefined): CursorPayload | undefined {
-  if (!cursor) return undefined;
-  try {
-    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Partial<CursorPayload>;
-    if (typeof parsed.t !== "string" || typeof parsed.id !== "string" || !parsed.t || !parsed.id) {
-      throw new InvalidCursorError();
-    }
-    if (!Number.isFinite(Date.parse(parsed.t))) throw new InvalidCursorError();
-    return { t: parsed.t, id: parsed.id };
-  } catch (error) {
-    if (error instanceof InvalidCursorError) throw error;
-    throw new InvalidCursorError();
-  }
-}
-
-export function toCursor(timestamp: string | Date, id: string): string {
-  const t = timestamp instanceof Date ? timestamp.toISOString() : new Date(timestamp).toISOString();
-  return Buffer.from(JSON.stringify({ t, id }), "utf8").toString("base64url");
 }
 
 export async function projectExistsForOwner(projectId: string, ownerAccountId: string): Promise<boolean> {

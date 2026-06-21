@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { ensureProjectsSchema, getProjectsPool } from "./db.js";
+import { parseCursor, toCursor } from "./projectCursor.js";
 import type {
   DefaultProjectSelection,
   Project,
@@ -26,11 +27,6 @@ export type ListProjectLinksOptions = {
   relationType?: string;
   limit?: number;
   cursor?: string;
-};
-
-type CursorPayload = {
-  t: string;
-  id: string;
 };
 
 type ProjectRow = {
@@ -96,27 +92,6 @@ function normalizeOwner(ownerAccountId: string): string {
     throw new Error("Owner account id is required");
   }
   return normalized;
-}
-
-function parseCursor(cursor: string | undefined): CursorPayload | undefined {
-  if (!cursor) {
-    return undefined;
-  }
-  try {
-    const decoded = Buffer.from(cursor, "base64url").toString("utf8");
-    const parsed = JSON.parse(decoded) as CursorPayload;
-    if (!parsed?.t || !parsed?.id) {
-      return undefined;
-    }
-    return parsed;
-  } catch {
-    return undefined;
-  }
-}
-
-function toCursor(timestampIso: string, id: string): string {
-  const payload: CursorPayload = { t: timestampIso, id };
-  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
 }
 
 function toProject(row: ProjectRow): Project {
