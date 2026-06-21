@@ -74,6 +74,16 @@ Unknown fields are ignored for forward compatibility. Unknown schema versions ar
 
 ### D-E1-004 Snapshot and detail contract
 
+Projects internal routes are frozen as:
+
+```text
+GET /projects/:projectId/sync-context
+GET /projects/:projectId/context-export
+GET /project-relations/:relationId
+```
+
+`sync-context` returns `{ projectId, complete, counts, project, brief, memories, relations }`. `context-export` returns the export response fixture below and may include internal `ownerAccountId`; Core removes it. Relation lookup is owner-scoped and returns the full relation or `404`.
+
 Core exposes local-client-authenticated, owner-scoped reads:
 
 ```text
