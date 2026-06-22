@@ -39,6 +39,16 @@ after(() => {
 });
 
 describe("Project context Artifact orchestration", () => {
+  it("treats malformed Artifact responses as a best-effort invalidation miss", async () => {
+    const originalWarn = console.warn;
+    console.warn = () => undefined;
+    try {
+      assert.deepEqual(await contextModule.listArtifactProjectIdsBestEffort("token", { id: "partial" }), []);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
   it("builds a deterministic primary index entry", () => {
     const entry = contextModule.buildArtifactIndexEntry(artifactItem, "primary");
     assert.equal(entry.sourceService, "artifacts");
@@ -286,11 +296,15 @@ describe("Project context Artifact orchestration", () => {
       throw new Error(`Unexpected request: ${method} ${url}`);
     };
 
-    await contextModule.removeArtifactItemWithProjectCleanup("token", "folder-1");
+    const snapshot = await contextModule.removeArtifactItemWithProjectCleanup("token", "folder-1");
 
     assert.ok(events.indexOf("artifact-delete") > events.indexOf("subtree-read"));
     assert.ok(events.indexOf("artifact-delete") > events.indexOf("links-read:child-1"));
     assert.deepEqual(deletedLinks.sort(), ["link-child", "link-folder"]);
+    assert.deepEqual(
+      contextModule.projectIdsFromArtifactDeletionSnapshot(snapshot).sort(),
+      ["project-primary", "secondary-child", "secondary-folder"]
+    );
     assert.deepEqual(
       tombstones.sort((a, b) => `${a.projectId}:${a.resourceId}`.localeCompare(`${b.projectId}:${b.resourceId}`)),
       [

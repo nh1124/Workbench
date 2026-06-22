@@ -85,7 +85,7 @@ export function registerDeepResearchTools(server: McpServer, ctx?: ToolContext):
           artifactPath: payload.artifact_path,
           projectId: payload.project_id,
           projectName: payload.project_name
-        })
+        }, "core-mcp")
       );
       return asMcpText(result);
     }
@@ -114,7 +114,7 @@ export function registerDeepResearchTools(server: McpServer, ctx?: ToolContext):
           projectId: payload.project_id,
           projectName: payload.project_name,
           createNew: payload.create_new
-        })
+        }, "core-mcp")
       );
       return asMcpText({
         status: "ok",

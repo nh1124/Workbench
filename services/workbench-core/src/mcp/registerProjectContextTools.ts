@@ -7,7 +7,13 @@ import {
   rebuildProjectArtifactIndex,
   removeProjectLinkWithValidation
 } from "../projectContext.js";
-import { asMcpText, runWithAuth } from "./helpers.js";
+import {
+  projectIdFromMutationResult,
+  recordProjectContextInvalidationsBestEffort,
+  requireProjectContextEndpoints,
+  type ProjectContextChanged
+} from "../projectContextSync.js";
+import { asMcpText, runWithAuth, runWithAuthContext } from "./helpers.js";
 
 type ToolContext = { accessToken: string };
 
@@ -16,6 +22,32 @@ const memoryAuthoritySchema = z.enum(["user_confirmed", "agent_observed", "impor
 const memoryStatusSchema = z.enum(["active", "archived", "superseded"]);
 const relationTypeSchema = z.enum(["related", "depends_on", "supports", "informs", "overlaps"]);
 const directionalitySchema = z.enum(["directed", "bidirectional"]);
+
+async function invalidateProjectContextFromMcp(
+  userId: string,
+  projectIds: Array<string | undefined>,
+  changed: ProjectContextChanged,
+  entityId: string
+): Promise<void> {
+  await recordProjectContextInvalidationsBestEffort(userId, projectIds, {
+    changed: [changed],
+    entityType: changed,
+    entityId,
+    source: "core-mcp"
+  });
+}
+
+function resultId(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const id = (value as { id?: unknown }).id;
+  return typeof id === "string" && id.trim() ? id.trim() : undefined;
+}
+
+function resultRelationType(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const relationType = (value as { relationType?: unknown }).relationType;
+  return typeof relationType === "string" && relationType.trim() ? relationType.trim() : undefined;
+}
 
 export function registerProjectContextTools(server: McpServer, ctx: ToolContext): void {
   server.registerTool(
@@ -66,16 +98,18 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
         expectedVersion: z.number().int().nonnegative()
       }
     },
-    async ({ projectId, contentMarkdown, expectedVersion }) =>
-      asMcpText(
-        await runWithAuth(ctx.accessToken, () =>
-          projectsClient.updateBrief(ctx.accessToken, projectId, {
+    async ({ projectId, contentMarkdown, expectedVersion }) => {
+      const result = await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
+        const updated = await projectsClient.updateBrief(ctx.accessToken, projectId, {
             contentMarkdown,
             expectedVersion,
             updatedByKind: "agent"
-          })
-        )
-      )
+        });
+        await invalidateProjectContextFromMcp(userId, [projectId], "brief", projectId);
+        return updated;
+      });
+      return asMcpText(result);
+    }
   );
 
   server.registerTool(
@@ -114,16 +148,18 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
         supersedesId: z.string().optional()
       }
     },
-    async ({ projectId, ...payload }) =>
-      asMcpText(
-        await runWithAuth(ctx.accessToken, () =>
-          projectsClient.appendMemory(ctx.accessToken, projectId, {
+    async ({ projectId, ...payload }) => {
+      const result = await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
+        const memory = await projectsClient.appendMemory(ctx.accessToken, projectId, {
             ...payload,
             authority: "agent_observed",
             createdByKind: "agent"
-          })
-        )
-      )
+        });
+        await invalidateProjectContextFromMcp(userId, [projectId], "memory", resultId(memory) ?? projectId);
+        return memory;
+      });
+      return asMcpText(result);
+    }
   );
 
   server.registerTool(
@@ -137,12 +173,14 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
         status: memoryStatusSchema.optional()
       }
     },
-    async ({ memoryId, ...payload }) =>
-      asMcpText(
-        await runWithAuth(ctx.accessToken, () =>
-          projectsClient.updateMemory(ctx.accessToken, memoryId, payload)
-        )
-      )
+    async ({ memoryId, ...payload }) => {
+      const result = await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
+        const memory = await projectsClient.updateMemory(ctx.accessToken, memoryId, payload);
+        await invalidateProjectContextFromMcp(userId, [projectIdFromMutationResult(memory)], "memory", memoryId);
+        return memory;
+      });
+      return asMcpText(result);
+    }
   );
 
   server.registerTool(
@@ -152,12 +190,14 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
       description: "Archive a Project memory entry without deleting its audit history.",
       inputSchema: { memoryId: z.string().min(1) }
     },
-    async ({ memoryId }) =>
-      asMcpText(
-        await runWithAuth(ctx.accessToken, () =>
-          projectsClient.updateMemory(ctx.accessToken, memoryId, { status: "archived" })
-        )
-      )
+    async ({ memoryId }) => {
+      const result = await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
+        const memory = await projectsClient.updateMemory(ctx.accessToken, memoryId, { status: "archived" });
+        await invalidateProjectContextFromMcp(userId, [projectIdFromMutationResult(memory)], "memory", memoryId);
+        return memory;
+      });
+      return asMcpText(result);
+    }
   );
 
   server.registerTool(
@@ -187,8 +227,14 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
       description: "Explicitly repair a Project Artifact index. This is a potentially expensive maintenance operation.",
       inputSchema: { projectId: z.string().min(1) }
     },
-    async ({ projectId }) =>
-      asMcpText(await runWithAuth(ctx.accessToken, () => rebuildProjectArtifactIndex(ctx.accessToken, projectId)))
+    async ({ projectId }) => {
+      const result = await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
+        const rebuilt = await rebuildProjectArtifactIndex(ctx.accessToken, projectId);
+        await invalidateProjectContextFromMcp(userId, [projectId], "index", projectId);
+        return rebuilt;
+      });
+      return asMcpText(result);
+    }
   );
 
   server.registerTool(
@@ -233,16 +279,24 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
         strength: z.number().min(0).max(1).optional()
       }
     },
-    async ({ projectId, ...payload }) =>
-      asMcpText(
-        await runWithAuth(ctx.accessToken, () =>
-          projectsClient.createRelation(ctx.accessToken, projectId, {
+    async ({ projectId, ...payload }) => {
+      const result = await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
+        const relation = await projectsClient.createRelation(ctx.accessToken, projectId, {
             ...payload,
             origin: "manual",
             createdByKind: "agent"
-          })
-        )
-      )
+        });
+        const endpoints = requireProjectContextEndpoints(relation);
+        await invalidateProjectContextFromMcp(
+          userId,
+          [endpoints.sourceProjectId, endpoints.targetProjectId],
+          "relation",
+          endpoints.id
+        );
+        return relation;
+      });
+      return asMcpText(result);
+    }
   );
 
   server.registerTool(
@@ -259,10 +313,20 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
         expectedVersion: z.number().int().positive()
       }
     },
-    async ({ relationId, ...payload }) =>
-      asMcpText(
-        await runWithAuth(ctx.accessToken, () => projectsClient.updateRelation(ctx.accessToken, relationId, payload))
-      )
+    async ({ relationId, ...payload }) => {
+      const result = await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
+        const relation = await projectsClient.updateRelation(ctx.accessToken, relationId, payload);
+        const endpoints = requireProjectContextEndpoints(relation);
+        await invalidateProjectContextFromMcp(
+          userId,
+          [endpoints.sourceProjectId, endpoints.targetProjectId],
+          "relation",
+          endpoints.id
+        );
+        return relation;
+      });
+      return asMcpText(result);
+    }
   );
 
   server.registerTool(
@@ -273,7 +337,17 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
       inputSchema: { relationId: z.string().min(1) }
     },
     async ({ relationId }) => {
-      await runWithAuth(ctx.accessToken, () => projectsClient.removeRelation(ctx.accessToken, relationId));
+      await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
+        const relation = await projectsClient.getRelation(ctx.accessToken, relationId);
+        const endpoints = requireProjectContextEndpoints(relation);
+        await projectsClient.removeRelation(ctx.accessToken, relationId);
+        await invalidateProjectContextFromMcp(
+          userId,
+          [endpoints.sourceProjectId, endpoints.targetProjectId],
+          "relation",
+          endpoints.id
+        );
+      });
       return asMcpText({ status: "ok" });
     }
   );
@@ -313,10 +387,26 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
         metadataJson: z.record(z.unknown()).optional()
       }
     },
-    async ({ projectId, ...payload }) =>
-      asMcpText(
-        await runWithAuth(ctx.accessToken, () => createProjectLinkWithValidation(ctx.accessToken, projectId, payload))
-      )
+    async ({ projectId, ...payload }) => {
+      const result = await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
+        const link = await createProjectLinkWithValidation(ctx.accessToken, projectId, payload);
+        const changed = (resultRelationType(link) ?? payload.relationType?.trim()) === "secondary_membership"
+          ? "membership"
+          : "link";
+        if (changed === "membership") {
+          await recordProjectContextInvalidationsBestEffort(userId, [projectId], {
+            changed: ["membership", "index"],
+            entityType: "membership",
+            entityId: resultId(link) ?? projectId,
+            source: "core-mcp"
+          });
+        } else {
+          await invalidateProjectContextFromMcp(userId, [projectId], changed, resultId(link) ?? projectId);
+        }
+        return link;
+      });
+      return asMcpText(result);
+    }
   );
 
   server.registerTool(
@@ -327,7 +417,20 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
       inputSchema: { linkId: z.string().min(1) }
     },
     async ({ linkId }) => {
-      await runWithAuth(ctx.accessToken, () => removeProjectLinkWithValidation(ctx.accessToken, linkId));
+      await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
+        const link = await removeProjectLinkWithValidation(ctx.accessToken, linkId);
+        const changed = link.relationType === "secondary_membership" ? "membership" : "link";
+        if (changed === "membership") {
+          await recordProjectContextInvalidationsBestEffort(userId, [link.projectId], {
+            changed: ["membership", "index"],
+            entityType: "membership",
+            entityId: link.id,
+            source: "core-mcp"
+          });
+        } else {
+          await invalidateProjectContextFromMcp(userId, [link.projectId], changed, link.id);
+        }
+      });
       return asMcpText({ status: "ok" });
     }
   );

@@ -908,6 +908,14 @@ export const projectsClient = {
       token
     );
   },
+  getSyncContext: (token: string, projectId: string) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(
+      projectsService,
+      `/projects/${encodeURIComponent(projectId)}/sync-context`,
+      token
+    );
+  },
   getBrief: (token: string, projectId: string) => {
     if (!projectsService) throw new Error("Projects service is not configured");
     return serviceRequest<unknown>(projectsService, `/projects/${encodeURIComponent(projectId)}/brief`, token);
@@ -1010,6 +1018,10 @@ export const projectsClient = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
+  },
+  getRelation: (token: string, relationId: string) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(projectsService, `/project-relations/${encodeURIComponent(relationId)}`, token);
   },
   removeRelation: (token: string, relationId: string) => {
     if (!projectsService) throw new Error("Projects service is not configured");

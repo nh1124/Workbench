@@ -583,6 +583,19 @@ describe("local client HTTP APIs", () => {
       });
       assert.equal(snapshotResponse.status, 200);
       assert.deepEqual(snapshotResponse.body.domains, {});
+      assert.equal(snapshotResponse.body.baselineCursor, recordedDelete.cursor);
+      assert.deepEqual(snapshotResponse.body.supportedDomains, [
+        "projects", "notes", "artifacts", "tasks", "project_context"
+      ]);
+
+      const echoedBaselineResponse = await requestJson(
+        server.baseUrl,
+        "GET",
+        "/api/sync/snapshot?domains=&baselineCursor=0007",
+        { headers: daemonHeaders }
+      );
+      assert.equal(echoedBaselineResponse.status, 200);
+      assert.equal(echoedBaselineResponse.body.baselineCursor, "0007");
 
       const pushResponse = await requestJson(server.baseUrl, "POST", "/api/sync/push", {
         headers: daemonHeaders,
@@ -753,6 +766,187 @@ describe("local client HTTP APIs", () => {
       assert.equal(taskChecksumBlobUploadResponse.status, 400);
       assert.equal(taskChecksumBlobUploadResponse.body.code, "SYNC_BLOB_CHECKSUM_MISMATCH");
     } finally {
+      await server.close();
+      await cleanupTestUser(pool, userId);
+    }
+  });
+
+  it("serves Project context snapshots and emits equivalent HTTP/MCP relation invalidations", async (t) => {
+    const harness = await requireHarness(t);
+    if (!harness) return;
+
+    const pool = harness.db.getCorePool();
+    const { userId, username } = await createTestUser(pool, "project-context-sync");
+    const { accessToken } = harness.auth.issueTokenBundle({ userId, username });
+    const server = await startTestServer(harness);
+    const originalFetch = globalThis.fetch;
+    const coreOrigin = new URL(server.baseUrl).origin;
+    let contextLimitError = false;
+
+    try {
+      const registerResponse = await requestJson(server.baseUrl, "POST", "/api/local-clients/register", {
+        headers: bearerHeaders(accessToken),
+        body: {
+          deviceId: "device-project-context-sync",
+          clientName: "Project Context Sync Daemon",
+          platform: "linux",
+          syncRootId: "project-context",
+          syncRootLabel: "Project Context"
+        }
+      });
+      assert.equal(registerResponse.status, 201);
+      const registeredClient = registerResponse.body.client as Record<string, unknown>;
+      const daemonHeaders = localClientHeaders(
+        String(registeredClient.id),
+        String(registerResponse.body.clientToken)
+      );
+
+      globalThis.fetch = async (input, init) => {
+        const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+        if (url.origin === coreOrigin) return originalFetch(input, init);
+
+        const method = (init?.method ?? "GET").toUpperCase();
+        if (url.pathname === "/projects/project-context-a/sync-context" && method === "GET") {
+          if (contextLimitError) {
+            return new Response(JSON.stringify({
+              code: "PROJECT_CONTEXT_SYNC_LIMIT_EXCEEDED",
+              message: "Project context exceeds the sync limit"
+            }), { status: 413, headers: { "Content-Type": "application/json" } });
+          }
+          return new Response(JSON.stringify({
+            projectId: "project-context-a",
+            complete: true,
+            counts: { memories: 1, relations: 1 },
+            project: { id: "project-context-a", name: "Project A" },
+            brief: { projectId: "project-context-a", version: 2, contentMarkdown: "# Project A" },
+            memories: [{ id: "memory-a", projectId: "project-context-a" }],
+            relations: [{
+              id: "relation-a",
+              sourceProjectId: "project-context-a",
+              targetProjectId: "project-context-b"
+            }]
+          }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        if (url.pathname === "/projects" && method === "GET") {
+          return new Response(JSON.stringify({
+            items: [{ id: "project-context-a", name: "Project A" }],
+            nextCursor: "next-project-page"
+          }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+
+        const relationMatch = url.pathname.match(/^\/project-relations\/([^/]+)$/);
+        if (relationMatch && method === "GET") {
+          const relationId = decodeURIComponent(relationMatch[1]);
+          return new Response(JSON.stringify({
+            id: relationId,
+            sourceProjectId: "project-context-a",
+            targetProjectId: "project-context-b",
+            relationType: "related",
+            directionality: "bidirectional",
+            version: 1
+          }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        if (relationMatch && method === "DELETE") {
+          return new Response(null, { status: 204 });
+        }
+        throw new Error(`Unexpected upstream request in Project context sync test: ${method} ${url.href}`);
+      };
+
+      const unauthenticated = await requestJson(
+        server.baseUrl,
+        "GET",
+        "/api/sync/project-context/project-context-a"
+      );
+      assert.equal(unauthenticated.status, 401);
+
+      const detail = await requestJson(
+        server.baseUrl,
+        "GET",
+        "/api/sync/project-context/project-context-a?baselineCursor=0009",
+        { headers: daemonHeaders }
+      );
+      assert.equal(detail.status, 200);
+      assert.equal(detail.body.schemaVersion, 1);
+      assert.equal(detail.body.projectId, "project-context-a");
+      assert.equal(detail.body.baselineCursor, "0009");
+      assert.equal(detail.body.complete, true);
+      assert.deepEqual(detail.body.counts, { memories: 1, relations: 1 });
+
+      const snapshot = await requestJson(
+        server.baseUrl,
+        "GET",
+        "/api/sync/snapshot?domains=project_context&limit=10&baselineCursor=0009",
+        { headers: daemonHeaders }
+      );
+      assert.equal(snapshot.status, 200);
+      assert.equal(snapshot.body.baselineCursor, "0009");
+      assert.deepEqual(snapshot.body.supportedDomains, [
+        "projects", "notes", "artifacts", "tasks", "project_context"
+      ]);
+      const contextPage = (snapshot.body.domains as Record<string, unknown>).project_context as Record<string, unknown>;
+      assert.equal(contextPage.nextCursor, "next-project-page");
+      const contextItems = contextPage.items as Array<Record<string, unknown>>;
+      assert.equal(contextItems.length, 1);
+      assert.equal(contextItems[0].baselineCursor, "0009");
+
+      const invalidBaseline = await requestJson(
+        server.baseUrl,
+        "GET",
+        "/api/sync/project-context/project-context-a?baselineCursor=not-a-cursor",
+        { headers: daemonHeaders }
+      );
+      assert.equal(invalidBaseline.status, 400);
+      assert.equal(invalidBaseline.body.code, "SYNC_BASELINE_CURSOR_INVALID");
+
+      contextLimitError = true;
+      const limitError = await requestJson(
+        server.baseUrl,
+        "GET",
+        "/api/sync/project-context/project-context-a?baselineCursor=10",
+        { headers: daemonHeaders }
+      );
+      contextLimitError = false;
+      assert.equal(limitError.status, 413);
+      assert.equal(limitError.body.code, "PROJECT_CONTEXT_SYNC_LIMIT_EXCEEDED");
+
+      const eventBaseline = await harness.syncStore.getLatestSyncCursor(userId);
+      const httpDelete = await requestJson(
+        server.baseUrl,
+        "DELETE",
+        "/api/project-relations/relation-http",
+        { headers: bearerHeaders(accessToken) }
+      );
+      assert.equal(httpDelete.status, 204);
+
+      type McpHandler = (input: Record<string, unknown>) => Promise<unknown>;
+      const handlers = new Map<string, McpHandler>();
+      const fakeServer = {
+        registerTool(name: string, _definition: unknown, handler: McpHandler): void {
+          handlers.set(name, handler);
+        }
+      };
+      const { registerProjectContextTools } = await import("../mcp/registerProjectContextTools.js");
+      registerProjectContextTools(fakeServer as never, { accessToken });
+      const removeRelation = handlers.get("projects.relations.remove");
+      assert.ok(removeRelation);
+      await removeRelation({ relationId: "relation-mcp" });
+
+      const invalidations = await harness.syncStore.listSyncEvents(userId, eventBaseline, 20);
+      const relationInvalidations = invalidations.events.filter((event) =>
+        event.domain === "project_context"
+        && (event.payload as Record<string, unknown>).entityType === "relation"
+      );
+      assert.equal(relationInvalidations.length, 4);
+      assert.deepEqual(
+        relationInvalidations.map((event) => event.resourceId).sort(),
+        ["project-context-a", "project-context-a", "project-context-b", "project-context-b"]
+      );
+      const sources = relationInvalidations.map((event) =>
+        (event.payload as Record<string, unknown>).source
+      ).sort();
+      assert.deepEqual(sources, ["core-api", "core-api", "core-mcp", "core-mcp"]);
+    } finally {
+      globalThis.fetch = originalFetch;
       await server.close();
       await cleanupTestUser(pool, userId);
     }

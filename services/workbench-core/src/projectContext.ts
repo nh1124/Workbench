@@ -39,6 +39,15 @@ export type ArtifactDeletionSnapshot = {
   items: Array<{ item: ArtifactItemRecord; links: ProjectLinkRecord[] }>;
 };
 
+export function projectIdsFromArtifactDeletionSnapshot(snapshot: ArtifactDeletionSnapshot): string[] {
+  const projectIds = new Set<string>();
+  for (const entry of snapshot.items) {
+    projectIds.add(entry.item.projectId);
+    for (const link of entry.links) projectIds.add(link.projectId);
+  }
+  return [...projectIds];
+}
+
 export class ProjectContextError extends Error {
   constructor(
     public readonly status: number,
@@ -155,6 +164,49 @@ async function listSecondaryLinks(token: string, artifactItemId: string): Promis
     cursor = nextCursor(page);
   } while (cursor);
   return links;
+}
+
+export async function listArtifactProjectIdsBestEffort(token: string, rawItem: unknown): Promise<string[]> {
+  let root: ArtifactItemRecord;
+  try {
+    root = parseArtifactItem(rawItem);
+  } catch (error) {
+    console.warn("[project-context-sync] failed to identify the Artifact Project", {
+      message: error instanceof Error ? error.message : String(error)
+    });
+    return [];
+  }
+  const projectIds = new Set<string>([root.projectId]);
+  try {
+    const items = new Map<string, ArtifactItemRecord>([[root.id, root]]);
+    if (root.kind === "folder") {
+      let cursor: string | undefined;
+      do {
+        const page = await artifactsClient.treeListPage(token, {
+          projectId: root.projectId,
+          pathPrefix: root.path,
+          includeContent: false,
+          limit: 500,
+          cursor
+        });
+        for (const value of pageItems(page)) {
+          const item = parseArtifactItem(value);
+          items.set(item.id, item);
+        }
+        cursor = nextCursor(page);
+      } while (cursor);
+    }
+    for (const item of items.values()) {
+      projectIds.add(item.projectId);
+      for (const link of await listSecondaryLinks(token, item.id)) projectIds.add(link.projectId);
+    }
+  } catch (error) {
+    console.warn("[project-context-sync] failed to enumerate every Artifact Project", {
+      artifactItemId: root.id,
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+  return [...projectIds];
 }
 
 async function upsertArtifactEntry(
@@ -326,10 +378,14 @@ export async function cleanupArtifactDeletionSnapshotBestEffort(
   );
 }
 
-export async function removeArtifactItemWithProjectCleanup(token: string, artifactItemId: string): Promise<void> {
+export async function removeArtifactItemWithProjectCleanup(
+  token: string,
+  artifactItemId: string
+): Promise<ArtifactDeletionSnapshot> {
   const snapshot = await snapshotArtifactDeletion(token, artifactItemId);
   await artifactsClient.removeItem(token, artifactItemId);
   await cleanupArtifactDeletionSnapshotBestEffort(token, snapshot);
+  return snapshot;
 }
 
 export async function getArtifactProjectMemberships(token: string, artifactItemId: string): Promise<JsonRecord> {
@@ -436,14 +492,15 @@ export async function unlinkArtifactFromProject(
   }
 }
 
-export async function removeProjectLinkWithValidation(token: string, linkId: string): Promise<void> {
+export async function removeProjectLinkWithValidation(token: string, linkId: string): Promise<ProjectLinkRecord> {
   const link = parseProjectLink(await projectsClient.getLink(token, linkId));
   if (!link) throw new ProjectContextError(502, "INVALID_PROJECT_LINK_RESPONSE", "Projects service returned an invalid link");
   if (link.relationType === SECONDARY_MEMBERSHIP_RELATION) {
     await unlinkArtifactFromProject(token, link.targetResourceId, link.projectId);
-    return;
+    return link;
   }
   await projectsClient.removeLink(token, linkId);
+  return link;
 }
 
 export async function createProjectLinkWithValidation(

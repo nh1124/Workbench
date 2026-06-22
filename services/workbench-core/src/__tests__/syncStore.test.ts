@@ -7,7 +7,7 @@ process.env.CORE_DB_NAME ||= "workbench-test-unused";
 process.env.CORE_DB_USER ||= "workbench-test-unused";
 process.env.CORE_DB_PASSWORD ||= "workbench-test-unused";
 
-const { recordSyncEventWithPool } = await import("../syncStore.js");
+const { getLatestSyncCursorWithPool, recordSyncEventWithPool } = await import("../syncStore.js");
 
 type QueryCall = {
   text: string;
@@ -19,6 +19,20 @@ function normalizedSql(text: string): string {
 }
 
 describe("sync event transactions", () => {
+  it("captures the latest owner-scoped cursor for snapshot baselines", async () => {
+    const calls: QueryCall[] = [];
+    const cursor = await getLatestSyncCursorWithPool({
+      async query<Row>(text: string, values?: unknown[]): Promise<{ rows: Row[] }> {
+        calls.push({ text: normalizedSql(text), values });
+        return { rows: [{ cursor: "12345" } as Row] };
+      }
+    }, "user-1");
+
+    assert.equal(cursor, "12345");
+    assert.match(calls[0].text, /MAX\(id\)/);
+    assert.deepEqual(calls[0].values, ["user-1"]);
+  });
+
   it("uses one checked-out client for the entire transaction", async () => {
     const calls: QueryCall[] = [];
     let connectCalls = 0;

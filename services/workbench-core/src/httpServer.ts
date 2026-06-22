@@ -30,9 +30,11 @@ import {
   deleteProjectWithGuard,
   getArtifactProjectMemberships,
   getProjectDeletionImpact,
+  listArtifactProjectIdsBestEffort,
   linkArtifactToProject,
   maintainArtifactIndexBestEffort,
   ProjectContextError,
+  projectIdsFromArtifactDeletionSnapshot,
   rebuildProjectArtifactIndex,
   reconcileArtifactMutationBestEffort,
   removeArtifactItemWithProjectCleanup,
@@ -69,7 +71,18 @@ import {
   type LocalJobStatus,
   type LocalJobTarget
 } from "./localClientsStore.js";
-import { getSyncResourceVersion, listSyncEvents, recordSyncEvent, type SyncAction, type SyncDomain } from "./syncStore.js";
+import { getLatestSyncCursor, getSyncResourceVersion, listSyncEvents, recordSyncEvent, type SyncAction, type SyncDomain } from "./syncStore.js";
+import {
+  buildProjectContextSyncItem,
+  parseProjectContextBaselineCursor,
+  projectContextSnapshotPage,
+  projectIdFromMutationResult,
+  ProjectContextSyncError,
+  recordProjectContextInvalidationsBestEffort,
+  requireProjectContextEndpoints,
+  SYNC_SUPPORTED_DOMAINS,
+  type ProjectContextChanged
+} from "./projectContextSync.js";
 import { DeepResearchError } from "./deepResearch/errors.js";
 import {
   cancelDeepResearch,
@@ -1188,6 +1201,10 @@ function respondInternalError(res: express.Response, error: unknown): express.Re
     return res.status(error.status).json({ message: error.message, code: error.code });
   }
 
+  if (error instanceof ProjectContextSyncError) {
+    return res.status(error.status).json({ message: error.message, code: error.code });
+  }
+
   const message = error instanceof Error ? error.message : "Unexpected internal error";
   return res.status(500).json({ message });
 }
@@ -1216,6 +1233,31 @@ function recordSyncEventBestEffort(
     const message = error instanceof Error ? error.message : String(error);
     console.warn("[sync] failed to record event", { domain, resourceId, action, message });
   });
+}
+
+async function invalidateProjectContextFromApi(
+  userId: string,
+  projectIds: Array<string | undefined>,
+  changed: ProjectContextChanged | readonly ProjectContextChanged[],
+  entityType: ProjectContextChanged,
+  entityId: string,
+  action: "update" | "delete" = "update"
+): Promise<void> {
+  await recordProjectContextInvalidationsBestEffort(userId, projectIds, {
+    changed: Array.isArray(changed) ? [...changed] : [changed],
+    entityType,
+    entityId,
+    source: "core-api",
+    action
+  });
+}
+
+async function invalidateArtifactIndexFromApi(
+  userId: string,
+  projectIds: Array<string | undefined>,
+  artifactItemId: string
+): Promise<void> {
+  await invalidateProjectContextFromApi(userId, projectIds, "index", "index", artifactItemId);
 }
 
 function asJsonRecord(value: unknown): Record<string, unknown> {
@@ -1757,6 +1799,15 @@ async function applySyncPushOperation(
       ...(action !== "delete" ? { resource: result } : {}),
       ...(action === "delete" ? { deleted: true } : {})
     });
+    if (relation !== "default") {
+      await recordProjectContextInvalidationsBestEffort(authContext.userId, [nextResourceId], {
+        changed: ["project"],
+        entityType: "project",
+        entityId: nextResourceId,
+        source: "sync-push",
+        action: action === "delete" ? "delete" : "update"
+      });
+    }
     return {
       index,
       clientOpId,
@@ -1894,9 +1945,11 @@ async function applySyncPushOperation(
   }
 
   let artifactBefore: unknown;
-  if (resourceId && action !== "delete") {
+  let artifactProjectIds: string[] = [];
+  if (resourceId) {
     try {
       artifactBefore = await artifactsClient.getItem(authContext.accessToken, resourceId);
+      artifactProjectIds = await listArtifactProjectIdsBestEffort(authContext.accessToken, artifactBefore);
     } catch {
       artifactBefore = undefined;
     }
@@ -1953,7 +2006,8 @@ async function applySyncPushOperation(
     if (!resourceId) {
       throw new LocalClientStoreError(400, "SYNC_RESOURCE_ID_REQUIRED", "Delete requires resourceId.");
     }
-    await removeArtifactItemWithProjectCleanup(authContext.accessToken, resourceId);
+    const deletionSnapshot = await removeArtifactItemWithProjectCleanup(authContext.accessToken, resourceId);
+    artifactProjectIds.push(...projectIdsFromArtifactDeletionSnapshot(deletionSnapshot));
     nextResourceId = resourceId;
     result = { id: resourceId, deleted: true };
   }
@@ -1962,6 +2016,10 @@ async function applySyncPushOperation(
     await reconcileArtifactMutationBestEffort(authContext.accessToken, artifactBefore, result);
   } else if (action !== "delete") {
     await maintainArtifactIndexBestEffort(authContext.accessToken, result);
+  }
+
+  if (action !== "delete") {
+    artifactProjectIds.push(...await listArtifactProjectIdsBestEffort(authContext.accessToken, result));
   }
 
   if (!nextResourceId) {
@@ -1973,6 +2031,12 @@ async function applySyncPushOperation(
     localClientId: authContext.localClient?.id,
     ...(action !== "delete" ? { resource: result } : {}),
     ...(action === "delete" ? { deleted: true } : {})
+  });
+  await recordProjectContextInvalidationsBestEffort(authContext.userId, artifactProjectIds, {
+    changed: ["index"],
+    entityType: "index",
+    entityId: nextResourceId,
+    source: "sync-push"
   });
   return {
     index,
@@ -2243,6 +2307,8 @@ async function saveImageAssetToArtifacts(
 
   const record = created as Record<string, unknown>;
   const artifactItemId = typeof record.id === "string" ? record.id : undefined;
+  const projectIds = await listArtifactProjectIdsBestEffort(authContext.accessToken, created);
+  await invalidateArtifactIndexFromApi(authContext.userId, projectIds, artifactItemId ?? "unknown");
   if (artifactItemId) {
     await imagesClient.attachArtifact(authContext.accessToken, assetId, {
       artifactItemId,
@@ -3647,6 +3713,28 @@ app.get("/api/local-jobs/:jobId/download", async (req, res) => {
   }
 });
 
+async function projectContextBaselineCursor(req: express.Request, userId: string): Promise<string> {
+  const supplied = parseProjectContextBaselineCursor(req.query.baselineCursor);
+  return supplied ?? getLatestSyncCursor(userId);
+}
+
+app.get("/api/sync/project-context/:projectId", async (req, res) => {
+  const authContext = await requireSyncAccessContext(req, res, "sync.pull");
+  if (!authContext) return;
+
+  try {
+    const baselineCursor = await projectContextBaselineCursor(req, authContext.userId);
+    const fetchedAt = new Date().toISOString();
+    const snapshot = await projectsClient.getSyncContext(
+      authContext.accessToken,
+      String(req.params.projectId)
+    );
+    return res.json(buildProjectContextSyncItem(snapshot, baselineCursor, fetchedAt));
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
 app.get("/api/sync/snapshot", async (req, res) => {
   const authContext = await requireSyncAccessContext(req, res, "sync.pull");
   if (!authContext) return;
@@ -3660,6 +3748,8 @@ app.get("/api/sync/snapshot", async (req, res) => {
   const snapshotLimit = Number.isFinite(limit) ? limit : undefined;
 
   try {
+    const baselineCursor = await projectContextBaselineCursor(req, authContext.userId);
+    const generatedAt = new Date().toISOString();
     const snapshot: Record<string, unknown> = {};
     if (domainSet.has("projects")) {
       snapshot.projects = await projectsClient.list(authContext.accessToken, undefined, undefined, snapshotLimit ?? 100, cursor);
@@ -3676,8 +3766,34 @@ app.get("/api/sync/snapshot", async (req, res) => {
     if (domainSet.has("tasks")) {
       snapshot.tasks = await tasksClient.listPage(authContext.accessToken, undefined, undefined, snapshotLimit ?? 100, cursor);
     }
+    if (domainSet.has("project_context")) {
+      const contextPageLimit = Math.max(1, Math.min(100, Math.floor(snapshotLimit ?? 20)));
+      const projectPage = await projectsClient.list(
+        authContext.accessToken,
+        undefined,
+        undefined,
+        contextPageLimit,
+        cursor
+      );
+      const { items: projects, nextCursor } = projectContextSnapshotPage(projectPage);
+      const items = await Promise.all(projects.map(async (project) => {
+        const projectId = objectId(project);
+        if (!projectId) {
+          throw new ProjectContextSyncError(
+            502,
+            "INVALID_PROJECT_CONTEXT_SYNC_RESPONSE",
+            "Projects service returned a Project page item without an id."
+          );
+        }
+        const context = await projectsClient.getSyncContext(authContext.accessToken, projectId);
+        return buildProjectContextSyncItem(context, baselineCursor, generatedAt);
+      }));
+      snapshot.project_context = { items, nextCursor };
+    }
     return res.json({
-      generatedAt: new Date().toISOString(),
+      generatedAt,
+      baselineCursor,
+      supportedDomains: SYNC_SUPPORTED_DOMAINS,
       domains: snapshot
     });
   } catch (error) {
@@ -3824,12 +3940,19 @@ app.put("/api/sync/blobs/:blobId", async (req, res) => {
       expectedVersion: parsed.data.expectedVersion
     });
     await maintainArtifactIndexBestEffort(authContext.accessToken, result);
+    const projectIds = await listArtifactProjectIdsBestEffort(authContext.accessToken, result);
     const event = await recordSyncEvent(authContext.userId, "artifacts", resourceId, "update", {
       source: "sync-blob-put",
       blobId,
       localClientId: authContext.localClient?.id,
       checksum,
       sizeBytes: buffer.length
+    });
+    await recordProjectContextInvalidationsBestEffort(authContext.userId, projectIds, {
+      changed: ["index"],
+      entityType: "index",
+      entityId: resourceId,
+      source: "sync-push"
     });
 
     return res.json({
@@ -3911,10 +4034,14 @@ app.post("/api/projects", async (req, res) => {
 
   try {
     const result = await projectsClient.create(authContext.accessToken, req.body);
-    recordSyncEventBestEffort(authContext.userId, "projects", objectId(result), "create", {
+    const projectId = objectId(result);
+    recordSyncEventBestEffort(authContext.userId, "projects", projectId, "create", {
       source: "core-api",
       resource: result as Record<string, unknown>
     });
+    if (projectId) {
+      await invalidateProjectContextFromApi(authContext.userId, [projectId], "project", "project", projectId);
+    }
     return res.status(201).json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -3995,11 +4122,13 @@ app.put("/api/projects/:projectId/brief", async (req, res) => {
       expectedVersion: body.expectedVersion,
       updatedByKind: "user"
     });
-    recordSyncEventBestEffort(authContext.userId, "projects", String(req.params.projectId), "update", {
-      source: "core-api",
-      relation: "brief",
-      resource: result as Record<string, unknown>
-    });
+    await invalidateProjectContextFromApi(
+      authContext.userId,
+      [String(req.params.projectId)],
+      "brief",
+      "brief",
+      String(req.params.projectId)
+    );
     return res.json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -4034,12 +4163,13 @@ app.post("/api/projects/:projectId/memories", async (req, res) => {
       authority: asNonEmptyString(asJsonRecord(req.body).authority) ?? "user_confirmed",
       createdByKind: "user"
     });
-    recordSyncEventBestEffort(authContext.userId, "projects", String(req.params.projectId), "update", {
-      source: "core-api",
-      relation: "memory",
-      action: "create",
-      memoryId: objectId(result)
-    });
+    await invalidateProjectContextFromApi(
+      authContext.userId,
+      [String(req.params.projectId)],
+      "memory",
+      "memory",
+      objectId(result) ?? String(req.params.projectId)
+    );
     return res.status(201).json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -4051,11 +4181,13 @@ app.patch("/api/project-memories/:memoryId", async (req, res) => {
   if (!authContext) return;
   try {
     const result = await projectsClient.updateMemory(authContext.accessToken, String(req.params.memoryId), req.body);
-    recordSyncEventBestEffort(authContext.userId, "projects", String(req.params.memoryId), "update", {
-      source: "core-api",
-      relation: "memory",
-      patch: req.body as Record<string, unknown>
-    });
+    await invalidateProjectContextFromApi(
+      authContext.userId,
+      [projectIdFromMutationResult(result)],
+      "memory",
+      "memory",
+      String(req.params.memoryId)
+    );
     return res.json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -4085,12 +4217,13 @@ app.post("/api/projects/:projectId/index/rebuild", async (req, res) => {
   if (!authContext) return;
   try {
     const result = await rebuildProjectArtifactIndex(authContext.accessToken, String(req.params.projectId));
-    recordSyncEventBestEffort(authContext.userId, "projects", String(req.params.projectId), "update", {
-      source: "core-api",
-      relation: "index",
-      action: "rebuild",
-      result
-    });
+    await invalidateProjectContextFromApi(
+      authContext.userId,
+      [String(req.params.projectId)],
+      "index",
+      "index",
+      String(req.params.projectId)
+    );
     return res.json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -4131,12 +4264,14 @@ app.post("/api/projects/:projectId/relations", async (req, res) => {
       ...asJsonRecord(req.body),
       createdByKind: "user"
     });
-    recordSyncEventBestEffort(authContext.userId, "projects", String(req.params.projectId), "update", {
-      source: "core-api",
-      relation: "project-relation",
-      action: "create",
-      relationId: objectId(result)
-    });
+    const endpoints = requireProjectContextEndpoints(result);
+    await invalidateProjectContextFromApi(
+      authContext.userId,
+      [endpoints.sourceProjectId, endpoints.targetProjectId],
+      "relation",
+      "relation",
+      endpoints.id
+    );
     return res.status(201).json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -4148,11 +4283,14 @@ app.patch("/api/project-relations/:relationId", async (req, res) => {
   if (!authContext) return;
   try {
     const result = await projectsClient.updateRelation(authContext.accessToken, String(req.params.relationId), req.body);
-    recordSyncEventBestEffort(authContext.userId, "projects", String(req.params.relationId), "update", {
-      source: "core-api",
-      relation: "project-relation",
-      patch: req.body as Record<string, unknown>
-    });
+    const endpoints = requireProjectContextEndpoints(result);
+    await invalidateProjectContextFromApi(
+      authContext.userId,
+      [endpoints.sourceProjectId, endpoints.targetProjectId],
+      "relation",
+      "relation",
+      endpoints.id
+    );
     return res.json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -4163,12 +4301,16 @@ app.delete("/api/project-relations/:relationId", async (req, res) => {
   const authContext = await requireAuthenticatedContext(req, res);
   if (!authContext) return;
   try {
+    const relation = await projectsClient.getRelation(authContext.accessToken, String(req.params.relationId));
+    const endpoints = requireProjectContextEndpoints(relation);
     await projectsClient.removeRelation(authContext.accessToken, String(req.params.relationId));
-    recordSyncEventBestEffort(authContext.userId, "projects", String(req.params.relationId), "update", {
-      source: "core-api",
-      relation: "project-relation",
-      action: "delete"
-    });
+    await invalidateProjectContextFromApi(
+      authContext.userId,
+      [endpoints.sourceProjectId, endpoints.targetProjectId],
+      "relation",
+      "relation",
+      endpoints.id
+    );
     return res.status(204).send();
   } catch (error) {
     return respondInternalError(res, error);
@@ -4205,6 +4347,16 @@ app.post("/api/projects/:projectId/links", async (req, res) => {
       String(req.params.projectId),
       req.body
     );
+    const linkRelationType = asNonEmptyString(asJsonRecord(result).relationType)
+      ?? asNonEmptyString(asJsonRecord(req.body).relationType);
+    const changed = linkRelationType === "secondary_membership" ? "membership" : "link";
+    await invalidateProjectContextFromApi(
+      authContext.userId,
+      [String(req.params.projectId)],
+      changed === "membership" ? ["membership", "index"] : changed,
+      changed,
+      objectId(result) ?? String(req.params.projectId)
+    );
     return res.status(201).json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -4215,7 +4367,15 @@ app.delete("/api/project-links/:linkId", async (req, res) => {
   const authContext = await requireAuthenticatedContext(req, res);
   if (!authContext) return;
   try {
-    await removeProjectLinkWithValidation(authContext.accessToken, String(req.params.linkId));
+    const link = await removeProjectLinkWithValidation(authContext.accessToken, String(req.params.linkId));
+    const changed = link.relationType === "secondary_membership" ? "membership" : "link";
+    await invalidateProjectContextFromApi(
+      authContext.userId,
+      [link.projectId],
+      changed === "membership" ? ["membership", "index"] : changed,
+      changed,
+      link.id
+    );
     return res.status(204).send();
   } catch (error) {
     return respondInternalError(res, error);
@@ -4240,6 +4400,13 @@ app.post("/api/projects/:projectId/context-summary/refresh", async (req, res) =>
       authContext.accessToken,
       String(req.params.projectId),
       req.body
+    );
+    await invalidateProjectContextFromApi(
+      authContext.userId,
+      [String(req.params.projectId)],
+      "summary",
+      "summary",
+      objectId(result) ?? String(req.params.projectId)
     );
     return res.json(result);
   } catch (error) {
@@ -4270,6 +4437,13 @@ app.patch("/api/projects/:projectId", async (req, res) => {
       patch: req.body as Record<string, unknown>,
       resource: result as Record<string, unknown>
     });
+    await invalidateProjectContextFromApi(
+      authContext.userId,
+      [String(req.params.projectId)],
+      "project",
+      "project",
+      String(req.params.projectId)
+    );
     return res.json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -4286,6 +4460,14 @@ app.delete("/api/projects/:projectId", async (req, res) => {
       source: "core-api",
       deleted: true
     });
+    await invalidateProjectContextFromApi(
+      authContext.userId,
+      [String(req.params.projectId)],
+      "project",
+      "project",
+      String(req.params.projectId),
+      "delete"
+    );
     return res.status(204).send();
   } catch (error) {
     return respondInternalError(res, error);
@@ -4492,6 +4674,13 @@ app.post("/api/artifacts/items/:artifactItemId/projects", async (req, res) => {
       action: "link",
       projectId
     });
+    await invalidateProjectContextFromApi(
+      authContext.userId,
+      [projectId],
+      ["membership", "index"],
+      "membership",
+      String(req.params.artifactItemId)
+    );
     return res.status(201).json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -4513,6 +4702,13 @@ app.delete("/api/artifacts/items/:artifactItemId/projects/:projectId", async (re
       action: "unlink",
       projectId: String(req.params.projectId)
     });
+    await invalidateProjectContextFromApi(
+      authContext.userId,
+      [String(req.params.projectId)],
+      ["membership", "index"],
+      "membership",
+      String(req.params.artifactItemId)
+    );
     return res.status(204).send();
   } catch (error) {
     return respondInternalError(res, error);
@@ -4526,10 +4722,12 @@ app.post("/api/artifacts/folders", async (req, res) => {
   try {
     const result = await artifactsClient.createFolder(authContext.accessToken, req.body);
     await maintainArtifactIndexBestEffort(authContext.accessToken, result);
+    const projectIds = await listArtifactProjectIdsBestEffort(authContext.accessToken, result);
     recordSyncEventBestEffort(authContext.userId, "artifacts", objectId(result), "create", {
       source: "core-api",
       resource: result as Record<string, unknown>
     });
+    await invalidateArtifactIndexFromApi(authContext.userId, projectIds, objectId(result) ?? "unknown");
     return res.status(201).json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -4542,10 +4740,12 @@ app.post("/api/artifacts/notes", async (req, res) => {
 
   try {
     const result = await createArtifactNoteWithIndex(authContext.accessToken, req.body);
+    const projectIds = await listArtifactProjectIdsBestEffort(authContext.accessToken, result);
     recordSyncEventBestEffort(authContext.userId, "artifacts", objectId(result), "create", {
       source: "core-api",
       resource: result as Record<string, unknown>
     });
+    await invalidateArtifactIndexFromApi(authContext.userId, projectIds, objectId(result) ?? "unknown");
     return res.status(201).json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -4577,7 +4777,10 @@ app.post("/api/artifacts/upload", async (req, res) => {
     }
 
     if (upstream.ok && responseContentType?.includes("application/json")) {
-      await maintainArtifactIndexBestEffort(authContext.accessToken, jsonRecordFromBuffer(buffer));
+      const result = jsonRecordFromBuffer(buffer);
+      await maintainArtifactIndexBestEffort(authContext.accessToken, result);
+      const projectIds = await listArtifactProjectIdsBestEffort(authContext.accessToken, result);
+      await invalidateArtifactIndexFromApi(authContext.userId, projectIds, objectId(result) ?? "unknown");
     }
 
     return res.status(upstream.status).send(buffer);
@@ -4594,6 +4797,8 @@ app.patch("/api/artifacts/items/:id/content-patch", async (req, res) => {
   try {
     const result = await artifactsClient.patchNoteContent(authContext.accessToken, String(req.params.id), req.body);
     await maintainArtifactIndexBestEffort(authContext.accessToken, result);
+    const projectIds = await listArtifactProjectIdsBestEffort(authContext.accessToken, result);
+    await invalidateArtifactIndexFromApi(authContext.userId, projectIds, String(req.params.id));
     return res.json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -4607,6 +4812,8 @@ app.patch("/api/artifacts/items/:id/section", async (req, res) => {
   try {
     const result = await artifactsClient.updateNoteSection(authContext.accessToken, String(req.params.id), req.body);
     await maintainArtifactIndexBestEffort(authContext.accessToken, result);
+    const projectIds = await listArtifactProjectIdsBestEffort(authContext.accessToken, result);
+    await invalidateArtifactIndexFromApi(authContext.userId, projectIds, String(req.params.id));
     return res.json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -4619,8 +4826,10 @@ app.patch("/api/artifacts/items/:id", async (req, res) => {
 
   try {
     let before: unknown;
+    let projectIds: string[] = [];
     try {
       before = await artifactsClient.getItem(authContext.accessToken, String(req.params.id));
+      projectIds = await listArtifactProjectIdsBestEffort(authContext.accessToken, before);
     } catch {
       before = undefined;
     }
@@ -4630,11 +4839,13 @@ app.patch("/api/artifacts/items/:id", async (req, res) => {
     } else {
       await maintainArtifactIndexBestEffort(authContext.accessToken, result);
     }
+    projectIds.push(...await listArtifactProjectIdsBestEffort(authContext.accessToken, result));
     recordSyncEventBestEffort(authContext.userId, "artifacts", String(req.params.id), "update", {
       source: "core-api",
       patch: req.body as Record<string, unknown>,
       resource: result as Record<string, unknown>
     });
+    await invalidateArtifactIndexFromApi(authContext.userId, projectIds, String(req.params.id));
     return res.json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -4646,11 +4857,16 @@ app.delete("/api/artifacts/items/:id", async (req, res) => {
   if (!authContext) return;
 
   try {
-    await removeArtifactItemWithProjectCleanup(authContext.accessToken, String(req.params.id));
+    const snapshot = await removeArtifactItemWithProjectCleanup(authContext.accessToken, String(req.params.id));
     recordSyncEventBestEffort(authContext.userId, "artifacts", String(req.params.id), "delete", {
       source: "core-api",
       deleted: true
     });
+    await invalidateArtifactIndexFromApi(
+      authContext.userId,
+      projectIdsFromArtifactDeletionSnapshot(snapshot),
+      String(req.params.id)
+    );
     return res.status(204).send();
   } catch (error) {
     return respondInternalError(res, error);

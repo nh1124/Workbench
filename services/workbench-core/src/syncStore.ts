@@ -1,6 +1,6 @@
 import { ensureCoreSchema, getCorePool } from "./db.js";
 
-export type SyncDomain = "projects" | "notes" | "artifacts" | "tasks";
+export type SyncDomain = "projects" | "notes" | "artifacts" | "tasks" | "project_context";
 export type SyncAction = "create" | "update" | "delete" | "upsert";
 
 export interface SyncEvent {
@@ -55,6 +55,10 @@ type SyncEventTransactionClient = {
 
 type SyncEventTransactionPool = {
   connect(): Promise<SyncEventTransactionClient>;
+};
+
+type SyncCursorQueryPool = {
+  query<Row = never>(text: string, values?: unknown[]): Promise<SyncEventQueryResult<Row>>;
 };
 
 function jsonObject(value: unknown): Record<string, unknown> {
@@ -222,6 +226,24 @@ export async function listSyncEvents(
   };
 }
 
+export async function getLatestSyncCursor(userId: string): Promise<string> {
+  await ensureCoreSchema();
+  return getLatestSyncCursorWithPool(getCorePool(), userId);
+}
+
+/** @internal Exported so cursor capture can be tested without a live database. */
+export async function getLatestSyncCursorWithPool(pool: SyncCursorQueryPool, userId: string): Promise<string> {
+  const result = await pool.query<{ cursor: string | number | null }>(
+    `
+      SELECT COALESCE(MAX(id), 0) AS cursor
+      FROM sync_events
+      WHERE user_id = $1
+    `,
+    [userId]
+  );
+  return String(result.rows[0]?.cursor ?? "0");
+}
+
 export async function listSyncResourceVersions(
   userId: string,
   domains?: SyncDomain[],
@@ -231,7 +253,7 @@ export async function listSyncResourceVersions(
   const pool = getCorePool();
   const safeLimit = Math.max(1, Math.min(1000, Math.floor(limit)));
   const domainFilter = domains?.filter((domain): domain is SyncDomain =>
-    ["projects", "notes", "artifacts", "tasks"].includes(domain)
+    ["projects", "notes", "artifacts", "tasks", "project_context"].includes(domain)
   );
   const result = await pool.query<SyncResourceVersionRow>(
     `

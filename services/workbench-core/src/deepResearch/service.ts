@@ -1,4 +1,8 @@
-import { createArtifactNoteWithIndex } from "../projectContext.js";
+import { createArtifactNoteWithIndex, listArtifactProjectIdsBestEffort } from "../projectContext.js";
+import {
+  recordProjectContextInvalidationsBestEffort,
+  type ProjectContextSyncSource
+} from "../projectContextSync.js";
 import { getIntegrationConfig } from "../store.js";
 import { DeepResearchError } from "./errors.js";
 import { resolveProviderModel, runDeepResearchProvider } from "./providers.js";
@@ -360,7 +364,9 @@ function toHistoryEntry(job: DeepResearchJobRecord): DeepResearchHistoryEntry {
 }
 
 async function saveResultToArtifacts(params: {
+  userId: string;
   accessToken: string;
+  projectContextSource: ProjectContextSyncSource;
   query: string;
   provider: DeepResearchProvider;
   model: string;
@@ -395,7 +401,15 @@ async function saveResultToArtifacts(params: {
     contentMarkdown: markdown
   };
   const created = await createArtifactNoteWithIndex(params.accessToken, payload);
-  return parseArtifactRef(created);
+  const artifact = parseArtifactRef(created);
+  const projectIds = await listArtifactProjectIdsBestEffort(params.accessToken, created);
+  await recordProjectContextInvalidationsBestEffort(params.userId, projectIds, {
+    changed: ["index"],
+    entityType: "index",
+    entityId: artifact.id,
+    source: params.projectContextSource
+  });
+  return artifact;
 }
 
 async function resolveSettings(userId: string): Promise<DeepResearchSettings> {
@@ -491,6 +505,7 @@ function resolveRunRequest(input: DeepResearchRunInput, settings: DeepResearchSe
 async function finalizeCompletion(params: {
   userId: string;
   accessToken: string;
+  projectContextSource: ProjectContextSyncSource;
   jobId: string;
   request: DeepResearchResolvedRequest;
   resultMarkdown: string;
@@ -522,7 +537,9 @@ async function finalizeCompletion(params: {
         message: "Saving to Artifacts"
       });
       artifact = await saveResultToArtifacts({
+        userId: params.userId,
         accessToken: params.accessToken,
+        projectContextSource: params.projectContextSource,
         query: params.request.query,
         provider: params.provider,
         model: params.model,
@@ -593,6 +610,7 @@ async function finalizeCompletion(params: {
 async function executeBackgroundJob(params: {
   userId: string;
   accessToken: string;
+  projectContextSource: ProjectContextSyncSource;
   jobId: string;
   request: DeepResearchResolvedRequest;
   provider: DeepResearchProvider;
@@ -638,6 +656,7 @@ async function executeBackgroundJob(params: {
     await finalizeCompletion({
       userId: params.userId,
       accessToken: params.accessToken,
+      projectContextSource: params.projectContextSource,
       jobId: params.jobId,
       request: params.request,
       resultMarkdown: result.content,
@@ -699,7 +718,8 @@ export async function getDeepResearchDefaults(userId: string): Promise<{
 export async function runDeepResearch(
   userId: string,
   accessToken: string,
-  input: DeepResearchRunInput
+  input: DeepResearchRunInput,
+  projectContextSource: ProjectContextSyncSource = "core-api"
 ): Promise<DeepResearchRunResponse> {
   const settings = await resolveSettings(userId);
   const request = resolveRunRequest(input, settings);
@@ -767,6 +787,7 @@ export async function runDeepResearch(
     return await finalizeCompletion({
       userId,
       accessToken,
+      projectContextSource,
       jobId: createdJob.id,
       request,
       resultMarkdown: result.content,
@@ -804,6 +825,7 @@ export async function runDeepResearch(
       void executeBackgroundJob({
         userId,
         accessToken,
+        projectContextSource,
         jobId: createdJob.id,
         request,
         provider: request.provider,
@@ -926,7 +948,8 @@ export async function saveDeepResearchJobArtifact(
     projectId?: string;
     projectName?: string;
     createNew?: boolean;
-  }
+  },
+  projectContextSource: ProjectContextSyncSource = "core-api"
 ): Promise<DeepResearchArtifactRef> {
   const job = await getDeepResearchJob(userId, jobId);
   if (!job) {
@@ -949,7 +972,9 @@ export async function saveDeepResearchJobArtifact(
   }
 
   const artifact = await saveResultToArtifacts({
+    userId,
     accessToken,
+    projectContextSource,
     query: job.query,
     provider: job.provider,
     model: job.model,

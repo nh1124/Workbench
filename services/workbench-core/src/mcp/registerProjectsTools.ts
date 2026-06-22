@@ -2,13 +2,52 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { projectsClient } from "../internalClients.js";
 import { deleteProjectWithGuard } from "../projectContext.js";
-import { asMcpText, runWithAuth } from "./helpers.js";
+import { recordProjectContextInvalidationsBestEffort } from "../projectContextSync.js";
+import { recordSyncEvent, type SyncAction } from "../syncStore.js";
+import { asMcpText, runWithAuth, runWithAuthContext } from "./helpers.js";
 
 const projectStatusSchema = z.enum(["draft", "active", "archived"]);
 
 type ToolContext = {
   accessToken: string;
 };
+
+function resultId(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const id = (value as { id?: unknown }).id;
+  return typeof id === "string" && id.trim() ? id.trim() : undefined;
+}
+
+async function invalidateProjectFromMcp(
+  userId: string,
+  projectId: string,
+  action: "update" | "delete" = "update"
+): Promise<void> {
+  await recordProjectContextInvalidationsBestEffort(userId, [projectId], {
+    changed: ["project"],
+    entityType: "project",
+    entityId: projectId,
+    source: "core-mcp",
+    action
+  });
+}
+
+async function recordBaseProjectEventFromMcp(
+  userId: string,
+  projectId: string,
+  action: SyncAction,
+  payload: Record<string, unknown>
+): Promise<void> {
+  try {
+    await recordSyncEvent(userId, "projects", projectId, action, payload);
+  } catch (error) {
+    console.warn("[sync] failed to record MCP Project event", {
+      projectId,
+      action,
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+}
 
 export function registerProjectsTools(server: McpServer, ctx: ToolContext): void;
 export function registerProjectsTools(server: McpServer): void;
@@ -62,7 +101,18 @@ export function registerProjectsTools(server: McpServer, ctx?: ToolContext): voi
       }
     },
     async (payload) => {
-      const result = await runWithAuth(ctx.accessToken, () => projectsClient.create(ctx.accessToken, payload));
+      const result = await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
+        const project = await projectsClient.create(ctx.accessToken, payload);
+        const projectId = resultId(project);
+        if (projectId) {
+          await recordBaseProjectEventFromMcp(userId, projectId, "create", {
+            source: "core-mcp",
+            resource: project as Record<string, unknown>
+          });
+          await invalidateProjectFromMcp(userId, projectId);
+        }
+        return project;
+      });
       return asMcpText(result);
     }
   );
@@ -80,7 +130,16 @@ export function registerProjectsTools(server: McpServer, ctx?: ToolContext): voi
       }
     },
     async ({ id, ...payload }) => {
-      const result = await runWithAuth(ctx.accessToken, () => projectsClient.update(ctx.accessToken, id, payload));
+      const result = await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
+        const project = await projectsClient.update(ctx.accessToken, id, payload);
+        await recordBaseProjectEventFromMcp(userId, id, "update", {
+          source: "core-mcp",
+          patch: payload,
+          resource: project as Record<string, unknown>
+        });
+        await invalidateProjectFromMcp(userId, id);
+        return project;
+      });
       return asMcpText(result);
     }
   );
@@ -95,7 +154,14 @@ export function registerProjectsTools(server: McpServer, ctx?: ToolContext): voi
       }
     },
     async ({ id }) => {
-      await runWithAuth(ctx.accessToken, () => deleteProjectWithGuard(ctx.accessToken, id));
+      await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
+        await deleteProjectWithGuard(ctx.accessToken, id);
+        await recordBaseProjectEventFromMcp(userId, id, "delete", {
+          source: "core-mcp",
+          deleted: true
+        });
+        await invalidateProjectFromMcp(userId, id, "delete");
+      });
       return asMcpText({ status: "ok" });
     }
   );
