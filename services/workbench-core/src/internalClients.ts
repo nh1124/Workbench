@@ -916,6 +916,14 @@ export const projectsClient = {
       token
     );
   },
+  getContextExport: (token: string, projectId: string) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(
+      projectsService,
+      `/projects/${encodeURIComponent(projectId)}/context-export`,
+      token
+    );
+  },
   getBrief: (token: string, projectId: string) => {
     if (!projectsService) throw new Error("Projects service is not configured");
     return serviceRequest<unknown>(projectsService, `/projects/${encodeURIComponent(projectId)}/brief`, token);

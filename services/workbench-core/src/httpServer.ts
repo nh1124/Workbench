@@ -83,6 +83,7 @@ import {
   SYNC_SUPPORTED_DOMAINS,
   type ProjectContextChanged
 } from "./projectContextSync.js";
+import { buildProjectContextExportResponse } from "./projectContextExport.js";
 import { DeepResearchError } from "./deepResearch/errors.js";
 import {
   cancelDeepResearch,
@@ -3730,6 +3731,19 @@ app.get("/api/sync/project-context/:projectId", async (req, res) => {
       String(req.params.projectId)
     );
     return res.json(buildProjectContextSyncItem(snapshot, baselineCursor, fetchedAt));
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.get("/api/sync/projects/:projectId/context-export", async (req, res) => {
+  const authContext = await requireSyncAccessContext(req, res, "sync.pull");
+  if (!authContext) return;
+
+  try {
+    const projectId = String(req.params.projectId);
+    const snapshot = await projectsClient.getContextExport(authContext.accessToken, projectId);
+    return res.json(buildProjectContextExportResponse(snapshot, projectId));
   } catch (error) {
     return respondInternalError(res, error);
   }

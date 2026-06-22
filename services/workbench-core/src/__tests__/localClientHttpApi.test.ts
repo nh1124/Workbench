@@ -782,6 +782,7 @@ describe("local client HTTP APIs", () => {
     const originalFetch = globalThis.fetch;
     const coreOrigin = new URL(server.baseUrl).origin;
     let contextLimitError = false;
+    let exportMode: "ok" | "limit" | "missing" | "invalid" = "ok";
 
     try {
       const registerResponse = await requestJson(server.baseUrl, "POST", "/api/local-clients/register", {
@@ -825,6 +826,56 @@ describe("local client HTTP APIs", () => {
               sourceProjectId: "project-context-a",
               targetProjectId: "project-context-b"
             }]
+          }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        if (url.pathname === "/projects/project-context-a/context-export" && method === "GET") {
+          assert.match(new Headers(init?.headers).get("Authorization") ?? "", /^Bearer\s+\S+$/);
+          if (exportMode === "limit") {
+            return new Response(JSON.stringify({
+              code: "PROJECT_CONTEXT_EXPORT_LIMIT_EXCEEDED",
+              message: "Project context export exceeds the limit"
+            }), { status: 413, headers: { "Content-Type": "application/json" } });
+          }
+          if (exportMode === "missing") {
+            return new Response(JSON.stringify({ message: "Project not found" }), {
+              status: 404,
+              headers: { "Content-Type": "application/json" }
+            });
+          }
+          const projectId = exportMode === "invalid" ? "project-context-other" : "project-context-a";
+          return new Response(JSON.stringify({
+            schemaVersion: 1,
+            packageType: "workbench.project-context-export",
+            generatedAt: "2026-06-23T00:00:00.000Z",
+            complete: true,
+            project: {
+              id: "project-context-a",
+              name: "Project A",
+              status: "active",
+              updatedAt: "2026-06-23T00:00:00.000Z",
+              ownerAccountId: userId
+            },
+            brief: {
+              projectId: "project-context-a",
+              contentMarkdown: "# Project A",
+              version: 2,
+              updatedAt: "2026-06-23T00:00:00.000Z"
+            },
+            memories: [{
+              id: "memory-a",
+              projectId,
+              kind: "decision",
+              bodyMarkdown: "Decision",
+              authority: "user_confirmed",
+              status: "active",
+              createdAt: "2026-06-23T00:00:00.000Z",
+              updatedAt: "2026-06-23T00:00:00.000Z"
+            }],
+            relations: [],
+            links: [],
+            indexEntries: [],
+            generatedSummary: null,
+            counts: { memories: 1, relations: 0, links: 0, indexEntries: 0 }
           }), { status: 200, headers: { "Content-Type": "application/json" } });
         }
         if (url.pathname === "/projects" && method === "GET") {
@@ -888,6 +939,48 @@ describe("local client HTTP APIs", () => {
       const contextItems = contextPage.items as Array<Record<string, unknown>>;
       assert.equal(contextItems.length, 1);
       assert.equal(contextItems[0].baselineCursor, "0009");
+
+      const exportResponse = await requestJson(
+        server.baseUrl,
+        "GET",
+        "/api/sync/projects/project-context-a/context-export",
+        { headers: daemonHeaders }
+      );
+      assert.equal(exportResponse.status, 200);
+      assert.equal(exportResponse.body.packageType, "workbench.project-context-export");
+      assert.equal(JSON.stringify(exportResponse.body).includes(userId), false);
+      assert.equal(JSON.stringify(exportResponse.body).includes("ownerAccountId"), false);
+
+      exportMode = "limit";
+      const exportLimit = await requestJson(
+        server.baseUrl,
+        "GET",
+        "/api/sync/projects/project-context-a/context-export",
+        { headers: daemonHeaders }
+      );
+      assert.equal(exportLimit.status, 413);
+      assert.equal(exportLimit.body.code, "PROJECT_CONTEXT_EXPORT_LIMIT_EXCEEDED");
+
+      exportMode = "missing";
+      const exportMissing = await requestJson(
+        server.baseUrl,
+        "GET",
+        "/api/sync/projects/project-context-a/context-export",
+        { headers: daemonHeaders }
+      );
+      assert.equal(exportMissing.status, 404);
+      assert.equal(exportMissing.body.message, "Project not found");
+
+      exportMode = "invalid";
+      const exportInvalid = await requestJson(
+        server.baseUrl,
+        "GET",
+        "/api/sync/projects/project-context-a/context-export",
+        { headers: daemonHeaders }
+      );
+      assert.equal(exportInvalid.status, 502);
+      assert.equal(exportInvalid.body.code, "PROJECT_CONTEXT_EXPORT_UNAVAILABLE");
+      exportMode = "ok";
 
       const invalidBaseline = await requestJson(
         server.baseUrl,

@@ -42,15 +42,18 @@ describe("Project context sync HTTP authentication", () => {
   });
 
   it("rejects detail and snapshot reads without local-client or bearer credentials", async () => {
-    const [detail, snapshot] = await Promise.all([
+    const [detail, snapshot, exportResponse] = await Promise.all([
       fetch(`${baseUrl}/api/sync/project-context/project-1`),
-      fetch(`${baseUrl}/api/sync/snapshot?domains=project_context`)
+      fetch(`${baseUrl}/api/sync/snapshot?domains=project_context`),
+      fetch(`${baseUrl}/api/sync/projects/project-1/context-export`)
     ]);
 
     assert.equal(detail.status, 401);
     assert.deepEqual(await detail.json(), { message: "Missing local client credentials" });
     assert.equal(snapshot.status, 401);
     assert.deepEqual(await snapshot.json(), { message: "Missing local client credentials" });
+    assert.equal(exportResponse.status, 401);
+    assert.deepEqual(await exportResponse.json(), { message: "Missing local client credentials" });
   });
 
   it("rejects an invalid bearer before calling Projects or capturing a baseline", async () => {
