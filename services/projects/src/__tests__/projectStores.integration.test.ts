@@ -18,9 +18,10 @@ test("project context stores preserve owner isolation, idempotence and relation 
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const ownerA = `integration-a-${suffix}`;
   const ownerB = `integration-b-${suffix}`;
-  const [{ getProjectsPool, ensureProjectsSchema }, projectStore, briefStore, memoryStore, indexStore, linksStore, relationStore, errors] = await Promise.all([
+  const [{ getProjectsPool, ensureProjectsSchema }, projectStore, briefStore, memoryStore, indexStore, linksStore, relationStore, snapshotStore, errors] = await Promise.all([
     import("../db.js"), import("../store.js"), import("../projectBriefStore.js"), import("../projectMemoryStore.js"),
-    import("../projectIndexStore.js"), import("../projectLinksStore.js"), import("../projectRelationsStore.js"), import("../projectStoreUtils.js")
+    import("../projectIndexStore.js"), import("../projectLinksStore.js"), import("../projectRelationsStore.js"),
+    import("../projectContextSnapshotsStore.js"), import("../projectStoreUtils.js")
   ]);
   await Promise.all([ensureProjectsSchema(), ensureProjectsSchema()]);
   await ensureProjectsSchema();
@@ -134,6 +135,8 @@ test("project context stores preserve owner isolation, idempotence and relation 
       targetProjectId: projectA2.id, relationType: "related", directionality: "bidirectional", createdByKind: "user"
     }, ownerA);
     assert.ok(editableRelation);
+    assert.equal((await relationStore.getProjectRelation(editableRelation.id, ownerA))?.sourceProjectId, projectA.id);
+    assert.equal(await relationStore.getProjectRelation(editableRelation.id, ownerB), undefined);
     await assert.rejects(() => relationStore.createProjectRelation(projectA2.id, {
       targetProjectId: projectA.id, relationType: "related", directionality: "bidirectional", createdByKind: "user"
     }, ownerA), errors.DuplicateRelationError);
@@ -152,6 +155,19 @@ test("project context stores preserve owner isolation, idempotence and relation 
     await relationStore.createProjectRelation(projectA.id, {
       targetProjectId: projectA2.id, relationType: "supports", createdByKind: "user"
     }, ownerA);
+
+    const syncSnapshot = await snapshotStore.getProjectSyncContextSnapshot(projectA.id, ownerA);
+    assert.equal(syncSnapshot?.complete, true);
+    assert.deepEqual(syncSnapshot?.counts, { memories: 1, relations: 1 });
+    assert.deepEqual(syncSnapshot?.memories.map((item) => item.bodyMarkdown), ["second"]);
+    assert.equal(await snapshotStore.getProjectSyncContextSnapshot(projectA.id, ownerB), undefined);
+
+    const exportSnapshot = await snapshotStore.getProjectContextExportSnapshot(projectA.id, ownerA);
+    assert.equal(exportSnapshot?.complete, true);
+    assert.equal(exportSnapshot?.counts.memories, 2);
+    assert.equal(exportSnapshot?.counts.relations, 1);
+    assert.deepEqual(exportSnapshot?.memories.map((item) => item.bodyMarkdown), ["first", "second"]);
+    assert.equal(await snapshotStore.getProjectContextExportSnapshot(projectA.id, ownerB), undefined);
 
     const ownedRowsBeforeDelete = await getProjectsPool().query<Record<string, string>>(
       `SELECT

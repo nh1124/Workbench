@@ -33,10 +33,16 @@ import { getProjectLink, listProjectLinksByTarget } from "./projectLinksStore.js
 import {
   createProjectRelation,
   deleteProjectRelation,
+  getProjectRelation,
   listProjectRelations,
   updateProjectRelation
 } from "./projectRelationsStore.js";
 import { getProjectContext } from "./projectContextStore.js";
+import {
+  getProjectContextExportSnapshot,
+  getProjectSyncContextSnapshot,
+  ProjectContextSnapshotLimitError
+} from "./projectContextSnapshotsStore.js";
 import {
   DuplicateRelationError,
   InvalidCursorError,
@@ -697,6 +703,13 @@ app.post("/projects/:projectId/relations", requireUserAuth, async (req, res) => 
   }
 });
 
+app.get("/project-relations/:relationId", requireUserAuth, async (req, res) => {
+  const owner = req.authUser?.coreUserId;
+  if (!owner) return res.status(401).json({ message: "Missing auth context" });
+  const relation = await getProjectRelation(String(req.params.relationId), owner);
+  return relation ? res.json(relation) : res.status(404).json({ message: "Project relation not found" });
+});
+
 app.patch("/project-relations/:relationId", requireUserAuth, async (req, res) => {
   const parsed = relationUpdateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
@@ -737,6 +750,34 @@ app.get("/projects/:projectId/context", requireUserAuth, async (req, res) => {
     maxChars: sanitizeLimit(typeof req.query.maxChars === "string" ? req.query.maxChars : undefined)
   });
   return context ? res.json(context) : res.status(404).json({ message: "Project not found" });
+});
+
+app.get("/projects/:projectId/sync-context", requireUserAuth, async (req, res) => {
+  const owner = req.authUser?.coreUserId;
+  if (!owner) return res.status(401).json({ message: "Missing auth context" });
+  try {
+    const snapshot = await getProjectSyncContextSnapshot(String(req.params.projectId), owner);
+    return snapshot ? res.json(snapshot) : res.status(404).json({ message: "Project not found" });
+  } catch (error) {
+    if (error instanceof ProjectContextSnapshotLimitError) {
+      return res.status(error.status).json({ code: error.code, message: error.message });
+    }
+    throw error;
+  }
+});
+
+app.get("/projects/:projectId/context-export", requireUserAuth, async (req, res) => {
+  const owner = req.authUser?.coreUserId;
+  if (!owner) return res.status(401).json({ message: "Missing auth context" });
+  try {
+    const snapshot = await getProjectContextExportSnapshot(String(req.params.projectId), owner);
+    return snapshot ? res.json(snapshot) : res.status(404).json({ message: "Project not found" });
+  } catch (error) {
+    if (error instanceof ProjectContextSnapshotLimitError) {
+      return res.status(error.status).json({ code: error.code, message: error.message });
+    }
+    throw error;
+  }
 });
 
 app.get("/projects/:projectId/context-summary", requireUserAuth, async (req, res) => {

@@ -35,6 +35,10 @@ type RelationRow = {
   updated_at: string;
 };
 
+type RelationQuerySource = {
+  query<Row = never>(text: string, values?: unknown[]): Promise<{ rows: Row[] }>;
+};
+
 export type ListProjectRelationsOptions = {
   relationType?: ProjectRelationType;
   directionality?: ProjectRelationDirection;
@@ -66,6 +70,37 @@ function toRelation(row: RelationRow): ProjectRelation {
 function rethrowDuplicate(error: unknown): never {
   if ((error as { code?: string }).code === "23505") throw new DuplicateRelationError();
   throw error;
+}
+
+export async function getProjectRelation(
+  relationId: string,
+  ownerAccountId: string
+): Promise<ProjectRelation | undefined> {
+  await ensureProjectsSchema();
+  return getProjectRelationWithQuery(getProjectsPool(), relationId, ownerAccountId);
+}
+
+/** @internal Exported to verify owner scoping without requiring a live database. */
+export async function getProjectRelationWithQuery(
+  querySource: RelationQuerySource,
+  relationId: string,
+  ownerAccountId: string
+): Promise<ProjectRelation | undefined> {
+  const result = await querySource.query<RelationRow>(
+    `
+      SELECT ${RELATION_COLUMNS}
+      FROM project_relations r
+      JOIN projects source_project ON source_project.id = r.source_project_id
+      JOIN projects target_project ON target_project.id = r.target_project_id
+      WHERE r.id = $1
+        AND source_project.owner_account_id = $2
+        AND target_project.owner_account_id = $2
+        AND r.is_deleted = FALSE
+      LIMIT 1
+    `,
+    [relationId, normalizeOwner(ownerAccountId)]
+  );
+  return result.rows[0] ? toRelation(result.rows[0]) : undefined;
 }
 
 export async function listProjectRelations(

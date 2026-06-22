@@ -6,7 +6,7 @@
   "scripts": {
     "dev:http": "tsx src/httpServer.ts",
     "build": "tsc -p tsconfig.json",
-    "test": "tsx --test src/__tests__/projectContext.test.ts src/__tests__/projectStores.integration.test.ts src/__tests__/projectContextHttpApi.test.ts",
+    "test": "tsx --test src/__tests__/projectContext.test.ts src/__tests__/projectContextSnapshots.test.ts src/__tests__/projectStores.integration.test.ts src/__tests__/projectContextHttpApi.test.ts",
     "start": "node dist/httpServer.js"
   },
   "dependencies": {

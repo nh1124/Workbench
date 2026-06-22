@@ -233,3 +233,36 @@ export interface ProjectContextPack {
     truncatedSections: ProjectContextSection[];
   };
 }
+
+export interface ProjectSyncContextSnapshot {
+  projectId: string;
+  complete: true;
+  counts: {
+    memories: number;
+    relations: number;
+  };
+  project: Project;
+  brief: ProjectBrief;
+  memories: ProjectMemoryEntry[];
+  relations: ProjectRelation[];
+}
+
+export interface ProjectContextExportSnapshot {
+  schemaVersion: 1;
+  packageType: "workbench.project-context-export";
+  generatedAt: string;
+  complete: true;
+  project: Project;
+  brief: ProjectBrief;
+  memories: ProjectMemoryEntry[];
+  relations: ProjectRelation[];
+  links: ProjectLink[];
+  indexEntries: ProjectIndexEntry[];
+  generatedSummary: ProjectContextSummary | null;
+  counts: {
+    memories: number;
+    relations: number;
+    links: number;
+    indexEntries: number;
+  };
+}
