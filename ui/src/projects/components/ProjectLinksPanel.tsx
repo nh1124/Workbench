@@ -1,34 +1,48 @@
 import { useEffect, useState } from "react";
 import { projectsApi } from "../../lib/api";
 import type { ProjectLinkRecord } from "../../types/models";
+import { useProjectAsyncGuard } from "../hooks/useProjectAsyncGuard";
 
 export function ProjectLinksPanel({ projectId }: { projectId: string }) {
   const [items, setItems] = useState<ProjectLinkRecord[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { beginRequest, isCurrentRequest, isCurrentProject, invalidateRequests } = useProjectAsyncGuard(projectId);
 
-  const load = async () => {
+  const load = async (requestedProjectId = projectId) => {
+    const request = beginRequest(requestedProjectId);
     setIsLoading(true);
     setError(null);
     try {
-      const result = await projectsApi.listLinks(projectId, { limit: 100 });
+      const result = await projectsApi.listLinks(requestedProjectId, { limit: 100 });
+      if (!isCurrentRequest(request)) return;
       setItems(result.items ?? []);
     } catch (loadError) {
+      if (!isCurrentRequest(request)) return;
       setError(loadError instanceof Error ? loadError.message : "Unable to load Project links.");
     } finally {
-      setIsLoading(false);
+      if (isCurrentRequest(request)) setIsLoading(false);
     }
   };
 
-  useEffect(() => { void load(); }, [projectId]);
+  useEffect(() => {
+    invalidateRequests();
+    setItems([]);
+    setError(null);
+    void load(projectId);
+    return invalidateRequests;
+  }, [projectId]);
 
   const remove = async (link: ProjectLinkRecord) => {
     if (link.relationType === "secondary_membership") return;
     if (!window.confirm("Remove this Project link? The linked resource will not be deleted.")) return;
+    const operationProjectId = projectId;
     try {
       await projectsApi.removeLink(link.id);
-      await load();
+      if (!isCurrentProject(operationProjectId)) return;
+      await load(operationProjectId);
     } catch (removeError) {
+      if (!isCurrentProject(operationProjectId)) return;
       setError(removeError instanceof Error ? removeError.message : "Unable to remove Project link.");
     }
   };

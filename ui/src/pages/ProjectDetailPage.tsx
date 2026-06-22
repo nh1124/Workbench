@@ -8,6 +8,7 @@ import { ProjectLinksPanel } from "../projects/components/ProjectLinksPanel";
 import { ProjectMemoryPanel } from "../projects/components/ProjectMemoryPanel";
 import { ProjectRelationsPanel } from "../projects/components/ProjectRelationsPanel";
 import { useProjectContext } from "../projects/hooks/useProjectContext";
+import { useProjectAsyncGuard } from "../projects/hooks/useProjectAsyncGuard";
 import {
   isProjectDeletionBlocked,
   selectStableProjectDeletionTargets,
@@ -140,6 +141,7 @@ export function ProjectDetailPage() {
   const { projectId = "" } = useParams();
   const navigate = useNavigate();
   const projectContext = useProjectContext(projectId);
+  const { beginRequest, isCurrentRequest, isCurrentProject, invalidateRequests } = useProjectAsyncGuard(projectId);
 
   const [project, setProject] = useState<ProjectRecord | null>(null);
   const [notes, setNotes] = useState<Note[]>([]);
@@ -166,25 +168,29 @@ export function ProjectDetailPage() {
 
   const loadDeletionImpact = async () => {
     if (!projectId) return null;
+    const requestedProjectId = projectId;
     setIsLoadingDeletionImpact(true);
     setDeletionImpactError(null);
     try {
       const impact = await projectsApi.getDeletionImpact(projectId);
+      if (!isCurrentProject(requestedProjectId)) return null;
       setDeletionImpact(impact);
       return impact;
     } catch (impactError) {
+      if (!isCurrentProject(requestedProjectId)) return null;
       setDeletionImpact(null);
       setDeletionImpactError(impactError instanceof Error ? impactError.message : "Unable to preview Project deletion.");
       return null;
     } finally {
-      setIsLoadingDeletionImpact(false);
+      if (isCurrentProject(requestedProjectId)) setIsLoadingDeletionImpact(false);
     }
   };
 
-  const load = async (showLoading = true) => {
-    if (!projectId) {
+  const load = async (showLoading = true, requestedProjectId = projectId) => {
+    if (!requestedProjectId) {
       return;
     }
+    const request = beginRequest(requestedProjectId);
 
     if (showLoading) {
       setIsLoading(true);
@@ -192,11 +198,12 @@ export function ProjectDetailPage() {
     setError(null);
 
     const [projectResult, noteProjectsResult, taskProjectsResult, artifactProjectsResult] = await Promise.allSettled([
-      projectsApi.get(projectId),
+      projectsApi.get(requestedProjectId),
       notesApi.projects(),
       tasksApi.projects(),
       artifactsApi.projects()
     ]);
+    if (!isCurrentRequest(request)) return;
 
     const baseErrors = [projectResult, noteProjectsResult, taskProjectsResult, artifactProjectsResult]
       .filter((result): result is PromiseRejectedResult => result.status === "rejected")
@@ -207,7 +214,7 @@ export function ProjectDetailPage() {
     const taskProjects = taskProjectsResult.status === "fulfilled" ? taskProjectsResult.value : [];
     const artifactProjects = artifactProjectsResult.status === "fulfilled" ? artifactProjectsResult.value : [];
 
-    const keys = collectProjectKeys(projectId, loadedProject?.name, noteProjects, taskProjects, artifactProjects);
+    const keys = collectProjectKeys(requestedProjectId, loadedProject?.name, noteProjects, taskProjects, artifactProjects);
 
     const [notesFetchResult, tasksFetchResult, artifactLegacyFetchResult, artifactTreeFetchResult] = await Promise.all([
       Promise.allSettled(keys.map((key) => notesApi.list(key, 500))),
@@ -215,6 +222,7 @@ export function ProjectDetailPage() {
       Promise.allSettled(keys.map((key) => artifactsApi.list(key, 500))),
       Promise.allSettled(keys.map((key) => artifactsApi.tree(key)))
     ]);
+    if (!isCurrentRequest(request)) return;
 
     const detailErrors = [
       ...notesFetchResult.filter((result): result is PromiseRejectedResult => result.status === "rejected").map((result) => readErrorMessage(result.reason)),
@@ -274,7 +282,16 @@ export function ProjectDetailPage() {
   };
 
   useEffect(() => {
-    void load(true);
+    invalidateRequests();
+    setProject(null);
+    setNotes([]);
+    setTasks([]);
+    setArtifactRecords([]);
+    setArtifactItems([]);
+    setAuthRequired(false);
+    setError(null);
+    void load(true, projectId);
+    return invalidateRequests;
   }, [projectId]);
 
   useEffect(() => {
@@ -336,6 +353,18 @@ export function ProjectDetailPage() {
     () => selectStableProjectRenameTargets(projectId, notes, tasks, artifactRecords, artifactItems),
     [artifactItems, artifactRecords, notes, projectId, tasks]
   );
+  const contextSectionTimestamps = useMemo(() => {
+    const context = projectContext.context;
+    if (!context) return [];
+    return [
+      context.brief?.updatedAt,
+      context.project.updatedAt,
+      ...context.memories.map((entry) => entry.updatedAt),
+      ...context.indexEntries.flatMap((entry) => [entry.sourceUpdatedAt, entry.indexedAt]),
+      ...context.relations.map((relation) => relation.updatedAt),
+      ...context.links.map((link) => link.linkedAt)
+    ];
+  }, [projectContext.context]);
 
   const handleSaveTitle = async () => {
     const nextTitle = titleDraft.trim();
@@ -626,6 +655,7 @@ export function ProjectDetailPage() {
               projectId={projectId}
               brief={projectContext.context.brief}
               generatedSummary={projectContext.context.generatedSummary}
+              loadedSectionTimestamps={contextSectionTimestamps}
               onChanged={projectContext.reload}
             />
           ) : null}

@@ -1,8 +1,9 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { projectsApi } from "../../lib/api";
 import { formatDateTime } from "../../lib/format";
 import { isProjectIndexEntryStale } from "../projectContextUtils";
 import type { ProjectIndexEntry } from "../../types/models";
+import { useProjectAsyncGuard } from "../hooks/useProjectAsyncGuard";
 
 export function ProjectIndexPanel({ projectId }: { projectId: string }) {
   const [items, setItems] = useState<ProjectIndexEntry[]>([]);
@@ -11,38 +12,72 @@ export function ProjectIndexPanel({ projectId }: { projectId: string }) {
   const [isLoading, setIsLoading] = useState(false);
   const [isRebuilding, setIsRebuilding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { beginRequest, isCurrentRequest, isCurrentProject, invalidateRequests } = useProjectAsyncGuard(projectId);
+  const appliedFiltersRef = useRef<{ q?: string; resourceType?: string }>({});
+  const searchIntentRef = useRef(0);
 
-  const load = async () => {
+  const load = async (
+    requestedProjectId = projectId,
+    filters = appliedFiltersRef.current
+  ) => {
+    const request = beginRequest(requestedProjectId);
     setIsLoading(true);
     setError(null);
     try {
-      const result = await projectsApi.searchIndex(projectId, {
-        q: query.trim() || undefined,
-        resourceType: resourceType || undefined,
+      const result = await projectsApi.searchIndex(requestedProjectId, {
+        ...filters,
         limit: 100
       });
+      if (!isCurrentRequest(request)) return;
       setItems(result.items ?? []);
     } catch (loadError) {
+      if (!isCurrentRequest(request)) return;
       setError(loadError instanceof Error ? loadError.message : "Unable to search the Project index.");
     } finally {
-      setIsLoading(false);
+      if (isCurrentRequest(request)) setIsLoading(false);
     }
   };
 
-  useEffect(() => { void load(); }, [projectId]);
+  useEffect(() => {
+    invalidateRequests();
+    searchIntentRef.current += 1;
+    appliedFiltersRef.current = {};
+    setItems([]);
+    setQuery("");
+    setResourceType("");
+    setIsRebuilding(false);
+    setError(null);
+    void load(projectId);
+    return invalidateRequests;
+  }, [projectId]);
 
-  const search = (event: FormEvent) => { event.preventDefault(); void load(); };
+  const search = (event: FormEvent) => {
+    event.preventDefault();
+    const filters = {
+      q: query.trim() || undefined,
+      resourceType: resourceType || undefined
+    };
+    appliedFiltersRef.current = filters;
+    searchIntentRef.current += 1;
+    void load(projectId, filters);
+  };
   const rebuild = async () => {
     if (!window.confirm("Rebuild this Project index to repair observed drift?")) return;
+    const operationProjectId = projectId;
+    const searchIntentAtStart = searchIntentRef.current;
     setIsRebuilding(true);
     setError(null);
     try {
       await projectsApi.rebuildIndex(projectId);
-      await load();
+      if (!isCurrentProject(operationProjectId)) return;
+      if (searchIntentRef.current === searchIntentAtStart) {
+        await load(operationProjectId, appliedFiltersRef.current);
+      }
     } catch (rebuildError) {
+      if (!isCurrentProject(operationProjectId)) return;
       setError(rebuildError instanceof Error ? rebuildError.message : "Unable to rebuild the Project index.");
     } finally {
-      setIsRebuilding(false);
+      if (isCurrentProject(operationProjectId)) setIsRebuilding(false);
     }
   };
 

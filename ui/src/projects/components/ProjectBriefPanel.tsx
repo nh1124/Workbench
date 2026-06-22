@@ -2,11 +2,14 @@ import { useEffect, useState } from "react";
 import { formatDateTime } from "../../lib/format";
 import { projectsApi } from "../../lib/api";
 import type { ProjectBriefRecord, ProjectContextSummary } from "../../types/models";
+import { useProjectAsyncGuard } from "../hooks/useProjectAsyncGuard";
+import { assessGeneratedSummaryFreshness } from "../projectContextUtils";
 
 interface ProjectBriefPanelProps {
   projectId: string;
   brief?: ProjectBriefRecord | null;
   generatedSummary?: ProjectContextSummary | null;
+  loadedSectionTimestamps?: Array<string | undefined>;
   onChanged?: () => void;
 }
 
@@ -14,7 +17,13 @@ function isConflict(error: unknown): boolean {
   return typeof error === "object" && error !== null && "status" in error && (error as { status?: number }).status === 409;
 }
 
-export function ProjectBriefPanel({ projectId, brief, generatedSummary, onChanged }: ProjectBriefPanelProps) {
+export function ProjectBriefPanel({
+  projectId,
+  brief,
+  generatedSummary,
+  loadedSectionTimestamps = [],
+  onChanged
+}: ProjectBriefPanelProps) {
   const [currentBrief, setCurrentBrief] = useState<ProjectBriefRecord | null>(brief ?? null);
   const [currentSummary, setCurrentSummary] = useState<ProjectContextSummary | null>(generatedSummary ?? null);
   const [draft, setDraft] = useState(brief?.contentMarkdown ?? "");
@@ -23,6 +32,24 @@ export function ProjectBriefPanel({ projectId, brief, generatedSummary, onChange
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { beginRequest, isCurrentRequest, isCurrentProject, invalidateRequests } = useProjectAsyncGuard(projectId);
+  const summaryFreshness = assessGeneratedSummaryFreshness(
+    currentSummary?.updatedAt,
+    [...loadedSectionTimestamps, currentBrief?.updatedAt]
+  );
+
+  useEffect(() => {
+    invalidateRequests();
+    setCurrentBrief(brief ?? null);
+    setCurrentSummary(generatedSummary ?? null);
+    setDraft(brief?.contentMarkdown ?? "");
+    setIsEditing(false);
+    setIsSaving(false);
+    setIsRefreshing(false);
+    setConflict(false);
+    setError(null);
+    return invalidateRequests;
+  }, [invalidateRequests, projectId]);
 
   useEffect(() => {
     setCurrentBrief(brief ?? null);
@@ -32,18 +59,22 @@ export function ProjectBriefPanel({ projectId, brief, generatedSummary, onChange
   useEffect(() => setCurrentSummary(generatedSummary ?? null), [generatedSummary]);
 
   const reloadBrief = async () => {
+    const request = beginRequest(projectId);
     setError(null);
     try {
       const loaded = await projectsApi.getBrief(projectId);
+      if (!isCurrentRequest(request)) return;
       setCurrentBrief(loaded);
       setDraft(loaded.contentMarkdown);
       setConflict(false);
     } catch (loadError) {
+      if (!isCurrentRequest(request)) return;
       setError(loadError instanceof Error ? loadError.message : "Unable to reload the brief.");
     }
   };
 
   const saveBrief = async () => {
+    const operationProjectId = projectId;
     setIsSaving(true);
     setError(null);
     setConflict(false);
@@ -52,30 +83,36 @@ export function ProjectBriefPanel({ projectId, brief, generatedSummary, onChange
         contentMarkdown: draft,
         expectedVersion: currentBrief?.version ?? 0
       });
+      if (!isCurrentProject(operationProjectId)) return;
       setCurrentBrief(updated);
       setIsEditing(false);
       onChanged?.();
     } catch (saveError) {
+      if (!isCurrentProject(operationProjectId)) return;
       if (isConflict(saveError)) {
         setConflict(true);
       } else {
         setError(saveError instanceof Error ? saveError.message : "Unable to save the brief.");
       }
     } finally {
-      setIsSaving(false);
+      if (isCurrentProject(operationProjectId)) setIsSaving(false);
     }
   };
 
   const refreshSummary = async () => {
+    const operationProjectId = projectId;
     setIsRefreshing(true);
     setError(null);
     try {
-      setCurrentSummary(await projectsApi.refreshContextSummary(projectId));
+      const refreshed = await projectsApi.refreshContextSummary(projectId);
+      if (!isCurrentProject(operationProjectId)) return;
+      setCurrentSummary(refreshed);
       onChanged?.();
     } catch (refreshError) {
+      if (!isCurrentProject(operationProjectId)) return;
       setError(refreshError instanceof Error ? refreshError.message : "Unable to refresh the summary.");
     } finally {
-      setIsRefreshing(false);
+      if (isCurrentProject(operationProjectId)) setIsRefreshing(false);
     }
   };
 
@@ -120,6 +157,11 @@ export function ProjectBriefPanel({ projectId, brief, generatedSummary, onChange
         </div>
         <p className="project-context-copy">{currentSummary?.summaryText || "No generated summary yet."}</p>
         {currentSummary ? <small>{currentSummary.source} · Updated {formatDateTime(currentSummary.updatedAt)}</small> : null}
+        {currentSummary ? (
+          <p className={`project-context-freshness freshness-${summaryFreshness.state}`}>
+            {summaryFreshness.message}
+          </p>
+        ) : null}
       </article>
     </div>
   );

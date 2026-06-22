@@ -8,6 +8,7 @@ import type {
   ProjectRelationType
 } from "../../types/models";
 import { projectRelationViewDirection } from "../projectContextUtils";
+import { useProjectAsyncGuard } from "../hooks/useProjectAsyncGuard";
 
 const RELATION_TYPES: ProjectRelationType[] = ["related", "depends_on", "supports", "informs", "overlaps"];
 
@@ -25,31 +26,45 @@ export function ProjectRelationsPanel({ projectId }: { projectId: string }) {
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { beginRequest, isCurrentRequest, isCurrentProject, invalidateRequests } = useProjectAsyncGuard(projectId);
 
   const projectNames = useMemo(() => new Map(projects.map((project) => [project.id, project.name])), [projects]);
 
-  const load = async () => {
+  const load = async (requestedProjectId = projectId) => {
+    const request = beginRequest(requestedProjectId);
     setIsLoading(true);
     setError(null);
     try {
       const [relations, projectList] = await Promise.all([
-        projectsApi.listRelations(projectId),
+        projectsApi.listRelations(requestedProjectId),
         projectsApi.list(undefined, undefined, 200)
       ]);
+      if (!isCurrentRequest(request)) return;
       setItems(relations.items ?? []);
       setProjects(projectList.items ?? []);
     } catch (loadError) {
+      if (!isCurrentRequest(request)) return;
       setError(loadError instanceof Error ? loadError.message : "Unable to load Project relations.");
     } finally {
-      setIsLoading(false);
+      if (isCurrentRequest(request)) setIsLoading(false);
     }
   };
 
-  useEffect(() => { void load(); }, [projectId]);
+  useEffect(() => {
+    invalidateRequests();
+    setItems([]);
+    setProjects([]);
+    setTargetProjectId("");
+    setIsSaving(false);
+    setError(null);
+    void load(projectId);
+    return invalidateRequests;
+  }, [projectId]);
 
   const add = async (event: FormEvent) => {
     event.preventDefault();
     if (!targetProjectId) return;
+    const operationProjectId = projectId;
     setIsSaving(true);
     setError(null);
     try {
@@ -59,22 +74,27 @@ export function ProjectRelationsPanel({ projectId }: { projectId: string }) {
         directionality,
         note: note.trim() || undefined
       });
+      if (!isCurrentProject(operationProjectId)) return;
       setTargetProjectId("");
       setNote("");
-      await load();
+      await load(operationProjectId);
     } catch (saveError) {
+      if (!isCurrentProject(operationProjectId)) return;
       setError(saveError instanceof Error ? saveError.message : "Unable to add Project relation.");
     } finally {
-      setIsSaving(false);
+      if (isCurrentProject(operationProjectId)) setIsSaving(false);
     }
   };
 
   const remove = async (relation: ProjectRelation) => {
     if (!window.confirm(`Remove the ${relation.relationType} Project relation?`)) return;
+    const operationProjectId = projectId;
     try {
       await projectsApi.removeRelation(relation.id);
-      await load();
+      if (!isCurrentProject(operationProjectId)) return;
+      await load(operationProjectId);
     } catch (removeError) {
+      if (!isCurrentProject(operationProjectId)) return;
       setError(removeError instanceof Error ? removeError.message : "Unable to remove Project relation.");
     }
   };
@@ -82,15 +102,19 @@ export function ProjectRelationsPanel({ projectId }: { projectId: string }) {
   const editNote = async (relation: ProjectRelation) => {
     const nextNote = window.prompt("Update the reason for this Project relation:", relation.note ?? "");
     if (nextNote === null || nextNote.trim() === (relation.note ?? "")) return;
+    const operationProjectId = projectId;
     try {
       await projectsApi.updateRelation(relation.id, {
         note: nextNote.trim(),
         expectedVersion: relation.version
       });
-      await load();
+      if (!isCurrentProject(operationProjectId)) return;
+      await load(operationProjectId);
     } catch (updateError) {
+      if (!isCurrentProject(operationProjectId)) return;
       if (isConflict(updateError)) {
-        await load();
+        await load(operationProjectId);
+        if (!isCurrentProject(operationProjectId)) return;
         setError("This relation changed in another session. The latest version was reloaded; review it before editing again.");
       } else {
         setError(updateError instanceof Error ? updateError.message : "Unable to update Project relation.");

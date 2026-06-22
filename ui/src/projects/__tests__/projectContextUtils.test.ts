@@ -1,12 +1,28 @@
 import { describe, expect, it } from "vitest";
 import type { ProjectDeletionImpact, ProjectIndexEntry, ProjectRelation } from "../../types/models";
 import {
+  assessGeneratedSummaryFreshness,
   isProjectDeletionBlocked,
   isProjectIndexEntryStale,
   projectRelationViewDirection,
   selectStableProjectDeletionTargets,
   selectStableProjectRenameTargets
 } from "../projectContextUtils";
+
+describe("assessGeneratedSummaryFreshness", () => {
+  it("does not claim unloaded sources are current", () => {
+    expect(assessGeneratedSummaryFreshness(undefined, [])).toEqual({
+      state: "unknown",
+      message: "Freshness is unknown because the summary has no valid update time."
+    });
+    expect(assessGeneratedSummaryFreshness("2026-06-21T00:00:00.000Z", ["2026-06-20T00:00:00.000Z"])).toEqual({
+      state: "no_newer_loaded_section",
+      message: "No newer timestamp was found in the loaded context; complete source freshness cannot be verified."
+    });
+    expect(assessGeneratedSummaryFreshness("2026-06-20T00:00:00.000Z", ["2026-06-21T00:00:00.000Z"]).state)
+      .toBe("possibly_stale");
+  });
+});
 
 const relation: ProjectRelation = {
   id: "rel-1",

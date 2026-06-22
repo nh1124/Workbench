@@ -343,6 +343,17 @@
   color: #fde68a;
 }
 
+.project-context-freshness {
+  margin: 0.45rem 0 0;
+  font-size: 0.75rem;
+  color: #cbd5e1;
+}
+
+.project-context-freshness.freshness-possibly_stale,
+.project-context-freshness.freshness-unknown {
+  color: #fde68a;
+}
+
 .project-context-warning,
 .project-context-error,
 .project-context-unavailable {
