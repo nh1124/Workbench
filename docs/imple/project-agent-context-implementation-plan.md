@@ -1,7 +1,7 @@
 # Project Agent Context / Network / Skill Implementation Plan
 
-Status: MVP implemented; local sync / export deferred
-Last updated: 2026-06-20
+Status: Project agent context implemented; local sync cache and one-way export implemented; live DB/E2E verification follow-up remains
+Last updated: 2026-06-28
 
 関連設計: [Project Agent Context / Network / Skill 設計草案](../project-agent-context-design.md)
 
@@ -95,7 +95,7 @@ D-001 Artifact multi-project membership
 | context default maxChars | `12000` |
 | context max maxChars | `50000` |
 | neighbor depth | `1` |
-| file export | initial release対象外 |
+| file export | one-way `.workbench/project-context` export implemented |
 | skill location | `.agents/skills/workbench-project` |
 
 ### 3.2 HTTP contract
@@ -216,38 +216,38 @@ services/projects/src/__tests__/projectContextHttpApi.test.ts
 
 ### 4.3 Database tasks
 
-- `[pending]` `project_briefs` tableを追加する。
-- `[pending]` `project_memory_entries` tableとfilter用indexを追加する。
-- `[pending]` `project_index_entries` tableとactive unique indexを追加する。
-- `[pending]` `project_index_entries`へ`association_kind(primary|secondary)`とnullable `association_id`を追加する。
-- `[pending]` `project_relations` tableとincoming / outgoing indexを追加する。
-- `[pending]` 既存`project_links`のtarget lookup indexとactive unique制約をmembership要件に照合する。
-- `[pending]` relationのcross-owner / self-linkをstore層で拒否する。
-- `[pending]` Project delete時のFK / tombstone behaviorをtestする。
-- `[pending]` schema initializationをidempotentにする。
+- `[implemented]` `project_briefs` tableを追加する。
+- `[implemented]` `project_memory_entries` tableとfilter用indexを追加する。
+- `[implemented]` `project_index_entries` tableとactive unique indexを追加する。
+- `[implemented]` `project_index_entries`へ`association_kind(primary|secondary)`とnullable `association_id`を追加する。
+- `[implemented]` `project_relations` tableとincoming / outgoing indexを追加する。
+- `[implemented]` 既存`project_links`のtarget lookup indexとactive unique制約をmembership要件に照合する。
+- `[implemented]` relationのcross-owner / self-linkをstore層で拒否する。
+- `[implemented]` Project delete時のFK / tombstone behaviorをtestする。
+- `[implemented]` schema initializationをidempotentにする。
 
 ### 4.4 Store tasks
 
-- `[pending]` brief get / optimistic updateを実装する。
-- `[pending]` memory list / append / update / archive / supersedeを実装する。
-- `[pending]` index search / idempotent upsert / tombstone / bulk upsertを実装する。
-- `[pending]` Project link listへ`relationType` filterを追加する。
-- `[pending]` Artifact idからowner内のsecondary membershipsを逆引きするstore methodを追加する。
-- `[pending]` 同じArtifact / secondary Projectのmembership createをidempotentにする。
-- `[pending]` relation list / create / update / deleteを実装する。
-- `[pending]` context pack assemblyとbudget truncationを実装する。
-- `[pending]` cursorを不正入力で500にせず、未指定扱いまたは400へ統一する。
+- `[implemented]` brief get / optimistic updateを実装する。
+- `[implemented]` memory list / append / update / archive / supersedeを実装する。
+- `[implemented]` index search / idempotent upsert / tombstone / bulk upsertを実装する。
+- `[implemented]` Project link listへ`relationType` filterを追加する。
+- `[implemented]` Artifact idからowner内のsecondary membershipsを逆引きするstore methodを追加する。
+- `[implemented]` 同じArtifact / secondary Projectのmembership createをidempotentにする。
+- `[implemented]` relation list / create / update / deleteを実装する。
+- `[implemented]` context pack assemblyとbudget truncationを実装する。
+- `[implemented]` cursorを不正入力で500にせず、未指定扱いまたは400へ統一する。
 
 ### 4.5 Internal HTTP tasks
 
-- `[pending]` zod schemaを追加する。
-- `[pending]` design documentのinternal routesを実装する。
-- `[pending]` `409` brief version conflict responseを実装する。
-- `[pending]` unknown Project / memory / relationを`404`にする。
-- `[pending]` `/project-links` reverse lookup internal routeを追加する。
-- `[pending]` reverse lookupで他ownerのProjectLinkを返さない。
-- `[pending]` cross-owner target relationを存在秘匿のため`404`相当にする。
-- `[pending]` context budget上限をserver側でclampする。
+- `[implemented]` zod schemaを追加する。
+- `[implemented]` design documentのinternal routesを実装する。
+- `[implemented]` `409` brief version conflict responseを実装する。
+- `[implemented]` unknown Project / memory / relationを`404`にする。
+- `[implemented]` `/project-links` reverse lookup internal routeを追加する。
+- `[implemented]` reverse lookupで他ownerのProjectLinkを返さない。
+- `[implemented]` cross-owner target relationを存在秘匿のため`404`相当にする。
+- `[implemented]` context budget上限をserver側でclampする。
 
 ### 4.6 Tests
 
@@ -319,59 +319,59 @@ services/workbench-core/src/mcp/registerProjectContextTools.ts
 
 ### 5.3 Internal client tasks
 
-- `[pending]` brief / memory / index / relation / links / reverse links / summary methodsを追加する。
-- `[pending]` query parameterを`buildQuery`経由でencodeする。
-- `[pending]` Projects service未設定時の既存error behaviorを維持する。
+- `[implemented]` brief / memory / index / relation / links / reverse links / summary methodsを追加する。
+- `[implemented]` query parameterを`buildQuery`経由でencodeする。
+- `[implemented]` Projects service未設定時の既存error behaviorを維持する。
 
 ### 5.4 HTTP facade tasks
 
-- `[pending]` Gate 0 external routesを追加する。
-- `[pending]` auth contextをすべてのrouteで必須にする。
-- `[pending]` internal status code / bodyをCoreの既存error形式でforwardする。
-- `[pending]` brief / memory / relation mutationをsync eventへ記録する。
-- `[pending]` existing Project links / summary routesを初めてCoreへ公開する。
-- `[pending]` Artifact中心のproject membership routesを追加する。
-- `[pending]` membership create前にArtifactItemとProjectの存在・ownerを検証する。
-- `[pending]` primary Projectと同一Projectへのsecondary membershipを拒否する。
-- `[pending]` generic Project link routeでも`secondary_membership`を使う場合は同じvalidationを通し、Artifact中心APIを迂回できないようにする。
-- `[pending]` optional `expectedArtifactVersion`を検証し、競合時は`409`を返す。
-- `[pending]` link作成後にArtifact primaryを再確認し、primary / secondary重複を自己修復する。
-- `[pending]` membership readでprimary Projectとsecondary Projectを1 responseへ統合する。
-- `[pending]` 通常表示ではProject / Artifactをlive resolveし、snapshotはfallbackにする。
-- `[pending]` Project deletion impact routeでprimary Artifact数とsecondary link数を分離して返す。
-- `[pending]` primary ArtifactItemが残るProject deleteを`409 PROJECT_HAS_PRIMARY_ARTIFACTS`で拒否する。
+- `[implemented]` Gate 0 external routesを追加する。
+- `[implemented]` auth contextをすべてのrouteで必須にする。
+- `[implemented]` internal status code / bodyをCoreの既存error形式でforwardする。
+- `[implemented]` brief / memory / relation mutationをsync eventへ記録する。
+- `[implemented]` existing Project links / summary routesを初めてCoreへ公開する。
+- `[implemented]` Artifact中心のproject membership routesを追加する。
+- `[implemented]` membership create前にArtifactItemとProjectの存在・ownerを検証する。
+- `[implemented]` primary Projectと同一Projectへのsecondary membershipを拒否する。
+- `[implemented]` generic Project link routeでも`secondary_membership`を使う場合は同じvalidationを通し、Artifact中心APIを迂回できないようにする。
+- `[implemented]` optional `expectedArtifactVersion`を検証し、競合時は`409`を返す。
+- `[implemented]` link作成後にArtifact primaryを再確認し、primary / secondary重複を自己修復する。
+- `[implemented]` membership readでprimary Projectとsecondary Projectを1 responseへ統合する。
+- `[implemented]` 通常表示ではProject / Artifactをlive resolveし、snapshotはfallbackにする。
+- `[implemented]` Project deletion impact routeでprimary Artifact数とsecondary link数を分離して返す。
+- `[implemented]` primary ArtifactItemが残るProject deleteを`409 PROJECT_HAS_PRIMARY_ARTIFACTS`で拒否する。
 
 ### 5.5 Index maintenance tasks
 
-- `[pending]` Artifact folder / note / file create後にentry upsertを行う。
-- `[pending]` Artifact rename / move / content update後にentry upsertを行う。
-- `[pending]` Artifact delete後にentry tombstoneを行う。
-- `[pending]` primary Project移動時に旧Projectをtombstone、新Projectをupsertする。
-- `[pending]` secondary membership追加時に対象Projectのindex entryをupsertする。
-- `[pending]` secondary membership解除時に対象Projectのindex entryだけをtombstoneする。
-- `[pending]` Artifact更新時にprimary + secondary全Projectのindex entryを更新する。
-- `[pending]` 移動先Projectがsecondaryだった場合、そのlinkを解除してprimaryへ昇格する。
-- `[pending]` 旧primaryをsecondaryへ自動変換しない。
-- `[pending]` Artifact delete時に全secondary ProjectLinkをtombstoneする。
-- `[pending]` membership side effectのindex更新失敗を記録し、membership自体は成功させてrebuildで修復可能にする。
-- `[pending]` index失敗で元のArtifact mutationを失敗扱いにしない。
-- `[pending]` index失敗をstructured logへ残す。
-- `[pending]` rebuildでArtifactsをpaginationし、bulk upsertする。
-- `[pending]` rebuild完了後、sourceに存在しないentryをtombstoneする。
+- `[implemented]` Artifact folder / note / file create後にentry upsertを行う。
+- `[implemented]` Artifact rename / move / content update後にentry upsertを行う。
+- `[implemented]` Artifact delete後にentry tombstoneを行う。
+- `[implemented]` primary Project移動時に旧Projectをtombstone、新Projectをupsertする。
+- `[implemented]` secondary membership追加時に対象Projectのindex entryをupsertする。
+- `[implemented]` secondary membership解除時に対象Projectのindex entryだけをtombstoneする。
+- `[implemented]` Artifact更新時にprimary + secondary全Projectのindex entryを更新する。
+- `[implemented]` 移動先Projectがsecondaryだった場合、そのlinkを解除してprimaryへ昇格する。
+- `[implemented]` 旧primaryをsecondaryへ自動変換しない。
+- `[implemented]` Artifact delete時に全secondary ProjectLinkをtombstoneする。
+- `[implemented]` membership side effectのindex更新失敗を記録し、membership自体は成功させてrebuildで修復可能にする。
+- `[implemented]` index失敗で元のArtifact mutationを失敗扱いにしない。
+- `[implemented]` index失敗をstructured logへ残す。
+- `[implemented]` rebuildでArtifactsをpaginationし、bulk upsertする。
+- `[implemented]` rebuild完了後、sourceに存在しないentryをtombstoneする。
 
 MVP summaryはdeterministic helperへ閉じ込め、HTTP handler内に文字列組み立てを散在させない。
 
 ### 5.6 MCP tasks
 
-- `[pending]` Gate 0 MCP toolsを登録する。
-- `[pending]` read toolはcompact responseを返す。
-- `[pending]` `projects.context.get` に`q`, `include`, limits, `maxChars`を持たせる。
-- `[pending]` brief updateに`expectedVersion`を持たせる。
-- `[pending]` MCP memory appendのdefault authorityを`agent_observed`に固定する。
-- `[pending]` artifact-specific membership MCP toolsを`registerArtifactsTools`側へ追加する。
-- `[pending]` `projects.delete.preview`をread-only toolとして追加する。
-- `[pending]` mutation tool descriptionへ副作用を明記する。
-- `[pending]` stdio MCPとHTTP MCPの両方で同一tool setを登録する。
+- `[implemented]` Gate 0 MCP toolsを登録する。
+- `[implemented]` read toolはcompact responseを返す。
+- `[implemented]` `projects.context.get` に`q`, `include`, limits, `maxChars`を持たせる。
+- `[implemented]` brief updateに`expectedVersion`を持たせる。
+- `[implemented]` MCP memory appendのdefault authorityを`agent_observed`に固定する。
+- `[implemented]` artifact-specific membership MCP toolsを`registerArtifactsTools`側へ追加する。
+- `[implemented]` `projects.delete.preview`をread-only toolとして追加する。
+- `[implemented]` mutation tool descriptionへ副作用を明記する。
+- `[implemented]` stdio MCPとHTTP MCPの両方で同一tool setを登録する。
 
 ### 5.7 Tests
 
@@ -448,22 +448,22 @@ ui/src/artifacts/components/ArtifactProjectMemberships.tsx
 
 ### 6.3 UI tasks
 
-- `[pending]` API response型を追加する。
-- `[pending]` `projectsApi`へcontext関連methodを追加する。
-- `[pending]` overviewでbriefとgenerated summaryを表示する。
-- `[pending]` brief edit時にversion conflictを表示し、再読込できるようにする。
-- `[pending]` memoryのkind / authority / sourceを表示する。
-- `[pending]` agent observationをuser-confirmedと同じ表示にしない。
-- `[pending]` indexのquery / resource type filterを追加する。
-- `[pending]` rebuildを明示操作にし、通常loadでは実行しない。
-- `[pending]` relationのincoming / outgoing / bidirectionalを区別する。
-- `[pending]` Project linkでsecondary resourceを表示する。
-- `[pending]` Artifact detailでprimary Projectを固定表示し、secondary Projectを追加・解除できるようにする。
-- `[pending]` primary Projectをsecondary解除UIから削除できないようにする。
-- `[pending]` folder membershipがdescendantへ継承されないことをUIへ明示する。
-- `[pending]` Project delete前にprimary / secondary Artifact数を分けて表示する。
-- `[pending]` primary Artifactが残る場合、moveまたはdeleteを完了するまでProject deleteを実行しない。
-- `[pending]` context truncation / stale表示を追加する。
+- `[implemented]` API response型を追加する。
+- `[implemented]` `projectsApi`へcontext関連methodを追加する。
+- `[implemented]` overviewでbriefとgenerated summaryを表示する。
+- `[implemented]` brief edit時にversion conflictを表示し、再読込できるようにする。
+- `[implemented]` memoryのkind / authority / sourceを表示する。
+- `[implemented]` agent observationをuser-confirmedと同じ表示にしない。
+- `[implemented]` indexのquery / resource type filterを追加する。
+- `[implemented]` rebuildを明示操作にし、通常loadでは実行しない。
+- `[implemented]` relationのincoming / outgoing / bidirectionalを区別する。
+- `[implemented]` Project linkでsecondary resourceを表示する。
+- `[implemented]` Artifact detailでprimary Projectを固定表示し、secondary Projectを追加・解除できるようにする。
+- `[implemented]` primary Projectをsecondary解除UIから削除できないようにする。
+- `[implemented]` folder membershipがdescendantへ継承されないことをUIへ明示する。
+- `[implemented]` Project delete前にprimary / secondary Artifact数を分けて表示する。
+- `[implemented]` primary Artifactが残る場合、moveまたはdeleteを完了するまでProject deleteを実行しない。
+- `[implemented]` context truncation / stale表示を追加する。
 
 ### 6.4 UX guardrails
 
@@ -507,14 +507,14 @@ README、changelog、installation guideはskill directoryへ追加しない。
 
 ### 7.3 Creation tasks
 
-- `[pending]` `skill-creator` の `init_skill.py` でrepo-scoped skillを初期化する。
-- `[pending]` `SKILL.md` を500行未満のinstruction-only workflowとして作成する。
-- `[pending]` trigger descriptionへProject / index / memory / relations / Artifacts / Notes / Tasksを含める。
-- `[pending]` detailed tool schemaを`references/tool-contracts.md`へ分離する。
-- `[pending]` `agents/openai.yaml`をgeneratorで作成する。
-- `[pending]` memory write guardrailを明記する。
-- `[pending]` missing tool / old server version時のfallbackを明記する。
-- `[pending]` tool names確定後にreferenceをCore実装と照合する。
+- `[implemented]` `skill-creator` の `init_skill.py` でrepo-scoped skillを初期化する。
+- `[implemented]` `SKILL.md` を500行未満のinstruction-only workflowとして作成する。
+- `[implemented]` trigger descriptionへProject / index / memory / relations / Artifacts / Notes / Tasksを含める。
+- `[implemented]` detailed tool schemaを`references/tool-contracts.md`へ分離する。
+- `[implemented]` `agents/openai.yaml`をgeneratorで作成する。
+- `[implemented]` memory write guardrailを明記する。
+- `[implemented]` missing tool / old server version時のfallbackを明記する。
+- `[implemented]` tool names確定後にreferenceをCore実装と照合する。
 
 ### 7.4 Core workflow
 
@@ -564,29 +564,41 @@ validatorのhost pathは開発環境依存なので、commitする文書やskill
 
 ## 8. Workstream E: Local sync / export
 
-Branch: `codex/project-context-sync`  
-Status: `[deferred]`（初期releaseではremote Coreを利用）
+Branches: `codex/project-context-sync-daemon`, `codex/project-context-export-daemon`
+Status: `[implemented]`（read-only local cache / facadeとone-way exportを実装済み）
 
 ### 8.1 Initial release recommendation
 
-初期releaseではProject context dataをlocal daemon cache / `.workbench` exportへ含めない。remote Core経由で利用する。
+初期releaseでは、local daemonはProject contextをread-only cacheとして扱う。mutationは引き続きCoreへ送るか、Local Modeでは`LOCAL_PROJECT_CONTEXT_READ_ONLY`として拒否する。
 
-### 8.2 Follow-up scope
+`.workbench` exportはone-way snapshotのみを提供する。file watcher / import / diskからのauthoritative updateは実装しない。
 
-- Project snapshotへbrief / memory / relationsを含めるか、別domain eventとする。
-- sync event relation名を定義する。
-- local daemon SQLite cache schemaを追加する。
-- offline `projects.context.get` facadeを追加する。
-- `.workbench/PROJECT.md`, `memory.jsonl`, `index.jsonl` exportを追加する。
-- import時のversion conflict / provenance ruleを追加する。
+### 8.2 Implemented scope
 
-### 8.3 Risks
+- `[implemented]` Core / Projects sync snapshotへ`project_context` domainを追加する。
+- `[implemented]` Project context invalidation eventをCoreから記録する。
+- `[implemented]` local daemon SQLite cacheへbrief / active memory / relationsのcomplete snapshotを保存する。
+- `[implemented]` local daemon loopbackで`GET /api/projects/:projectId/context`, `/brief`, `/memories`, `/relations`をread-only提供する。
+- `[implemented]` local daemonでProject context mutationを503 `LOCAL_PROJECT_CONTEXT_READ_ONLY`として拒否する。
+- `[implemented]` old Core / unsupported `project_context` capabilityでは既存complete cacheを保持し、partial publishしない。
+- `[implemented]` `POST /api/project-context/exports`でlive Core `GET /api/sync/projects/:projectId/context-export`からfresh snapshotを取得し、local cacheを使わずにexportする。
+- `[implemented]` MCP `workbench.local.project_context.export`を追加する。
+- `[implemented]` `.workbench/project-context/<base64url-project-id>/snapshots/<export-id>/`へ`PROJECT.md`, `memory.jsonl`, `relations.jsonl`, `links.jsonl`, `index.jsonl`, `summary.json`, `manifest.json`をatomic publishする。
+- `[implemented]` `current.json`をsnapshot publish後に更新し、export manifest checksum / record counts / sensitive owner fields redaction / path containmentを検証する。
+
+### 8.3 Deferred / follow-up scope
+
+- `[deferred]` `.workbench` file watcherからProject contextをimportしない。
+- `[deferred]` disk上のexportをauthoritative memory / index sourceとして扱わない。
+- `[deferred]` import時のversion conflict / provenance ruleは、双方向local editingを採用する場合に別途contract化する。
+
+### 8.4 Risks
 
 - memory本文を既存Project resource payloadへ埋め込むと、1 Project更新で大きなsync eventになる。
 - indexは派生データのため、全entry同期よりlocal rebuildの方が適切な場合がある。
 - `.workbench` file watchingとAPI updateを同時導入すると双方向loopが起こり得る。
 
-このworkstreamはMVP利用実績を確認してからcontractを作る。
+このため、今回のexportはone-way / import unsupportedを明示する。
 
 ## 9. Parallel execution waves
 
@@ -594,10 +606,10 @@ root agentが監視・承認を担当し、worker枠が3つの場合の推奨進
 
 ### Wave 0: baseline
 
-- `[pending]` 本設計文書をreviewする。
-- `[pending]` Gate 0を承認する。
-- `[pending]` docs baseline commitを作成する。
-- `[pending]` 全branchのbase commitを固定する。
+- `[implemented]` 本設計文書をreviewする。
+- `[implemented]` Gate 0を承認する。
+- `[implemented]` docs baseline commitを作成する。
+- `[implemented]` 全branchのbase commitを固定する。
 
 ### Wave 1: 3 parallel workers
 
@@ -754,6 +766,8 @@ manual acceptance:
 
 2026-06-20時点で、MVPのProjects domain、Core HTTP / MCP、Artifact multi-project membership、index maintenance / rebuild、Project network、UI、repo-scoped skill、API E2Eシナリオを実装した。
 
+2026-06-28時点で、Project context sync snapshot、Core invalidation producer、Core export facade、local daemon read-only cache / facade、one-way `.workbench/project-context` export、skill tool contract hardening、Core MCP read-model hardeningを追加実装した。
+
 主要commit:
 
 ```text
@@ -764,6 +778,17 @@ d21b761 feat(ui): add project context management
 43cddb8 fix(skills): preserve agent provenance in fallback guidance
 81d480d test: cover project context integration
 0d0d28a fix(projects): enforce context character budget
+d5a750a docs: freeze project context sync and export contract
+a36b059 docs: freeze project context internal sync routes
+5719e17 fix(projects): harden project context pagination
+c364633 fix(ui): harden project context interactions
+c48bdca feat(projects): add project context sync snapshots
+18721c3 feat(core): sync project context invalidations
+64ba4f7 docs(skills): complete Workbench project tool contract
+aa5709c feat(core): expose project context export snapshot
+d7147fc fix(core): harden project context read models
+efc9c3f feat(sync-daemon): cache project context snapshots
+5a7d7b3 feat(sync-daemon): export project context packages
 ```
 
 verification result:
@@ -774,8 +799,13 @@ verification result:
 - full workspace build成功。
 - `$workbench-project`: `quick_validate.py`成功。実装済みMCP schemaとのforward compatibility review済み。
 - API E2E: lifecycleシナリオ追加、syntax checkと独立contract review成功。Docker daemon未起動のためlive runは未実施。
+- 2026-06-28追加検証:
+  - Projects context sync snapshot / pagination hardening: build成功、test成功（DB依存testは環境未起動時skip）。
+  - Core sync / export / MCP read-model hardening: build成功、test成功（DB依存testは環境未起動時skip）。
+  - sync-daemon Project context cache / export: build成功、test 91件成功。
+  - skill contract: `quick_validate.py`成功、forward-testでcontext-first workflow / resource body lazy fetch / no unsafe mutationを確認。
 
 follow-up:
 
 - PostgreSQL / Dockerを起動した環境でDB integration testと`npm run test:e2e:api`を実行する。
-- local sync cacheと`.workbench` exportは、MVP利用実績を確認してからWorkstream Eとして別途contractを定義する。
+- `.workbench/project-context` exportのimport / watcher / disk-authoritative updateは未採用。必要になった時点で別contractを作る。
