@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
-import { artifactsClient, InternalServiceError, projectsClient } from "./internalClients.js";
+import {
+  artifactsClient,
+  InternalServiceError,
+  notesClient,
+  projectsClient,
+  tasksClient
+} from "./internalClients.js";
 
 export const SECONDARY_MEMBERSHIP_RELATION = "secondary_membership";
 export const ARTIFACT_TARGET_SERVICE = "artifacts";
@@ -62,6 +68,13 @@ function asRecord(value: unknown): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : {};
 }
 
+function boundedText(value: unknown, maxChars: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) return undefined;
+  return normalized.length <= maxChars ? normalized : `${normalized.slice(0, Math.max(0, maxChars - 1))}…`;
+}
+
 export function pageItems(value: unknown): unknown[] {
   if (Array.isArray(value)) return value;
   const items = asRecord(value).items;
@@ -102,6 +115,211 @@ function parseProjectLink(value: unknown): ProjectLinkRecord | undefined {
     return undefined;
   }
   return record as ProjectLinkRecord;
+}
+
+type ProjectLinkListOptions = {
+  targetService?: string;
+  targetResourceType?: string;
+  targetResourceId?: string;
+  relationType?: string;
+  limit?: number;
+  cursor?: string;
+};
+
+type ResolvedProjectLinkTarget = {
+  title: string;
+  summary?: string;
+  updatedAt?: string;
+};
+
+function liveTargetMetadata(link: ProjectLinkRecord, value: unknown): ResolvedProjectLinkTarget | undefined {
+  const record = asRecord(value);
+  const updatedAt = boundedText(record.updatedAt, 64);
+
+  if (link.targetService === ARTIFACT_TARGET_SERVICE && link.targetResourceType === ARTIFACT_TARGET_RESOURCE_TYPE) {
+    const title = boundedText(record.title, 240);
+    if (!title) return undefined;
+    const kind = boundedText(record.kind, 40);
+    const path = boundedText(record.path, 500);
+    const summary = boundedText([kind, path].filter(Boolean).join(" · "), 500);
+    return { title, ...(summary ? { summary } : {}), ...(updatedAt ? { updatedAt } : {}) };
+  }
+
+  if (link.targetService === ARTIFACT_TARGET_SERVICE && link.targetResourceType === "artifact") {
+    const title = boundedText(record.name, 240);
+    if (!title) return undefined;
+    const summary = boundedText(record.description, 500);
+    return { title, ...(summary ? { summary } : {}), ...(updatedAt ? { updatedAt } : {}) };
+  }
+
+  if (link.targetService === "notes" && link.targetResourceType === "note") {
+    const title = boundedText(record.title, 240);
+    if (!title) return undefined;
+    return { title, ...(updatedAt ? { updatedAt } : {}) };
+  }
+
+  if (link.targetService === "tasks" && link.targetResourceType === "task") {
+    const title = boundedText(record.title, 240);
+    if (!title) return undefined;
+    const summary = boundedText(
+      [record.status, record.context].filter((part): part is string => typeof part === "string").join(" · "),
+      500
+    );
+    return { title, ...(summary ? { summary } : {}), ...(updatedAt ? { updatedAt } : {}) };
+  }
+
+  return undefined;
+}
+
+async function readSupportedProjectLinkTarget(token: string, link: ProjectLinkRecord): Promise<unknown | undefined> {
+  if (link.targetService === ARTIFACT_TARGET_SERVICE && link.targetResourceType === ARTIFACT_TARGET_RESOURCE_TYPE) {
+    return artifactsClient.getItem(token, link.targetResourceId);
+  }
+  if (link.targetService === ARTIFACT_TARGET_SERVICE && link.targetResourceType === "artifact") {
+    return artifactsClient.get(token, link.targetResourceId);
+  }
+  if (link.targetService === "notes" && link.targetResourceType === "note") {
+    return notesClient.get(token, link.targetResourceId);
+  }
+  if (link.targetService === "tasks" && link.targetResourceType === "task") {
+    return tasksClient.get(token, link.targetResourceId);
+  }
+  return undefined;
+}
+
+async function resolveProjectLinkForRead(
+  token: string,
+  rawLink: unknown,
+  expectedProjectId: string
+): Promise<unknown> {
+  const link = parseProjectLink(rawLink);
+  if (!link || link.projectId !== expectedProjectId) return rawLink;
+
+  try {
+    const target = await readSupportedProjectLinkTarget(token, link);
+    if (target === undefined) return link;
+    const resolved = liveTargetMetadata(link, target);
+    if (!resolved) return { ...link, targetResolution: "snapshot" };
+    return {
+      ...link,
+      titleSnapshot: resolved.title,
+      ...(resolved.summary ? { summarySnapshot: resolved.summary } : {}),
+      targetResolution: "live",
+      ...(resolved.updatedAt ? { targetUpdatedAt: resolved.updatedAt } : {})
+    };
+  } catch {
+    // The same bearer token is used for the target read. Missing, cross-owner,
+    // and temporarily unavailable targets all fall back to the stored snapshot.
+    return { ...link, targetResolution: "snapshot" };
+  }
+}
+
+async function resolveProjectLinkItems(
+  token: string,
+  expectedProjectId: string,
+  rawItems: unknown[]
+): Promise<unknown[]> {
+  const resolved = new Array<unknown>(rawItems.length);
+  let nextIndex = 0;
+  const worker = async (): Promise<void> => {
+    while (nextIndex < rawItems.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      resolved[index] = await resolveProjectLinkForRead(token, rawItems[index], expectedProjectId);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(8, rawItems.length) }, worker));
+  return resolved;
+}
+
+export async function listProjectLinksResolved(
+  token: string,
+  projectId: string,
+  options: ProjectLinkListOptions = {}
+): Promise<JsonRecord> {
+  const rawPage = await projectsClient.listLinks(token, projectId, options);
+  if (!rawPage || typeof rawPage !== "object" || Array.isArray(rawPage)) {
+    throw new ProjectContextError(502, "INVALID_PROJECT_LINK_LIST_RESPONSE", "Projects service returned an invalid link page");
+  }
+  const page = rawPage as JsonRecord;
+  if (!Array.isArray(page.items)) {
+    throw new ProjectContextError(502, "INVALID_PROJECT_LINK_LIST_RESPONSE", "Projects service returned an invalid link page");
+  }
+  if (page.nextCursor !== undefined && (typeof page.nextCursor !== "string" || !page.nextCursor.trim() || page.nextCursor.trim() !== page.nextCursor)) {
+    throw new ProjectContextError(502, "INVALID_PROJECT_LINK_LIST_RESPONSE", "Projects service returned an invalid link cursor");
+  }
+  const parsedLinks = page.items.map((item) => parseProjectLink(item));
+  if (parsedLinks.some((link) => !link || link.projectId !== projectId)) {
+    throw new ProjectContextError(502, "INVALID_PROJECT_LINK_LIST_RESPONSE", "Projects service returned an invalid Project link");
+  }
+  const items = await resolveProjectLinkItems(token, projectId, parsedLinks as ProjectLinkRecord[]);
+  return {
+    items,
+    ...(typeof page.nextCursor === "string" && page.nextCursor ? { nextCursor: page.nextCursor } : {})
+  };
+}
+
+export async function getProjectContextWithResolvedLinks(
+  token: string,
+  projectId: string,
+  options: {
+    q?: string;
+    include?: string;
+    memoryLimit?: number;
+    indexLimit?: number;
+    relationLimit?: number;
+    maxChars?: number;
+  } = {}
+): Promise<JsonRecord> {
+  const rawContext = await projectsClient.getContext(token, projectId, options);
+  if (!rawContext || typeof rawContext !== "object" || Array.isArray(rawContext)) {
+    throw new ProjectContextError(502, "INVALID_PROJECT_CONTEXT_RESPONSE", "Projects service returned an invalid context pack");
+  }
+  const context = rawContext as JsonRecord;
+  const project = asRecord(context.project);
+  const truncation = asRecord(context.truncation);
+  if (
+    project.id !== projectId ||
+    typeof project.name !== "string" ||
+    typeof truncation.maxChars !== "number" ||
+    !Array.isArray(truncation.truncatedSections)
+  ) {
+    throw new ProjectContextError(502, "INVALID_PROJECT_CONTEXT_RESPONSE", "Projects service returned an invalid context pack");
+  }
+  for (const section of ["memories", "indexEntries", "relations", "links"] as const) {
+    if (context[section] !== undefined && !Array.isArray(context[section])) {
+      throw new ProjectContextError(
+        502,
+        "INVALID_PROJECT_CONTEXT_RESPONSE",
+        `Projects service returned an invalid context ${section} section`
+      );
+    }
+  }
+  const contextLinks = context.links;
+  if (contextLinks === undefined) return context;
+  if (!Array.isArray(contextLinks)) {
+    throw new ProjectContextError(502, "INVALID_PROJECT_CONTEXT_RESPONSE", "Projects service returned invalid context links");
+  }
+  const parsedLinks = contextLinks.map((item) => parseProjectLink(item));
+  if (parsedLinks.some((link) => !link || link.projectId !== projectId)) {
+    throw new ProjectContextError(502, "INVALID_PROJECT_CONTEXT_RESPONSE", "Projects service returned invalid context links");
+  }
+  const originalLinks = parsedLinks as ProjectLinkRecord[];
+  const resolvedLinks = await resolveProjectLinkItems(token, projectId, originalLinks);
+  const resolvedContext = {
+    ...context,
+    links: resolvedLinks
+  };
+  const maxChars = truncation.maxChars as number;
+  if (JSON.stringify(resolvedContext).length <= maxChars) return resolvedContext;
+
+  // Projects already applied the frozen context budget. Prefer live metadata,
+  // but fall back link-by-link rather than violating that response invariant.
+  for (let index = resolvedLinks.length - 1; index >= 0; index -= 1) {
+    resolvedLinks[index] = originalLinks[index];
+    if (JSON.stringify(resolvedContext).length <= maxChars) return resolvedContext;
+  }
+  throw new ProjectContextError(502, "INVALID_PROJECT_CONTEXT_RESPONSE", "Project context exceeds its declared budget");
 }
 
 function artifactSummary(item: ArtifactItemRecord): string {

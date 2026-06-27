@@ -39,6 +39,283 @@ after(() => {
 });
 
 describe("Project context Artifact orchestration", () => {
+  it("live-resolves supported Project link metadata with the caller bearer and never returns target bodies", async () => {
+    const links = [
+      {
+        id: "link-note",
+        projectId: "project-primary",
+        targetService: "notes",
+        targetResourceType: "note",
+        targetResourceId: "note-1",
+        relationType: "reference",
+        titleSnapshot: "Stale note",
+        summarySnapshot: "Stale note summary",
+        metadataJson: {}
+      },
+      {
+        id: "link-task",
+        projectId: "project-primary",
+        targetService: "tasks",
+        targetResourceType: "task",
+        targetResourceId: "task-1",
+        relationType: "reference",
+        titleSnapshot: "Stale task",
+        metadataJson: {}
+      },
+      {
+        id: "link-artifact",
+        projectId: "project-primary",
+        targetService: "artifacts",
+        targetResourceType: "artifact_item",
+        targetResourceId: "artifact-1",
+        relationType: "secondary_membership",
+        titleSnapshot: "Stale artifact",
+        metadataJson: {}
+      }
+    ];
+    const targetAuthorizations: string[] = [];
+
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(String(input));
+      const authorization = new Headers(init?.headers).get("authorization");
+      assert.equal(authorization, "Bearer caller-token");
+      if (url.origin === "http://projects.test" && url.pathname === "/projects/project-primary/links") {
+        return jsonResponse({ items: links, nextCursor: "cursor-2" });
+      }
+      targetAuthorizations.push(authorization ?? "");
+      if (url.origin === "http://notes.test" && url.pathname === "/notes/note-1") {
+        return jsonResponse({
+          id: "note-1",
+          title: "Live note",
+          content: "  Current   note body with private details. ",
+          updatedAt: "2026-06-23T01:00:00.000Z"
+        });
+      }
+      if (url.origin === "http://tasks.test" && url.pathname === "/tasks/task-1") {
+        return jsonResponse({
+          id: "task-1",
+          title: "Live task",
+          notes: "Current task notes",
+          status: "todo",
+          context: "project-primary",
+          updatedAt: "2026-06-23T02:00:00.000Z"
+        });
+      }
+      if (url.origin === "http://artifacts.test" && url.pathname === "/artifacts/items/artifact-1") {
+        return jsonResponse({ ...artifactItem, title: "Live artifact", contentMarkdown: "Current artifact body" });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    };
+
+    const page = await contextModule.listProjectLinksResolved("caller-token", "project-primary");
+    assert.equal(page.nextCursor, "cursor-2");
+    const resolved = page.items as Array<Record<string, unknown>>;
+    assert.deepEqual(resolved.map((link) => link.titleSnapshot), ["Live note", "Live task", "Live artifact"]);
+    assert.deepEqual(resolved.map((link) => link.targetResolution), ["live", "live", "live"]);
+    assert.equal(resolved[0]?.summarySnapshot, "Stale note summary");
+    assert.equal(resolved[1]?.summarySnapshot, "todo · project-primary");
+    assert.equal(resolved[2]?.summarySnapshot, "note · /Architecture.md");
+    assert.equal("content" in (resolved[0] ?? {}), false, "raw Note bodies must not be embedded");
+    assert.equal("notes" in (resolved[1] ?? {}), false, "raw Task bodies must not be embedded");
+    assert.equal("contentMarkdown" in (resolved[2] ?? {}), false, "raw Artifact bodies must not be embedded");
+    const serialized = JSON.stringify(page);
+    assert.equal(serialized.includes("Current note body with private details"), false);
+    assert.equal(serialized.includes("Current task notes"), false);
+    assert.equal(serialized.includes("Current artifact body"), false);
+    assert.deepEqual(targetAuthorizations, ["Bearer caller-token", "Bearer caller-token", "Bearer caller-token"]);
+  });
+
+  it("falls back to stored snapshots for cross-owner 404 and upstream failure without leaking error bodies", async () => {
+    const links = [
+      {
+        id: "link-cross-owner",
+        projectId: "project-primary",
+        targetService: "notes",
+        targetResourceType: "note",
+        targetResourceId: "other-owner-note",
+        relationType: "reference",
+        titleSnapshot: "Allowed historical title",
+        summarySnapshot: "Allowed historical summary",
+        metadataJson: {}
+      },
+      {
+        id: "link-unavailable",
+        projectId: "project-primary",
+        targetService: "tasks",
+        targetResourceType: "task",
+        targetResourceId: "task-down",
+        relationType: "reference",
+        titleSnapshot: "Cached task title",
+        summarySnapshot: "Cached task summary",
+        metadataJson: {}
+      }
+    ];
+    globalThis.fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.origin === "http://projects.test") return jsonResponse({ items: links });
+      if (url.origin === "http://notes.test") {
+        return jsonResponse({ message: "not found", secret: "other-owner-body" }, 404);
+      }
+      if (url.origin === "http://tasks.test") {
+        return jsonResponse({ message: "temporarily down", diagnostic: "upstream-private-detail" }, 503);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    };
+
+    const page = await contextModule.listProjectLinksResolved("caller-token", "project-primary");
+    const resolved = page.items as Array<Record<string, unknown>>;
+    assert.deepEqual(resolved.map((link) => link.targetResolution), ["snapshot", "snapshot"]);
+    assert.deepEqual(resolved.map((link) => link.titleSnapshot), ["Allowed historical title", "Cached task title"]);
+    const serialized = JSON.stringify(page);
+    assert.equal(serialized.includes("other-owner-body"), false);
+    assert.equal(serialized.includes("upstream-private-detail"), false);
+  });
+
+  it("does not live-resolve a link returned for a different Project boundary", async () => {
+    let targetReads = 0;
+    globalThis.fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.origin === "http://projects.test") {
+        return jsonResponse({
+          items: [{
+            id: "link-wrong-project",
+            projectId: "project-other",
+            targetService: "notes",
+            targetResourceType: "note",
+            targetResourceId: "note-1",
+            relationType: "reference",
+            titleSnapshot: "Snapshot only"
+          }]
+        });
+      }
+      targetReads += 1;
+      return jsonResponse({ title: "Must not be read" });
+    };
+
+    await assert.rejects(
+      contextModule.listProjectLinksResolved("caller-token", "project-primary"),
+      (error: unknown) =>
+        error instanceof contextModule.ProjectContextError &&
+        error.code === "INVALID_PROJECT_LINK_LIST_RESPONSE"
+    );
+    assert.equal(targetReads, 0);
+  });
+
+  it("fails closed when Projects returns a malformed link page", async () => {
+    globalThis.fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.origin === "http://projects.test") return jsonResponse({ nextCursor: "looks-valid" });
+      throw new Error(`Unexpected target read: ${url}`);
+    };
+
+    await assert.rejects(
+      contextModule.listProjectLinksResolved("caller-token", "project-primary"),
+      (error: unknown) =>
+        error instanceof contextModule.ProjectContextError &&
+        error.status === 502 &&
+        error.code === "INVALID_PROJECT_LINK_LIST_RESPONSE"
+    );
+
+    globalThis.fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.origin === "http://projects.test") return jsonResponse({ items: [], nextCursor: "" });
+      throw new Error(`Unexpected target read: ${url}`);
+    };
+    await assert.rejects(
+      contextModule.listProjectLinksResolved("caller-token", "project-primary"),
+      (error: unknown) =>
+        error instanceof contextModule.ProjectContextError &&
+        error.code === "INVALID_PROJECT_LINK_LIST_RESPONSE"
+    );
+  });
+
+  it("live-resolves links inside a valid context pack and rejects malformed context identity", async () => {
+    let malformed = false;
+    globalThis.fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.origin === "http://projects.test" && url.pathname === "/projects/project-primary/context") {
+        if (malformed) {
+          return jsonResponse({ project: { id: "project-other", name: "Other" }, truncation: { maxChars: 100, truncatedSections: [] } });
+        }
+        return jsonResponse({
+          project: {
+            id: "project-primary",
+            name: "Primary",
+            description: "",
+            status: "active",
+            updatedAt: "2026-06-23T00:00:00.000Z"
+          },
+          links: [{
+            id: "context-link-note",
+            projectId: "project-primary",
+            targetService: "notes",
+            targetResourceType: "note",
+            targetResourceId: "note-context",
+            relationType: "reference",
+            titleSnapshot: "Stale context title"
+          }],
+          truncation: { maxChars: 12_000, truncatedSections: [] }
+        });
+      }
+      if (url.origin === "http://notes.test" && url.pathname === "/notes/note-context") {
+        return jsonResponse({ title: "Live context title", content: "Live context summary" });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    };
+
+    const context = await contextModule.getProjectContextWithResolvedLinks("caller-token", "project-primary");
+    const link = (context.links as Array<Record<string, unknown>>)[0];
+    assert.equal(link?.titleSnapshot, "Live context title");
+    assert.equal(link?.summarySnapshot, undefined);
+    assert.equal(JSON.stringify(context).includes("Live context summary"), false);
+
+    malformed = true;
+    await assert.rejects(
+      contextModule.getProjectContextWithResolvedLinks("caller-token", "project-primary"),
+      (error: unknown) =>
+        error instanceof contextModule.ProjectContextError && error.code === "INVALID_PROJECT_CONTEXT_RESPONSE"
+    );
+  });
+
+  it("keeps live-resolved context links within the Projects-declared character budget", async () => {
+    const links = ["a", "b", "c"].map((id) => ({
+      id: `link-${id}`,
+      projectId: "project-primary",
+      targetService: "artifacts",
+      targetResourceType: "artifact",
+      targetResourceId: `artifact-${id}`,
+      relationType: "reference",
+      titleSnapshot: id,
+      summarySnapshot: id
+    }));
+    globalThis.fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.origin === "http://projects.test") {
+        return jsonResponse({
+          project: {
+            id: "project-primary",
+            name: "Primary",
+            description: "",
+            status: "active",
+            updatedAt: "2026-06-23T00:00:00.000Z"
+          },
+          links,
+          truncation: { maxChars: 1_600, truncatedSections: [] }
+        });
+      }
+      if (url.origin === "http://artifacts.test") {
+        return jsonResponse({ name: `Live ${url.pathname}`, description: "x".repeat(800) });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    };
+
+    const context = await contextModule.getProjectContextWithResolvedLinks("caller-token", "project-primary");
+    assert.ok(JSON.stringify(context).length <= 1_600);
+    const resolvedLinks = context.links as Array<Record<string, unknown>>;
+    assert.equal(resolvedLinks.some((link) => link.targetResolution === "live"), true);
+    assert.equal(resolvedLinks.some((link) => link.targetResolution === undefined), true);
+  });
+
   it("treats malformed Artifact responses as a best-effort invalidation miss", async () => {
     const originalWarn = console.warn;
     console.warn = () => undefined;

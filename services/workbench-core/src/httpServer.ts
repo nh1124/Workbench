@@ -29,8 +29,10 @@ import {
   createProjectLinkWithValidation,
   deleteProjectWithGuard,
   getArtifactProjectMemberships,
+  getProjectContextWithResolvedLinks,
   getProjectDeletionImpact,
   listArtifactProjectIdsBestEffort,
+  listProjectLinksResolved,
   linkArtifactToProject,
   maintainArtifactIndexBestEffort,
   ProjectContextError,
@@ -4102,7 +4104,7 @@ app.get("/api/projects/:projectId/context", async (req, res) => {
     return Number.isFinite(value) ? value : undefined;
   };
   try {
-    const result = await projectsClient.getContext(authContext.accessToken, String(req.params.projectId), {
+    const result = await getProjectContextWithResolvedLinks(authContext.accessToken, String(req.params.projectId), {
       q: typeof req.query.q === "string" ? req.query.q : undefined,
       include: typeof req.query.include === "string" ? req.query.include : undefined,
       memoryLimit: numberQuery("memoryLimit"),
@@ -4337,7 +4339,7 @@ app.get("/api/projects/:projectId/links", async (req, res) => {
   const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
   try {
     return res.json(
-      await projectsClient.listLinks(authContext.accessToken, String(req.params.projectId), {
+      await listProjectLinksResolved(authContext.accessToken, String(req.params.projectId), {
         targetService: typeof req.query.targetService === "string" ? req.query.targetService : undefined,
         targetResourceType:
           typeof req.query.targetResourceType === "string" ? req.query.targetResourceType : undefined,

@@ -3,7 +3,9 @@ import { z } from "zod";
 import { projectsClient } from "../internalClients.js";
 import {
   createProjectLinkWithValidation,
+  getProjectContextWithResolvedLinks,
   getProjectDeletionImpact,
+  listProjectLinksResolved,
   rebuildProjectArtifactIndex,
   removeProjectLinkWithValidation
 } from "../projectContext.js";
@@ -14,6 +16,15 @@ import {
   type ProjectContextChanged
 } from "../projectContextSync.js";
 import { asMcpText, runWithAuth, runWithAuthContext } from "./helpers.js";
+import {
+  briefMcpReadProjection,
+  deletionImpactMcpReadProjection,
+  indexListMcpReadProjection,
+  linkListMcpReadProjection,
+  memoryListMcpReadProjection,
+  projectContextMcpReadProjection,
+  relationListMcpReadProjection
+} from "./projectContextReadModels.js";
 
 type ToolContext = { accessToken: string };
 
@@ -68,10 +79,10 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
     async ({ projectId, include, ...options }) =>
       asMcpText(
         await runWithAuth(ctx.accessToken, () =>
-          projectsClient.getContext(ctx.accessToken, projectId, {
+          getProjectContextWithResolvedLinks(ctx.accessToken, projectId, {
             ...options,
             include: include?.join(",")
-          })
+          }).then(projectContextMcpReadProjection)
         )
       )
   );
@@ -84,14 +95,18 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
       inputSchema: { projectId: z.string().min(1) }
     },
     async ({ projectId }) =>
-      asMcpText(await runWithAuth(ctx.accessToken, () => projectsClient.getBrief(ctx.accessToken, projectId)))
+      asMcpText(
+        await runWithAuth(ctx.accessToken, () =>
+          projectsClient.getBrief(ctx.accessToken, projectId).then(briefMcpReadProjection)
+        )
+      )
   );
 
   server.registerTool(
     "projects.brief.update",
     {
       title: "Update Project Brief",
-      description: "Update durable Project instructions with optimistic concurrency. Use only with explicit user intent.",
+      description: "Update durable Project instructions only with explicit user intent. Requires expectedVersion, preserves agent provenance, and invalidates the Project context snapshot.",
       inputSchema: {
         projectId: z.string().min(1),
         contentMarkdown: z.string(),
@@ -129,7 +144,9 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
     },
     async ({ projectId, ...options }) =>
       asMcpText(
-        await runWithAuth(ctx.accessToken, () => projectsClient.listMemories(ctx.accessToken, projectId, options))
+        await runWithAuth(ctx.accessToken, () =>
+          projectsClient.listMemories(ctx.accessToken, projectId, options).then(memoryListMcpReadProjection)
+        )
       )
   );
 
@@ -137,7 +154,7 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
     "projects.memory.append",
     {
       title: "Append Project Memory",
-      description: "Append a durable observation. Agent-created entries are always marked agent_observed.",
+      description: "Append a durable observation, always as agent_observed with agent provenance, then invalidate the Project context snapshot. Do not use for transient progress.",
       inputSchema: {
         projectId: z.string().min(1),
         kind: memoryKindSchema,
@@ -166,7 +183,7 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
     "projects.memory.update",
     {
       title: "Update Project Memory",
-      description: "Update a Project memory entry without changing it to user-confirmed authority.",
+      description: "Update a Project memory entry and invalidate its Project context snapshot. This tool cannot promote authority to user_confirmed.",
       inputSchema: {
         memoryId: z.string().min(1),
         bodyMarkdown: z.string().min(1).optional(),
@@ -187,7 +204,7 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
     "projects.memory.archive",
     {
       title: "Archive Project Memory",
-      description: "Archive a Project memory entry without deleting its audit history.",
+      description: "Archive a Project memory entry without deleting its audit history, then invalidate its Project context snapshot.",
       inputSchema: { memoryId: z.string().min(1) }
     },
     async ({ memoryId }) => {
@@ -216,7 +233,9 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
     },
     async ({ projectId, ...options }) =>
       asMcpText(
-        await runWithAuth(ctx.accessToken, () => projectsClient.listIndexEntries(ctx.accessToken, projectId, options))
+        await runWithAuth(ctx.accessToken, () =>
+          projectsClient.listIndexEntries(ctx.accessToken, projectId, options).then(indexListMcpReadProjection)
+        )
       )
   );
 
@@ -224,7 +243,7 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
     "projects.index.rebuild",
     {
       title: "Rebuild Project Index",
-      description: "Explicitly repair a Project Artifact index. This is a potentially expensive maintenance operation.",
+      description: "Explicitly repair a Project Artifact index by scanning primary and secondary memberships, upserting current entries, tombstoning drift, and invalidating context. This can be expensive.",
       inputSchema: { projectId: z.string().min(1) }
     },
     async ({ projectId }) => {
@@ -245,7 +264,11 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
       inputSchema: { projectId: z.string().min(1) }
     },
     async ({ projectId }) =>
-      asMcpText(await runWithAuth(ctx.accessToken, () => getProjectDeletionImpact(ctx.accessToken, projectId)))
+      asMcpText(
+        await runWithAuth(ctx.accessToken, () =>
+          getProjectDeletionImpact(ctx.accessToken, projectId).then(deletionImpactMcpReadProjection)
+        )
+      )
   );
 
   server.registerTool(
@@ -261,7 +284,9 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
     },
     async ({ projectId, ...options }) =>
       asMcpText(
-        await runWithAuth(ctx.accessToken, () => projectsClient.listRelations(ctx.accessToken, projectId, options))
+        await runWithAuth(ctx.accessToken, () =>
+          projectsClient.listRelations(ctx.accessToken, projectId, options).then(relationListMcpReadProjection)
+        )
       )
   );
 
@@ -269,7 +294,7 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
     "projects.relations.add",
     {
       title: "Add Project Relation",
-      description: "Create an explicit Project relation; this does not propagate Artifact membership.",
+      description: "Create an explicit same-owner Project relation, rejecting invalid self or duplicate relations. This invalidates both Project contexts and never propagates Artifact membership.",
       inputSchema: {
         projectId: z.string().min(1),
         targetProjectId: z.string().min(1),
@@ -303,7 +328,7 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
     "projects.relations.update",
     {
       title: "Update Project Relation",
-      description: "Update an explicit Project relation.",
+      description: "Update an explicit Project relation with expectedVersion optimistic concurrency and invalidate both endpoint contexts. Artifact membership is unaffected.",
       inputSchema: {
         relationId: z.string().min(1),
         relationType: relationTypeSchema.optional(),
@@ -333,7 +358,7 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
     "projects.relations.remove",
     {
       title: "Remove Project Relation",
-      description: "Remove an explicit Project relation. Artifact membership is unaffected.",
+      description: "Remove an explicit Project relation and invalidate both endpoint contexts. Artifact membership is unaffected.",
       inputSchema: { relationId: z.string().min(1) }
     },
     async ({ relationId }) => {
@@ -368,14 +393,18 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
       }
     },
     async ({ projectId, ...options }) =>
-      asMcpText(await runWithAuth(ctx.accessToken, () => projectsClient.listLinks(ctx.accessToken, projectId, options)))
+      asMcpText(
+        await runWithAuth(ctx.accessToken, () =>
+          listProjectLinksResolved(ctx.accessToken, projectId, options).then(linkListMcpReadProjection)
+        )
+      )
   );
 
   server.registerTool(
     "projects.links.add",
     {
       title: "Add Project Link",
-      description: "Add a generic resource link. Artifact secondary memberships receive full validation and index maintenance.",
+      description: "Add a generic resource link and best-effort invalidate Project context. Artifact secondary memberships also validate the Artifact/Project boundary and best-effort maintain the derived index.",
       inputSchema: {
         projectId: z.string().min(1),
         targetService: z.string().min(1),
@@ -413,7 +442,7 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
     "projects.links.remove",
     {
       title: "Remove Project Link",
-      description: "Remove a resource link. Artifact membership index state is cleaned up when applicable.",
+      description: "Remove a resource link and best-effort invalidate Project context. For secondary membership, keep the Artifact intact and best-effort tombstone only that Project's derived index entry.",
       inputSchema: { linkId: z.string().min(1) }
     },
     async ({ linkId }) => {

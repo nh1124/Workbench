@@ -268,7 +268,7 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
     "artifacts.item.projects.link",
     {
       title: "Link Artifact Item To Project",
-      description: "Add a validated secondary Project membership without duplicating the Artifact.",
+      description: "Add a validated same-owner secondary Project membership without duplicating the Artifact. Optionally guards on Artifact version, then best-effort updates the target Project index and context invalidation.",
       inputSchema: {
         artifactItemId: z.string().min(1),
         projectId: z.string().min(1),
@@ -290,7 +290,7 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
     "artifacts.item.projects.unlink",
     {
       title: "Unlink Artifact Item From Project",
-      description: "Remove a secondary membership. The primary Project and Artifact content are never deleted.",
+      description: "Remove only a secondary membership and best-effort tombstone that Project's index entry and context invalidation. Primary membership and Artifact content are guarded from deletion.",
       inputSchema: {
         artifactItemId: z.string().min(1),
         projectId: z.string().min(1)
