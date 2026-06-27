@@ -20,6 +20,7 @@ import {
   type IdentityStorageConfig
 } from "./identityStorage.js";
 import { normalizeCoreUrl } from "./coreUrl.js";
+import { exportProjectContext, ProjectContextExportError } from "./projectContextExport.js";
 
 function env(name: string): string | undefined {
   const value = process.env[name]?.trim();
@@ -214,6 +215,37 @@ server.registerTool(
       status: "validated",
       path: resolved
     });
+  }
+);
+
+server.registerTool(
+  "workbench.local.project_context.export",
+  {
+    title: "Export Workbench Project Context",
+    description: "Fetch a fresh live Project context export from Core and write a one-way local snapshot package under .workbench/project-context. This never imports from disk or uses the daemon's local cache.",
+    inputSchema: {
+      projectId: z.string().min(1),
+      exportId: z.string().uuid().optional()
+    }
+  },
+  async ({ projectId, exportId }) => {
+    const currentIdentity = await readIdentityWithSource(identityConfig);
+    if (!currentIdentity) {
+      throw new Error("A registered local client identity is required for Project context export.");
+    }
+    try {
+      return asText(await exportProjectContext(
+        { coreUrl, syncRoot },
+        currentIdentity.identity,
+        projectId,
+        { exportId }
+      ));
+    } catch (error) {
+      if (error instanceof ProjectContextExportError) {
+        throw new Error(`${error.code}: ${error.message}`);
+      }
+      throw error;
+    }
   }
 );
 

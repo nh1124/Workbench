@@ -11,6 +11,8 @@ const repoRoot = path.resolve(__dirname, "../../../..");
 const uiApiSource = readFileSync(path.join(repoRoot, "ui/src/lib/api.ts"), "utf8");
 const uiServicesSource = readFileSync(path.join(repoRoot, "ui/src/config/services.ts"), "utf8");
 const daemonSource = readFileSync(path.join(repoRoot, "services/sync-daemon/src/index.ts"), "utf8");
+const daemonMcpSource = readFileSync(path.join(repoRoot, "services/sync-daemon/src/mcpServer.ts"), "utf8");
+const daemonProjectContextExportSource = readFileSync(path.join(repoRoot, "services/sync-daemon/src/projectContextExport.ts"), "utf8");
 const coreHttpSource = readFileSync(path.join(repoRoot, "services/workbench-core/src/httpServer.ts"), "utf8");
 const coreSyncStoreSource = readFileSync(path.join(repoRoot, "services/workbench-core/src/syncStore.ts"), "utf8");
 
@@ -174,5 +176,13 @@ describe("local mode route coverage", () => {
     ]) {
       assertIncludes(coreSyncStoreSource, storeContract, "Core sync event store");
     }
+  });
+
+  it("keeps the daemon Project context export route and MCP tool explicit", () => {
+    assertIncludes(daemonSource, "url.pathname === \"/api/project-context/exports\" && req.method === \"POST\"", "Project context export loopback route");
+    assertIncludes(daemonProjectContextExportSource, "/api/sync/projects/${encodeURIComponent(projectId)}/context-export", "Project context export live Core route");
+    assertIncludes(daemonSource, "state.identity", "Project context export local identity");
+    assertIncludes(daemonMcpSource, "\"workbench.local.project_context.export\"", "Project context export MCP tool");
+    assertIncludes(daemonMcpSource, "never imports from disk or uses the daemon's local cache", "Project context export MCP warning");
   });
 });

@@ -73,6 +73,11 @@ import {
   PROJECT_CONTEXT_SUPPORTED_META_KEY,
   removeStaleProjectContextRows
 } from "./projectContextCache.js";
+import {
+  exportProjectContext,
+  ProjectContextExportError,
+  PROJECT_CONTEXT_EXPORT_CODES
+} from "./projectContextExport.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -5865,6 +5870,21 @@ function writeLocalProjectContextError(res: ServerResponse, error: unknown): voi
   }, 500);
 }
 
+function writeProjectContextExportError(res: ServerResponse, error: unknown): void {
+  if (error instanceof ProjectContextExportError) {
+    writeJson(res, { code: error.code, message: error.message }, error.status);
+    return;
+  }
+  writeJson(res, {
+    code: PROJECT_CONTEXT_EXPORT_CODES.writeFailed,
+    message: error instanceof Error ? error.message : String(error)
+  }, 500);
+}
+
+function requestString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
 function optionalNumberQuery(url: URL, name: string): number | undefined {
   const raw = url.searchParams.get(name);
   if (raw === null || raw.trim() === "") return undefined;
@@ -6035,6 +6055,30 @@ function startStatusServer(state: DaemonState): void {
         code: "LOCAL_PROJECT_CONTEXT_READ_ONLY",
         message: "Project context mutations are unavailable in Local Mode."
       }, 503);
+      return;
+    }
+
+    if (url.pathname === "/api/project-context/exports" && req.method === "POST") {
+      try {
+        const body = await readRequestJson(req);
+        const projectId = requestString(body.projectId) ?? requestString(url.searchParams.get("projectId"));
+        if (!projectId) {
+          writeJson(res, {
+            code: PROJECT_CONTEXT_EXPORT_CODES.pathUnsafe,
+            message: "projectId is required."
+          }, 400);
+          return;
+        }
+        const result = await exportProjectContext(
+          { coreUrl: state.config.coreUrl, syncRoot: state.config.syncRoot },
+          state.identity,
+          projectId,
+          { exportId: requestString(body.exportId) }
+        );
+        writeJson(res, result, 201);
+      } catch (error) {
+        writeProjectContextExportError(res, error);
+      }
       return;
     }
 
