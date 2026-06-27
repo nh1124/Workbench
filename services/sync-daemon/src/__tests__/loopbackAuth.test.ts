@@ -7,6 +7,7 @@ import {
   LOOPBACK_CORS_ERROR_CODE,
   LOOPBACK_CORS_ERROR_MESSAGE,
   isLoopbackOriginAllowed,
+  isLocalProjectContextMutation,
   loopbackAuthBypassed,
   parseLoopbackAllowedOrigins,
   requestHasValidLoopbackToken
@@ -59,6 +60,26 @@ describe("loopback API token auth", () => {
   it("exposes a stable 401 payload contract", () => {
     assert.equal(LOOPBACK_AUTH_ERROR_CODE, "WORKBENCH_DAEMON_UNAUTHORIZED");
     assert.equal(LOOPBACK_AUTH_ERROR_MESSAGE, "Local daemon API token is required.");
+  });
+
+  it("classifies every cached Project-context write as read-only", () => {
+    for (const [method, pathname] of [
+      ["PUT", "/api/projects/project-1/brief"],
+      ["POST", "/api/projects/project-1/memories"],
+      ["PATCH", "/api/project-memories/memory-1"],
+      ["POST", "/api/projects/project-1/relations"],
+      ["DELETE", "/api/project-relations/relation-1"],
+      ["POST", "/api/projects/project-1/links"],
+      ["DELETE", "/api/project-links/link-1"],
+      ["POST", "/api/projects/project-1/index/rebuild"],
+      ["POST", "/api/projects/project-1/context-summary/refresh"],
+      ["POST", "/api/artifacts/items/item-1/projects"],
+      ["DELETE", "/api/artifacts/items/item-1/projects/project-2"]
+    ]) {
+      assert.equal(isLocalProjectContextMutation(pathname, method), true, `${method} ${pathname}`);
+    }
+    assert.equal(isLocalProjectContextMutation("/api/projects/project-1/context", "GET"), false);
+    assert.equal(isLocalProjectContextMutation("/api/projects/project-1", "PATCH"), false);
   });
 
   it("allows local browser origins by default and rejects remote origins", () => {

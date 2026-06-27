@@ -24,6 +24,7 @@ import {
   getRemoteResource,
   getResource,
   hasOpenOutboxForPath,
+  listAllRemoteResourcesForDomain,
   listRemoteResources,
   listConflicts,
   listOpenOutboxForResource,
@@ -57,6 +58,21 @@ import {
   type SyncErrorCategory,
   type SyncErrorMetadata
 } from "./manifestStore.js";
+import {
+  cacheProjectContextSnapshot,
+  getLocalProjectBrief,
+  getLocalProjectContext,
+  listLocalProjectMemories,
+  listLocalProjectRelations,
+  LocalProjectContextError,
+  parseProjectContextSnapshot,
+  PROJECT_CONTEXT_BASELINE_CURSOR_META_KEY,
+  PROJECT_CONTEXT_DOMAIN,
+  PROJECT_CONTEXT_SCHEMA_VERSION,
+  PROJECT_CONTEXT_SNAPSHOT_COMPLETE_META_KEY,
+  PROJECT_CONTEXT_SUPPORTED_META_KEY,
+  removeStaleProjectContextRows
+} from "./projectContextCache.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -3752,6 +3768,8 @@ type SyncPullResponse = {
 
 type SyncSnapshotResponse = {
   generatedAt?: string;
+  baselineCursor?: string;
+  supportedDomains?: string[];
   domains?: Partial<Record<RemoteResourceDomain, unknown>>;
 };
 
@@ -3777,7 +3795,13 @@ function asNumber(value: unknown): number | undefined {
 }
 
 function parseRemoteResourceDomain(value: unknown): RemoteResourceDomain | undefined {
-  return value === "projects" || value === "notes" || value === "artifacts" || value === "tasks" ? value : undefined;
+  return value === "projects"
+    || value === "notes"
+    || value === "artifacts"
+    || value === "tasks"
+    || value === PROJECT_CONTEXT_DOMAIN
+    ? value
+    : undefined;
 }
 
 function firstRecord(...values: unknown[]): Record<string, unknown> | undefined {
@@ -4536,6 +4560,124 @@ function applyRemoteProjectDefaultEvent(
   return true;
 }
 
+function projectContextSnapshotPage(value: unknown): { items: unknown[]; nextCursor?: string } {
+  const page = asRecord(value);
+  if (!page || !Array.isArray(page.items)) {
+    throw new LocalProjectContextError(
+      502,
+      "LOCAL_PROJECT_CONTEXT_INVALID_SNAPSHOT",
+      "Core returned an invalid Project context snapshot page."
+    );
+  }
+  let nextCursor: string | undefined;
+  if (page.nextCursor !== undefined) {
+    if (
+      typeof page.nextCursor !== "string"
+      || page.nextCursor.length === 0
+      || page.nextCursor.trim() !== page.nextCursor
+    ) {
+      throw new LocalProjectContextError(
+        502,
+        "LOCAL_PROJECT_CONTEXT_INVALID_SNAPSHOT",
+        "Core returned an invalid Project context snapshot cursor."
+      );
+    }
+    nextCursor = page.nextCursor;
+  }
+  return { items: page.items, nextCursor };
+}
+
+function projectContextEventIsStale(state: DaemonState, event: RemoteSyncEvent): boolean {
+  if (event.version === undefined || !event.resourceId) return false;
+  const current = getRemoteResource(state.manifestStore, PROJECT_CONTEXT_DOMAIN, event.resourceId);
+  return current?.version !== undefined && event.version <= current.version;
+}
+
+function markProjectContextRescanRequired(state: DaemonState): void {
+  setMeta(state.manifestStore, PROJECT_CONTEXT_SNAPSHOT_COMPLETE_META_KEY, undefined);
+  setMeta(state.manifestStore, PROJECT_CONTEXT_SUPPORTED_META_KEY, undefined);
+  setMeta(state.manifestStore, PROJECT_CONTEXT_BASELINE_CURSOR_META_KEY, undefined);
+  setMeta(state.manifestStore, REMOTE_ARTIFACT_SNAPSHOT_COMPLETE_META_KEY, undefined);
+  if (state.tickRunning) {
+    state.tickQueued = true;
+  } else {
+    scheduleTick(state, 0);
+  }
+}
+
+async function fetchProjectContextDetail(
+  state: DaemonState,
+  projectId: string,
+  version?: number
+): Promise<void> {
+  if (!state.identity) throw new Error("Missing local client identity");
+  try {
+    const detail = await coreJson<unknown>(
+      state.config,
+      `/api/sync/project-context/${encodeURIComponent(projectId)}`,
+      { method: "GET", localIdentity: state.identity }
+    );
+    const snapshot = parseProjectContextSnapshot(detail);
+    if (!snapshot || snapshot.projectId !== projectId) {
+      throw new LocalProjectContextError(
+        502,
+        "LOCAL_PROJECT_CONTEXT_INVALID_SNAPSHOT",
+        "Core returned Project context for a different Project."
+      );
+    }
+    cacheProjectContextSnapshot(state.manifestStore, snapshot, {
+      version,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    if (error instanceof CoreHttpError && error.status === 404) {
+      const deletedAt = new Date().toISOString();
+      markRemoteResourceDeleted(state.manifestStore, {
+        domain: PROJECT_CONTEXT_DOMAIN,
+        resourceId: projectId,
+        version,
+        payload: { schemaVersion: PROJECT_CONTEXT_SCHEMA_VERSION, projectId, deleted: true },
+        deletedAt,
+        lastSyncedAt: deletedAt
+      });
+      return;
+    }
+    throw error;
+  }
+}
+
+async function applyRemoteProjectContextEvent(state: DaemonState, event: RemoteSyncEvent): Promise<void> {
+  if (event.domain !== PROJECT_CONTEXT_DOMAIN) return;
+  const projectId = event.resourceId;
+  if (!projectId || projectContextEventIsStale(state, event)) return;
+  const payload = asRecord(event.payload) ?? {};
+  if (asString(payload.localClientId) === state.identity?.localClientId) return;
+  const createdAt = asString(event.createdAt) ?? new Date().toISOString();
+
+  if (isRemoteResourceTombstone(event)) {
+    markRemoteResourceDeleted(state.manifestStore, {
+      domain: PROJECT_CONTEXT_DOMAIN,
+      resourceId: projectId,
+      version: event.version,
+      payload,
+      deletedAt: createdAt,
+      lastSyncedAt: createdAt
+    });
+    return;
+  }
+
+  if (payload.schemaVersion !== PROJECT_CONTEXT_SCHEMA_VERSION) {
+    markProjectContextRescanRequired(state);
+    return;
+  }
+  if (payload.kind !== "invalidate") return;
+  if (asString(payload.projectId) !== projectId) {
+    markProjectContextRescanRequired(state);
+    return;
+  }
+  await fetchProjectContextDetail(state, projectId, event.version);
+}
+
 function applyRemoteDomainEvent(state: DaemonState, event: RemoteSyncEvent): void {
   const domain = parseRemoteResourceDomain(event.domain);
   if (!domain || domain === "artifacts") return;
@@ -4575,6 +4717,10 @@ function applyRemoteDomainEvent(state: DaemonState, event: RemoteSyncEvent): voi
 }
 
 async function applyRemoteSyncEvent(state: DaemonState, event: RemoteSyncEvent): Promise<void> {
+  if (event.domain === PROJECT_CONTEXT_DOMAIN) {
+    await applyRemoteProjectContextEvent(state, event);
+    return;
+  }
   if (event.domain === "artifacts") {
     await applyRemoteArtifactEvent(state, event);
     return;
@@ -4598,7 +4744,7 @@ async function getSyncPullPage(state: DaemonState, cursor: string | undefined, l
 async function getSyncSnapshot(
   state: DaemonState,
   domains: RemoteResourceDomain[],
-  options: { cursor?: string; limit?: number } = {}
+  options: { cursor?: string; limit?: number; baselineCursor?: string } = {}
 ): Promise<SyncSnapshotResponse> {
   if (!state.identity) throw new Error("Missing local client identity");
   const query = new URLSearchParams();
@@ -4608,6 +4754,9 @@ async function getSyncSnapshot(
   }
   if (options.limit) {
     query.set("limit", String(options.limit));
+  }
+  if (options.baselineCursor) {
+    query.set("baselineCursor", options.baselineCursor);
   }
   return coreJson<SyncSnapshotResponse>(state.config, `/api/sync/snapshot?${query.toString()}`, {
     method: "GET",
@@ -4689,12 +4838,130 @@ async function bootstrapPagedDomainSnapshots(
   }
 }
 
+function snapshotSupportsProjectContext(snapshot: SyncSnapshotResponse): boolean {
+  return Array.isArray(snapshot.supportedDomains)
+    && snapshot.supportedDomains.includes(PROJECT_CONTEXT_DOMAIN);
+}
+
+function pruneLegacyProjectContextRows(state: DaemonState, activeProjectIds: Set<string>): void {
+  for (const resource of listAllRemoteResourcesForDomain(state.manifestStore, "projects", { includeDeleted: true })) {
+    if (activeProjectIds.has(resource.resourceId)) continue;
+    if (listOpenOutboxForResource(state.manifestStore, resource.resourceId).length > 0) continue;
+    if (!recordHasLegacyProjectContextShape(resource.payload)) continue;
+    removeRemoteResource(state.manifestStore, "projects", resource.resourceId);
+  }
+}
+
+async function bootstrapProjectContextSnapshot(
+  state: DaemonState,
+  suppliedBaselineCursor?: string
+): Promise<{ supported: boolean; baselineCursor?: string }> {
+  const firstPage = await getSyncSnapshot(state, [PROJECT_CONTEXT_DOMAIN], {
+    limit: REMOTE_SNAPSHOT_PAGE_LIMIT,
+    baselineCursor: suppliedBaselineCursor
+  });
+  if (!snapshotSupportsProjectContext(firstPage)) {
+    throw new LocalProjectContextError(
+      502,
+      "LOCAL_PROJECT_CONTEXT_INVALID_SNAPSHOT",
+      "Core removed the Project context capability during bootstrap."
+    );
+  }
+
+  const baselineCursor = suppliedBaselineCursor ?? asString(firstPage.baselineCursor);
+  if (
+    !baselineCursor
+    || !/^\d+$/.test(baselineCursor)
+    || (suppliedBaselineCursor && firstPage.baselineCursor !== suppliedBaselineCursor)
+  ) {
+    throw new LocalProjectContextError(
+      502,
+      "LOCAL_PROJECT_CONTEXT_INVALID_SNAPSHOT",
+      "Core returned an invalid Project context baseline cursor."
+    );
+  }
+
+  const activeProjectIds = new Set<string>();
+  const pendingSnapshots: Array<{ snapshot: NonNullable<ReturnType<typeof parseProjectContextSnapshot>>; timestamp: string }> = [];
+  const acceptPage = (page: SyncSnapshotResponse): string | undefined => {
+    const parsedPage = projectContextSnapshotPage(page.domains?.[PROJECT_CONTEXT_DOMAIN]);
+    for (const item of parsedPage.items) {
+      const snapshot = parseProjectContextSnapshot(item);
+      if (!snapshot || snapshot.baselineCursor !== baselineCursor || activeProjectIds.has(snapshot.projectId)) {
+        throw new LocalProjectContextError(
+          502,
+          "LOCAL_PROJECT_CONTEXT_INVALID_SNAPSHOT",
+          "Core returned an incomplete, duplicate, or baseline-mismatched Project context item."
+        );
+      }
+      activeProjectIds.add(snapshot.projectId);
+      pendingSnapshots.push({
+        snapshot,
+        timestamp: asString(page.generatedAt) ?? new Date().toISOString()
+      });
+    }
+    return parsedPage.nextCursor;
+  };
+
+  let cursor = acceptPage(firstPage);
+  const seenCursors = new Set<string>();
+  for (let pageIndex = 0; cursor && pageIndex < 100; pageIndex += 1) {
+    if (seenCursors.has(cursor)) {
+      throw new LocalProjectContextError(
+        502,
+        "LOCAL_PROJECT_CONTEXT_INVALID_SNAPSHOT",
+        "Core repeated a Project context snapshot cursor."
+      );
+    }
+    seenCursors.add(cursor);
+    const page = await getSyncSnapshot(state, [PROJECT_CONTEXT_DOMAIN], {
+      cursor,
+      limit: REMOTE_SNAPSHOT_PAGE_LIMIT,
+      baselineCursor
+    });
+    if (!snapshotSupportsProjectContext(page) || page.baselineCursor !== baselineCursor) {
+      throw new LocalProjectContextError(
+        502,
+        "LOCAL_PROJECT_CONTEXT_INVALID_SNAPSHOT",
+        "Core changed the Project context capability or baseline during pagination."
+      );
+    }
+    cursor = acceptPage(page);
+  }
+  if (cursor) {
+    throw new LocalProjectContextError(
+      413,
+      "PROJECT_CONTEXT_SYNC_LIMIT_EXCEEDED",
+      "Project context snapshot pagination exceeded the daemon safety limit."
+    );
+  }
+
+  state.manifestStore.db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const pending of pendingSnapshots) {
+      cacheProjectContextSnapshot(state.manifestStore, pending.snapshot, { timestamp: pending.timestamp });
+    }
+    removeStaleProjectContextRows(state.manifestStore, activeProjectIds);
+    pruneLegacyProjectContextRows(state, activeProjectIds);
+    setMeta(state.manifestStore, PROJECT_CONTEXT_SUPPORTED_META_KEY, "1");
+    setMeta(state.manifestStore, PROJECT_CONTEXT_SNAPSHOT_COMPLETE_META_KEY, "1");
+    setMeta(state.manifestStore, PROJECT_CONTEXT_BASELINE_CURSOR_META_KEY, baselineCursor);
+    state.manifestStore.db.exec("COMMIT");
+  } catch (error) {
+    state.manifestStore.db.exec("ROLLBACK");
+    throw error;
+  }
+  return { supported: true, baselineCursor };
+}
+
 async function bootstrapRemoteArtifactSnapshot(state: DaemonState): Promise<string | undefined> {
   if (!state.identity) throw new Error("Missing local client identity");
   let snapshot: SyncSnapshotResponse;
+  let fullSnapshotAvailable = true;
   try {
     snapshot = await getSyncSnapshot(state, REMOTE_SYNC_DOMAINS);
   } catch (error) {
+    fullSnapshotAvailable = false;
     console.warn(
       `[sync-daemon] all-domain remote snapshot failed; falling back to artifacts-only snapshot: ${
         error instanceof Error ? error.message : String(error)
@@ -4706,14 +4973,28 @@ async function bootstrapRemoteArtifactSnapshot(state: DaemonState): Promise<stri
   await applyRemoteSnapshot(state, snapshot, generatedAt);
   await bootstrapPagedDomainSnapshots(state, snapshot, generatedAt);
 
-  let cursor: string | undefined;
+  let contextBaselineCursor: string | undefined;
+  if (fullSnapshotAvailable && snapshotSupportsProjectContext(snapshot)) {
+    const contextBootstrap = await bootstrapProjectContextSnapshot(state, asString(snapshot.baselineCursor));
+    contextBaselineCursor = contextBootstrap.supported ? contextBootstrap.baselineCursor : undefined;
+  } else if (fullSnapshotAvailable) {
+    setMeta(state.manifestStore, PROJECT_CONTEXT_SUPPORTED_META_KEY, "0");
+  }
+
+  const snapshotBaselineCursor = asString(snapshot.baselineCursor);
+  let cursor: string | undefined = contextBaselineCursor ?? snapshotBaselineCursor;
+  const drainFromBaseline = cursor !== undefined;
   for (let pageIndex = 0; pageIndex < 20; pageIndex += 1) {
     const page = await getSyncPullPage(state, cursor, REMOTE_CURSOR_DRAIN_LIMIT);
     const events = page.events ?? [];
     for (const event of events) {
-      const eventTime = event.createdAt ? Date.parse(event.createdAt) : Number.NaN;
-      if (Number.isFinite(eventTime) && eventTime > Date.parse(generatedAt)) {
+      if (drainFromBaseline) {
         await applyRemoteSyncEvent(state, event);
+      } else {
+        const eventTime = event.createdAt ? Date.parse(event.createdAt) : Number.NaN;
+        if (Number.isFinite(eventTime) && eventTime > Date.parse(generatedAt)) {
+          await applyRemoteSyncEvent(state, event);
+        }
       }
     }
     if (!page.nextCursor || page.nextCursor === cursor) {
@@ -4733,7 +5014,11 @@ export async function pullRemoteArtifactSyncState(state: DaemonState): Promise<v
     ?? getMeta(state.manifestStore, REMOTE_ARTIFACT_CURSOR_META_KEY)
     ?? state.remoteArtifactCursor;
   const snapshotComplete = getMeta(state.manifestStore, REMOTE_ARTIFACT_SNAPSHOT_COMPLETE_META_KEY) === "1";
-  if (!cursor || !snapshotComplete) {
+  const contextSupported = getMeta(state.manifestStore, PROJECT_CONTEXT_SUPPORTED_META_KEY);
+  const contextSnapshotComplete = getMeta(state.manifestStore, PROJECT_CONTEXT_SNAPSHOT_COMPLETE_META_KEY) === "1";
+  const contextBootstrapRequired = contextSupported === undefined
+    || (contextSupported === "1" && !contextSnapshotComplete);
+  if (!cursor || !snapshotComplete || contextBootstrapRequired) {
     cursor = await bootstrapRemoteArtifactSnapshot(state);
     setMeta(state.manifestStore, REMOTE_ARTIFACT_SNAPSHOT_COMPLETE_META_KEY, "1");
   } else {
@@ -4758,6 +5043,9 @@ async function requestRemoteSnapshotRescan(state: DaemonState): Promise<void> {
   setMeta(state.manifestStore, REMOTE_SYNC_CURSOR_META_KEY, undefined);
   setMeta(state.manifestStore, REMOTE_ARTIFACT_CURSOR_META_KEY, undefined);
   setMeta(state.manifestStore, REMOTE_ARTIFACT_SNAPSHOT_COMPLETE_META_KEY, undefined);
+  setMeta(state.manifestStore, PROJECT_CONTEXT_SNAPSHOT_COMPLETE_META_KEY, undefined);
+  setMeta(state.manifestStore, PROJECT_CONTEXT_SUPPORTED_META_KEY, undefined);
+  setMeta(state.manifestStore, PROJECT_CONTEXT_BASELINE_CURSOR_META_KEY, undefined);
   state.remoteArtifactCursor = undefined;
   scheduleTick(state, 0);
   await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
@@ -5546,6 +5834,9 @@ function daemonStatusPayload(state: DaemonState): Record<string, unknown> {
     remoteSyncCursor: getMeta(state.manifestStore, REMOTE_SYNC_CURSOR_META_KEY) ?? state.remoteArtifactCursor,
     remoteArtifactCursor: state.remoteArtifactCursor,
     remoteArtifactSnapshotComplete: getMeta(state.manifestStore, REMOTE_ARTIFACT_SNAPSHOT_COMPLETE_META_KEY) === "1",
+    projectContextSupported: getMeta(state.manifestStore, PROJECT_CONTEXT_SUPPORTED_META_KEY) === "1",
+    projectContextSnapshotComplete: getMeta(state.manifestStore, PROJECT_CONTEXT_SNAPSHOT_COMPLETE_META_KEY) === "1",
+    projectContextBaselineCursor: getMeta(state.manifestStore, PROJECT_CONTEXT_BASELINE_CURSOR_META_KEY),
     lastError: state.lastError,
     lastErrorCode: state.lastErrorCode,
     lastErrorCategory: state.lastErrorCategory,
@@ -5561,6 +5852,32 @@ function writeJson(res: ServerResponse, value: unknown, statusCode = 200): void 
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "application/json");
   res.end(JSON.stringify(value, null, 2));
+}
+
+function writeLocalProjectContextError(res: ServerResponse, error: unknown): void {
+  if (error instanceof LocalProjectContextError) {
+    writeJson(res, { code: error.code, message: error.message }, error.status);
+    return;
+  }
+  writeJson(res, {
+    code: "LOCAL_PROJECT_CONTEXT_READ_FAILED",
+    message: error instanceof Error ? error.message : String(error)
+  }, 500);
+}
+
+function optionalNumberQuery(url: URL, name: string): number | undefined {
+  const raw = url.searchParams.get(name);
+  if (raw === null || raw.trim() === "") return undefined;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+export function isLocalProjectContextMutation(pathname: string, method: string | undefined): boolean {
+  if (!method || method === "GET" || method === "HEAD" || method === "OPTIONS") return false;
+  return /^\/api\/projects\/[^/]+\/(brief|memories|relations|links|context-summary)(\/refresh)?$/.test(pathname)
+    || /^\/api\/projects\/[^/]+\/index\/rebuild$/.test(pathname)
+    || /^\/api\/project-(memories|relations|links)\/[^/]+$/.test(pathname)
+    || /^\/api\/artifacts\/items\/[^/]+\/projects(?:\/[^/]+)?$/.test(pathname);
 }
 
 async function sendLocalArtifactDownload(state: DaemonState, item: LocalArtifactItem, req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -5696,11 +6013,100 @@ function startStatusServer(state: DaemonState): void {
       if (domainSet.has("tasks")) {
         domains.tasks = listLocalRemoteDomainItems(state, "tasks", { includeDeleted, limit });
       }
+      if (domainSet.has(PROJECT_CONTEXT_DOMAIN)) {
+        domains[PROJECT_CONTEXT_DOMAIN] = {
+          items: listAllRemoteResourcesForDomain(state.manifestStore, PROJECT_CONTEXT_DOMAIN, { includeDeleted })
+            .map((resource) => resource.payload)
+        };
+      }
       writeJson(res, {
         generatedAt: new Date().toISOString(),
         source: "local-daemon",
+        supportedDomains: getMeta(state.manifestStore, PROJECT_CONTEXT_SUPPORTED_META_KEY) === "1"
+          ? [...REMOTE_SYNC_DOMAINS, PROJECT_CONTEXT_DOMAIN]
+          : [...REMOTE_SYNC_DOMAINS],
         domains
       });
+      return;
+    }
+
+    if (isLocalProjectContextMutation(url.pathname, req.method)) {
+      writeJson(res, {
+        code: "LOCAL_PROJECT_CONTEXT_READ_ONLY",
+        message: "Project context mutations are unavailable in Local Mode."
+      }, 503);
+      return;
+    }
+
+    const projectContextMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/context$/);
+    if (projectContextMatch && req.method === "GET") {
+      try {
+        const include = url.searchParams.get("include")
+          ?.split(",")
+          .map((section) => section.trim())
+          .filter(Boolean);
+        writeJson(res, getLocalProjectContext(
+          state.manifestStore,
+          decodeURIComponent(projectContextMatch[1]),
+          {
+            q: url.searchParams.get("q") ?? undefined,
+            include,
+            memoryLimit: optionalNumberQuery(url, "memoryLimit"),
+            relationLimit: optionalNumberQuery(url, "relationLimit"),
+            maxChars: optionalNumberQuery(url, "maxChars")
+          }
+        ));
+      } catch (error) {
+        writeLocalProjectContextError(res, error);
+      }
+      return;
+    }
+
+    const projectBriefMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/brief$/);
+    if (projectBriefMatch && req.method === "GET") {
+      try {
+        writeJson(res, getLocalProjectBrief(state.manifestStore, decodeURIComponent(projectBriefMatch[1])));
+      } catch (error) {
+        writeLocalProjectContextError(res, error);
+      }
+      return;
+    }
+
+    const projectMemoriesMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/memories$/);
+    if (projectMemoriesMatch && req.method === "GET") {
+      try {
+        writeJson(res, listLocalProjectMemories(
+          state.manifestStore,
+          decodeURIComponent(projectMemoriesMatch[1]),
+          {
+            q: url.searchParams.get("q") ?? undefined,
+            kind: url.searchParams.get("kind") ?? undefined,
+            authority: url.searchParams.get("authority") ?? undefined,
+            status: url.searchParams.get("status") ?? undefined,
+            limit: optionalNumberQuery(url, "limit"),
+            cursor: url.searchParams.get("cursor") ?? undefined
+          }
+        ));
+      } catch (error) {
+        writeLocalProjectContextError(res, error);
+      }
+      return;
+    }
+
+    const projectRelationsMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/relations$/);
+    if (projectRelationsMatch && req.method === "GET") {
+      try {
+        writeJson(res, listLocalProjectRelations(
+          state.manifestStore,
+          decodeURIComponent(projectRelationsMatch[1]),
+          {
+            limit: optionalNumberQuery(url, "limit"),
+            cursor: url.searchParams.get("cursor") ?? undefined
+          }
+        ));
+      } catch (error) {
+        writeLocalProjectContextError(res, error);
+      }
       return;
     }
 

@@ -7,6 +7,7 @@ import { afterEach, describe, it } from "node:test";
 import {
   closeManifestStore,
   getMeta,
+  getRemoteResource,
   listConflicts,
   openManifestStore,
   readManifestFromStore,
@@ -15,6 +16,10 @@ import {
   upsertResource,
   type ManifestStore
 } from "../manifestStore.js";
+import {
+  PROJECT_CONTEXT_SNAPSHOT_COMPLETE_META_KEY,
+  PROJECT_CONTEXT_SUPPORTED_META_KEY
+} from "../projectContextCache.js";
 import {
   pullRemoteArtifactSyncState,
   type DaemonConfig,
@@ -75,6 +80,34 @@ function jsonResponse(value: unknown): Response {
     status: 200,
     headers: { "Content-Type": "application/json" }
   });
+}
+
+function projectContextSnapshot(projectId: string, fetchedAt = "2026-06-21T00:00:00.000Z") {
+  return {
+    schemaVersion: 1,
+    projectId,
+    fetchedAt,
+    baselineCursor: "50",
+    complete: true,
+    counts: { memories: 1, relations: 0 },
+    context: {
+      project: { id: projectId, name: `Snapshot ${projectId}`, status: "active", updatedAt: fetchedAt },
+      brief: { projectId, contentMarkdown: `# ${projectId}`, version: 1, updatedByKind: "user", updatedAt: fetchedAt },
+      memories: [
+        {
+          id: `memory-${projectId}`,
+          projectId,
+          kind: "decision",
+          bodyMarkdown: `Memory for ${projectId}`,
+          authority: "user_confirmed",
+          status: "active",
+          createdAt: fetchedAt,
+          updatedAt: fetchedAt
+        }
+      ],
+      relations: []
+    }
+  };
 }
 
 afterEach(async () => {
@@ -274,6 +307,7 @@ describe("remote artifact pull reconciliation", () => {
     try {
       setMeta(store, "remoteArtifactCursor", "50");
       setMeta(store, "remoteArtifactSnapshotComplete", "1");
+      setMeta(store, PROJECT_CONTEXT_SUPPORTED_META_KEY, "0");
       upsertRemoteResource(store, {
         domain: "tasks",
         resourceId: "task-existing",
@@ -372,6 +406,7 @@ describe("remote artifact pull reconciliation", () => {
     try {
       setMeta(store, "remoteArtifactCursor", "60");
       setMeta(store, "remoteArtifactSnapshotComplete", "1");
+      setMeta(store, PROJECT_CONTEXT_SUPPORTED_META_KEY, "0");
       upsertRemoteResource(store, {
         domain: "projects",
         resourceId: "project-brief-safe",
@@ -429,6 +464,7 @@ describe("remote artifact pull reconciliation", () => {
     try {
       setMeta(store, "remoteArtifactCursor", "70");
       setMeta(store, "remoteArtifactSnapshotComplete", "1");
+      setMeta(store, PROJECT_CONTEXT_SUPPORTED_META_KEY, "0");
       upsertRemoteResource(store, {
         domain: "projects",
         resourceId: "project-normal",
@@ -529,6 +565,7 @@ describe("remote artifact pull reconciliation", () => {
     try {
       setMeta(store, "remoteArtifactCursor", "80");
       setMeta(store, "remoteArtifactSnapshotComplete", "1");
+      setMeta(store, PROJECT_CONTEXT_SUPPORTED_META_KEY, "0");
       upsertRemoteResource(store, {
         domain: "projects",
         resourceId: "project-previous-default",
@@ -655,6 +692,7 @@ describe("remote artifact pull reconciliation", () => {
     try {
       setMeta(store, "remoteArtifactCursor", "10");
       setMeta(store, "remoteArtifactSnapshotComplete", "1");
+      setMeta(store, PROJECT_CONTEXT_SUPPORTED_META_KEY, "0");
       globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         assert.equal((init?.headers as Record<string, string>)["x-workbench-local-client-id"], "client-1");
         assert.equal((init?.headers as Record<string, string>)["x-workbench-local-client-token"], "token-1");
@@ -702,6 +740,7 @@ describe("remote artifact pull reconciliation", () => {
     try {
       setMeta(store, "remoteArtifactCursor", "20");
       setMeta(store, "remoteArtifactSnapshotComplete", "1");
+      setMeta(store, PROJECT_CONTEXT_SUPPORTED_META_KEY, "0");
       globalThis.fetch = (async (input: RequestInfo | URL) => {
         const url = String(input);
         calls.push(url);
@@ -759,6 +798,7 @@ describe("remote artifact pull reconciliation", () => {
     try {
       setMeta(store, "remoteArtifactCursor", "25");
       setMeta(store, "remoteArtifactSnapshotComplete", "1");
+      setMeta(store, PROJECT_CONTEXT_SUPPORTED_META_KEY, "0");
       globalThis.fetch = (async (input: RequestInfo | URL) => {
         const url = String(input);
         if (url === "http://core.test/api/sync/pull?cursor=25&limit=100") {
@@ -821,6 +861,7 @@ describe("remote artifact pull reconciliation", () => {
       });
       setMeta(store, "remoteArtifactCursor", "30");
       setMeta(store, "remoteArtifactSnapshotComplete", "1");
+      setMeta(store, PROJECT_CONTEXT_SUPPORTED_META_KEY, "0");
       globalThis.fetch = (async () => jsonResponse({
         events: [
           {
@@ -872,6 +913,7 @@ describe("remote artifact pull reconciliation", () => {
       });
       setMeta(store, "remoteArtifactCursor", "35");
       setMeta(store, "remoteArtifactSnapshotComplete", "1");
+      setMeta(store, PROJECT_CONTEXT_SUPPORTED_META_KEY, "0");
       globalThis.fetch = (async () => jsonResponse({
         events: [
           {
@@ -911,6 +953,7 @@ describe("remote artifact pull reconciliation", () => {
       await writeFile(join(root, "docs", "local.txt"), "local-only", "utf8");
       setMeta(store, "remoteArtifactCursor", "37");
       setMeta(store, "remoteArtifactSnapshotComplete", "1");
+      setMeta(store, PROJECT_CONTEXT_SUPPORTED_META_KEY, "0");
       globalThis.fetch = (async () => jsonResponse({
         events: [
           {
@@ -950,6 +993,7 @@ describe("remote artifact pull reconciliation", () => {
     try {
       setMeta(store, "remoteArtifactCursor", "40");
       setMeta(store, "remoteArtifactSnapshotComplete", "1");
+      setMeta(store, PROJECT_CONTEXT_SUPPORTED_META_KEY, "0");
       globalThis.fetch = (async () => jsonResponse({
         events: [
           {
@@ -979,6 +1023,436 @@ describe("remote artifact pull reconciliation", () => {
       await assert.rejects(readFile(join(root, ".workbench", "evil.md"), "utf8"));
       assert.equal(getMeta(store, "remoteArtifactCursor"), "41");
     } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("preserves existing context cache when an old Core omits project_context capability", async () => {
+    const { store, state } = await createState();
+    try {
+      upsertRemoteResource(store, {
+        domain: "project_context",
+        resourceId: "project-cached",
+        payload: projectContextSnapshot("project-cached")
+      });
+      upsertRemoteResource(store, {
+        domain: "projects",
+        resourceId: "project-cached",
+        payload: { id: "project-cached", name: "Cached Project", status: "active" }
+      });
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "http://core.test/api/sync/snapshot?domains=projects%2Cnotes%2Cartifacts%2Ctasks") {
+          return jsonResponse({
+            generatedAt: "2026-06-21T00:00:00.000Z",
+            domains: { projects: { items: [] } }
+          });
+        }
+        if (url === "http://core.test/api/sync/pull?limit=500") {
+          return jsonResponse({ events: [], nextCursor: "9" });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      }) as typeof fetch;
+
+      await pullRemoteArtifactSyncState(state);
+
+      assert.ok(getRemoteResource(store, "project_context", "project-cached"));
+      assert.equal(getMeta(store, PROJECT_CONTEXT_SUPPORTED_META_KEY), "0");
+      assert.equal(getMeta(store, PROJECT_CONTEXT_SNAPSHOT_COMPLETE_META_KEY), undefined);
+      assert.equal(getMeta(store, "remoteSyncCursor"), "9");
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("detects and bootstraps Project context when upgrading an existing daemon cache", async () => {
+    const { store, state } = await createState();
+    const calls: string[] = [];
+    try {
+      setMeta(store, "remoteArtifactCursor", "100");
+      setMeta(store, "remoteArtifactSnapshotComplete", "1");
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        calls.push(url);
+        if (url === "http://core.test/api/sync/snapshot?domains=projects%2Cnotes%2Cartifacts%2Ctasks") {
+          return jsonResponse({
+            generatedAt: "2026-06-21T00:00:00.000Z",
+            baselineCursor: "150",
+            supportedDomains: ["projects", "notes", "artifacts", "tasks", "project_context"],
+            domains: { projects: { items: [{ id: "project-1", name: "Project One", status: "active" }] } }
+          });
+        }
+        if (url === "http://core.test/api/sync/snapshot?domains=project_context&limit=100&baselineCursor=150") {
+          return jsonResponse({
+            generatedAt: "2026-06-21T00:00:01.000Z",
+            baselineCursor: "150",
+            supportedDomains: ["projects", "notes", "artifacts", "tasks", "project_context"],
+            domains: {
+              project_context: {
+                items: [{ ...projectContextSnapshot("project-1"), baselineCursor: "150" }]
+              }
+            }
+          });
+        }
+        if (url === "http://core.test/api/sync/pull?cursor=150&limit=500") {
+          return jsonResponse({ events: [], nextCursor: "150" });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      }) as typeof fetch;
+
+      await pullRemoteArtifactSyncState(state);
+
+      assert.deepEqual(calls, [
+        "http://core.test/api/sync/snapshot?domains=projects%2Cnotes%2Cartifacts%2Ctasks",
+        "http://core.test/api/sync/snapshot?domains=project_context&limit=100&baselineCursor=150",
+        "http://core.test/api/sync/pull?cursor=150&limit=500"
+      ]);
+      assert.equal(getMeta(store, PROJECT_CONTEXT_SUPPORTED_META_KEY), "1");
+      assert.equal(getMeta(store, PROJECT_CONTEXT_SNAPSHOT_COMPLETE_META_KEY), "1");
+      assert.equal(getMeta(store, "remoteSyncCursor"), "150");
+      assert.ok(getRemoteResource(store, "project_context", "project-1"));
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("pins the first baseline across paged context bootstrap and prunes only stale context and legacy fake Projects", async () => {
+    const { store, state } = await createState();
+    const calls: string[] = [];
+    try {
+      upsertRemoteResource(store, {
+        domain: "project_context",
+        resourceId: "project-stale",
+        payload: projectContextSnapshot("project-stale")
+      });
+      upsertRemoteResource(store, {
+        domain: "projects",
+        resourceId: "memory-fake-project",
+        payload: { id: "memory-fake-project", contentMarkdown: "legacy brief payload" }
+      });
+      upsertRemoteResource(store, {
+        domain: "notes",
+        resourceId: "note-preserved",
+        payload: { id: "note-preserved", title: "Preserve other domains" }
+      });
+
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        calls.push(url);
+        if (url === "http://core.test/api/sync/snapshot?domains=projects%2Cnotes%2Cartifacts%2Ctasks") {
+          return jsonResponse({
+            generatedAt: "2026-06-21T00:00:00.000Z",
+            baselineCursor: "50",
+            supportedDomains: ["projects", "notes", "artifacts", "tasks", "project_context"],
+            domains: {
+              projects: {
+                items: [
+                  { id: "project-1", name: "Project One", status: "active" },
+                  { id: "project-2", name: "Project Two", status: "active" }
+                ]
+              }
+            }
+          });
+        }
+        if (url === "http://core.test/api/sync/snapshot?domains=project_context&limit=100&baselineCursor=50") {
+          return jsonResponse({
+            generatedAt: "2026-06-21T00:00:01.000Z",
+            baselineCursor: "50",
+            supportedDomains: ["projects", "notes", "artifacts", "tasks", "project_context"],
+            domains: {
+              project_context: {
+                items: [projectContextSnapshot("project-1")],
+                nextCursor: "context-page-2"
+              }
+            }
+          });
+        }
+        if (url === "http://core.test/api/sync/snapshot?domains=project_context&cursor=context-page-2&limit=100&baselineCursor=50") {
+          return jsonResponse({
+            generatedAt: "2026-06-21T00:00:02.000Z",
+            baselineCursor: "50",
+            supportedDomains: ["projects", "notes", "artifacts", "tasks", "project_context"],
+            domains: { project_context: { items: [projectContextSnapshot("project-2")] } }
+          });
+        }
+        if (url === "http://core.test/api/sync/pull?cursor=50&limit=500") {
+          return jsonResponse({
+            events: [
+              {
+                cursor: "51",
+                domain: "project_context",
+                resourceId: "project-1",
+                action: "update",
+                version: 3,
+                createdAt: "2026-06-21T00:00:03.000Z",
+                payload: { schemaVersion: 1, kind: "invalidate", projectId: "project-1", changed: ["brief"] }
+              }
+            ],
+            nextCursor: "51"
+          });
+        }
+        if (url === "http://core.test/api/sync/project-context/project-1") {
+          return jsonResponse(projectContextSnapshot("project-1", "2026-06-21T00:00:04.000Z"));
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      }) as typeof fetch;
+
+      await pullRemoteArtifactSyncState(state);
+
+      assert.deepEqual(calls, [
+        "http://core.test/api/sync/snapshot?domains=projects%2Cnotes%2Cartifacts%2Ctasks",
+        "http://core.test/api/sync/snapshot?domains=project_context&limit=100&baselineCursor=50",
+        "http://core.test/api/sync/snapshot?domains=project_context&cursor=context-page-2&limit=100&baselineCursor=50",
+        "http://core.test/api/sync/pull?cursor=50&limit=500",
+        "http://core.test/api/sync/project-context/project-1"
+      ]);
+      assert.equal(getMeta(store, PROJECT_CONTEXT_SUPPORTED_META_KEY), "1");
+      assert.equal(getMeta(store, PROJECT_CONTEXT_SNAPSHOT_COMPLETE_META_KEY), "1");
+      assert.equal(getMeta(store, "projectContextBaselineCursor"), "50");
+      assert.equal(getRemoteResource(store, "project_context", "project-stale"), undefined);
+      assert.equal(getRemoteResource(store, "projects", "memory-fake-project"), undefined);
+      assert.ok(getRemoteResource(store, "notes", "note-preserved"));
+      assert.equal(getRemoteResource(store, "project_context", "project-1")?.version, 3);
+      assert.equal(getMeta(store, "remoteSyncCursor"), "51");
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("refetches invalidations and applies delete, duplicate, out-of-order, and self events safely", async () => {
+    const { store, state } = await createState();
+    let detailFetches = 0;
+    try {
+      setMeta(store, "remoteArtifactCursor", "100");
+      setMeta(store, "remoteArtifactSnapshotComplete", "1");
+      setMeta(store, PROJECT_CONTEXT_SUPPORTED_META_KEY, "1");
+      setMeta(store, PROJECT_CONTEXT_SNAPSHOT_COMPLETE_META_KEY, "1");
+      upsertRemoteResource(store, {
+        domain: "project_context",
+        resourceId: "project-1",
+        version: 5,
+        payload: projectContextSnapshot("project-1")
+      });
+
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "http://core.test/api/sync/pull?cursor=100&limit=100") {
+          const invalidate = (version: number, localClientId?: string) => ({
+            domain: "project_context",
+            resourceId: "project-1",
+            action: "update",
+            version,
+            createdAt: `2026-06-21T00:00:${String(version).padStart(2, "0")}.000Z`,
+            payload: {
+              schemaVersion: 1,
+              kind: "invalidate",
+              projectId: "project-1",
+              changed: ["memory"],
+              ...(localClientId ? { localClientId } : {})
+            }
+          });
+          return jsonResponse({
+            events: [
+              invalidate(6),
+              invalidate(6),
+              invalidate(5),
+              invalidate(7, "client-1"),
+              {
+                cursor: "108",
+                domain: "project_context",
+                resourceId: "project-1",
+                action: "delete",
+                version: 8,
+                createdAt: "2026-06-21T00:00:08.000Z",
+                payload: { schemaVersion: 1, projectId: "project-1", deleted: true }
+              },
+              invalidate(7)
+            ],
+            nextCursor: "108"
+          });
+        }
+        if (url === "http://core.test/api/sync/project-context/project-1") {
+          detailFetches += 1;
+          return jsonResponse(projectContextSnapshot("project-1", "2026-06-21T00:00:06.000Z"));
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      }) as typeof fetch;
+
+      await pullRemoteArtifactSyncState(state);
+
+      const resource = getRemoteResource(store, "project_context", "project-1");
+      assert.equal(detailFetches, 1);
+      assert.equal(resource?.deleted, true);
+      assert.equal(resource?.version, 8);
+      assert.equal(getMeta(store, "remoteSyncCursor"), "108");
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("fails closed on a malformed paged context snapshot without publishing partial rows", async () => {
+    const { store, state } = await createState();
+    try {
+      setMeta(store, PROJECT_CONTEXT_SUPPORTED_META_KEY, "1");
+      setMeta(store, PROJECT_CONTEXT_SNAPSHOT_COMPLETE_META_KEY, "1");
+      upsertRemoteResource(store, {
+        domain: "project_context",
+        resourceId: "project-old",
+        version: 9,
+        payload: projectContextSnapshot("project-old")
+      });
+
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "http://core.test/api/sync/snapshot?domains=projects%2Cnotes%2Cartifacts%2Ctasks") {
+          return jsonResponse({
+            generatedAt: "2026-06-21T00:00:00.000Z",
+            baselineCursor: "50",
+            supportedDomains: ["projects", "notes", "artifacts", "tasks", "project_context"],
+            domains: { projects: { items: [{ id: "project-new", name: "New Project", status: "active" }] } }
+          });
+        }
+        if (url === "http://core.test/api/sync/snapshot?domains=project_context&limit=100&baselineCursor=50") {
+          return jsonResponse({
+            generatedAt: "2026-06-21T00:00:01.000Z",
+            baselineCursor: "50",
+            supportedDomains: ["projects", "notes", "artifacts", "tasks", "project_context"],
+            domains: {
+              project_context: {
+                items: [projectContextSnapshot("project-new")],
+                nextCursor: "page-2"
+              }
+            }
+          });
+        }
+        if (url === "http://core.test/api/sync/snapshot?domains=project_context&cursor=page-2&limit=100&baselineCursor=50") {
+          return jsonResponse({
+            generatedAt: "2026-06-21T00:00:02.000Z",
+            baselineCursor: "50",
+            supportedDomains: ["projects", "notes", "artifacts", "tasks", "project_context"],
+            domains: { project_context: { items: "not-an-array" } }
+          });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      }) as typeof fetch;
+
+      await assert.rejects(
+        () => pullRemoteArtifactSyncState(state),
+        (error: unknown) => error instanceof Error
+          && "code" in error
+          && error.code === "LOCAL_PROJECT_CONTEXT_INVALID_SNAPSHOT"
+      );
+
+      assert.equal(getRemoteResource(store, "project_context", "project-new"), undefined);
+      assert.equal(getRemoteResource(store, "project_context", "project-old")?.version, 9);
+      assert.equal(getMeta(store, PROJECT_CONTEXT_SUPPORTED_META_KEY), "1");
+      assert.equal(getMeta(store, PROJECT_CONTEXT_SNAPSHOT_COMPLETE_META_KEY), "1");
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("rejects a mismatched detail refetch without overwriting another Project cache row", async () => {
+    const { store, state } = await createState();
+    try {
+      setMeta(store, "remoteArtifactCursor", "100");
+      setMeta(store, "remoteArtifactSnapshotComplete", "1");
+      setMeta(store, PROJECT_CONTEXT_SUPPORTED_META_KEY, "1");
+      setMeta(store, PROJECT_CONTEXT_SNAPSHOT_COMPLETE_META_KEY, "1");
+      upsertRemoteResource(store, {
+        domain: "project_context",
+        resourceId: "project-1",
+        version: 5,
+        payload: projectContextSnapshot("project-1")
+      });
+      upsertRemoteResource(store, {
+        domain: "project_context",
+        resourceId: "project-2",
+        version: 11,
+        payload: projectContextSnapshot("project-2", "2026-06-21T00:00:02.000Z")
+      });
+
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "http://core.test/api/sync/pull?cursor=100&limit=100") {
+          return jsonResponse({
+            events: [{
+              domain: "project_context",
+              resourceId: "project-1",
+              action: "update",
+              version: 6,
+              payload: { schemaVersion: 1, kind: "invalidate", projectId: "project-1", changed: ["brief"] }
+            }],
+            nextCursor: "101"
+          });
+        }
+        if (url === "http://core.test/api/sync/project-context/project-1") {
+          return jsonResponse(projectContextSnapshot("project-2", "2026-06-21T00:00:09.000Z"));
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      }) as typeof fetch;
+
+      await assert.rejects(
+        () => pullRemoteArtifactSyncState(state),
+        (error: unknown) => error instanceof Error
+          && "code" in error
+          && error.code === "LOCAL_PROJECT_CONTEXT_INVALID_SNAPSHOT"
+      );
+      assert.equal(getRemoteResource(store, "project_context", "project-1")?.version, 5);
+      assert.equal(getRemoteResource(store, "project_context", "project-2")?.version, 11);
+      assert.equal(
+        getRemoteResource(store, "project_context", "project-2")?.payload.fetchedAt,
+        "2026-06-21T00:00:02.000Z"
+      );
+      assert.equal(getMeta(store, "remoteSyncCursor"), undefined);
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("does not apply an unknown context schema and requests a safe full rescan", async () => {
+    const { store, state } = await createState();
+    try {
+      setMeta(store, "remoteArtifactCursor", "100");
+      setMeta(store, "remoteArtifactSnapshotComplete", "1");
+      setMeta(store, PROJECT_CONTEXT_SUPPORTED_META_KEY, "1");
+      setMeta(store, PROJECT_CONTEXT_SNAPSHOT_COMPLETE_META_KEY, "1");
+      setMeta(store, "projectContextBaselineCursor", "50");
+      upsertRemoteResource(store, {
+        domain: "project_context",
+        resourceId: "project-1",
+        version: 5,
+        payload: projectContextSnapshot("project-1")
+      });
+      state.tickRunning = true;
+
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "http://core.test/api/sync/pull?cursor=100&limit=100") {
+          return jsonResponse({
+            events: [{
+              domain: "project_context",
+              resourceId: "project-1",
+              action: "update",
+              version: 6,
+              payload: { schemaVersion: 2, kind: "invalidate", projectId: "project-1", changed: ["memory"] }
+            }],
+            nextCursor: "101"
+          });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      }) as typeof fetch;
+
+      await pullRemoteArtifactSyncState(state);
+
+      assert.equal(getRemoteResource(store, "project_context", "project-1")?.version, 5);
+      assert.equal(getMeta(store, PROJECT_CONTEXT_SUPPORTED_META_KEY), undefined);
+      assert.equal(getMeta(store, PROJECT_CONTEXT_SNAPSHOT_COMPLETE_META_KEY), undefined);
+      assert.equal(getMeta(store, "projectContextBaselineCursor"), undefined);
+      assert.equal(getMeta(store, "remoteArtifactSnapshotComplete"), undefined);
+      assert.equal(state.tickQueued, true);
+    } finally {
+      state.tickRunning = false;
       closeManifestStore(store);
     }
   });

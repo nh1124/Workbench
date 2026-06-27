@@ -17,7 +17,7 @@ export type ManifestResource = {
   lastError?: string;
 };
 
-export type RemoteResourceDomain = "projects" | "notes" | "artifacts" | "tasks";
+export type RemoteResourceDomain = "projects" | "notes" | "artifacts" | "tasks" | "project_context";
 
 export type RemoteResource = {
   domain: RemoteResourceDomain;
@@ -761,6 +761,20 @@ export function listRemoteResources(
     ORDER BY domain ASC, updated_at DESC, resource_id ASC
     LIMIT ?
   `).all(limit) as RemoteResourceRow[]).map(toRemoteResource);
+}
+
+export function listAllRemoteResourcesForDomain(
+  store: ManifestStore,
+  domain: RemoteResourceDomain,
+  options: { includeDeleted?: boolean } = {}
+): RemoteResource[] {
+  const deletedWhere = options.includeDeleted ? "" : "AND deleted = 0";
+  return (store.db.prepare(`
+    SELECT domain, resource_id, version, deleted, payload_json, updated_at, last_synced_at
+    FROM remote_resources
+    WHERE domain = ? ${deletedWhere}
+    ORDER BY updated_at DESC, resource_id ASC
+  `).all(domain) as RemoteResourceRow[]).map(toRemoteResource);
 }
 
 export function markRemoteResourceDeleted(
