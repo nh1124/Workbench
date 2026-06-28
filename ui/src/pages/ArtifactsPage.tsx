@@ -2625,13 +2625,43 @@ export function ArtifactsPage() {
                 {artifactSettingsOpen ? (
                   <div id="va-artifact-settings-panel" className="va-artifact-settings-panel">
                     <div className="va-artifact-settings-head">
-                      <div>
-                        <span className="va-field-label">File settings</span>
-                        <small>Tags, primary Project, and secondary Project memberships.</small>
-                      </div>
+                      <span className="va-field-label">File settings</span>
                       <button type="button" className="va-icon-btn" onClick={() => setArtifactSettingsOpen(false)} aria-label="Close artifact settings">
                         <IcoClose />
                       </button>
+                    </div>
+
+                    <div className="va-artifact-settings-section">
+                      <span className="va-field-label">Tags</span>
+                      <div className="va-edit-tags-wrap" onClick={() => document.getElementById("va-artifact-tag-input")?.focus()}>
+                        {draft.tags.map((tag) => (
+                          <span key={tag} className="va-tag-chip">
+                            {tag}
+                            <button
+                              type="button"
+                              onClick={() => setDraft((prev) => ({ ...prev, tags: prev.tags.filter((value) => value !== tag) }))}
+                              aria-label={`Remove ${tag}`}
+                            >
+                              <IcoClose />
+                            </button>
+                          </span>
+                        ))}
+                        <input
+                          id="va-artifact-tag-input"
+                          value={tagInput}
+                          onChange={(event) => setTagInput(event.target.value)}
+                          onKeyDown={handleTagInputKeyDown}
+                          onBlur={() => {
+                            const normalized = tagInput.trim();
+                            if (!normalized) return;
+                            if (!draft.tags.some((tag) => tag.toLowerCase() === normalized.toLowerCase())) {
+                              setDraft((prev) => ({ ...prev, tags: [...prev.tags, normalized] }));
+                            }
+                            setTagInput("");
+                          }}
+                          placeholder="Add tag"
+                        />
+                      </div>
                     </div>
 
                     <label className="va-detail-project-picker">
@@ -2644,36 +2674,6 @@ export function ArtifactsPage() {
                         ))}
                       </select>
                     </label>
-
-                    <div className="va-edit-tags-wrap" onClick={() => document.getElementById("va-artifact-tag-input")?.focus()}>
-                      {draft.tags.map((tag) => (
-                        <span key={tag} className="va-tag-chip">
-                          {tag}
-                          <button
-                            type="button"
-                            onClick={() => setDraft((prev) => ({ ...prev, tags: prev.tags.filter((value) => value !== tag) }))}
-                            aria-label={`Remove ${tag}`}
-                          >
-                            <IcoClose />
-                          </button>
-                        </span>
-                      ))}
-                      <input
-                        id="va-artifact-tag-input"
-                        value={tagInput}
-                        onChange={(event) => setTagInput(event.target.value)}
-                        onKeyDown={handleTagInputKeyDown}
-                        onBlur={() => {
-                          const normalized = tagInput.trim();
-                          if (!normalized) return;
-                          if (!draft.tags.some((tag) => tag.toLowerCase() === normalized.toLowerCase())) {
-                            setDraft((prev) => ({ ...prev, tags: [...prev.tags, normalized] }));
-                          }
-                          setTagInput("");
-                        }}
-                        placeholder="Add tag"
-                      />
-                    </div>
 
                     {selectedItemSummary ? (
                       <ArtifactProjectMemberships

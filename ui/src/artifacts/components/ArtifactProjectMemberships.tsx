@@ -64,11 +64,6 @@ export function ArtifactProjectMemberships({ item, projects }: ArtifactProjectMe
     };
   }, [item.id, item.projectId, item.version]);
 
-  const primary = memberships.find((membership) => membership.role === "primary") ?? {
-    projectId: item.projectId,
-    projectName: item.projectName,
-    role: "primary" as const
-  };
   const secondary = loadedItemId === item.id
     ? memberships.filter((membership) => membership.role === "secondary")
     : [];
@@ -78,9 +73,10 @@ export function ArtifactProjectMemberships({ item, projects }: ArtifactProjectMe
   );
   const displayProjectName = (projectId: string, snapshotName?: string) =>
     normalizeProjectName(projectId, snapshotName || projectNameById.get(projectId));
+  const primaryProjectId = memberships.find((membership) => membership.role === "primary")?.projectId ?? item.projectId;
   const linkedProjectIds = useMemo(
-    () => new Set([primary.projectId, ...secondary.map((membership) => membership.projectId)]),
-    [primary.projectId, secondary]
+    () => new Set([primaryProjectId, ...secondary.map((membership) => membership.projectId)]),
+    [primaryProjectId, secondary]
   );
   const availableProjects = projects.filter((project) => !linkedProjectIds.has(project.id) && project.status !== "archived");
 
@@ -116,7 +112,7 @@ export function ArtifactProjectMemberships({ item, projects }: ArtifactProjectMe
     const currentMembership = memberships.find((entry) => entry.projectId === membership.projectId);
     if (currentMembership?.role !== "secondary") return;
     const operationItemId = item.id;
-    const label = normalizeProjectName(currentMembership.projectId, currentMembership.projectName);
+    const label = displayProjectName(currentMembership.projectId, currentMembership.projectName);
     if (!window.confirm(`Remove the secondary Project membership for ${label}?\n\nThe Artifact itself will remain.`)) return;
     setIsSaving(true);
     setError(null);
@@ -136,13 +132,12 @@ export function ArtifactProjectMemberships({ item, projects }: ArtifactProjectMe
   };
 
   return (
-    <section className="artifact-memberships span-2" aria-label="Artifact Project memberships">
-      <div className="artifact-memberships-head"><div><span className="va-field-label">Projects</span><small>One primary Project owns this Artifact; secondary Projects reference the same content.</small></div>{isLoading ? <small>Loading...</small> : null}</div>
-      <div className="artifact-membership-primary"><span className="artifact-membership-role">Primary</span><strong>{displayProjectName(primary.projectId, primary.projectName)}</strong><small>Change the primary Project with the file settings control.</small></div>
+    <section className="artifact-memberships" aria-label="Artifact Project memberships">
+      <div className="artifact-memberships-head"><span className="va-field-label">Secondary Projects</span>{isLoading ? <small>Loading...</small> : null}</div>
       <ul className="artifact-membership-list">
         {secondary.map((membership) => <li key={membership.projectId}>
-          <div><span className="artifact-membership-role secondary">Secondary</span><strong>{displayProjectName(membership.projectId, membership.projectName)}</strong>{membership.note ? <small>{membership.note}</small> : null}</div>
-          <button type="button" className="ghost-button" onClick={() => void unlink(membership)} disabled={isSaving || isLoading || loadedItemId !== item.id}>Remove membership</button>
+          <div><strong>{displayProjectName(membership.projectId, membership.projectName)}</strong>{membership.note ? <small>{membership.note}</small> : null}</div>
+          <button type="button" className="artifact-membership-remove" onClick={() => void unlink(membership)} disabled={isSaving || isLoading || loadedItemId !== item.id} aria-label="Remove membership">Remove</button>
         </li>)}
         {secondary.length === 0 ? <li className="artifact-membership-empty">No secondary Projects.</li> : null}
       </ul>
@@ -151,8 +146,8 @@ export function ArtifactProjectMemberships({ item, projects }: ArtifactProjectMe
           <option value="">Add a secondary Project</option>
           {availableProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
         </select>
-        <input value={note} onChange={(event) => setNote(event.target.value)} placeholder="Why is this Artifact relevant? (optional)" />
-        <button type="submit" disabled={isSaving || isLoading || loadedItemId !== item.id || !targetProjectId}>{isSaving ? "Adding..." : "Add membership"}</button>
+        <input value={note} onChange={(event) => setNote(event.target.value)} placeholder="Note (optional)" />
+        <button type="submit" className="artifact-membership-add" disabled={isSaving || isLoading || loadedItemId !== item.id || !targetProjectId}>{isSaving ? "Adding..." : "Add"}</button>
       </form>
       {item.kind === "folder" ? <p className="artifact-membership-warning">Secondary membership applies to this folder only. It is not inherited by descendants.</p> : null}
       {error ? <p className="artifact-membership-error">{error}</p> : null}

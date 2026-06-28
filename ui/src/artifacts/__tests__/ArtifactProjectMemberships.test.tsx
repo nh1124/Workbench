@@ -54,18 +54,16 @@ describe("ArtifactProjectMemberships", () => {
     );
 
     expect(await screen.findByText("Secondary Project")).toBeTruthy();
-    expect(screen.getByText("Primary Project")).toBeTruthy();
     expect(screen.getAllByRole("button", { name: "Remove membership" })).toHaveLength(1);
 
     fireEvent.click(screen.getByRole("button", { name: "Remove membership" }));
 
     await waitFor(() => expect(artifactsApi.unlinkProject).toHaveBeenCalledWith("artifact-a", "project-secondary"));
     await waitFor(() => expect(within(screen.getByRole("list")).queryByText("Secondary Project")).toBeNull());
-    expect(screen.getByText("Primary Project")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Remove membership" })).toBeNull();
   });
 
-  it("uses loaded Project names when membership snapshots only contain IDs", async () => {
+  it("uses loaded Project names for secondary memberships when snapshots only contain IDs", async () => {
     vi.spyOn(artifactsApi, "listProjectMemberships").mockResolvedValueOnce({
       artifactItemId: item.id,
       memberships: [
@@ -84,8 +82,7 @@ describe("ArtifactProjectMemberships", () => {
       />
     );
 
-    expect(await screen.findByText("Primary Project")).toBeTruthy();
     expect(await screen.findByText("Secondary Project")).toBeTruthy();
-    expect(screen.queryByText("project-primary")).toBeNull();
+    expect(screen.queryByText("project-secondary")).toBeNull();
   });
 });
