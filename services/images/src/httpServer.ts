@@ -121,6 +121,18 @@ function ownerFromRequest(req: express.Request, res: express.Response): string |
   return owner;
 }
 
+type AsyncRouteHandler = (
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) => Promise<unknown>;
+
+function asyncRoute(handler: AsyncRouteHandler): express.RequestHandler {
+  return (req, res, next) => {
+    void handler(req, res, next).catch(next);
+  };
+}
+
 function respondImageError(res: express.Response, error: unknown): express.Response {
   if (error instanceof ImageProviderError || error instanceof ImageServiceError) {
     return res.status(error.status).json({ message: error.message, code: error.code });
@@ -137,7 +149,7 @@ app.get("/health", (_req, res) => {
   });
 });
 
-app.post("/internal/accounts", requireInternalApiKey, async (req, res) => {
+app.post("/internal/accounts", requireInternalApiKey, asyncRoute(async (req, res) => {
   const parsed = internalAccountSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ message: parsed.error.flatten() });
@@ -145,14 +157,14 @@ app.post("/internal/accounts", requireInternalApiKey, async (req, res) => {
 
   await upsertServiceAccount(parsed.data.coreUserId, parsed.data.username);
   return res.status(201).json({ status: "ok", service: "images" });
-});
+}));
 
-app.get("/images/defaults", requireUserAuth, async (_req, res) => {
+app.get("/images/defaults", requireUserAuth, asyncRoute(async (_req, res) => {
   const defaults = await imageDefaults();
   return res.json(defaults);
-});
+}));
 
-app.post("/images/references", requireUserAuth, upload.single("file"), async (req, res) => {
+app.post("/images/references", requireUserAuth, upload.single("file"), asyncRoute(async (req, res) => {
   const owner = ownerFromRequest(req, res);
   if (!owner) return;
   if (!req.file) {
@@ -179,9 +191,9 @@ app.post("/images/references", requireUserAuth, upload.single("file"), async (re
   } catch (error) {
     return respondImageError(res, error);
   }
-});
+}));
 
-app.post("/images/generations", requireUserAuth, async (req, res) => {
+app.post("/images/generations", requireUserAuth, asyncRoute(async (req, res) => {
   const owner = ownerFromRequest(req, res);
   if (!owner) return;
   const parsed = generationSchema.safeParse(req.body);
@@ -195,17 +207,17 @@ app.post("/images/generations", requireUserAuth, async (req, res) => {
   } catch (error) {
     return respondImageError(res, error);
   }
-});
+}));
 
-app.get("/images/generations", requireUserAuth, async (req, res) => {
+app.get("/images/generations", requireUserAuth, asyncRoute(async (req, res) => {
   const owner = ownerFromRequest(req, res);
   if (!owner) return;
   const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
   const items = await listImageJobs(owner, Number.isFinite(limit) ? limit : undefined);
   return res.json({ items });
-});
+}));
 
-app.get("/images/generations/:jobId", requireUserAuth, async (req, res) => {
+app.get("/images/generations/:jobId", requireUserAuth, asyncRoute(async (req, res) => {
   const owner = ownerFromRequest(req, res);
   if (!owner) return;
   const job = await getImageJob(owner, String(req.params.jobId));
@@ -213,9 +225,9 @@ app.get("/images/generations/:jobId", requireUserAuth, async (req, res) => {
     return res.status(404).json({ message: "Image generation job not found" });
   }
   return res.json(job);
-});
+}));
 
-app.post("/images/generations/:jobId/cancel", requireUserAuth, async (req, res) => {
+app.post("/images/generations/:jobId/cancel", requireUserAuth, asyncRoute(async (req, res) => {
   const owner = ownerFromRequest(req, res);
   if (!owner) return;
   const job = await cancelImageJob(owner, String(req.params.jobId));
@@ -223,9 +235,9 @@ app.post("/images/generations/:jobId/cancel", requireUserAuth, async (req, res) 
     return res.status(404).json({ message: "Image generation job not found" });
   }
   return res.json(job);
-});
+}));
 
-app.delete("/images/generations/:jobId", requireUserAuth, async (req, res) => {
+app.delete("/images/generations/:jobId", requireUserAuth, asyncRoute(async (req, res) => {
   const owner = ownerFromRequest(req, res);
   if (!owner) return;
   const deleted = await deleteImageJob(owner, String(req.params.jobId));
@@ -233,9 +245,9 @@ app.delete("/images/generations/:jobId", requireUserAuth, async (req, res) => {
     return res.status(404).json({ message: "Image generation job not found" });
   }
   return res.status(204).send();
-});
+}));
 
-app.post("/images/generations/:jobId/retry", requireUserAuth, async (req, res) => {
+app.post("/images/generations/:jobId/retry", requireUserAuth, asyncRoute(async (req, res) => {
   const owner = ownerFromRequest(req, res);
   if (!owner) return;
   const parsed = retrySchema.safeParse(req.body ?? {});
@@ -252,9 +264,9 @@ app.post("/images/generations/:jobId/retry", requireUserAuth, async (req, res) =
   } catch (error) {
     return respondImageError(res, error);
   }
-});
+}));
 
-app.get("/images/assets/:assetId", requireUserAuth, async (req, res) => {
+app.get("/images/assets/:assetId", requireUserAuth, asyncRoute(async (req, res) => {
   const owner = ownerFromRequest(req, res);
   if (!owner) return;
   const asset = await getImageAsset(owner, String(req.params.assetId));
@@ -262,9 +274,9 @@ app.get("/images/assets/:assetId", requireUserAuth, async (req, res) => {
     return res.status(404).json({ message: "Image asset not found" });
   }
   return res.json(asset);
-});
+}));
 
-app.get("/images/assets/:assetId/download", requireUserAuth, async (req, res) => {
+app.get("/images/assets/:assetId/download", requireUserAuth, asyncRoute(async (req, res) => {
   const owner = ownerFromRequest(req, res);
   if (!owner) return;
   const data = await readImageAssetData(owner, String(req.params.assetId));
@@ -278,9 +290,9 @@ app.get("/images/assets/:assetId/download", requireUserAuth, async (req, res) =>
   res.setHeader("Content-Length", String(data.buffer.length));
   res.setHeader("Content-Disposition", `${disposition}; filename*=UTF-8''${encodeURIComponent(data.fileName)}`);
   return res.send(data.buffer);
-});
+}));
 
-app.delete("/images/assets/:assetId", requireUserAuth, async (req, res) => {
+app.delete("/images/assets/:assetId", requireUserAuth, asyncRoute(async (req, res) => {
   const owner = ownerFromRequest(req, res);
   if (!owner) return;
   const deleted = await deleteImageAsset(owner, String(req.params.assetId));
@@ -288,9 +300,9 @@ app.delete("/images/assets/:assetId", requireUserAuth, async (req, res) => {
     return res.status(404).json({ message: "Image asset not found" });
   }
   return res.status(204).send();
-});
+}));
 
-app.post("/images/assets/:assetId/artifact", requireUserAuth, async (req, res) => {
+app.post("/images/assets/:assetId/artifact", requireUserAuth, asyncRoute(async (req, res) => {
   const owner = ownerFromRequest(req, res);
   if (!owner) return;
   const parsed = artifactAttachSchema.safeParse(req.body);
@@ -302,6 +314,14 @@ app.post("/images/assets/:assetId/artifact", requireUserAuth, async (req, res) =
     return res.status(404).json({ message: "Image asset not found" });
   }
   return res.json(updated);
+}));
+
+app.use((error: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (res.headersSent) {
+    next(error);
+    return;
+  }
+  respondImageError(res, error);
 });
 
 const port = Number(requireEnv("IMAGES_SERVICE_PORT"));

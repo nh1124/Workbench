@@ -107,6 +107,10 @@ function normalizeOwner(ownerCoreUserId: string): string {
   return owner;
 }
 
+function isMissingFileError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
 function dateOrUndefined(value: string | null): string | undefined {
   return value ? new Date(value).toISOString() : undefined;
 }
@@ -503,7 +507,15 @@ export async function readImageAssetData(
   const owner = normalizeOwner(ownerCoreUserId);
   const row = await getAssetRow(owner, assetId);
   if (!row) return undefined;
-  const buffer = await readImageBuffer(row.storage_key);
+  let buffer: Buffer;
+  try {
+    buffer = await readImageBuffer(row.storage_key);
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return undefined;
+    }
+    throw error;
+  }
   const extension = row.mime_type === "image/jpeg" ? "jpg" : row.mime_type === "image/webp" ? "webp" : "png";
   return {
     asset: toAsset(row),
