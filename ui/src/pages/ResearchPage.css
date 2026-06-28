@@ -1,6 +1,39 @@
 .research-shell {
+  height: 100%;
+  min-height: calc(100vh - 96px);
+}
+
+.research-workbench {
   display: grid;
+  grid-template-columns: minmax(520px, 1.05fr) minmax(420px, 0.95fr);
   gap: 0.9rem;
+  min-height: 0;
+  height: 100%;
+}
+
+.research-control-panel,
+.research-output-panel {
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid rgba(51, 65, 85, 0.7);
+  border-radius: 14px;
+  background: #0f172a;
+  color: #e5e7eb;
+}
+
+.research-control-panel {
+  display: grid;
+  align-content: start;
+  gap: 0.75rem;
+  padding: 0.95rem;
+}
+
+.research-output-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: #0b1220;
+  overflow: hidden;
+  padding: 0;
 }
 
 .research-tabs {
@@ -9,7 +42,7 @@
   flex-wrap: wrap;
   gap: 0.15rem;
   border-bottom: 1px solid rgba(51, 65, 85, 0.72);
-  padding-top: 0.15rem;
+  padding: 0.15rem 0.9rem 0;
 }
 
 .research-tab {
@@ -39,11 +72,33 @@
   color: #e0f2fe;
 }
 
+.research-tab span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.3rem;
+  margin-left: 0.45rem;
+  border-radius: 999px;
+  background: rgba(8, 145, 178, 0.42);
+  color: #cffafe;
+  font-size: 0.7rem;
+  letter-spacing: 0;
+  padding: 0.08rem 0.34rem;
+}
+
 .research-form-panel,
 .research-status-panel,
-.research-result-panel {
+.research-result-panel,
+.research-output-body {
   display: grid;
   gap: 0.75rem;
+}
+
+.research-output-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 0.95rem;
+  align-content: start;
 }
 
 .research-empty-state {
@@ -99,8 +154,7 @@
 
 .research-toggle-row {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.9rem;
+  gap: 0.65rem;
 }
 
 .research-switch {
@@ -187,20 +241,26 @@
 }
 
 .research-actions-row {
-  justify-content: flex-end;
+  justify-content: stretch;
+}
+
+.research-actions-row button {
+  width: 100%;
 }
 
 .research-metrics-tray {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.6rem;
+  align-items: stretch;
 }
 
 .research-metric {
   border: 1px solid rgba(71, 85, 105, 0.72);
   border-radius: 10px;
   background: rgba(11, 24, 46, 0.66);
-  padding: 0.58rem 0.68rem;
+  min-height: 88px;
+  padding: 0.7rem 0.78rem;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -267,6 +327,11 @@
 
 .research-running-section h4 {
   margin: 0 0 0.45rem;
+}
+
+.research-status-panel {
+  grid-template-rows: auto auto auto auto;
+  align-content: start;
 }
 
 .research-running-list {
@@ -384,7 +449,7 @@
   padding: 0;
   display: grid;
   gap: 0.48rem;
-  max-height: 280px;
+  max-height: none;
   overflow: auto;
 }
 
@@ -432,7 +497,8 @@
   border-radius: 10px;
   background: #0b1220;
   padding: 0.75rem;
-  max-height: 56vh;
+  max-height: none;
+  min-height: 0;
   overflow: auto;
 }
 
@@ -453,6 +519,9 @@
 
 /* Match Tasks/Notes/Artifacts scrollbar style */
 .page-frame.research-page-frame,
+.research-control-panel,
+.research-output-panel,
+.research-output-body,
 .research-markdown,
 .research-log-list,
 .research-history-list {
@@ -461,6 +530,9 @@
 }
 
 .page-frame.research-page-frame::-webkit-scrollbar,
+.research-control-panel::-webkit-scrollbar,
+.research-output-panel::-webkit-scrollbar,
+.research-output-body::-webkit-scrollbar,
 .research-markdown::-webkit-scrollbar,
 .research-log-list::-webkit-scrollbar,
 .research-history-list::-webkit-scrollbar {
@@ -469,6 +541,9 @@
 }
 
 .page-frame.research-page-frame::-webkit-scrollbar-track,
+.research-control-panel::-webkit-scrollbar-track,
+.research-output-panel::-webkit-scrollbar-track,
+.research-output-body::-webkit-scrollbar-track,
 .research-markdown::-webkit-scrollbar-track,
 .research-log-list::-webkit-scrollbar-track,
 .research-history-list::-webkit-scrollbar-track {
@@ -477,6 +552,9 @@
 }
 
 .page-frame.research-page-frame::-webkit-scrollbar-thumb,
+.research-control-panel::-webkit-scrollbar-thumb,
+.research-output-panel::-webkit-scrollbar-thumb,
+.research-output-body::-webkit-scrollbar-thumb,
 .research-markdown::-webkit-scrollbar-thumb,
 .research-log-list::-webkit-scrollbar-thumb,
 .research-history-list::-webkit-scrollbar-thumb {
@@ -486,6 +564,9 @@
 }
 
 .page-frame.research-page-frame::-webkit-scrollbar-button,
+.research-control-panel::-webkit-scrollbar-button,
+.research-output-panel::-webkit-scrollbar-button,
+.research-output-body::-webkit-scrollbar-button,
 .research-markdown::-webkit-scrollbar-button,
 .research-log-list::-webkit-scrollbar-button,
 .research-history-list::-webkit-scrollbar-button {
@@ -495,6 +576,10 @@
 }
 
 @media (max-width: 980px) {
+  .research-workbench {
+    grid-template-columns: 1fr;
+  }
+
   .research-grid {
     grid-template-columns: 1fr;
   }

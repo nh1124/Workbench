@@ -12,7 +12,7 @@ import type {
 } from "../types/models";
 import "./ResearchPage.css";
 
-type ResearchTab = "query" | "status" | "history";
+type ResearchTab = "result" | "status" | "history";
 type ProviderChoice = "auto" | "gemini" | "openai" | "anthropic";
 
 interface ProviderOption {
@@ -133,7 +133,7 @@ export function ResearchPage() {
   const [defaults, setDefaults] = useState<DeepResearchDefaultsResponse | null>(null);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [history, setHistory] = useState<DeepResearchHistoryEntry[]>([]);
-  const [activeTab, setActiveTab] = useState<ResearchTab>("query");
+  const [activeTab, setActiveTab] = useState<ResearchTab>("result");
   const [query, setQuery] = useState("");
   const [provider, setProvider] = useState<ProviderChoice>("auto");
   const [speed, setSpeed] = useState<"deep" | "fast">("deep");
@@ -451,36 +451,8 @@ export function ResearchPage() {
 
   return (
     <section className="research-shell">
-      <header className="page-header">
-        <h2>Research</h2>
-      </header>
-
-      <nav className="research-tabs" aria-label="Research tabs">
-        <button
-          type="button"
-          className={activeTab === "query" ? "research-tab active" : "research-tab"}
-          onClick={() => setActiveTab("query")}
-        >
-          Query
-        </button>
-        <button
-          type="button"
-          className={activeTab === "status" ? "research-tab active" : "research-tab"}
-          onClick={() => setActiveTab("status")}
-        >
-          Run Status
-        </button>
-        <button
-          type="button"
-          className={activeTab === "history" ? "research-tab active" : "research-tab"}
-          onClick={() => setActiveTab("history")}
-        >
-          History
-        </button>
-      </nav>
-
-      {activeTab === "query" ? (
-        <article className="panel research-form-panel">
+      <section className="research-workbench">
+        <aside className="panel research-control-panel">
           {!hasAnyConfiguredProvider ? (
             <div className="research-empty-state">
               <h3>No Provider Key Configured</h3>
@@ -617,171 +589,199 @@ export function ResearchPage() {
           </fieldset>
 
           {error ? <p className="error">{error}</p> : null}
-        </article>
-      ) : null}
+        </aside>
 
-      {activeTab === "status" ? (
-        <article className="panel research-status-panel">
-          <div className="research-metrics-tray">
-            <div className="research-metric">
-              <small>Completed</small>
-              <strong>{completedCount}</strong>
-            </div>
-            <div className="research-metric">
-              <small>Running</small>
-              <strong>{runningRows.length}</strong>
-            </div>
-          </div>
+        <main className="panel research-output-panel">
+          <nav className="research-tabs" aria-label="Research output tabs">
+            <button
+              type="button"
+              className={activeTab === "result" ? "research-tab active" : "research-tab"}
+              onClick={() => setActiveTab("result")}
+            >
+              Result
+            </button>
+            <button
+              type="button"
+              className={activeTab === "status" ? "research-tab active" : "research-tab"}
+              onClick={() => setActiveTab("status")}
+            >
+              Run Status
+              <span>{runningRows.length}</span>
+            </button>
+            <button
+              type="button"
+              className={activeTab === "history" ? "research-tab active" : "research-tab"}
+              onClick={() => setActiveTab("history")}
+            >
+              History
+              <span>{history.length}</span>
+            </button>
+          </nav>
 
-          {jobStatus?.errorMessage ? <p className="error">{jobStatus.errorMessage}</p> : null}
-          {jobStatus?.artifactSaveError ? <p className="error">{jobStatus.artifactSaveError}</p> : null}
-          {error ? <p className="error">{error}</p> : null}
+          {activeTab === "result" ? (
+            <section className="research-output-body research-history-result-panel">
+              <div className="research-status-top">
+                <h3>Selected Result</h3>
+                {currentJobId ? <small>Job ID: {currentJobId}</small> : null}
+              </div>
 
-          <section className="research-running-section">
-            <h4>Running Jobs</h4>
-            {runningRows.length === 0 ? (
-              <p className="muted">No running jobs.</p>
-            ) : (
-              <ul className="research-running-list">
-                {runningRows.map((entry) => {
-                  const rowLogs = entry.jobId ? logsByJobId.get(entry.jobId) ?? [] : [];
-                  const expanded = Boolean(expandedRunningRows[entry.key]);
-                  return (
-                    <li key={entry.key} className="research-running-item">
-                      <div className="research-running-item-head">
-                        <button
-                          type="button"
-                          className="research-row-toggle"
-                          onClick={() =>
-                            setExpandedRunningRows((current) => ({
-                              ...current,
-                              [entry.key]: !current[entry.key]
-                            }))
-                          }
-                          aria-expanded={expanded}
-                        >
-                          {expanded ? "Hide Logs" : "Show Logs"}
-                        </button>
-                        <div>
-                          <strong>{entry.query}</strong>
-                          <small>
-                            {providerDisplayName(entry.provider)} / {entry.speed.toUpperCase()} / {entry.message}
-                          </small>
-                          {entry.jobId ? <small>Job ID: {entry.jobId}</small> : <small>Job ID: assigning...</small>}
-                        </div>
-                        <div className="research-running-actions">
-                          {entry.jobId ? (
+              {artifactRef ? (
+                <div className="research-artifact-link">
+                  <span>Saved Artifact: {artifactRef.title}</span>
+                  <Link to={`/artifacts?item=${encodeURIComponent(artifactRef.id)}`}>Open Saved Result</Link>
+                </div>
+              ) : null}
+
+              {selectedJobId && !selectedJobCompleted ? (
+                <p className="muted">Selected job is not completed yet.</p>
+              ) : null}
+
+              {selectedJobCompleted && resultMarkdown ? (
+                <div className="research-markdown">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{resultMarkdown}</ReactMarkdown>
+                </div>
+              ) : null}
+
+              {!selectedJobId ? <p className="muted">Select a history item to view result.</p> : null}
+              {selectedJobId && selectedJobCompleted && !resultMarkdown ? (
+                <p className="muted">Result body is not available for the selected job yet.</p>
+              ) : null}
+            </section>
+          ) : null}
+
+          {activeTab === "status" ? (
+            <section className="research-output-body research-status-panel">
+              <div className="research-metrics-tray">
+                <div className="research-metric">
+                  <small>Completed</small>
+                  <strong>{completedCount}</strong>
+                </div>
+                <div className="research-metric">
+                  <small>Running</small>
+                  <strong>{runningRows.length}</strong>
+                </div>
+              </div>
+
+              {jobStatus?.errorMessage ? <p className="error">{jobStatus.errorMessage}</p> : null}
+              {jobStatus?.artifactSaveError ? <p className="error">{jobStatus.artifactSaveError}</p> : null}
+              {error ? <p className="error">{error}</p> : null}
+
+              <section className="research-running-section">
+                <h4>Running Jobs</h4>
+                {runningRows.length === 0 ? (
+                  <p className="muted">No running jobs.</p>
+                ) : (
+                  <ul className="research-running-list">
+                    {runningRows.map((entry) => {
+                      const rowLogs = entry.jobId ? logsByJobId.get(entry.jobId) ?? [] : [];
+                      const expanded = Boolean(expandedRunningRows[entry.key]);
+                      return (
+                        <li key={entry.key} className="research-running-item">
+                          <div className="research-running-item-head">
                             <button
                               type="button"
-                              className="ghost-button"
-                              onClick={() => void cancelJob(entry.jobId!)}
-                              disabled={cancellingJobId === entry.jobId || !entry.cancellable}
+                              className="research-row-toggle"
+                              onClick={() =>
+                                setExpandedRunningRows((current) => ({
+                                  ...current,
+                                  [entry.key]: !current[entry.key]
+                                }))
+                              }
+                              aria-expanded={expanded}
                             >
-                              {cancellingJobId === entry.jobId ? "Cancelling..." : "Cancel"}
+                              {expanded ? "Hide Logs" : "Show Logs"}
                             </button>
-                          ) : (
-                            <button type="button" className="ghost-button" disabled>
-                              Starting...
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                      {expanded ? (
-                        <div className="research-running-item-logs">
-                          {rowLogs.length > 0 ? (
-                            <ul className="research-log-list">
-                              {rowLogs.map((logEntry, index) => (
-                                <li key={`${entry.key}-${logEntry.at}-${logEntry.message}-${index}`}>
-                                  <span className={`research-log-level ${logEntry.level}`}>{logEntry.level.toUpperCase()}</span>
-                                  <span>{logEntry.message}</span>
-                                  <small>{shortIso(logEntry.at)}</small>
-                                </li>
-                              ))}
-                            </ul>
-                          ) : (
-                            <p className="muted">No logs yet for this job.</p>
-                          )}
-                        </div>
-                      ) : null}
+                            <div>
+                              <strong>{entry.query}</strong>
+                              <small>
+                                {providerDisplayName(entry.provider)} / {entry.speed.toUpperCase()} / {entry.message}
+                              </small>
+                              {entry.jobId ? <small>Job ID: {entry.jobId}</small> : <small>Job ID: assigning...</small>}
+                            </div>
+                            <div className="research-running-actions">
+                              {entry.jobId ? (
+                                <button
+                                  type="button"
+                                  className="ghost-button"
+                                  onClick={() => void cancelJob(entry.jobId!)}
+                                  disabled={cancellingJobId === entry.jobId || !entry.cancellable}
+                                >
+                                  {cancellingJobId === entry.jobId ? "Cancelling..." : "Cancel"}
+                                </button>
+                              ) : (
+                                <button type="button" className="ghost-button" disabled>
+                                  Starting...
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          {expanded ? (
+                            <div className="research-running-item-logs">
+                              {rowLogs.length > 0 ? (
+                                <ul className="research-log-list">
+                                  {rowLogs.map((logEntry, index) => (
+                                    <li key={`${entry.key}-${logEntry.at}-${logEntry.message}-${index}`}>
+                                      <span className={`research-log-level ${logEntry.level}`}>{logEntry.level.toUpperCase()}</span>
+                                      <span>{logEntry.message}</span>
+                                      <small>{shortIso(logEntry.at)}</small>
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <p className="muted">No logs yet for this job.</p>
+                              )}
+                            </div>
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </section>
+            </section>
+          ) : null}
+
+          {activeTab === "history" ? (
+            <section className="research-output-body research-history-panel">
+              <div className="research-history-top">
+                <h4>History</h4>
+                <button type="button" className="ghost-button" onClick={() => void refreshHistory()}>
+                  Refresh History
+                </button>
+              </div>
+              {historyUnsupported ? (
+                <p className="muted">
+                  Persistent history endpoint is unavailable in the current Core runtime. Restart Core to enable DB-backed history.
+                </p>
+              ) : null}
+              {history.length === 0 ? (
+                <p className="muted">No runs yet.</p>
+              ) : (
+                <ul className="research-history-list">
+                  {history.map((entry) => (
+                    <li key={entry.jobId}>
+                      <button
+                        type="button"
+                        className={entry.jobId === currentJobId ? "research-history-item active" : "research-history-item"}
+                        onClick={() => {
+                          setSelectedJobId(entry.jobId);
+                          setActiveTab("result");
+                        }}
+                      >
+                        <strong>{entry.query}</strong>
+                        <small>
+                          {providerDisplayName(entry.provider)} / {entry.speed.toUpperCase()} / {deriveRunStateLabel(entry.status)}
+                        </small>
+                        <small>{shortIso(entry.createdAt)}</small>
+                      </button>
                     </li>
-                  );
-                })}
-              </ul>
-            )}
-          </section>
-        </article>
-      ) : null}
-
-      {activeTab === "history" ? (
-        <article className="panel research-result-panel">
-          <section className="research-history-panel">
-            <div className="research-history-top">
-              <h4>History</h4>
-              <button type="button" className="ghost-button" onClick={() => void refreshHistory()}>
-                Refresh History
-              </button>
-            </div>
-            {historyUnsupported ? (
-              <p className="muted">
-                Persistent history endpoint is unavailable in the current Core runtime. Restart Core to enable DB-backed history.
-              </p>
-            ) : null}
-            {history.length === 0 ? (
-              <p className="muted">No runs yet.</p>
-            ) : (
-              <ul className="research-history-list">
-                {history.map((entry) => (
-                  <li key={entry.jobId}>
-                    <button
-                      type="button"
-                      className={entry.jobId === currentJobId ? "research-history-item active" : "research-history-item"}
-                      onClick={() => {
-                        setSelectedJobId(entry.jobId);
-                        setActiveTab("history");
-                      }}
-                    >
-                      <strong>{entry.query}</strong>
-                      <small>
-                        {providerDisplayName(entry.provider)} / {entry.speed.toUpperCase()} / {deriveRunStateLabel(entry.status)}
-                      </small>
-                      <small>{shortIso(entry.createdAt)}</small>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-
-          <section className="research-history-result-panel">
-            <div className="research-status-top">
-              <h3>Selected Result</h3>
-              {currentJobId ? <small>Job ID: {currentJobId}</small> : null}
-            </div>
-
-            {artifactRef ? (
-              <div className="research-artifact-link">
-                <span>Saved Artifact: {artifactRef.title}</span>
-                <Link to={`/artifacts?item=${encodeURIComponent(artifactRef.id)}`}>Open Saved Result</Link>
-              </div>
-            ) : null}
-
-            {selectedJobId && !selectedJobCompleted ? (
-              <p className="muted">Selected job is not completed yet.</p>
-            ) : null}
-
-            {selectedJobCompleted && resultMarkdown ? (
-              <div className="research-markdown">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{resultMarkdown}</ReactMarkdown>
-              </div>
-            ) : null}
-
-            {!selectedJobId ? <p className="muted">Select a history item to view result.</p> : null}
-            {selectedJobId && selectedJobCompleted && !resultMarkdown ? (
-              <p className="muted">Result body is not available for the selected job yet.</p>
-            ) : null}
-          </section>
-        </article>
-      ) : null}
+                  ))}
+                </ul>
+              )}
+            </section>
+          ) : null}
+        </main>
+      </section>
     </section>
   );
 }
