@@ -2632,7 +2632,6 @@ export function ArtifactsPage() {
                     </div>
 
                     <div className="va-artifact-settings-section">
-                      <span className="va-field-label">Tags</span>
                       <div className="va-edit-tags-wrap" onClick={() => document.getElementById("va-artifact-tag-input")?.focus()}>
                         {draft.tags.map((tag) => (
                           <span key={tag} className="va-tag-chip">

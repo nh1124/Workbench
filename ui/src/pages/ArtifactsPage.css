@@ -936,10 +936,10 @@
 
 .va-form-grid {
   min-height: 0;
-  overflow: visible;
-  align-content: start;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
   gap: 0.66rem;
   padding-right: 0.25rem;
   padding-bottom: 1rem;
@@ -957,7 +957,7 @@
 .va-shell.edit-mode .va-content-section textarea,
 .va-shell.edit-mode .va-notion-editor,
 .va-shell.edit-mode .va-markdown-preview {
-  min-height: min(58vh, 640px);
+  min-height: 0;
 }
 
 .va-tree-pane>.va-tree-list,
@@ -1067,12 +1067,19 @@
   gap: 0.34rem;
 }
 
+.va-content-section {
+  flex: 1 1 0;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
 .va-content-section textarea {
-  min-height: 320px;
+  min-height: 0;
+  resize: none;
 }
 
 .va-notion-editor {
-  min-height: 320px;
+  min-height: 0;
   border: 1px solid rgba(56, 75, 103, 0.88);
   border-radius: 12px;
   background: rgba(8, 14, 27, 0.93);
@@ -1604,6 +1611,8 @@
   align-items: center;
   justify-content: space-between;
   gap: 0.65rem;
+  flex: 0 0 auto;
+  margin-top: auto;
   color: #6f88ad;
   border-top: 1px solid rgba(47, 65, 93, 0.8);
   padding-top: 0.62rem;

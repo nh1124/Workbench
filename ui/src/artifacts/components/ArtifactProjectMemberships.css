@@ -3,7 +3,6 @@
   gap: 0.5rem;
 }
 
-.artifact-memberships-head,
 .artifact-membership-list li {
   display: flex;
   align-items: center;

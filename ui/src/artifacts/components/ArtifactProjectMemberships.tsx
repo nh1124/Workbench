@@ -133,7 +133,6 @@ export function ArtifactProjectMemberships({ item, projects }: ArtifactProjectMe
 
   return (
     <section className="artifact-memberships" aria-label="Artifact Project memberships">
-      <div className="artifact-memberships-head"><span className="va-field-label">Secondary Projects</span>{isLoading ? <small>Loading...</small> : null}</div>
       <ul className="artifact-membership-list">
         {secondary.map((membership) => <li key={membership.projectId}>
           <div><strong>{displayProjectName(membership.projectId, membership.projectName)}</strong>{membership.note ? <small>{membership.note}</small> : null}</div>
