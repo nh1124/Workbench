@@ -512,6 +512,16 @@ export function ImagesPage() {
               />
             </label>
 
+            <label className="images-field span-2">
+              <span>Context</span>
+              <textarea
+                value={contextText}
+                onChange={(event) => setContextText(event.target.value)}
+                rows={4}
+                placeholder="Paste project direction, brand notes, or update requirements."
+              />
+            </label>
+
             <div className="images-grid-fields">
               <label className="images-field">
                 <span>Provider</span>
@@ -641,16 +651,6 @@ export function ImagesPage() {
               ))}
             </div>
           </section>
-
-          <label className="images-field">
-            <span>Context</span>
-            <textarea
-              value={contextText}
-              onChange={(event) => setContextText(event.target.value)}
-              rows={4}
-              placeholder="Paste project direction, brand notes, or update requirements."
-            />
-          </label>
 
           <details
             className="images-source-section images-advanced-section"
