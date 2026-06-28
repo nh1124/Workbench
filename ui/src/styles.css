@@ -76,13 +76,38 @@ button, input, select, textarea { font: inherit; }
 .sidebar-toggle:hover { background: rgba(255,255,255,0.05); color: #cbd5e1; }
 .main-nav {
   display: grid;
-  gap: 0.25rem;
+  gap: 0.72rem;
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
   align-content: start;
   padding-bottom: 0.35rem;
 }
+
+.nav-section {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.nav-section + .nav-section {
+  padding-top: 0.58rem;
+}
+
+.nav-section-label {
+  padding: 0 0.7rem 0.16rem;
+  color: #64748b;
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.nav-section-links {
+  display: grid;
+  gap: 0.25rem;
+}
+
 .nav-link {
   display: flex; align-items: center; gap: 0.6rem;
   border-radius: 10px; padding: 0.6rem 0.7rem;
@@ -200,11 +225,31 @@ button, input, select, textarea { font: inherit; }
 }
 
 .app-shell.sidebar-collapsed .main-nav {
-  gap: 0.28rem;
+  gap: 0.58rem;
+}
+
+.app-shell.sidebar-collapsed .nav-section {
+  justify-items: center;
+  gap: 0.24rem;
+}
+
+.app-shell.sidebar-collapsed .nav-section + .nav-section {
+  width: 100%;
+  padding-top: 0.5rem;
+}
+
+.app-shell.sidebar-collapsed .nav-section-label {
+  display: none;
+}
+
+.app-shell.sidebar-collapsed .nav-section-links {
+  width: 100%;
+  justify-items: center;
 }
 
 .app-shell.sidebar-collapsed .nav-link {
   justify-content: center;
+  width: 100%;
   padding: 0.58rem 0;
 }
 

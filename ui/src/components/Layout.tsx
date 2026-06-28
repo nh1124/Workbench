@@ -70,6 +70,22 @@ const navIconMap: Record<string, ReactNode> = {
   )
 };
 
+type NavItem = (typeof navItems)[number];
+
+const sidebarNavSections: Array<{ label?: string; items: NavItem[] }> = [
+  {
+    items: navItems.filter((item) => item.label === "Home")
+  },
+  {
+    label: "Project",
+    items: navItems.filter((item) => ["Project", "Tasks", "Notes", "Artifacts"].includes(item.label))
+  },
+  {
+    label: "Tool",
+    items: navItems.filter((item) => ["Research", "Images"].includes(item.label))
+  }
+];
+
 export function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -393,18 +409,25 @@ export function Layout() {
         </div>
 
         <nav className="main-nav" aria-label="Primary">
-          {navItems.map((item) => (
-            <NavLink
-              key={item.path}
-              to={item.path}
-              className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
-              end={item.path === "/"}
-            >
-              <span className="nav-icon" aria-hidden="true">
-                {navIconMap[item.label]}
-              </span>
-              <span className="nav-label">{item.label}</span>
-            </NavLink>
+          {sidebarNavSections.map((section, index) => (
+            <section className="nav-section" key={section.label ?? `primary-${index}`}>
+              {section.label ? <div className="nav-section-label">{section.label}</div> : null}
+              <div className="nav-section-links">
+                {section.items.map((item) => (
+                  <NavLink
+                    key={item.path}
+                    to={item.path}
+                    className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
+                    end={item.path === "/"}
+                  >
+                    <span className="nav-icon" aria-hidden="true">
+                      {navIconMap[item.label]}
+                    </span>
+                    <span className="nav-label">{item.label}</span>
+                  </NavLink>
+                ))}
+              </div>
+            </section>
           ))}
         </nav>
 
