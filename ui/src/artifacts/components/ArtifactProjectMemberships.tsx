@@ -72,6 +72,12 @@ export function ArtifactProjectMemberships({ item, projects }: ArtifactProjectMe
   const secondary = loadedItemId === item.id
     ? memberships.filter((membership) => membership.role === "secondary")
     : [];
+  const projectNameById = useMemo(
+    () => new Map(projects.map((project) => [project.id, project.name])),
+    [projects]
+  );
+  const displayProjectName = (projectId: string, snapshotName?: string) =>
+    normalizeProjectName(projectId, snapshotName || projectNameById.get(projectId));
   const linkedProjectIds = useMemo(
     () => new Set([primary.projectId, ...secondary.map((membership) => membership.projectId)]),
     [primary.projectId, secondary]
@@ -132,10 +138,10 @@ export function ArtifactProjectMemberships({ item, projects }: ArtifactProjectMe
   return (
     <section className="artifact-memberships span-2" aria-label="Artifact Project memberships">
       <div className="artifact-memberships-head"><div><span className="va-field-label">Projects</span><small>One primary Project owns this Artifact; secondary Projects reference the same content.</small></div>{isLoading ? <small>Loading...</small> : null}</div>
-      <div className="artifact-membership-primary"><span className="artifact-membership-role">Primary</span><strong>{normalizeProjectName(primary.projectId, primary.projectName)}</strong><small>Change the primary Project with the existing Project move control.</small></div>
+      <div className="artifact-membership-primary"><span className="artifact-membership-role">Primary</span><strong>{displayProjectName(primary.projectId, primary.projectName)}</strong><small>Change the primary Project with the file settings control.</small></div>
       <ul className="artifact-membership-list">
         {secondary.map((membership) => <li key={membership.projectId}>
-          <div><span className="artifact-membership-role secondary">Secondary</span><strong>{normalizeProjectName(membership.projectId, membership.projectName)}</strong>{membership.note ? <small>{membership.note}</small> : null}</div>
+          <div><span className="artifact-membership-role secondary">Secondary</span><strong>{displayProjectName(membership.projectId, membership.projectName)}</strong>{membership.note ? <small>{membership.note}</small> : null}</div>
           <button type="button" className="ghost-button" onClick={() => void unlink(membership)} disabled={isSaving || isLoading || loadedItemId !== item.id}>Remove membership</button>
         </li>)}
         {secondary.length === 0 ? <li className="artifact-membership-empty">No secondary Projects.</li> : null}

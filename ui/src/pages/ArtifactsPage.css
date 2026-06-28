@@ -706,15 +706,22 @@
   border-bottom: 1px solid rgba(47, 65, 93, 0.62);
 }
 
+.va-edit-title-bar {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.55rem;
+}
+
 .va-edit-title-row {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(260px, 720px) auto;
+  grid-template-columns: minmax(260px, 1fr) auto;
   grid-template-areas:
     "title version"
     "path path";
   align-items: center;
-  justify-content: start;
   gap: 0.22rem 0.52rem;
 }
 
@@ -749,7 +756,8 @@
 
 .va-edit-tags-wrap {
   min-height: 2.15rem;
-  max-width: min(420px, 34vw);
+  width: 100%;
+  max-width: none;
   border: 1px solid rgba(77, 97, 128, 0.9);
   border-radius: 9px;
   background: rgba(14, 24, 42, 0.92);
@@ -817,15 +825,14 @@
 
 .va-edit-head .va-detail-actions {
   min-width: 0;
-  width: 100%;
+  width: auto;
   justify-content: flex-end;
-  align-items: stretch;
-  flex-wrap: wrap;
+  align-items: center;
+  flex-wrap: nowrap;
 }
 
-.va-edit-head .va-edit-tags-wrap {
-  flex: 1 1 420px;
-  max-width: none;
+.va-title-icon-row {
+  padding-top: 0.02rem;
 }
 
 .va-outline-open-btn,
@@ -837,8 +844,42 @@
   border-color: rgba(103, 184, 224, 0.68);
 }
 
+.va-icon-btn.active,
+.va-icon-btn.primary {
+  border-color: rgba(113, 202, 237, 0.58);
+  background: linear-gradient(180deg, rgba(136, 223, 255, 0.96), rgba(90, 184, 229, 0.94));
+  color: #06273b;
+}
+
+.va-artifact-settings-panel {
+  display: grid;
+  gap: 0.65rem;
+  border: 1px solid rgba(77, 97, 128, 0.9);
+  border-radius: 12px;
+  background: rgba(10, 18, 34, 0.96);
+  padding: 0.72rem;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.24);
+}
+
+.va-artifact-settings-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.va-artifact-settings-head > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.va-artifact-settings-head small {
+  color: #8ea5c3;
+  font-size: 0.72rem;
+}
+
 .va-detail-project-picker {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 0.35rem;
   border: 1px solid rgba(77, 97, 128, 0.9);
@@ -863,7 +904,8 @@
   color: #d2e6ff;
   font-size: 0.72rem;
   min-width: 140px;
-  max-width: 220px;
+  max-width: none;
+  flex: 1;
 }
 
 .va-detail-project-picker select:focus {
@@ -1707,6 +1749,17 @@
 
   .va-pdf-frame {
     min-height: 440px;
+  }
+}
+
+@media (max-width: 980px) {
+  .va-edit-title-bar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .va-edit-head .va-detail-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
   }
 }
 

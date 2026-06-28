@@ -69,6 +69,7 @@ import {
   IcoHome,
   IcoListView,
   IcoPanelLeft,
+  IcoSettings,
   IcoTileView,
   IcoTrash,
   IcoUpload
@@ -137,6 +138,7 @@ export function ArtifactsPage() {
   const [insertLinkState, setInsertLinkState] = useState<InsertLinkState | null>(null);
   const [editorExpanded, setEditorExpanded] = useState(false);
   const [pdfExpanded, setPdfExpanded] = useState(false);
+  const [artifactSettingsOpen, setArtifactSettingsOpen] = useState(false);
   const [editSidebarCollapsed, setEditSidebarCollapsed] = useState(false);
   const [mobileTreeVisible, setMobileTreeVisible] = useState(false);
   const [outlineCollapsed, setOutlineCollapsed] = useState(false);
@@ -241,6 +243,10 @@ export function ArtifactsPage() {
       document.body.classList.remove("workbench-artifacts-edit-mode");
     };
   }, [hasDetailSelection]);
+
+  useEffect(() => {
+    setArtifactSettingsOpen(false);
+  }, [draft.id, mode]);
 
   const detailProjectOptions = useMemo(() => {
     const map = new Map<string, ProjectOption>();
@@ -2524,113 +2530,163 @@ export function ArtifactsPage() {
 
             <main className="va-detail-pane">
               <header className="va-edit-head">
-                <div className="va-edit-title-row">
-                  <input
-                    className="va-edit-title-input"
-                    value={draft.title}
-                    onChange={(event) => setDraft((prev) => ({ ...prev, title: event.target.value }))}
-                    placeholder="Untitled"
-                    aria-label="Artifact title"
-                  />
-                  {draft.version ? <small>v{draft.version}</small> : null}
-                  <span className="va-detail-path" title={draft.path || "No item selected"}>
-                    {draft.path || "No item selected"}
-                  </span>
-                </div>
-
-                <div className="va-detail-actions">
-                  {editSidebarCollapsed ? (
-                    <button
-                      type="button"
-                      className="va-icon-btn va-outline-open-btn"
-                      onClick={() => setEditSidebarCollapsed(false)}
-                      aria-label="Open outline"
-                      title="Open Outline"
-                    >
-                      <IcoPanelLeft />
-                    </button>
-                  ) : null}
-
-                  <div className="va-edit-tags-wrap" onClick={() => document.getElementById("va-artifact-tag-input")?.focus()}>
-                    {draft.tags.map((tag) => (
-                      <span key={tag} className="va-tag-chip">
-                        {tag}
-                        <button
-                          type="button"
-                          onClick={() => setDraft((prev) => ({ ...prev, tags: prev.tags.filter((value) => value !== tag) }))}
-                          aria-label={`Remove ${tag}`}
-                        >
-                          <IcoClose />
-                        </button>
-                      </span>
-                    ))}
+                <div className="va-edit-title-bar">
+                  <div className="va-edit-title-row">
                     <input
-                      id="va-artifact-tag-input"
-                      value={tagInput}
-                      onChange={(event) => setTagInput(event.target.value)}
-                      onKeyDown={handleTagInputKeyDown}
-                      onBlur={() => {
-                        const normalized = tagInput.trim();
-                        if (!normalized) return;
-                        if (!draft.tags.some((tag) => tag.toLowerCase() === normalized.toLowerCase())) {
-                          setDraft((prev) => ({ ...prev, tags: [...prev.tags, normalized] }));
-                        }
-                        setTagInput("");
-                      }}
-                      placeholder="Add tag"
+                      className="va-edit-title-input"
+                      value={draft.title}
+                      onChange={(event) => setDraft((prev) => ({ ...prev, title: event.target.value }))}
+                      placeholder="Untitled"
+                      aria-label="Artifact title"
                     />
+                    {draft.version ? <small>v{draft.version}</small> : null}
+                    <span className="va-detail-path" title={draft.path || "No item selected"}>
+                      {draft.path || "No item selected"}
+                    </span>
                   </div>
 
-                {draft.id ? (
-                  <button
-                    type="button"
-                    className="va-icon-btn"
-                    onClick={() => void handleDelete()}
-                    disabled={isSaving}
-                    aria-label="Delete item"
-                    title="Delete"
-                  >
-                    <IcoTrash />
-                  </button>
-                ) : null}
+                  <div className="va-detail-actions va-title-icon-row">
+                    {editSidebarCollapsed ? (
+                      <button
+                        type="button"
+                        className="va-icon-btn va-outline-open-btn"
+                        onClick={() => setEditSidebarCollapsed(false)}
+                        aria-label="Open outline"
+                        title="Open Outline"
+                      >
+                        <IcoPanelLeft />
+                      </button>
+                    ) : null}
 
-                {draft.kind === "file" && draft.id ? (
-                  <button
-                    type="button"
-                    className="va-icon-btn"
-                    onClick={() => void handleDownload()}
-                    aria-label="Download file"
-                    title="Download"
-                  >
-                    <IcoDownload />
-                  </button>
-                ) : null}
+                    <button
+                      type="button"
+                      className={artifactSettingsOpen ? "va-icon-btn active" : "va-icon-btn"}
+                      onClick={() => setArtifactSettingsOpen((open) => !open)}
+                      aria-expanded={artifactSettingsOpen}
+                      aria-controls="va-artifact-settings-panel"
+                      aria-label="Artifact settings"
+                      title="Artifact Settings"
+                    >
+                      <IcoSettings />
+                    </button>
 
-                {draft.kind === "file" && draft.id && isWordFileSelected ? (
-                  <button
-                    type="button"
-                    className="va-action-btn"
-                    onClick={() => void handleOpenInWord()}
-                    aria-label="Edit in Word"
-                    title="Open in default Word app"
-                  >
-                    Edit
-                  </button>
-                ) : null}
+                    {draft.id ? (
+                      <button
+                        type="button"
+                        className="va-icon-btn"
+                        onClick={() => void handleDelete()}
+                        disabled={isSaving}
+                        aria-label="Delete item"
+                        title="Delete"
+                      >
+                        <IcoTrash />
+                      </button>
+                    ) : null}
 
-                <button type="button" className="va-action-btn primary" onClick={() => void handleSave()} disabled={isSaving || !canSave}>
-                  <IcoFloppy />
-                </button>
-                <button
-                  type="button"
-                  className="va-icon-btn va-home-action-btn"
-                  onClick={returnToDirectoryView}
-                  aria-label="Back to directory"
-                  title="Back to Directory"
-                >
-                  <IcoHome />
-                </button>
-              </div>
+                    {draft.kind === "file" && draft.id ? (
+                      <button
+                        type="button"
+                        className="va-icon-btn"
+                        onClick={() => void handleDownload()}
+                        aria-label="Download file"
+                        title="Download"
+                      >
+                        <IcoDownload />
+                      </button>
+                    ) : null}
+
+                    {draft.kind === "file" && draft.id && isWordFileSelected ? (
+                      <button
+                        type="button"
+                        className="va-action-btn"
+                        onClick={() => void handleOpenInWord()}
+                        aria-label="Edit in Word"
+                        title="Open in default Word app"
+                      >
+                        Edit
+                      </button>
+                    ) : null}
+
+                    <button type="button" className="va-icon-btn primary" onClick={() => void handleSave()} disabled={isSaving || !canSave} aria-label="Save item" title="Save">
+                      <IcoFloppy />
+                    </button>
+                    <button
+                      type="button"
+                      className="va-icon-btn va-home-action-btn"
+                      onClick={returnToDirectoryView}
+                      aria-label="Back to directory"
+                      title="Back to Directory"
+                    >
+                      <IcoHome />
+                    </button>
+                  </div>
+                </div>
+
+                {artifactSettingsOpen ? (
+                  <div id="va-artifact-settings-panel" className="va-artifact-settings-panel">
+                    <div className="va-artifact-settings-head">
+                      <div>
+                        <span className="va-field-label">File settings</span>
+                        <small>Tags, primary Project, and secondary Project memberships.</small>
+                      </div>
+                      <button type="button" className="va-icon-btn" onClick={() => setArtifactSettingsOpen(false)} aria-label="Close artifact settings">
+                        <IcoClose />
+                      </button>
+                    </div>
+
+                    <label className="va-detail-project-picker">
+                      <span>Primary Project</span>
+                      <select value={draft.projectId} onChange={(event) => handleDraftProjectChange(event.target.value)}>
+                        {detailProjectOptions.map((project) => (
+                          <option key={project.projectId} value={project.projectId}>
+                            {normalizeProjectName(project.projectId, project.projectName)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <div className="va-edit-tags-wrap" onClick={() => document.getElementById("va-artifact-tag-input")?.focus()}>
+                      {draft.tags.map((tag) => (
+                        <span key={tag} className="va-tag-chip">
+                          {tag}
+                          <button
+                            type="button"
+                            onClick={() => setDraft((prev) => ({ ...prev, tags: prev.tags.filter((value) => value !== tag) }))}
+                            aria-label={`Remove ${tag}`}
+                          >
+                            <IcoClose />
+                          </button>
+                        </span>
+                      ))}
+                      <input
+                        id="va-artifact-tag-input"
+                        value={tagInput}
+                        onChange={(event) => setTagInput(event.target.value)}
+                        onKeyDown={handleTagInputKeyDown}
+                        onBlur={() => {
+                          const normalized = tagInput.trim();
+                          if (!normalized) return;
+                          if (!draft.tags.some((tag) => tag.toLowerCase() === normalized.toLowerCase())) {
+                            setDraft((prev) => ({ ...prev, tags: [...prev.tags, normalized] }));
+                          }
+                          setTagInput("");
+                        }}
+                        placeholder="Add tag"
+                      />
+                    </div>
+
+                    {selectedItemSummary ? (
+                      <ArtifactProjectMemberships
+                        key={selectedItemSummary.id}
+                        item={selectedItemSummary}
+                        projects={detailProjectOptions.map((project) => ({
+                          id: project.projectId,
+                          name: normalizeProjectName(project.projectId, project.projectName)
+                        }))}
+                      />
+                    ) : null}
+                  </div>
+                ) : null}
             </header>
 
             <section className={`va-form-grid${editorExpanded ? " editor-expanded" : ""}${pdfExpanded ? " pdf-expanded" : ""}`}>
@@ -2764,17 +2820,6 @@ export function ArtifactsPage() {
                   <span className="va-field-label">Preview</span>
                   <div className="va-empty">Word preview generation failed. Please re-upload or open via Edit.</div>
                 </div>
-              ) : null}
-
-              {selectedItemSummary ? (
-                <ArtifactProjectMemberships
-                  key={selectedItemSummary.id}
-                  item={selectedItemSummary}
-                  projects={detailProjectOptions.map((project) => ({
-                    id: project.projectId,
-                    name: normalizeProjectName(project.projectId, project.projectName)
-                  }))}
-                />
               ) : null}
 
               {(draft.createdAt || selectedItemSummary) ? (

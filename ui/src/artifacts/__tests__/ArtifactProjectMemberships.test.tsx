@@ -64,4 +64,28 @@ describe("ArtifactProjectMemberships", () => {
     expect(screen.getByText("Primary Project")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Remove membership" })).toBeNull();
   });
+
+  it("uses loaded Project names when membership snapshots only contain IDs", async () => {
+    vi.spyOn(artifactsApi, "listProjectMemberships").mockResolvedValueOnce({
+      artifactItemId: item.id,
+      memberships: [
+        { projectId: "project-primary", role: "primary" },
+        { projectId: "project-secondary", role: "secondary", linkId: "link-a" }
+      ]
+    });
+
+    render(
+      <ArtifactProjectMemberships
+        item={{ ...item, projectName: "" }}
+        projects={[
+          { id: "project-primary", name: "Primary Project", status: "active" },
+          { id: "project-secondary", name: "Secondary Project", status: "active" }
+        ]}
+      />
+    );
+
+    expect(await screen.findByText("Primary Project")).toBeTruthy();
+    expect(await screen.findByText("Secondary Project")).toBeTruthy();
+    expect(screen.queryByText("project-primary")).toBeNull();
+  });
 });
