@@ -1,12 +1,11 @@
 /**
- * Schedule items store — wraps DB CRUD with owner normalization.
+ * Schedule items store: wraps DB CRUD with owner normalization.
  *
- * A "schedule item" maps a task occurrence (occurrence_date = LBS execution date)
+ * A schedule item maps a task occurrence (occurrence_date = LBS execution date)
  * to a calendar day the user intends to work on it (scheduled_date).
  * It optionally carries time info (start_time, end_time, timezone).
  *
- * Today view = all items where scheduled_date = today
- *            ∪ LBS-due tasks (occurrence_date = today) not already in the above set.
+ * Today view = all items where scheduled_date = today.
  * Schedule calendar view = items grouped by scheduled_date over a date range.
  */
 
@@ -15,6 +14,7 @@ import {
   createScheduleItem,
   updateScheduleItem,
   deleteScheduleItem,
+  deleteScheduleItemByTaskOccurrenceAndScheduledDate,
   deleteScheduleItemsByTaskAndScheduledDate,
   listScheduleItemsByScheduledDate,
   listScheduleItemsByDateRange,
@@ -105,8 +105,25 @@ export async function removeScheduleItem(
 }
 
 /**
+ * Remove exactly one schedule item by task, scheduled date, and occurrence date.
+ */
+export async function removeItemByTaskScheduledDateAndOccurrenceDate(
+  ownerCoreUserId: string,
+  taskId: string,
+  scheduledDate: string,
+  occurrenceDate: string
+): Promise<number> {
+  return deleteScheduleItemByTaskOccurrenceAndScheduledDate(
+    normalizeOwner(ownerCoreUserId),
+    taskId,
+    scheduledDate,
+    occurrenceDate
+  );
+}
+
+/**
  * Remove all schedule items for a task on a given scheduled_date.
- * Used when the user removes a task from Today via the "remove from My Day" button.
+ * Compatibility fallback for clients that cannot identify an occurrence.
  */
 export async function removeItemsByTaskAndScheduledDate(
   ownerCoreUserId: string,

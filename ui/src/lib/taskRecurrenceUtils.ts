@@ -42,7 +42,9 @@ export function taskOccursOnDate(task: Task, date: Date): boolean {
   if (task.recurrence === "EVERY_N_DAYS") {
     const interval = Math.max(1, task.intervalDays ?? 1);
     const anchor =
-      parseDateOnly(task.activeFrom) || parseDateOnly(task.createdAt);
+      parseDateOnly(task.anchorDate) ||
+      parseDateOnly(task.activeFrom) ||
+      parseDateOnly(task.createdAt);
     if (!anchor) return false;
     const diff = Math.floor((day.getTime() - anchor.getTime()) / DAY_MS);
     return diff >= 0 && diff % interval === 0;

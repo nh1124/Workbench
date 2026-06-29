@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  normalizeResponseTask,
   resolveStatusTargetDate,
   toDueDateOnly,
   toLbsStatus,
+  toLbsWeekdayMon1,
   toUiStatus,
+  toUiWeekdayIndex,
   toValidRecurrence,
   todayInTimezone
 } from "../lbsTaskService.js";
@@ -25,6 +28,33 @@ describe("lbsTaskService", () => {
     assert.equal(toUiStatus("done"), "done");
     assert.equal(toUiStatus("skipped"), "skipped");
     assert.equal(toUiStatus("anything-else"), "todo");
+  });
+
+  it("converts weekday indexes across the LBS boundary", () => {
+    assert.equal(toLbsWeekdayMon1(0), 7);
+    assert.equal(toLbsWeekdayMon1(1), 1);
+    assert.equal(toLbsWeekdayMon1(6), 6);
+    assert.equal(toLbsWeekdayMon1(7), undefined);
+
+    assert.equal(toUiWeekdayIndex(7), 0);
+    assert.equal(toUiWeekdayIndex(1), 1);
+    assert.equal(toUiWeekdayIndex(6), 6);
+    assert.equal(toUiWeekdayIndex(0), undefined);
+  });
+
+  it("normalizes LBS Sunday weekday_mon1 to the UI weekday index", () => {
+    const task = normalizeResponseTask({
+      task_id: "task-1",
+      task_name: "Monthly Sunday",
+      context: "inbox",
+      base_load_score: 1,
+      active: true,
+      rule_type: "MONTHLY_NTH_WEEKDAY",
+      nth_in_month: 2,
+      weekday_mon1: 7
+    });
+
+    assert.equal(task.weekdayMon1, 0);
   });
 
   it("extracts YYYY-MM-DD from date-like inputs", () => {

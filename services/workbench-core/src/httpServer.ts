@@ -1635,8 +1635,9 @@ async function applyTaskTodaySyncPush(
 
   if (action === "delete") {
     const scheduledDate = requireSyncString(payload, "scheduledDate", "SYNC_TASK_TODAY_PAYLOAD_INVALID", "Task today delete requires scheduledDate.");
+    const occurrenceDate = optionalRawString(payload, "occurrenceDate", "SYNC_TASK_TODAY_PAYLOAD_INVALID", "occurrenceDate must be a string when provided.");
     return {
-      result: await tasksClient.removeFromToday(authContext.accessToken, taskId, scheduledDate),
+      result: await tasksClient.removeFromToday(authContext.accessToken, taskId, scheduledDate, occurrenceDate),
       nextResourceId: taskId
     };
   }
@@ -5581,23 +5582,31 @@ app.post("/api/tasks/today", async (req, res) => {
       taskId?: unknown; scheduledDate?: unknown; occurrenceDate?: unknown;
       startTime?: unknown; endTime?: unknown; timezone?: unknown;
     };
-    // occurrenceDate may be "" for tasks with no LBS due date (ONCE + no due_date);
-    // the tasks-service will fall back to scheduledDate in that case.
-    if (typeof taskId !== "string" || !taskId || typeof scheduledDate !== "string" || !scheduledDate || typeof occurrenceDate !== "string") {
-      return res.status(400).json({ message: "taskId, scheduledDate, and occurrenceDate (all strings) are required" });
+    // occurrenceDate may be omitted or "" for tasks with no LBS due date
+    // (ONCE + no due_date); the tasks-service resolves it to scheduledDate.
+    if (typeof taskId !== "string" || !taskId || typeof scheduledDate !== "string" || !scheduledDate) {
+      return res.status(400).json({ message: "taskId and scheduledDate are required strings" });
     }
+    if (occurrenceDate !== undefined && typeof occurrenceDate !== "string") {
+      return res.status(400).json({ message: "occurrenceDate must be a string when provided" });
+    }
+    const requestedOccurrenceDate = occurrenceDate ?? "";
     const opts = {
       startTime: typeof startTime === "string" ? startTime : undefined,
       endTime: typeof endTime === "string" ? endTime : undefined,
       timezone: typeof timezone === "string" ? timezone : undefined
     };
-    const result = await tasksClient.addToday(authContext.accessToken, taskId, scheduledDate, occurrenceDate, opts);
+    const result = await tasksClient.addToday(authContext.accessToken, taskId, scheduledDate, requestedOccurrenceDate, opts);
+    const resultRecord = result as Record<string, unknown>;
+    const effectiveOccurrenceDate = typeof resultRecord.occurrenceDate === "string"
+      ? resultRecord.occurrenceDate
+      : requestedOccurrenceDate || scheduledDate;
     recordSyncEventBestEffort(authContext.userId, "tasks", taskId, "update", {
       source: "core-api",
       relation: "today",
       action: "create",
       scheduledDate,
-      occurrenceDate,
+      occurrenceDate: effectiveOccurrenceDate,
       startTime: opts.startTime,
       endTime: opts.endTime,
       timezone: opts.timezone,
@@ -5615,15 +5624,17 @@ app.delete("/api/tasks/today/:taskId", async (req, res) => {
   if (!authContext) return;
   const taskId = String(req.params.taskId);
   const scheduledDate = typeof req.query.scheduledDate === "string" ? req.query.scheduledDate : undefined;
-  console.log(`[workbench-core] DELETE /api/tasks/today/${taskId}  scheduledDate=${scheduledDate ?? "?"}`);
+  const occurrenceDate = typeof req.query.occurrenceDate === "string" ? req.query.occurrenceDate : undefined;
+  console.log(`[workbench-core] DELETE /api/tasks/today/${taskId}  scheduledDate=${scheduledDate ?? "?"} occurrenceDate=${occurrenceDate ?? "?"}`);
   if (!scheduledDate) return res.status(400).json({ message: "scheduledDate query parameter is required (YYYY-MM-DD)" });
   try {
-    const result = await tasksClient.removeFromToday(authContext.accessToken, taskId, scheduledDate);
+    const result = await tasksClient.removeFromToday(authContext.accessToken, taskId, scheduledDate, occurrenceDate);
     recordSyncEventBestEffort(authContext.userId, "tasks", taskId, "update", {
       source: "core-api",
       relation: "today",
       action: "delete",
       scheduledDate,
+      occurrenceDate,
       deleted: true,
       result: result as Record<string, unknown>
     });

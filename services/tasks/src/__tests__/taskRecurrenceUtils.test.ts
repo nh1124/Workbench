@@ -51,4 +51,17 @@ describe("taskRecurrenceUtils", () => {
     assert.equal(taskOccursOnDateKey(task, "2026-05-05"), true);
     assert.equal(taskOccursOnDateKey(task, "2026-05-06"), false);
   });
+
+  it("matches monthly nth weekday using UI weekday indexes", () => {
+    const task: Task = {
+      ...baseTask,
+      recurrence: "MONTHLY_NTH_WEEKDAY",
+      activeFrom: "2026-05-01",
+      nthInMonth: 1,
+      weekdayMon1: 0
+    };
+
+    assert.equal(taskOccursOnDateKey(task, "2026-05-03"), true);
+    assert.equal(taskOccursOnDateKey(task, "2026-05-04"), false);
+  });
 });

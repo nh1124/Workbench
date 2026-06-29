@@ -185,6 +185,22 @@ export async function ensureTasksSchema(): Promise<void> {
         `);
 
         await pool.query(`
+          WITH ranked AS (
+            SELECT
+              id,
+              ROW_NUMBER() OVER (
+                PARTITION BY owner_username, task_id, occurrence_date, scheduled_date
+                ORDER BY updated_at DESC, created_at DESC, id DESC
+              ) AS duplicate_rank
+            FROM task_occurrence_schedule
+          )
+          DELETE FROM task_occurrence_schedule schedule
+          USING ranked
+          WHERE schedule.id = ranked.id
+            AND ranked.duplicate_rank > 1;
+        `);
+
+        await pool.query(`
           CREATE INDEX IF NOT EXISTS idx_task_occ_schedule_owner_scheduled_date
           ON task_occurrence_schedule(owner_username, scheduled_date);
         `);
@@ -192,6 +208,11 @@ export async function ensureTasksSchema(): Promise<void> {
         await pool.query(`
           CREATE INDEX IF NOT EXISTS idx_task_occ_schedule_owner_task_occ
           ON task_occurrence_schedule(owner_username, task_id, occurrence_date);
+        `);
+
+        await pool.query(`
+          CREATE UNIQUE INDEX IF NOT EXISTS ux_task_occ_schedule_owner_task_occ_scheduled
+          ON task_occurrence_schedule(owner_username, task_id, occurrence_date, scheduled_date);
         `);
       });
     })();
@@ -506,7 +527,9 @@ export async function createScheduleItem(
   await ensureTasksSchema();
   const owner = normalizeOwner(ownerCoreUserId);
   const tid = taskId.trim();
-  if (!owner || !tid || !occurrenceDate || !scheduledDate) {
+  const occurrence = occurrenceDate.trim();
+  const scheduled = scheduledDate.trim();
+  if (!owner || !tid || !occurrence || !scheduled) {
     throw new Error("owner, taskId, occurrenceDate, and scheduledDate are required");
   }
 
@@ -525,9 +548,15 @@ export async function createScheduleItem(
       INSERT INTO task_occurrence_schedule
         (owner_username, task_id, occurrence_date, scheduled_date, start_time, end_time, timezone)
       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      ON CONFLICT (owner_username, task_id, occurrence_date, scheduled_date)
+      DO UPDATE SET
+        start_time = COALESCE(EXCLUDED.start_time, task_occurrence_schedule.start_time),
+        end_time = COALESCE(EXCLUDED.end_time, task_occurrence_schedule.end_time),
+        timezone = COALESCE(EXCLUDED.timezone, task_occurrence_schedule.timezone),
+        updated_at = NOW()
       RETURNING id, task_id, occurrence_date, scheduled_date, start_time, end_time, timezone, created_at, updated_at
     `,
-    [owner, tid, occurrenceDate, scheduledDate, opts?.startTime ?? null, opts?.endTime ?? null, opts?.timezone ?? null]
+    [owner, tid, occurrence, scheduled, opts?.startTime ?? null, opts?.endTime ?? null, opts?.timezone ?? null]
   );
   return rowToScheduleItem(result.rows[0]);
 }
@@ -544,7 +573,7 @@ export async function updateScheduleItem(
   const owner = normalizeOwner(ownerCoreUserId);
   if (!owner) return undefined;
 
-  const result = await pool.query<{
+  type ScheduleItemDbRow = {
     id: string;
     task_id: string;
     occurrence_date: string;
@@ -554,34 +583,100 @@ export async function updateScheduleItem(
     timezone: string | null;
     created_at: string;
     updated_at: string;
-  }>(
-    `
-      UPDATE task_occurrence_schedule
-      SET
-        scheduled_date  = COALESCE($3, scheduled_date),
-        occurrence_date = COALESCE($4, occurrence_date),
-        start_time      = CASE WHEN $5::boolean THEN $6 ELSE start_time END,
-        end_time        = CASE WHEN $7::boolean THEN $8 ELSE end_time END,
-        timezone        = CASE WHEN $9::boolean THEN $10 ELSE timezone END,
-        updated_at      = NOW()
-      WHERE owner_username = $1 AND id = $2
-      RETURNING id, task_id, occurrence_date, scheduled_date, start_time, end_time, timezone, created_at, updated_at
-    `,
-    [
-      owner,
-      id,
-      patch.scheduledDate ?? null,
-      patch.occurrenceDate ?? null,
-      "startTime" in patch,
-      patch.startTime ?? null,
-      "endTime" in patch,
-      patch.endTime ?? null,
-      "timezone" in patch,
-      patch.timezone ?? null
-    ]
-  );
-  if (result.rows.length === 0) return undefined;
-  return rowToScheduleItem(result.rows[0]);
+  };
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const currentResult = await client.query<ScheduleItemDbRow>(
+      `
+        SELECT id, task_id, occurrence_date, scheduled_date, start_time, end_time, timezone, created_at, updated_at
+        FROM task_occurrence_schedule
+        WHERE owner_username = $1 AND id = $2
+        FOR UPDATE
+      `,
+      [owner, id]
+    );
+    if (currentResult.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return undefined;
+    }
+
+    const current = currentResult.rows[0];
+    const nextScheduledDate = patch.scheduledDate !== undefined
+      ? patch.scheduledDate.trim()
+      : current.scheduled_date;
+    const nextOccurrenceDate = patch.occurrenceDate !== undefined
+      ? patch.occurrenceDate.trim()
+      : current.occurrence_date;
+    if (!nextScheduledDate || !nextOccurrenceDate) {
+      throw new Error("scheduledDate and occurrenceDate must be non-empty when provided");
+    }
+
+    const nextStartTime = "startTime" in patch ? patch.startTime ?? null : current.start_time;
+    const nextEndTime = "endTime" in patch ? patch.endTime ?? null : current.end_time;
+    const nextTimezone = "timezone" in patch ? patch.timezone ?? null : current.timezone;
+
+    const conflictResult = await client.query<ScheduleItemDbRow>(
+      `
+        SELECT id, task_id, occurrence_date, scheduled_date, start_time, end_time, timezone, created_at, updated_at
+        FROM task_occurrence_schedule
+        WHERE owner_username = $1
+          AND task_id = $2
+          AND occurrence_date = $3
+          AND scheduled_date = $4
+          AND id <> $5
+        FOR UPDATE
+      `,
+      [owner, current.task_id, nextOccurrenceDate, nextScheduledDate, id]
+    );
+
+    if (conflictResult.rows.length > 0) {
+      const conflict = conflictResult.rows[0];
+      const mergedResult = await client.query<ScheduleItemDbRow>(
+        `
+          UPDATE task_occurrence_schedule
+          SET
+            start_time = $3,
+            end_time = $4,
+            timezone = $5,
+            updated_at = NOW()
+          WHERE owner_username = $1 AND id = $2
+          RETURNING id, task_id, occurrence_date, scheduled_date, start_time, end_time, timezone, created_at, updated_at
+        `,
+        [owner, conflict.id, nextStartTime, nextEndTime, nextTimezone]
+      );
+      await client.query(
+        `DELETE FROM task_occurrence_schedule WHERE owner_username = $1 AND id = $2`,
+        [owner, id]
+      );
+      await client.query("COMMIT");
+      return rowToScheduleItem(mergedResult.rows[0]);
+    }
+
+    const result = await client.query<ScheduleItemDbRow>(
+      `
+        UPDATE task_occurrence_schedule
+        SET
+          scheduled_date = $3,
+          occurrence_date = $4,
+          start_time = $5,
+          end_time = $6,
+          timezone = $7,
+          updated_at = NOW()
+        WHERE owner_username = $1 AND id = $2
+        RETURNING id, task_id, occurrence_date, scheduled_date, start_time, end_time, timezone, created_at, updated_at
+      `,
+      [owner, id, nextScheduledDate, nextOccurrenceDate, nextStartTime, nextEndTime, nextTimezone]
+    );
+    await client.query("COMMIT");
+    return rowToScheduleItem(result.rows[0]);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 /**
@@ -600,9 +695,37 @@ export async function deleteScheduleItem(ownerCoreUserId: string, id: number): P
 }
 
 /**
- * Delete all schedule items for a task + occurrence_date pair.
- * Used when the user removes a task occurrence from Today (removes the manual entry
- * but the LBS-due-today auto-display will still be suppressed by the UI's own logic).
+ * Delete one occurrence-level Today/schedule membership by its natural key.
+ */
+export async function deleteScheduleItemByTaskOccurrenceAndScheduledDate(
+  ownerCoreUserId: string,
+  taskId: string,
+  scheduledDate: string,
+  occurrenceDate: string
+): Promise<number> {
+  await ensureTasksSchema();
+  const owner = normalizeOwner(ownerCoreUserId);
+  const tid = taskId.trim();
+  const scheduled = scheduledDate.trim();
+  const occurrence = occurrenceDate.trim();
+  if (!owner || !tid || !scheduled || !occurrence) return 0;
+
+  const result = await pool.query(
+    `
+      DELETE FROM task_occurrence_schedule
+      WHERE owner_username = $1
+        AND task_id = $2
+        AND scheduled_date = $3
+        AND occurrence_date = $4
+    `,
+    [owner, tid, scheduled, occurrence]
+  );
+  return result.rowCount ?? 0;
+}
+
+/**
+ * Delete all schedule items for a task + scheduled_date pair.
+ * Compatibility fallback for old clients that do not pass occurrenceDate.
  */
 export async function deleteScheduleItemsByTaskAndScheduledDate(
   ownerCoreUserId: string,
@@ -611,14 +734,16 @@ export async function deleteScheduleItemsByTaskAndScheduledDate(
 ): Promise<number> {
   await ensureTasksSchema();
   const owner = normalizeOwner(ownerCoreUserId);
-  if (!owner) return 0;
+  const tid = taskId.trim();
+  const scheduled = scheduledDate.trim();
+  if (!owner || !tid || !scheduled) return 0;
 
   const result = await pool.query(
     `
       DELETE FROM task_occurrence_schedule
       WHERE owner_username = $1 AND task_id = $2 AND scheduled_date = $3
     `,
-    [owner, taskId.trim(), scheduledDate]
+    [owner, tid, scheduled]
   );
   return result.rowCount ?? 0;
 }

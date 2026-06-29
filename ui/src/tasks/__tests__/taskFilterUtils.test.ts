@@ -17,6 +17,7 @@ import {
   filterTasksByMode,
   sortTasks,
 } from "../lib/taskFilterUtils";
+import { occurrenceMembershipKey } from "../lib/taskOccurrenceIdentity";
 import type { Task } from "../../types/models";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -55,7 +56,7 @@ describe("filterTasksByMode", () => {
       sidebarMode: "calendar",
       calendarStatusFilter: "open",
       quickFilter: "today",
-      myDayFlaggedIds: new Set(),
+      todayMembershipKeys: new Set(),
       todayTaskIds: new Set(),
       today: TODAY,
     });
@@ -67,7 +68,7 @@ describe("filterTasksByMode", () => {
       sidebarMode: "calendar",
       calendarStatusFilter: "done",
       quickFilter: "today",
-      myDayFlaggedIds: new Set(),
+      todayMembershipKeys: new Set(),
       todayTaskIds: new Set(),
       today: TODAY,
     });
@@ -79,31 +80,31 @@ describe("filterTasksByMode", () => {
       sidebarMode: "calendar",
       calendarStatusFilter: "all",
       quickFilter: "today",
-      myDayFlaggedIds: new Set(),
+      todayMembershipKeys: new Set(),
       todayTaskIds: new Set(),
       today: TODAY,
     });
     expect(result).toHaveLength(3);
   });
 
-  it("list/today uses myDayFlaggedIds when non-empty", () => {
+  it("list/today uses occurrence-level Today membership keys when non-empty", () => {
     const result = filterTasksByMode(tasks, {
       sidebarMode: "list",
       calendarStatusFilter: "all",
       quickFilter: "today",
-      myDayFlaggedIds: new Set(["a"]),
+      todayMembershipKeys: new Set([occurrenceMembershipKey("a", "2026-03-30", "2026-03-30")]),
       todayTaskIds: new Set(["b"]),
       today: TODAY,
     });
     expect(result.map((t) => t.id)).toEqual(["a"]);
   });
 
-  it("list/today is empty when myDay is empty", () => {
+  it("list/today is empty when Today membership is empty", () => {
     const result = filterTasksByMode(tasks, {
       sidebarMode: "list",
       calendarStatusFilter: "all",
       quickFilter: "today",
-      myDayFlaggedIds: new Set(),
+      todayMembershipKeys: new Set(),
       todayTaskIds: new Set(["b", "c"]),
       today: TODAY,
     });
@@ -119,7 +120,7 @@ describe("filterTasksByMode", () => {
       sidebarMode: "list",
       calendarStatusFilter: "all",
       quickFilter: "myday",
-      myDayFlaggedIds: new Set(),
+      todayMembershipKeys: new Set(),
       todayTaskIds: new Set(),
       today: TODAY,
     });
@@ -131,7 +132,7 @@ describe("filterTasksByMode", () => {
       sidebarMode: "list",
       calendarStatusFilter: "all",
       quickFilter: "planned",
-      myDayFlaggedIds: new Set(),
+      todayMembershipKeys: new Set(),
       todayTaskIds: new Set(),
       today: TODAY,
     });
@@ -201,7 +202,7 @@ describe("filterAndSortTasks", () => {
       sidebarMode: "list",
       calendarStatusFilter: "all",
       quickFilter: "myday",
-      myDayFlaggedIds: new Set(),
+      todayMembershipKeys: new Set(),
       todayTaskIds: new Set(),
       today: TODAY,
       sortMode: "load",
@@ -213,9 +214,13 @@ describe("filterAndSortTasks", () => {
 // ─── computeTaskCounters ──────────────────────────────────────────────────────
 
 describe("computeTaskCounters", () => {
-  it("returns myDayFlaggedIds.size when non-empty as today count", () => {
+  it("returns Today membership key size as today count", () => {
     const counters = computeTaskCounters([], {
-      myDayFlaggedIds: new Set(["a", "b", "c"]),
+      todayMembershipKeys: new Set([
+        occurrenceMembershipKey("a", "2026-03-30", "2026-03-30"),
+        occurrenceMembershipKey("b", "2026-03-30", "2026-03-30"),
+        occurrenceMembershipKey("c", "2026-03-30", "2026-03-30"),
+      ]),
       todayTaskIds: new Set(["x"]),
       today: TODAY,
       plannedCount: 4,
@@ -225,9 +230,9 @@ describe("computeTaskCounters", () => {
     expect(counters.today).toBe(3);
   });
 
-  it("returns 0 for today count when myDay is empty", () => {
+  it("returns 0 for today count when Today membership is empty", () => {
     const counters = computeTaskCounters([], {
-      myDayFlaggedIds: new Set(),
+      todayMembershipKeys: new Set(),
       todayTaskIds: new Set(["x", "y"]),
       today: TODAY,
       plannedCount: 0,
@@ -244,7 +249,7 @@ describe("computeTaskCounters", () => {
       makeTask({ id: "c", isPinned: true }),
     ];
     const counters = computeTaskCounters(tasks, {
-      myDayFlaggedIds: new Set(),
+      todayMembershipKeys: new Set(),
       todayTaskIds: new Set(),
       today: TODAY,
       plannedCount: 1,

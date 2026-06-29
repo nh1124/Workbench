@@ -5,10 +5,15 @@ import {
   listItemsForCalendarWindow,
   listItemsByTask,
   listItemsByScheduledDate,
+  removeItemByTaskScheduledDateAndOccurrenceDate,
   removeScheduleItem,
   removeItemsByTaskAndScheduledDate,
   updateItem as updateScheduleItemInStore
 } from "./scheduleItemsStore.js";
+import {
+  hasExactScheduleOccurrenceDate,
+  resolveScheduleOccurrenceDate
+} from "./scheduleContract.js";
 import {
   applyResolvedStatus,
   createLbsClient,
@@ -38,9 +43,8 @@ export interface ScheduleItemInput {
 /**
  * List Today tasks for the given date.
  *
- * Merges:
- * 1) explicit schedule entries in task_occurrence_schedule,
- * 2) LBS due tasks for this date that are not explicitly scheduled.
+ * Today is explicit scheduled work: all schedule entries whose scheduledDate
+ * matches the requested date.
  */
 export async function listTaskToday(
   ownerUsername: string,
@@ -111,7 +115,10 @@ export async function addTaskToToday(
   occurrenceDate: string,
   opts?: { startTime?: string; endTime?: string; timezone?: string }
 ): Promise<ScheduleItemRow> {
-  const effectiveOccurrenceDate = occurrenceDate || scheduledDate;
+  const effectiveOccurrenceDate = resolveScheduleOccurrenceDate(
+    scheduledDate,
+    occurrenceDate
+  );
   console.log(
     `[tasks-service] addTaskToToday owner=${ownerUsername} taskId=${taskId} scheduledDate=${scheduledDate} occurrenceDate=${effectiveOccurrenceDate}`
   );
@@ -161,23 +168,34 @@ export async function deleteTaskScheduleItem(
 }
 
 /**
- * Remove explicit schedule items for task + date.
+ * Remove explicit schedule items from Today.
  */
 export async function removeTaskFromToday(
   ownerUsername: string,
   taskId: string,
-  scheduledDate: string
-): Promise<{ taskId: string; scheduledDate: string; removed: number }> {
+  scheduledDate: string,
+  occurrenceDate?: string
+): Promise<{ taskId: string; scheduledDate: string; occurrenceDate?: string; removed: number }> {
+  const exactOccurrenceDate = hasExactScheduleOccurrenceDate(occurrenceDate)
+    ? occurrenceDate.trim()
+    : undefined;
   console.log(
-    `[tasks-service] removeTaskFromToday owner=${ownerUsername} taskId=${taskId} scheduledDate=${scheduledDate}`
+    `[tasks-service] removeTaskFromToday owner=${ownerUsername} taskId=${taskId} scheduledDate=${scheduledDate} occurrenceDate=${exactOccurrenceDate ?? "compat-broad"}`
   );
-  const removed = await removeItemsByTaskAndScheduledDate(
-    ownerUsername,
-    taskId,
-    scheduledDate
-  );
+  const removed = exactOccurrenceDate
+    ? await removeItemByTaskScheduledDateAndOccurrenceDate(
+        ownerUsername,
+        taskId,
+        scheduledDate,
+        exactOccurrenceDate
+      )
+    : await removeItemsByTaskAndScheduledDate(
+        ownerUsername,
+        taskId,
+        scheduledDate
+      );
   console.log(`[tasks-service] removeTaskFromToday removed=${removed}`);
-  return { taskId, scheduledDate, removed };
+  return { taskId, scheduledDate, occurrenceDate: exactOccurrenceDate, removed };
 }
 
 /**

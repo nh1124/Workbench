@@ -341,8 +341,8 @@ const taskTodayAddSchema = z.object({
 });
 
 const scheduleItemUpdateSchema = z.object({
-  scheduledDate: z.string().optional(),
-  occurrenceDate: z.string().optional(),
+  scheduledDate: z.string().min(1).optional(),
+  occurrenceDate: z.string().min(1).optional(),
   startTime: z.string().nullable().optional(),
   endTime: z.string().nullable().optional(),
   timezone: z.string().nullable().optional()
@@ -387,16 +387,21 @@ app.post("/tasks/today", requireUserAuth, async (req, res) => {
   }
 });
 
-// DELETE /tasks/today/:taskId?scheduledDate=YYYY-MM-DD — remove all schedule items for task on date
+// DELETE /tasks/today/:taskId?scheduledDate=YYYY-MM-DD&occurrenceDate=YYYY-MM-DD
+// If occurrenceDate is present, delete only that occurrence-level membership.
+// Without occurrenceDate, keep the legacy broad task + scheduledDate behavior.
 app.delete("/tasks/today/:taskId", requireUserAuth, async (req, res) => {
   const owner = req.authUser?.coreUserId;
   const taskId = String(req.params.taskId);
   const scheduledDate = typeof req.query.scheduledDate === "string" ? req.query.scheduledDate : undefined;
-  console.log(`[tasks-service] DELETE /tasks/today/${taskId}  owner=${owner ?? "?"} scheduledDate=${scheduledDate ?? "?"}`);
+  const occurrenceDate = typeof req.query.occurrenceDate === "string" ? req.query.occurrenceDate : undefined;
+  console.log(
+    `[tasks-service] DELETE /tasks/today/${taskId}  owner=${owner ?? "?"} scheduledDate=${scheduledDate ?? "?"} occurrenceDate=${occurrenceDate ?? "?"}`
+  );
   try {
     if (!owner) return res.status(401).json({ message: "Missing auth context" });
     if (!scheduledDate) return res.status(400).json({ message: "scheduledDate query parameter is required (YYYY-MM-DD)" });
-    const result = await removeTaskFromToday(owner, taskId, scheduledDate);
+    const result = await removeTaskFromToday(owner, taskId, scheduledDate, occurrenceDate);
     console.log(`[tasks-service] DELETE /tasks/today/${taskId}  removed ${result.removed} item(s)`);
     return res.json(result);
   } catch (error) {

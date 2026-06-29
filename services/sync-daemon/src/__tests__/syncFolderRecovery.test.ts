@@ -34,12 +34,16 @@ import {
   getLocalArtifactItemById,
   importLocalTasksCsv,
   listLocalArtifactItems,
+  localScheduleCalendar,
+  localTaskSchedule,
   localTaskHistory,
+  localTodayTasks,
   patchLocalArtifactNoteContent,
   scanSyncFolder,
   setLocalDefaultProject,
   setLocalTaskPin,
   recordLocalTaskOccurrence,
+  removeLocalTaskFromToday,
   removeLocalTaskScheduleItem,
   updateLocalTaskScheduleItem,
   updateLocalTaskSubtask,
@@ -654,6 +658,234 @@ describe("sync folder recovery", () => {
     }
   });
 
+  it("upserts local Today membership by occurrence natural key", async () => {
+    const { store, state } = await createState();
+    try {
+      upsertRemoteResource(store, {
+        domain: "tasks",
+        resourceId: "task-1",
+        version: 2,
+        payload: {
+          id: "task-1",
+          title: "Recurring Scheduled Task",
+          notes: "",
+          context: "project-1",
+          status: "todo",
+          isLocked: false,
+          baseLoadScore: 3,
+          recurrence: "WEEKLY",
+          mon: true,
+          active: true,
+          createdAt: "2026-06-17T00:00:00.000Z",
+          updatedAt: "2026-06-17T00:00:00.000Z"
+        },
+        updatedAt: "2026-06-17T00:00:00.000Z",
+        lastSyncedAt: "2026-06-17T00:00:00.000Z"
+      });
+
+      const first = await addLocalTaskToToday(state, "task-1", {
+        scheduledDate: "2026-06-20",
+        occurrenceDate: "2026-06-22",
+        startTime: "09:00"
+      });
+      const second = await addLocalTaskToToday(state, "task-1", {
+        scheduledDate: "2026-06-20",
+        occurrenceDate: "2026-06-22",
+        startTime: "10:00",
+        endTime: "11:00"
+      });
+
+      assert.equal(second?.id, first?.id);
+      const manifest = readManifestFromStore(store);
+      const cached = manifest.remoteResources?.find((entry) => entry.domain === "tasks" && entry.resourceId === "task-1");
+      const scheduleItems = cached?.payload.scheduleItems as Array<Record<string, unknown>>;
+      assert.equal(scheduleItems.length, 1);
+      assert.equal(scheduleItems[0].occurrenceDate, "2026-06-22");
+      assert.equal(scheduleItems[0].scheduledDate, "2026-06-20");
+      assert.equal(scheduleItems[0].startTime, "10:00");
+      assert.equal(scheduleItems[0].endTime, "11:00");
+
+      const todayRows = localTodayTasks(state, "2026-06-20");
+      assert.equal(todayRows.length, 1);
+      assert.equal(todayRows[0].scheduleId, first?.id);
+      assert.equal(todayRows[0].occurrenceDate, "2026-06-22");
+      assert.equal(todayRows[0].scheduledDate, "2026-06-20");
+
+      const calendarRows = localScheduleCalendar(state, "2026-06-20", "2026-06-20")[0].items as Array<Record<string, unknown>>;
+      assert.equal(calendarRows.length, 1);
+      assert.equal(calendarRows[0].scheduleId, first?.id);
+      assert.equal(calendarRows[0].occurrenceDate, "2026-06-22");
+      assert.equal(calendarRows[0].scheduledDate, "2026-06-20");
+
+      const scheduleRows = localTaskSchedule(state, "2026-06-20", "2026-06-20")[0].tasks as Array<Record<string, unknown>>;
+      assert.equal(scheduleRows.length, 1);
+      assert.equal(scheduleRows[0].scheduleId, first?.id);
+      assert.equal(scheduleRows[0].occurrenceDate, "2026-06-22");
+      assert.equal(scheduleRows[0].scheduledDate, "2026-06-20");
+
+      const pending = manifest.outbox?.filter((entry) => entry.status === "pending") ?? [];
+      assert.equal(pending.length, 1);
+      assert.equal(pending[0].payload.taskId, "task-1");
+      assert.equal(pending[0].payload.scheduleId, first?.id);
+      assert.equal(pending[0].payload.occurrenceDate, "2026-06-22");
+      assert.equal(pending[0].payload.scheduledDate, "2026-06-20");
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("merges local schedule item updates that collide on occurrence natural key", async () => {
+    const { store, state } = await createState();
+    try {
+      upsertRemoteResource(store, {
+        domain: "tasks",
+        resourceId: "task-1",
+        version: 2,
+        payload: {
+          id: "task-1",
+          title: "Recurring Scheduled Task",
+          notes: "",
+          context: "project-1",
+          status: "todo",
+          isLocked: false,
+          baseLoadScore: 3,
+          recurrence: "WEEKLY",
+          mon: true,
+          active: true,
+          scheduleItems: [
+            {
+              id: 101,
+              scheduleId: 101,
+              taskId: "task-1",
+              scheduledDate: "2026-06-20",
+              occurrenceDate: "2026-06-22",
+              startTime: "09:00"
+            },
+            {
+              id: 102,
+              scheduleId: 102,
+              taskId: "task-1",
+              scheduledDate: "2026-06-20",
+              occurrenceDate: "2026-06-23",
+              startTime: "13:00"
+            }
+          ],
+          createdAt: "2026-06-17T00:00:00.000Z",
+          updatedAt: "2026-06-17T00:00:00.000Z"
+        },
+        updatedAt: "2026-06-17T00:00:00.000Z",
+        lastSyncedAt: "2026-06-17T00:00:00.000Z"
+      });
+
+      const updated = await updateLocalTaskScheduleItem(state, 102, {
+        scheduledDate: "2026-06-20",
+        occurrenceDate: "2026-06-22",
+        startTime: "15:00",
+        endTime: "16:00"
+      });
+
+      assert.equal(updated?.id, 101);
+      assert.equal(updated?.scheduleId, 101);
+
+      const manifest = readManifestFromStore(store);
+      const cached = manifest.remoteResources?.find((entry) => entry.domain === "tasks" && entry.resourceId === "task-1");
+      const scheduleItems = cached?.payload.scheduleItems as Array<Record<string, unknown>>;
+      assert.equal(scheduleItems.length, 1);
+      assert.equal(scheduleItems[0].id, 101);
+      assert.equal(scheduleItems[0].occurrenceDate, "2026-06-22");
+      assert.equal(scheduleItems[0].scheduledDate, "2026-06-20");
+      assert.equal(scheduleItems[0].startTime, "15:00");
+      assert.equal(scheduleItems[0].endTime, "16:00");
+
+      const todayRows = localTodayTasks(state, "2026-06-20");
+      assert.equal(todayRows.length, 1);
+      assert.equal(todayRows[0].scheduleId, 101);
+      assert.equal(todayRows[0].occurrenceDate, "2026-06-22");
+
+      const pending = manifest.outbox?.filter((entry) => entry.status === "pending") ?? [];
+      assert.deepEqual(pending.map((entry) => `${entry.action}:${entry.payload.scheduleId}:${entry.payload.relation}`).sort(), [
+        "delete:102:scheduleItem",
+        "update:101:scheduleItem"
+      ]);
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("removes only the exact local Today occurrence when occurrenceDate is provided", async () => {
+    const { store, state } = await createState();
+    try {
+      upsertRemoteResource(store, {
+        domain: "tasks",
+        resourceId: "task-1",
+        version: 2,
+        payload: {
+          id: "task-1",
+          title: "Repeated Occurrence Task",
+          notes: "",
+          context: "project-1",
+          status: "todo",
+          isLocked: false,
+          baseLoadScore: 4,
+          recurrence: "EVERY_N_DAYS",
+          intervalDays: 1,
+          anchorDate: "2026-06-17",
+          active: true,
+          createdAt: "2026-06-17T00:00:00.000Z",
+          updatedAt: "2026-06-17T00:00:00.000Z",
+          scheduleItems: [
+            {
+              id: 41,
+              scheduleId: 41,
+              taskId: "task-1",
+              occurrenceDate: "2026-06-18",
+              scheduledDate: "2026-06-20",
+              startTime: "09:00",
+              createdAt: "2026-06-17T00:00:00.000Z",
+              updatedAt: "2026-06-17T00:00:00.000Z"
+            },
+            {
+              id: 42,
+              scheduleId: 42,
+              taskId: "task-1",
+              occurrenceDate: "2026-06-19",
+              scheduledDate: "2026-06-20",
+              startTime: "10:00",
+              createdAt: "2026-06-17T00:00:00.000Z",
+              updatedAt: "2026-06-17T00:00:00.000Z"
+            }
+          ]
+        },
+        updatedAt: "2026-06-17T00:00:00.000Z",
+        lastSyncedAt: "2026-06-17T00:00:00.000Z"
+      });
+
+      const removed = await removeLocalTaskFromToday(state, "task-1", "2026-06-20", "2026-06-18");
+      assert.equal(removed?.removed, 1);
+
+      const manifest = readManifestFromStore(store);
+      const cached = manifest.remoteResources?.find((entry) => entry.domain === "tasks" && entry.resourceId === "task-1");
+      const scheduleItems = cached?.payload.scheduleItems as Array<Record<string, unknown>>;
+      assert.equal(scheduleItems.length, 1);
+      assert.equal(scheduleItems[0].scheduleId, 42);
+      assert.equal(scheduleItems[0].occurrenceDate, "2026-06-19");
+
+      const todayRows = localTodayTasks(state, "2026-06-20");
+      assert.equal(todayRows.length, 1);
+      assert.equal(todayRows[0].scheduleId, 42);
+      assert.equal(todayRows[0].occurrenceDate, "2026-06-19");
+
+      const pending = manifest.outbox?.filter((entry) => entry.status === "pending") ?? [];
+      assert.equal(pending.length, 1);
+      assert.equal(pending[0].action, "delete");
+      assert.equal(pending[0].payload.scheduleId, 41);
+      assert.equal(pending[0].payload.scheduledDate, "2026-06-20");
+      assert.equal(pending[0].payload.occurrenceDate, "2026-06-18");
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
   it("queues local task occurrence changes into the outbox cache", async () => {
     const { store, state } = await createState();
     try {
@@ -695,6 +927,71 @@ describe("sync folder recovery", () => {
       assert.deepEqual(localTaskHistory(state, "task-1").map((entry) => `${entry.taskId}:${entry.targetDate}:${entry.status}`), [
         "task-1:2026-06-18:done"
       ]);
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("records recurring occurrence completion without changing task-wide status", async () => {
+    const { store, state } = await createState();
+    try {
+      upsertRemoteResource(store, {
+        domain: "tasks",
+        resourceId: "task-1",
+        version: 2,
+        payload: {
+          id: "task-1",
+          title: "Daily Recurring Task",
+          notes: "",
+          context: "project-1",
+          status: "todo",
+          isLocked: false,
+          baseLoadScore: 5,
+          recurrence: "EVERY_N_DAYS",
+          intervalDays: 1,
+          anchorDate: "2026-06-17",
+          startTime: "08:00",
+          active: true,
+          createdAt: "2026-06-17T00:00:00.000Z",
+          updatedAt: "2026-06-17T00:00:00.000Z"
+        },
+        updatedAt: "2026-06-17T00:00:00.000Z",
+        lastSyncedAt: "2026-06-17T00:00:00.000Z"
+      });
+
+      const result = await recordLocalTaskOccurrence(state, "task-1", {
+        operation: "complete",
+        targetDate: "2026-06-18",
+        status: "done"
+      });
+      assert.deepEqual(result, { taskId: "task-1", targetDate: "2026-06-18", status: "done" });
+
+      const manifest = readManifestFromStore(store);
+      const cached = manifest.remoteResources?.find((entry) => entry.domain === "tasks" && entry.resourceId === "task-1");
+      assert.equal(cached?.payload.status, "todo");
+      const actions = cached?.payload.occurrenceActions as Array<Record<string, unknown>>;
+      assert.equal(actions.length, 1);
+      assert.equal(actions[0].occurrenceDate, "2026-06-18");
+      assert.equal(actions[0].targetDate, "2026-06-18");
+      assert.equal(actions[0].status, "done");
+
+      const pending = manifest.outbox?.filter((entry) => entry.status === "pending") ?? [];
+      assert.equal(pending.length, 1);
+      assert.equal(pending[0].payload.taskId, "task-1");
+      assert.equal(pending[0].payload.occurrenceDate, "2026-06-18");
+      assert.equal(pending[0].payload.targetDate, "2026-06-18");
+
+      const scheduleRows = localTaskSchedule(state, "2026-06-18", "2026-06-18")[0].tasks as Array<Record<string, unknown>>;
+      assert.equal(scheduleRows.length, 1);
+      assert.equal(scheduleRows[0].status, "done");
+      assert.equal(scheduleRows[0].occurrenceDate, "2026-06-18");
+      assert.equal(scheduleRows[0].scheduledDate, "2026-06-18");
+
+      const calendarRows = localScheduleCalendar(state, "2026-06-18", "2026-06-18")[0].items as Array<Record<string, unknown>>;
+      assert.equal(calendarRows.length, 1);
+      assert.equal(calendarRows[0].status, "done");
+      assert.equal(calendarRows[0].occurrenceDate, "2026-06-18");
+      assert.equal(calendarRows[0].scheduledDate, "2026-06-18");
     } finally {
       closeManifestStore(store);
     }
@@ -814,24 +1111,33 @@ describe("sync folder recovery", () => {
         title: "CSV Task",
         context: "project-1",
         notes: "export me",
-        recurrence: "ONCE"
+        recurrence: "MONTHLY_NTH_WEEKDAY",
+        nthInMonth: 1,
+        weekdayMon1: 0
       });
       assert.ok(String(created.id).startsWith("local-task-"));
 
       const csv = exportLocalTasksCsv(state);
       assert.match(csv, /task_name,context,base_load_score/);
       assert.match(csv, /CSV Task,project-1/);
+      const [headerLine = "", firstTaskLine = ""] = csv.split("\n");
+      const exportedRecord = Object.fromEntries(
+        headerLine.split(",").map((header, index) => [header, firstTaskLine.split(",")[index] ?? ""])
+      );
+      assert.equal(exportedRecord.weekday_mon1, "7");
 
       const imported = await importLocalTasksCsv(state, [
-        "task_name,context,base_load_score,active,rule_type,notes",
-        "Imported Task,project-2,3,true,ONCE,hello"
+        "task_name,context,base_load_score,active,rule_type,nth_in_month,weekday_mon1,notes",
+        "Imported Task,project-2,3,true,MONTHLY_NTH_WEEKDAY,2,7,hello"
       ].join("\n"));
       assert.equal(imported, 1);
 
       const manifest = readManifestFromStore(store);
       const cachedTasks = manifest.remoteResources?.filter((entry) => entry.domain === "tasks") ?? [];
       assert.equal(cachedTasks.length, 2);
-      assert.ok(cachedTasks.some((entry) => entry.payload.title === "Imported Task"));
+      const importedTask = cachedTasks.find((entry) => entry.payload.title === "Imported Task");
+      assert.ok(importedTask);
+      assert.equal(importedTask.payload.weekdayMon1, 0);
     } finally {
       closeManifestStore(store);
     }

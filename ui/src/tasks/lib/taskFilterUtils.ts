@@ -20,9 +20,14 @@ export interface FilterTasksOpts {
   sidebarMode: SidebarMode;
   calendarStatusFilter: CalendarStatusFilter;
   quickFilter: QuickFilter;
-  myDayFlaggedIds: Set<string>;
+  todayMembershipKeys: Set<string>;
   todayTaskIds: Set<string>;
   today: Date;
+}
+
+function hasTodayMembershipForTask(todayMembershipKeys: Set<string>, taskId: string): boolean {
+  const prefix = `occurrence:${encodeURIComponent(taskId)}:`;
+  return Array.from(todayMembershipKeys).some((key) => key.startsWith(prefix));
 }
 
 /**
@@ -32,7 +37,7 @@ export interface FilterTasksOpts {
 export function filterTasksByMode(tasks: Task[], opts: FilterTasksOpts): Task[] {
   const {
     sidebarMode, calendarStatusFilter,
-    quickFilter, myDayFlaggedIds
+    quickFilter, todayMembershipKeys
   } = opts;
 
   if (sidebarMode === "calendar") {
@@ -43,8 +48,8 @@ export function filterTasksByMode(tasks: Task[], opts: FilterTasksOpts): Task[] 
 
   // list / schedule mode
   if (quickFilter === "today") {
-    return myDayFlaggedIds.size > 0
-      ? tasks.filter((t) => myDayFlaggedIds.has(t.id))
+    return todayMembershipKeys.size > 0
+      ? tasks.filter((t) => hasTodayMembershipForTask(todayMembershipKeys, t.id))
       : [];
   }
   if (quickFilter === "myday") {
@@ -106,7 +111,7 @@ export function filterAndSortTasks(
 // ── Task counters ─────────────────────────────────────────────────────────────
 
 export interface TaskCounterOpts {
-  myDayFlaggedIds: Set<string>;
+  todayMembershipKeys: Set<string>;
   todayTaskIds: Set<string>;
   today: Date;
   plannedCount: number;
@@ -129,9 +134,9 @@ export function computeTaskCounters(
   tasks: Task[],
   opts: TaskCounterOpts
 ): TaskCounters {
-  const { myDayFlaggedIds, plannedCount, overdueCount, inboxUpcomingCount } = opts;
+  const { todayMembershipKeys, plannedCount, overdueCount, inboxUpcomingCount } = opts;
   return {
-    today: myDayFlaggedIds.size,
+    today: todayMembershipKeys.size,
     myday: tasks.filter((t) => t.isPinned === true).length,
     planned: plannedCount,
     overdue: overdueCount,

@@ -14,6 +14,13 @@ import { startOfDay, toDateKey } from "../../lib/taskDateUtils";
 import { mergeProjectOptions, normalizeText, type ProjectOption } from "../../lib/taskDisplayUtils";
 import type { Task, TaskAttachment, TaskHistoryEntry, TaskSubtask } from "../../types/models";
 import {
+  occurrenceMembershipKey,
+  rowOccurrenceDate,
+  rowScheduledDate,
+  rowTodayMembershipKey,
+  taskOccurrenceRowKey
+} from "../lib/taskOccurrenceIdentity";
+import {
   emptyDraft,
   taskToDraft,
   type QuickFilter,
@@ -154,7 +161,7 @@ export interface TaskMutationsActions {
     isToday: boolean,
     selectedRows: TaskOccurrenceRow[],
     setTodayRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>,
-    setMyDayFlaggedIds: React.Dispatch<React.SetStateAction<Set<string>>>,
+    setTodayMembershipKeys: React.Dispatch<React.SetStateAction<Set<string>>>,
     closeMenu: () => void
   ) => Promise<void>;
   handleAttachFiles: (files: FileList | File[]) => Promise<void>;
@@ -172,7 +179,11 @@ export interface TaskMutationsActions {
   handleImport: (e: React.ChangeEvent<HTMLInputElement>) => void;
   loadAttachments: (taskId: string) => Promise<void>;
   loadSubtasks: (taskId: string, occDate: string) => Promise<void>;
-  loadScheduleItem: (taskId: string, occurrenceDate: string) => Promise<void>;
+  loadScheduleItem: (
+    taskId: string,
+    occurrenceDate: string,
+    identity?: { scheduleId?: number; scheduledDate?: string }
+  ) => Promise<void>;
   /** Ref to keep draft fresh for applyAndSave. Must be set each render. */
   draftRef: React.MutableRefObject<TaskDraft>;
   /** Ref for attachment file input. */
@@ -256,13 +267,25 @@ export function useTaskMutations(
   }, []);
 
   const loadScheduleItem = useCallback(
-    async (taskId: string, occurrenceDate: string) => {
+    async (
+      taskId: string,
+      occurrenceDate: string,
+      identity?: { scheduleId?: number; scheduledDate?: string }
+    ) => {
       setScheduleItemLoading(true);
       setScheduleDraft(null);
       setScheduleItemId(null);
+      const fallbackScheduledDate = identity?.scheduledDate ?? occurrenceDate;
       try {
         const items = await tasksApi.scheduleItemsForTask(taskId);
-        const matchingItem = items.find((item) => item.occurrenceDate === occurrenceDate);
+        const matchingItem =
+          (identity?.scheduleId != null
+            ? items.find((item) => item.id === identity.scheduleId)
+            : undefined)
+          ?? (identity?.scheduledDate
+            ? items.find((item) => item.occurrenceDate === occurrenceDate && item.scheduledDate === identity.scheduledDate)
+            : undefined)
+          ?? items.find((item) => item.occurrenceDate === occurrenceDate);
         if (matchingItem) {
           setScheduleItemId(matchingItem.id);
           setScheduleDraft({
@@ -273,7 +296,7 @@ export function useTaskMutations(
           });
         } else {
           setScheduleDraft({
-            scheduledDate: occurrenceDate,
+            scheduledDate: fallbackScheduledDate,
             startTime: "",
             endTime: "",
             timezone: "Asia/Tokyo"
@@ -281,7 +304,7 @@ export function useTaskMutations(
         }
       } catch {
         setScheduleDraft({
-          scheduledDate: occurrenceDate,
+          scheduledDate: fallbackScheduledDate,
           startTime: "",
           endTime: "",
           timezone: "Asia/Tokyo"
@@ -692,51 +715,83 @@ export function useTaskMutations(
     isToday: boolean,
     selectedRows: TaskOccurrenceRow[],
     setTodayRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>,
-    setMyDayFlaggedIds: React.Dispatch<React.SetStateAction<Set<string>>>,
+    setTodayMembershipKeys: React.Dispatch<React.SetStateAction<Set<string>>>,
     closeMenu: () => void
   ) => {
     if (selectedRows.length === 0) return;
-    const todayKey = toDateKey(startOfDay(new Date()));
-    const uniquePairs = Array.from(
+    const todayKey = toDateKey(startOfDay(today));
+    const uniqueRows = Array.from(
       new Map(
         selectedRows.map((r) => [
-          `${r.taskId}::${r.date}`,
-          { taskId: r.taskId, occurrenceDate: r.occurrenceDate ?? r.date, row: r }
+          rowTodayMembershipKey(r, todayKey),
+          {
+            taskId: r.taskId,
+            occurrenceDate: rowOccurrenceDate(r) || todayKey,
+            membershipKey: rowTodayMembershipKey(r, todayKey),
+            row: r
+          }
         ])
       ).values()
     );
     try {
       if (isToday) {
-        await Promise.all(
-          uniquePairs.map(({ taskId, occurrenceDate }) =>
+        const createdItems = await Promise.all(
+          uniqueRows.map(({ taskId, occurrenceDate, membershipKey, row }) =>
             tasksApi.addToToday(taskId, todayKey, occurrenceDate)
+              .then((scheduleItem) => ({ membershipKey, occurrenceDate, row, scheduleItem }))
           )
         );
         setTodayRows((prev) => {
-          const existingKeys = new Set(prev.map((r) => r.key));
-          const toAdd = uniquePairs
-            .filter(({ taskId, occurrenceDate }) =>
-              !existingKeys.has(`${occurrenceDate}::${taskId}`)
-            )
-            .map(({ row }) => ({ ...row }));
+          const existingKeys = new Set(prev.map((r) => rowTodayMembershipKey(r, todayKey)));
+          const toAdd = createdItems
+            .filter(({ membershipKey }) => !existingKeys.has(membershipKey))
+            .map(({ occurrenceDate: fallbackOccurrenceDate, row, scheduleItem }) => {
+              const occurrenceDate = scheduleItem.occurrenceDate || fallbackOccurrenceDate;
+              const scheduledDate = scheduleItem.scheduledDate || todayKey;
+              return {
+                ...row,
+                key: taskOccurrenceRowKey({
+                  taskId: row.taskId,
+                  occurrenceDate,
+                  scheduledDate,
+                  scheduleId: scheduleItem.id
+                }),
+                date: scheduledDate,
+                occurrenceDate,
+                scheduledDate,
+                scheduleId: scheduleItem.id,
+                startTime: scheduleItem.startTime ?? row.startTime,
+                endTime: scheduleItem.endTime ?? row.endTime
+              };
+            });
           return [...prev, ...toAdd];
         });
-        setMyDayFlaggedIds((prev) => {
+        setTodayMembershipKeys((prev) => {
           const next = new Set(prev);
-          uniquePairs.forEach(({ taskId }) => next.add(taskId));
+          createdItems.forEach(({ occurrenceDate: fallbackOccurrenceDate, row, scheduleItem }) => {
+            const occurrenceDate = scheduleItem.occurrenceDate || fallbackOccurrenceDate;
+            const scheduledDate = scheduleItem.scheduledDate || todayKey;
+            next.add(occurrenceMembershipKey(row.taskId, occurrenceDate, scheduledDate));
+          });
           return next;
         });
       } else {
         await Promise.all(
-          uniquePairs.map(({ taskId }) => tasksApi.removeFromToday(taskId, todayKey))
+          uniqueRows.map(({ row, taskId, occurrenceDate }) => {
+            const scheduledDate = rowScheduledDate(row);
+            if (row.scheduleId != null && scheduledDate === todayKey) {
+              return tasksApi.removeScheduleItem(row.scheduleId);
+            }
+            return tasksApi.removeFromToday(taskId, todayKey, occurrenceDate);
+          })
         );
         const removedKeys = new Set(
-          uniquePairs.map(({ taskId, occurrenceDate }) => `${occurrenceDate}::${taskId}`)
+          uniqueRows.map(({ membershipKey }) => membershipKey)
         );
-        setTodayRows((prev) => prev.filter((r) => !removedKeys.has(r.key)));
-        setMyDayFlaggedIds((prev) => {
+        setTodayRows((prev) => prev.filter((r) => !removedKeys.has(rowTodayMembershipKey(r, todayKey))));
+        setTodayMembershipKeys((prev) => {
           const next = new Set(prev);
-          uniquePairs.forEach(({ taskId }) => next.delete(taskId));
+          uniqueRows.forEach(({ membershipKey }) => next.delete(membershipKey));
           return next;
         });
       }

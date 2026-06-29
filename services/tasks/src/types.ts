@@ -36,6 +36,7 @@ export interface Task {
   // monthly
   monthDay?: number;
   nthInMonth?: number;
+  /** Internal UI/service weekday index: Sunday = 0, Monday = 1, ..., Saturday = 6. */
   weekdayMon1?: number;
   createdAt: string;
   updatedAt: string;
@@ -121,6 +122,7 @@ export interface TaskInput {
   anchorDate?: string;
   monthDay?: number;
   nthInMonth?: number;
+  /** Internal UI/service weekday index: Sunday = 0, Monday = 1, ..., Saturday = 6. */
   weekdayMon1?: number;
 }
 

@@ -80,6 +80,38 @@ describe("taskRecurrenceUtils", () => {
     expect(taskOccursOnDate(task, new Date("2026-04-01T00:00:00+09:00"))).toBe(true);
   });
 
+  it("uses anchorDate before activeFrom for EVERY_N_DAYS", () => {
+    const task = makeTask({
+      recurrence: "EVERY_N_DAYS",
+      intervalDays: 3,
+      anchorDate: "2026-03-29",
+      activeFrom: "2026-03-30"
+    });
+    expect(taskOccursOnDate(task, new Date("2026-03-30T00:00:00+09:00"))).toBe(false);
+    expect(taskOccursOnDate(task, new Date("2026-04-01T00:00:00+09:00"))).toBe(true);
+  });
+
+  it("falls back to createdAt when EVERY_N_DAYS has no anchorDate or activeFrom", () => {
+    const task = makeTask({
+      recurrence: "EVERY_N_DAYS",
+      intervalDays: 2,
+      createdAt: "2026-03-30"
+    });
+    expect(taskOccursOnDate(task, new Date("2026-03-30T00:00:00+09:00"))).toBe(true);
+    expect(taskOccursOnDate(task, new Date("2026-03-31T00:00:00+09:00"))).toBe(false);
+  });
+
+  it("matches monthly nth weekday using UI weekday indexes", () => {
+    const task = makeTask({
+      recurrence: "MONTHLY_NTH_WEEKDAY",
+      activeFrom: "2026-04-01",
+      nthInMonth: 1,
+      weekdayMon1: 0
+    });
+    expect(taskOccursOnDate(task, new Date("2026-04-05T00:00:00+09:00"))).toBe(true);
+    expect(taskOccursOnDate(task, new Date("2026-04-06T00:00:00+09:00"))).toBe(false);
+  });
+
   it("respects active period boundaries for recurring tasks", () => {
     const task = makeTask({
       recurrence: "WEEKLY",

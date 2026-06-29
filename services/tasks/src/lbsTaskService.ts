@@ -133,6 +133,22 @@ export function toUiStatus(lbsStatus?: string | null): TaskStatus {
   return "todo";
 }
 
+export function toLbsWeekdayMon1(uiWeekday?: number | null): number | undefined {
+  if (typeof uiWeekday !== "number" || !Number.isFinite(uiWeekday)) return undefined;
+  const normalized = Math.trunc(uiWeekday);
+  if (normalized === 0) return 7;
+  if (normalized >= 1 && normalized <= 6) return normalized;
+  return undefined;
+}
+
+export function toUiWeekdayIndex(lbsWeekdayMon1?: number | null): number | undefined {
+  if (typeof lbsWeekdayMon1 !== "number" || !Number.isFinite(lbsWeekdayMon1)) return undefined;
+  const normalized = Math.trunc(lbsWeekdayMon1);
+  if (normalized === 7) return 0;
+  if (normalized >= 1 && normalized <= 6) return normalized;
+  return undefined;
+}
+
 export function toDueDateOnly(value?: string | null): string | undefined {
   if (!value) return undefined;
   const trimmed = value.trim();
@@ -194,7 +210,7 @@ export function normalizeResponseTask(task: LbsTask): Task {
     anchorDate: toDueDateOnly(task.anchor_date),
     monthDay: task.month_day ?? undefined,
     nthInMonth: task.nth_in_month ?? undefined,
-    weekdayMon1: task.weekday_mon1 ?? undefined,
+    weekdayMon1: toUiWeekdayIndex(task.weekday_mon1),
     createdAt: task.created_at || task.updated_at || now,
     updatedAt: task.updated_at || task.created_at || now
   };

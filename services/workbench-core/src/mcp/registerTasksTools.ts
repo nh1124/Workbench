@@ -849,7 +849,7 @@ export function registerTasksTools(server: McpServer, ctx?: ToolContext): void {
       title: "List Today's Tasks",
       description:
         "Return full task objects for the Today (My Day) view on a given date. " +
-        "Merges explicit schedule entries with LBS-due tasks for that date. " +
+        "Returns explicit schedule entries whose scheduledDate matches that date. " +
         "Each item includes occurrenceDate (LBS execution date), scheduledDate, " +
         "and optional startTime/endTime/timezone from the schedule entry. " +
         "date must be YYYY-MM-DD.",
@@ -875,7 +875,7 @@ export function registerTasksTools(server: McpServer, ctx?: ToolContext): void {
       inputSchema: {
         taskId: z.string().min(1).describe("Task ID"),
         scheduledDate: z.string().min(1).describe("Calendar date to work on the task (YYYY-MM-DD, usually today)"),
-        occurrenceDate: z.string().min(1).describe("LBS execution date for completion (YYYY-MM-DD)"),
+        occurrenceDate: z.string().optional().describe("LBS execution date for completion (YYYY-MM-DD). Omit or pass empty string to use scheduledDate."),
         startTime: z.string().optional().describe("Scheduled start time (HH:MM, optional)"),
         endTime: z.string().optional().describe("Scheduled end time (HH:MM, optional)"),
         timezone: z.string().optional().describe("Timezone for start/end times (e.g. Asia/Tokyo, optional)")
@@ -883,7 +883,7 @@ export function registerTasksTools(server: McpServer, ctx?: ToolContext): void {
     },
     async ({ taskId, scheduledDate, occurrenceDate, startTime, endTime, timezone }) => {
       const result = await runWithAuth(ctx.accessToken, () =>
-        tasksClient.addToday(ctx.accessToken, taskId, scheduledDate, occurrenceDate, { startTime, endTime, timezone })
+        tasksClient.addToday(ctx.accessToken, taskId, scheduledDate, occurrenceDate ?? "", { startTime, endTime, timezone })
       );
       return asMcpText(result);
     }
@@ -894,17 +894,18 @@ export function registerTasksTools(server: McpServer, ctx?: ToolContext): void {
     {
       title: "Remove Task from My Day",
       description:
-        "Remove all schedule entries for a task on a given scheduled date, " +
-        "removing it from the Today (My Day) list for that day. " +
+        "Remove a task occurrence from the Today (My Day) list for a scheduled date. " +
+        "Pass occurrenceDate for exact occurrence-level removal; omitting it keeps the legacy broad task/date removal behavior. " +
         "scheduledDate is the date it was scheduled to (usually today).",
       inputSchema: {
         taskId: z.string().min(1).describe("Task ID"),
-        scheduledDate: z.string().min(1).describe("Scheduled date to remove from (YYYY-MM-DD)")
+        scheduledDate: z.string().min(1).describe("Scheduled date to remove from (YYYY-MM-DD)"),
+        occurrenceDate: z.string().optional().describe("LBS execution date to remove exactly (YYYY-MM-DD, optional)")
       }
     },
-    async ({ taskId, scheduledDate }) => {
+    async ({ taskId, scheduledDate, occurrenceDate }) => {
       const result = await runWithAuth(ctx.accessToken, () =>
-        tasksClient.removeFromToday(ctx.accessToken, taskId, scheduledDate)
+        tasksClient.removeFromToday(ctx.accessToken, taskId, scheduledDate, occurrenceDate)
       );
       return asMcpText(result);
     }

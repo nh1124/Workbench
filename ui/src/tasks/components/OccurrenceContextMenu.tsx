@@ -7,6 +7,7 @@
 import type { TaskOccurrenceRow } from "../types";
 import type { ProjectOption } from "../../lib/taskDisplayUtils";
 import { toDateKey } from "../../lib/taskDateUtils";
+import { rowTodayMembershipKey } from "../lib/taskOccurrenceIdentity";
 
 export interface OccurrenceContextMenuProps {
   visible: boolean;
@@ -18,7 +19,7 @@ export interface OccurrenceContextMenuProps {
   moveProjectInput: string;
   selectedOccurrenceKeys: Set<string>;
   activeOccurrenceRows: TaskOccurrenceRow[];
-  myDayFlaggedIds: Set<string>;
+  todayMembershipKeys: Set<string>;
   today: Date;
   projectOptions: ProjectOption[];
   onMarkDone: () => void;
@@ -43,7 +44,7 @@ export function OccurrenceContextMenu({
   moveProjectInput,
   selectedOccurrenceKeys,
   activeOccurrenceRows,
-  myDayFlaggedIds,
+  todayMembershipKeys,
   today,
   projectOptions,
   onMarkDone,
@@ -60,8 +61,9 @@ export function OccurrenceContextMenu({
   if (!visible) return null;
 
   const selRows = activeOccurrenceRows.filter((r) => selectedOccurrenceKeys.has(r.key));
-  const anyNotInToday = selRows.some((r) => !myDayFlaggedIds.has(r.taskId));
-  const anyInToday = selRows.some((r) => myDayFlaggedIds.has(r.taskId));
+  const todayKey = toDateKey(today);
+  const anyNotInToday = selRows.some((r) => !todayMembershipKeys.has(rowTodayMembershipKey(r, todayKey)));
+  const anyInToday = selRows.some((r) => todayMembershipKeys.has(rowTodayMembershipKey(r, todayKey)));
 
   return (
     <div

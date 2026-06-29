@@ -73,6 +73,7 @@ export interface TaskDraft {
   anchorDate: string;
   monthDay: number;
   nthInMonth: number;
+  /** Internal UI/service weekday index: Sunday = 0, Monday = 1, ..., Saturday = 6. */
   weekdayMon1: number;
 }
 
@@ -141,13 +142,17 @@ export function taskToDraft(task: Task): TaskDraft {
 
 /** A flattened row used by planned/overdue/today/inbox list views. */
 export interface TaskOccurrenceRow {
-  /** Composite key: `"${date}::${taskId}"` */
+  /** Stable row key derived from schedule item identity or occurrence identity. */
   key: string;
   taskId: string;
-  /** Display/planning date for this row. */
+  /** Display/grouping date for the active view. */
   date: string;
   /** LBS execution date used for completion/history operations. */
   occurrenceDate?: string;
+  /** Planned work date when this row comes from an explicit schedule item. */
+  scheduledDate?: string;
+  /** Explicit schedule item id, when available. */
+  scheduleId?: number;
   title: string;
   context: string;
   status: TaskStatus;

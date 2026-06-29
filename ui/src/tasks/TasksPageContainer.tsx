@@ -98,8 +98,12 @@ export function TasksPageContainer() {
   const weekTimelineScrollRef = useRef<HTMLDivElement | null>(null);
   const autoScrolledWeekKeyRef = useRef<string>("");
 
-  const today = useMemo(() => startOfDay(new Date()), []);
-  const todayKey = useMemo(() => toDateKey(today), [today]);
+  const todayKey = useMemo(() => toDateKey(startOfDay(nowMarker)), [nowMarker]);
+  const today = useMemo(() => {
+    const [year = 1970, month = 1, day = 1] = todayKey.split("-").map(Number);
+    return new Date(year, month - 1, day);
+  }, [todayKey]);
+  const dayBoundaryKeyRef = useRef(todayKey);
 
   // ── Clock tick (every 30s for now-marker) ──────────────────────────────
   useEffect(() => {
@@ -110,14 +114,14 @@ export function TasksPageContainer() {
   // ── Data loader hook ──────────────────────────────────────────────────────
   const {
     tasks, projectOptions,
-    todayTaskIds, myDayFlaggedIds, todayRows,
+    todayTaskIds, todayMembershipKeys, todayRows,
     inboxUpcomingRows, inboxDoneRows,
     plannedCount, overdueCount,
     calendarStatusMap,
     isLoading, error,
     load,
     setTasks, setProjectOptions,
-    setTodayRows, setMyDayFlaggedIds,
+    setTodayRows, setTodayMembershipKeys,
     setInboxUpcomingRows, setInboxDoneRows,
   } = useTaskDataLoader(contextFilter, selectedTaskId, () => {
     setSelectedTaskId(null);
@@ -272,7 +276,13 @@ export function TasksPageContainer() {
 
   // ── selectTask / clearDetail helpers (need local state setters) ──────────
 
-  const selectTask = useCallback((task: Task, occurrenceStatus?: TaskStatus, occurrenceDate?: string) => {
+  const selectTask = useCallback((
+    task: Task,
+    occurrenceStatus?: TaskStatus,
+    occurrenceDate?: string,
+    scheduleId?: number,
+    scheduledDate?: string
+  ) => {
     setSelectedTaskId(task.id);
     const d = taskToDraft(task);
     setDraft(occurrenceStatus !== undefined ? { ...d, status: occurrenceStatus } : d);
@@ -281,7 +291,7 @@ export function TasksPageContainer() {
     setSelectedOccurrenceDate(date);
     void loadAttachments(task.id);
     void loadSubtasks(task.id, date);
-    void loadScheduleItem(task.id, date);
+    void loadScheduleItem(task.id, date, { scheduleId, scheduledDate });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadAttachments, loadSubtasks, loadScheduleItem, setDraft, setShowAddPanel]);
 
@@ -304,7 +314,7 @@ export function TasksPageContainer() {
   const handleOccurrenceClick = (event: ReactMouseEvent<HTMLButtonElement>, row: TaskOccurrenceRow) => {
     _handleOccClick(event, row, occurrenceOrderedKeys, (r) => {
       const task = tasks.find((t) => t.id === r.taskId);
-      if (task) selectTask(task, r.status, r.occurrenceDate ?? r.date);
+      if (task) selectTask(task, r.status, r.occurrenceDate ?? r.date, r.scheduleId, r.scheduledDate ?? r.date);
     });
   };
 
@@ -349,7 +359,7 @@ export function TasksPageContainer() {
 
   const handleToggleTodayForSelected = async (isToday: boolean) => {
     const rows = getSelectedOccurrenceRows(activeOccurrenceRows);
-    await _handleToggleToday(isToday, rows, setTodayRows, setMyDayFlaggedIds, closeMenu);
+    await _handleToggleToday(isToday, rows, setTodayRows, setTodayMembershipKeys, closeMenu);
   };
 
   const markTodaySuggestionHandled = useCallback((action: "add" | "cancel") => {
@@ -409,17 +419,17 @@ export function TasksPageContainer() {
   const filteredTasks = useMemo(
     () => filterAndSortTasks(tasks, {
       sidebarMode, calendarStatusFilter, quickFilter,
-      myDayFlaggedIds, todayTaskIds, today, sortMode,
+      todayMembershipKeys, todayTaskIds, today, sortMode,
     }),
-    [quickFilter, calendarStatusFilter, sidebarMode, tasks, today, todayTaskIds, myDayFlaggedIds, sortMode]
+    [quickFilter, calendarStatusFilter, sidebarMode, tasks, today, todayTaskIds, todayMembershipKeys, sortMode]
   );
 
   const counters = useMemo(
     () => computeTaskCounters(tasks, {
-      myDayFlaggedIds, todayTaskIds, today,
+      todayMembershipKeys, todayTaskIds, today,
       plannedCount, overdueCount, inboxUpcomingCount: inboxUpcomingRows.length,
     }),
-    [tasks, today, todayTaskIds, myDayFlaggedIds, plannedCount, overdueCount, inboxUpcomingRows]
+    [tasks, today, todayTaskIds, todayMembershipKeys, plannedCount, overdueCount, inboxUpcomingRows]
   );
 
   const pinnedTaskIds = useMemo(
@@ -508,6 +518,18 @@ export function TasksPageContainer() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (dayBoundaryKeyRef.current === todayKey) return;
+    dayBoundaryKeyRef.current = todayKey;
+    void load();
+    if (quickFilter === "planned" || quickFilter === "overdue") {
+      resetOccurrences();
+      void loadOccurrencePage(quickFilter, true);
+    }
+    setScheduleRefreshTick((n) => n + 1);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [todayKey]);
 
   useEffect(() => {
     try {
@@ -729,7 +751,7 @@ export function TasksPageContainer() {
               moveProjectInput={moveProjectInput}
               selectedOccurrenceKeys={selectedOccurrenceKeys}
               activeOccurrenceRows={activeOccurrenceRows}
-              myDayFlaggedIds={myDayFlaggedIds}
+              todayMembershipKeys={todayMembershipKeys}
               today={today}
               projectOptions={projectOptions}
               onMarkDone={() => void handleMarkSelectedOccurrences("done")}
@@ -875,7 +897,7 @@ export function TasksPageContainer() {
                           return (
                             <button key={`${item.scheduleId ?? "auto"}::${item.occurrenceDate}::${item.taskId}`} type="button"
                               className={`calendar-task-pill${item.status === "done" ? " done" : ""}`}
-                              onClick={() => { if (fullTask) selectTask(fullTask, item.status as TaskStatus, item.occurrenceDate); }}
+                              onClick={() => { if (fullTask) selectTask(fullTask, item.status as TaskStatus, item.occurrenceDate, item.scheduleId, item.scheduledDate); }}
                               title={item.startTime ? `${item.startTime}${item.endTime ? `–${item.endTime}` : ""} ${item.title}` : item.title}>
                               {item.startTime ? <span className="schedule-pill-time">{item.startTime}</span> : null}
                               {item.title}
@@ -930,7 +952,7 @@ export function TasksPageContainer() {
                               <button key={`${item.scheduleId ?? idx}`} type="button"
                                 className={`calendar-week-event-block${item.status === "done" ? " done" : ""}${compactClass}`}
                                 style={{ top: event.top, height: event.height, left: `calc(${laneW * event.lane}% + 2px)`, width: `calc(${laneW}% - 4px)`, zIndex: event.lane + 1 }}
-                                onClick={() => { if (fullTask) selectTask(fullTask, item.status as TaskStatus, item.occurrenceDate); }}>
+                                onClick={() => { if (fullTask) selectTask(fullTask, item.status as TaskStatus, item.occurrenceDate, item.scheduleId, item.scheduledDate); }}>
                                 <strong>{item.title}</strong>
                                 <span>{resolveContextDisplayName(item.context ?? "", item.context)}</span>
                                 <small className="calendar-week-event-time">{event.timeLabel}</small>

@@ -1431,6 +1431,7 @@ const LOCAL_TASK_ID_PREFIX = "local-task-";
 const LOCAL_TASK_STATUSES = new Set(["todo", "done", "skipped"]);
 const LOCAL_TASK_PRIORITIES = new Set(["low", "medium", "high"]);
 const LOCAL_TASK_RECURRENCES = new Set(["ONCE", "WEEKLY", "EVERY_N_DAYS", "MONTHLY_DAY", "MONTHLY_NTH_WEEKDAY"]);
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function isLocalTaskId(id: string | undefined): boolean {
   return typeof id === "string" && id.startsWith(LOCAL_TASK_ID_PREFIX);
@@ -1444,9 +1445,17 @@ function taskRelationOutboxPath(id: string, relation: string): string {
   return `tasks/${id}/${relation}`;
 }
 
+function parseTaskStatus(value: unknown): "todo" | "done" | "skipped" | undefined {
+  return typeof value === "string" && LOCAL_TASK_STATUSES.has(value)
+    ? value as "todo" | "done" | "skipped"
+    : undefined;
+}
+
 function normalizeTaskStatus(value: unknown, fallback?: unknown): "todo" | "done" | "skipped" {
-  if (typeof value === "string" && LOCAL_TASK_STATUSES.has(value)) return value as "todo" | "done" | "skipped";
-  if (typeof fallback === "string" && LOCAL_TASK_STATUSES.has(fallback)) return fallback as "todo" | "done" | "skipped";
+  const parsed = parseTaskStatus(value);
+  if (parsed) return parsed;
+  const fallbackParsed = parseTaskStatus(fallback);
+  if (fallbackParsed) return fallbackParsed;
   return "todo";
 }
 
@@ -1704,6 +1713,166 @@ function taskOccurrenceActions(task: Record<string, unknown> | undefined): Recor
   return recordArray(task?.occurrenceActions);
 }
 
+function parseDateOnly(value: unknown): Date | undefined {
+  const text = asString(value);
+  if (!text) return undefined;
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(text);
+  if (!match) return undefined;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (!year || !month || !day) return undefined;
+  return new Date(Date.UTC(year, month - 1, day));
+}
+
+function dateKeyFromDate(date: Date): string {
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function localTaskWithinActivePeriod(task: Record<string, unknown>, date: Date): boolean {
+  if (task.recurrence === "ONCE") return true;
+  if (task.active === false) return false;
+  const from = parseDateOnly(task.activeFrom);
+  const until = parseDateOnly(task.activeUntil);
+  if (from && date < from) return false;
+  if (until && date > until) return false;
+  return true;
+}
+
+function localTaskOccursOnDateKey(task: Record<string, unknown>, dateKey: string): boolean {
+  const day = parseDateOnly(dateKey);
+  if (!day) return false;
+  const recurrence = asString(task.recurrence) ?? "ONCE";
+
+  if (recurrence === "ONCE") {
+    const due = parseDateOnly(task.dueDate);
+    return !!due && dateKeyFromDate(due) === dateKey;
+  }
+
+  if (!localTaskWithinActivePeriod(task, day)) return false;
+
+  if (recurrence === "WEEKLY") {
+    const selectedDays = [
+      task.sun, task.mon, task.tue, task.wed, task.thu, task.fri, task.sat
+    ].map(Boolean);
+    if (selectedDays.some(Boolean)) return selectedDays[day.getUTCDay()];
+    const fallback = parseDateOnly(task.activeFrom) || parseDateOnly(task.dueDate);
+    return fallback ? fallback.getUTCDay() === day.getUTCDay() : false;
+  }
+
+  if (recurrence === "EVERY_N_DAYS") {
+    const interval = Math.max(1, finiteInteger(task.intervalDays) ?? 1);
+    const anchor =
+      parseDateOnly(task.anchorDate) ||
+      parseDateOnly(task.activeFrom) ||
+      parseDateOnly(task.createdAt);
+    if (!anchor) return false;
+    const diff = Math.floor((day.getTime() - anchor.getTime()) / DAY_MS);
+    return diff >= 0 && diff % interval === 0;
+  }
+
+  if (recurrence === "MONTHLY_DAY") {
+    const dayOfMonth = Math.min(31, Math.max(1, finiteInteger(task.monthDay) ?? 1));
+    return day.getUTCDate() === dayOfMonth;
+  }
+
+  if (recurrence === "MONTHLY_NTH_WEEKDAY") {
+    const nthInMonth = Math.min(5, Math.max(1, finiteInteger(task.nthInMonth) ?? 1));
+    const weekday = Math.min(6, Math.max(0, finiteInteger(task.weekdayMon1) ?? 0));
+    const weekIndex = Math.floor((day.getUTCDate() - 1) / 7) + 1;
+    return day.getUTCDay() === weekday && weekIndex === nthInMonth;
+  }
+
+  return false;
+}
+
+function scheduleItemNaturalKey(taskId: string, occurrenceDate: string, scheduledDate: string): string {
+  return `${taskId}::${occurrenceDate}::${scheduledDate}`;
+}
+
+function scheduleItemDates(item: Record<string, unknown>): { occurrenceDate: string; scheduledDate: string } | undefined {
+  const scheduledDate = asString(item.scheduledDate);
+  if (!scheduledDate) return undefined;
+  return {
+    occurrenceDate: asString(item.occurrenceDate) ?? scheduledDate,
+    scheduledDate
+  };
+}
+
+function scheduleItemNaturalKeyValue(taskId: string, item: Record<string, unknown>): string | undefined {
+  const dates = scheduleItemDates(item);
+  return dates ? scheduleItemNaturalKey(taskId, dates.occurrenceDate, dates.scheduledDate) : undefined;
+}
+
+function scheduleItemIdentityMatches(
+  taskId: string,
+  item: Record<string, unknown>,
+  identity: { scheduleId?: number; occurrenceDate?: string; scheduledDate?: string },
+  mode: "exact" | "upsert"
+): boolean {
+  const candidateId = scheduleItemIdValue(item);
+  if (identity.scheduleId !== undefined) {
+    if (mode === "exact") return candidateId === identity.scheduleId;
+    if (identity.scheduleId > 0) return candidateId === identity.scheduleId;
+  }
+  if (!identity.occurrenceDate || !identity.scheduledDate) return false;
+  return scheduleItemNaturalKeyValue(taskId, item) === scheduleItemNaturalKey(taskId, identity.occurrenceDate, identity.scheduledDate);
+}
+
+function occurrenceOperation(action: Record<string, unknown>): string | undefined {
+  const operation = asString(action.operation) ?? asString(action.kind);
+  return operation === "skip-exception" ? "skipException" : operation;
+}
+
+function occurrenceActionDate(action: Record<string, unknown>): string | undefined {
+  return asString(action.targetDate) ?? asString(action.occurrenceDate);
+}
+
+function localOccurrenceStatus(
+  task: Record<string, unknown>,
+  occurrenceDate: string
+): "todo" | "done" | "skipped" | undefined {
+  let status: "todo" | "done" | "skipped" | undefined;
+  for (const action of taskOccurrenceActions(task)) {
+    const operation = occurrenceOperation(action);
+    if (operation === "complete" && occurrenceActionDate(action) === occurrenceDate) {
+      status = parseTaskStatus(action.status) ?? status;
+    } else if (operation === "skipException" && occurrenceActionDate(action) === occurrenceDate) {
+      status = "skipped";
+    } else if (operation === "move") {
+      if (asString(action.sourceDate) === occurrenceDate) status = "skipped";
+      if (asString(action.targetDate) === occurrenceDate && status === "skipped") status = undefined;
+    }
+  }
+  return status;
+}
+
+function localResolvedOccurrenceStatus(
+  task: Record<string, unknown>,
+  occurrenceDate: string
+): "todo" | "done" | "skipped" {
+  return localOccurrenceStatus(task, occurrenceDate) ?? normalizeTaskStatus(task.status);
+}
+
+function localOccurrenceHidden(task: Record<string, unknown>, occurrenceDate: string): boolean {
+  return taskOccurrenceActions(task).some((action) => {
+    const operation = occurrenceOperation(action);
+    return (operation === "skipException" && occurrenceActionDate(action) === occurrenceDate)
+      || (operation === "move" && asString(action.sourceDate) === occurrenceDate);
+  });
+}
+
+function shouldUpdateTaskStatusFromOccurrence(task: Record<string, unknown>, operation: string, status: unknown): boolean {
+  return operation === "complete" && task.recurrence === "ONCE" && parseTaskStatus(status) !== undefined;
+}
+
+function localTaskHasCalendarTime(task: Record<string, unknown>): boolean {
+  return Boolean(asString(task.startTime) || asString(task.endTime));
+}
+
 function scheduleItemOutboxPath(taskId: string, scheduleId: string | number): string {
   return `tasks/${taskId}/schedule-items/${scheduleId}`;
 }
@@ -1736,14 +1905,16 @@ function scheduleItemIdValue(item: Record<string, unknown>): number | undefined 
 function normalizeScheduleItemPayload(taskId: string, input: Record<string, unknown>, existing?: Record<string, unknown>): Record<string, unknown> {
   const now = new Date().toISOString();
   const scheduledDate = asString(input.scheduledDate) ?? asString(existing?.scheduledDate) ?? new Date().toISOString().slice(0, 10);
-  const occurrenceDate = typeof input.occurrenceDate === "string"
-    ? input.occurrenceDate
-    : typeof existing?.occurrenceDate === "string"
-      ? existing.occurrenceDate
-      : scheduledDate;
+  const occurrenceDate = asString(input.occurrenceDate) ?? asString(existing?.occurrenceDate) ?? scheduledDate;
+  const id = scheduleItemId(input.id)
+    ?? scheduleItemId(input.scheduleId)
+    ?? scheduleItemId(existing?.id)
+    ?? scheduleItemId(existing?.scheduleId)
+    ?? nextLocalScheduleId();
   const payload: Record<string, unknown> = {
     ...(existing ?? {}),
-    id: scheduleItemId(input.id) ?? scheduleItemId(input.scheduleId) ?? scheduleItemId(existing?.id) ?? nextLocalScheduleId(),
+    id,
+    scheduleId: id,
     taskId,
     occurrenceDate,
     scheduledDate,
@@ -1789,15 +1960,19 @@ function findLocalScheduleItem(
   return undefined;
 }
 
-function localTodayTasks(state: DaemonState, date: string): Record<string, unknown>[] {
+export function localTodayTasks(state: DaemonState, date: string): Record<string, unknown>[] {
   const tasks: Record<string, unknown>[] = [];
   for (const task of listLocalRemoteDomainItems(state, "tasks", { includeDeleted: false, limit: 1000 })) {
+    const taskId = asString(task.id);
+    if (!taskId) continue;
     for (const item of taskScheduleItems(task)) {
-      if (item.scheduledDate !== date) continue;
+      const dates = scheduleItemDates(item);
+      if (!dates || dates.scheduledDate !== date) continue;
       tasks.push({
         ...task,
-        occurrenceDate: asString(item.occurrenceDate) ?? date,
-        scheduledDate: date,
+        status: localResolvedOccurrenceStatus(task, dates.occurrenceDate),
+        occurrenceDate: dates.occurrenceDate,
+        scheduledDate: dates.scheduledDate,
         scheduleId: scheduleItemIdValue(item),
         startTime: item.startTime,
         endTime: item.endTime,
@@ -1806,6 +1981,111 @@ function localTodayTasks(state: DaemonState, date: string): Record<string, unkno
     }
   }
   return tasks.sort((a, b) => String(a.startTime ?? "").localeCompare(String(b.startTime ?? "")));
+}
+
+function localScheduleRow(
+  task: Record<string, unknown>,
+  occurrenceDate: string,
+  scheduledDate: string,
+  scheduleItem?: Record<string, unknown>
+): Record<string, unknown> | undefined {
+  const taskId = asString(task.id);
+  if (!taskId) return undefined;
+  return {
+    scheduleId: scheduleItem ? scheduleItemIdValue(scheduleItem) : undefined,
+    taskId,
+    title: task.title,
+    context: task.context,
+    status: localResolvedOccurrenceStatus(task, occurrenceDate),
+    occurrenceDate,
+    scheduledDate,
+    load: task.baseLoadScore,
+    startTime: scheduleItem ? scheduleItem.startTime : task.startTime,
+    endTime: scheduleItem ? scheduleItem.endTime : task.endTime,
+    timezone: scheduleItem ? scheduleItem.timezone : task.timezone,
+    isLocked: task.isLocked
+  };
+}
+
+function localGeneratedMoveTargets(
+  task: Record<string, unknown>,
+  startDate: string,
+  endDate: string
+): string[] {
+  const targets = new Set<string>();
+  for (const action of taskOccurrenceActions(task)) {
+    if (occurrenceOperation(action) !== "move") continue;
+    const targetDate = asString(action.targetDate);
+    if (targetDate && targetDate >= startDate && targetDate <= endDate) {
+      targets.add(targetDate);
+    }
+  }
+  return [...targets].sort();
+}
+
+function localScheduleRows(
+  state: DaemonState,
+  startDate: string,
+  endDate: string,
+  options: { includeGenerated: boolean; generatedRequiresTime: boolean; includeOnceDue: boolean }
+): Record<string, unknown>[] {
+  const dateKeys = dateRange(startDate, endDate);
+  const rows: Record<string, unknown>[] = [];
+  const generatedRowKeys = new Set<string>();
+
+  for (const task of listLocalRemoteDomainItems(state, "tasks", { includeDeleted: false, limit: 1000 })) {
+    const taskId = asString(task.id);
+    if (!taskId) continue;
+    const scheduleItems = taskScheduleItems(task);
+    const explicitOccurrenceKeys = new Set<string>();
+
+    for (const item of scheduleItems) {
+      const dates = scheduleItemDates(item);
+      if (!dates) continue;
+      explicitOccurrenceKeys.add(`${taskId}::${dates.occurrenceDate}`);
+      if (dates.scheduledDate < startDate || dates.scheduledDate > endDate) continue;
+      const row = localScheduleRow(task, dates.occurrenceDate, dates.scheduledDate, item);
+      if (row) rows.push(row);
+    }
+
+    if (!options.includeGenerated) continue;
+    if (options.generatedRequiresTime && !localTaskHasCalendarTime(task)) continue;
+
+    for (const dateKey of dateKeys) {
+      if (!options.includeOnceDue && task.recurrence === "ONCE") continue;
+      if (!localTaskOccursOnDateKey(task, dateKey)) continue;
+      if (explicitOccurrenceKeys.has(`${taskId}::${dateKey}`)) continue;
+      if (localOccurrenceHidden(task, dateKey)) continue;
+      const key = `${taskId}::${dateKey}::${dateKey}`;
+      if (generatedRowKeys.has(key)) continue;
+      const row = localScheduleRow(task, dateKey, dateKey);
+      if (row) {
+        generatedRowKeys.add(key);
+        rows.push(row);
+      }
+    }
+
+    for (const targetDate of localGeneratedMoveTargets(task, startDate, endDate)) {
+      if (explicitOccurrenceKeys.has(`${taskId}::${targetDate}`)) continue;
+      if (localOccurrenceHidden(task, targetDate)) continue;
+      const key = `${taskId}::${targetDate}::${targetDate}`;
+      if (generatedRowKeys.has(key)) continue;
+      const row = localScheduleRow(task, targetDate, targetDate);
+      if (row) {
+        generatedRowKeys.add(key);
+        rows.push(row);
+      }
+    }
+  }
+
+  rows.sort((a, b) => {
+    const scheduled = String(a.scheduledDate ?? "").localeCompare(String(b.scheduledDate ?? ""));
+    if (scheduled !== 0) return scheduled;
+    const time = String(a.startTime ?? "").localeCompare(String(b.startTime ?? ""));
+    if (time !== 0) return time;
+    return String(a.title ?? "").localeCompare(String(b.title ?? ""));
+  });
+  return rows;
 }
 
 function dateRange(startDate: string, endDate: string): string[] {
@@ -1849,7 +2129,7 @@ export function exportLocalTasksCsv(state: DaemonState): string {
     task.anchorDate ?? "",
     task.monthDay ?? "",
     task.nthInMonth ?? "",
-    task.weekdayMon1 ?? "",
+    uiWeekdayToLbsWeekdayMon1(task.weekdayMon1) ?? "",
     task.activeFrom ?? "",
     task.activeUntil ?? "",
     task.notes ?? "",
@@ -1907,6 +2187,22 @@ function csvNumber(value: string | undefined): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function uiWeekdayToLbsWeekdayMon1(value: unknown): number | undefined {
+  const parsed = finiteInteger(value);
+  if (parsed === undefined) return undefined;
+  if (parsed === 0) return 7;
+  if (parsed >= 1 && parsed <= 6) return parsed;
+  return undefined;
+}
+
+function lbsWeekdayMon1ToUi(value: unknown): number | undefined {
+  const parsed = finiteInteger(value);
+  if (parsed === undefined) return undefined;
+  if (parsed === 7) return 0;
+  if (parsed >= 1 && parsed <= 6) return parsed;
+  return undefined;
+}
+
 function csvString(value: string | undefined): string | undefined {
   return value === undefined || value === "" ? undefined : value;
 }
@@ -1933,7 +2229,7 @@ function csvTaskPayload(record: Record<string, string>): Record<string, unknown>
     anchorDate: csvString(record.anchor_date),
     monthDay: csvNumber(record.month_day),
     nthInMonth: csvNumber(record.nth_in_month),
-    weekdayMon1: csvNumber(record.weekday_mon1),
+    weekdayMon1: lbsWeekdayMon1ToUi(csvNumber(record.weekday_mon1)),
     activeFrom: csvString(record.start_date),
     activeUntil: csvString(record.end_date),
     notes: record.notes ?? "",
@@ -1966,39 +2262,54 @@ export function localTaskHistory(state: DaemonState, taskId: string): Record<str
   }));
 }
 
-function localScheduleCalendar(state: DaemonState, startDate: string, endDate: string): Record<string, unknown>[] {
+export function localScheduleCalendar(state: DaemonState, startDate: string, endDate: string): Record<string, unknown>[] {
+  const rowsByDate = new Map<string, Record<string, unknown>[]>();
+  for (const row of localScheduleRows(state, startDate, endDate, {
+    includeGenerated: true,
+    generatedRequiresTime: true,
+    includeOnceDue: false
+  })) {
+    const scheduledDate = asString(row.scheduledDate);
+    if (!scheduledDate) continue;
+    const rows = rowsByDate.get(scheduledDate) ?? [];
+    rows.push(row);
+    rowsByDate.set(scheduledDate, rows);
+  }
   return dateRange(startDate, endDate).map((date) => ({
     date,
-    items: localTodayTasks(state, date).map((task) => ({
-      scheduleId: task.scheduleId,
-      taskId: task.id,
-      title: task.title,
-      context: task.context,
-      status: task.status,
-      occurrenceDate: task.occurrenceDate,
-      scheduledDate: task.scheduledDate,
-      load: task.baseLoadScore,
-      startTime: task.startTime,
-      endTime: task.endTime,
-      timezone: task.timezone,
-      isLocked: task.isLocked
-    }))
+    items: rowsByDate.get(date) ?? []
   }));
 }
 
-function localTaskSchedule(state: DaemonState, startDate: string, endDate: string, context?: string, status?: string): Record<string, unknown>[] {
+export function localTaskSchedule(state: DaemonState, startDate: string, endDate: string, context?: string, status?: string): Record<string, unknown>[] {
+  const rowsByDate = new Map<string, Record<string, unknown>[]>();
+  for (const row of localScheduleRows(state, startDate, endDate, {
+    includeGenerated: true,
+    generatedRequiresTime: false,
+    includeOnceDue: true
+  })) {
+    const scheduledDate = asString(row.scheduledDate);
+    if (!scheduledDate) continue;
+    const rows = rowsByDate.get(scheduledDate) ?? [];
+    rows.push(row);
+    rowsByDate.set(scheduledDate, rows);
+  }
   return dateRange(startDate, endDate).map((date) => {
-    const tasks = localTodayTasks(state, date)
+    const tasks = (rowsByDate.get(date) ?? [])
       .filter((task) => !context || task.context === context)
       .filter((task) => !status || task.status === status)
       .map((task) => ({
-        taskId: task.id,
+        scheduleId: task.scheduleId,
+        taskId: task.taskId,
         title: task.title,
         context: task.context,
         status: task.status,
-        load: task.baseLoadScore,
+        occurrenceDate: task.occurrenceDate,
+        scheduledDate: task.scheduledDate,
+        load: task.load,
         startTime: task.startTime,
         endTime: task.endTime,
+        timezone: task.timezone,
         isLocked: task.isLocked
       }));
     return {
@@ -2047,19 +2358,34 @@ function applyTaskScheduleResult(
   const resultId = scheduleItemId(result?.id) ?? scheduleItemId(result?.scheduleId) ?? localId;
 
   updateTaskScheduleItems(state, taskId, (items) => {
+    const identity = {
+      scheduleId: resultId ?? localId,
+      occurrenceDate: asString(item.payload.occurrenceDate) ?? asString(result?.occurrenceDate),
+      scheduledDate: asString(item.payload.scheduledDate) ?? asString(result?.scheduledDate)
+    };
     if (item.action === "delete") {
-      return items.filter((candidate) => scheduleItemIdValue(candidate) !== localId && scheduleItemIdValue(candidate) !== resultId);
+      return items.filter((candidate) => !scheduleItemIdentityMatches(taskId, candidate, identity, "exact"));
     }
     const nextItem = normalizeScheduleItemPayload(taskId, {
       ...item.payload,
       ...(result ?? {}),
       id: resultId ?? localId
     });
+    const nextNaturalKey = scheduleItemNaturalKeyValue(taskId, nextItem);
+    const nextId = scheduleItemIdValue(nextItem);
     const replaced = items.map((candidate) => {
       const candidateId = scheduleItemIdValue(candidate);
-      return candidateId === localId || candidateId === resultId ? nextItem : candidate;
+      const candidateNaturalKey = scheduleItemNaturalKeyValue(taskId, candidate);
+      return candidateId === localId
+        || candidateId === resultId
+        || (nextNaturalKey !== undefined && candidateNaturalKey === nextNaturalKey)
+        ? nextItem
+        : candidate;
     });
-    return replaced.some((candidate) => scheduleItemIdValue(candidate) === scheduleItemIdValue(nextItem))
+    return replaced.some((candidate) => (
+      (nextId !== undefined && scheduleItemIdValue(candidate) === nextId)
+      || (nextNaturalKey !== undefined && scheduleItemNaturalKeyValue(taskId, candidate) === nextNaturalKey)
+    ))
       ? replaced
       : [...replaced, nextItem];
   }, now);
@@ -2160,7 +2486,7 @@ function applyTaskOccurrenceResult(
   };
   upsertLocalTaskPayload(state, taskId, {
     ...task,
-    ...(item.payload.operation === "complete" && asString(item.payload.status) ? { status: item.payload.status } : {}),
+    ...(shouldUpdateTaskStatusFromOccurrence(task, asString(item.payload.operation) ?? "", item.payload.status) ? { status: item.payload.status } : {}),
     occurrenceActions: [...taskOccurrenceActions(task), occurrence]
   }, now);
   return true;
@@ -2201,6 +2527,30 @@ function enqueueLocalTaskPinOutbox(state: DaemonState, id: string, pinned: boole
   });
 }
 
+function enqueueLocalScheduleItemWriteOutbox(
+  state: DaemonState,
+  taskId: string,
+  item: Record<string, unknown>,
+  updatedAt: string,
+  supersedeReason: string
+): void {
+  const scheduleId = scheduleItemIdValue(item);
+  if (scheduleId === undefined) return;
+  enqueueTaskRelationOutbox(state, {
+    path: scheduleItemOutboxPath(taskId, scheduleId),
+    action: scheduleId < 0 ? "create" : "update",
+    taskId,
+    payload: {
+      relation: scheduleId < 0 ? "today" : "scheduleItem",
+      scheduleId,
+      id: scheduleId,
+      ...item
+    },
+    supersedeReason,
+    updatedAt
+  });
+}
+
 export async function addLocalTaskToToday(
   state: DaemonState,
   taskId: string,
@@ -2209,23 +2559,50 @@ export async function addLocalTaskToToday(
   const now = new Date().toISOString();
   const task = localTaskPayloadForUpdate(state, taskId);
   if (!task || task.deleted === true) return undefined;
-  const item = normalizeScheduleItemPayload(taskId, input);
+  const scheduledDate = asString(input.scheduledDate) ?? new Date().toISOString().slice(0, 10);
+  const occurrenceDate = asString(input.occurrenceDate) ?? scheduledDate;
+  const inputScheduleId = scheduleItemId(input.scheduleId) ?? scheduleItemId(input.id);
+  const existing = taskScheduleItems(task).find((candidate) =>
+    scheduleItemIdentityMatches(taskId, candidate, {
+      scheduleId: inputScheduleId,
+      occurrenceDate,
+      scheduledDate
+    }, "upsert")
+  );
+  const item = normalizeScheduleItemPayload(taskId, {
+    ...input,
+    occurrenceDate,
+    scheduledDate
+  }, existing);
   const scheduleId = scheduleItemIdValue(item);
   if (scheduleId === undefined) return undefined;
-  updateTaskScheduleItems(state, taskId, (items) => [...items, item], now);
-  enqueueTaskRelationOutbox(state, {
-    path: scheduleItemOutboxPath(taskId, scheduleId),
-    action: "create",
+  updateTaskScheduleItems(state, taskId, (items) => {
+    let inserted = false;
+    const nextItems: Record<string, unknown>[] = [];
+    for (const candidate of items) {
+      const candidateId = scheduleItemIdValue(candidate);
+      const sameId = candidateId !== undefined && candidateId === scheduleId;
+      const sameInputId = inputScheduleId !== undefined && inputScheduleId > 0 && candidateId === inputScheduleId;
+      const sameNaturalKey = scheduleItemNaturalKeyValue(taskId, candidate) === scheduleItemNaturalKey(taskId, occurrenceDate, scheduledDate);
+      if (sameId || sameInputId || sameNaturalKey) {
+        if (!inserted) {
+          nextItems.push(item);
+          inserted = true;
+        }
+        continue;
+      }
+      nextItems.push(candidate);
+    }
+    if (!inserted) nextItems.push(item);
+    return nextItems;
+  }, now);
+  enqueueLocalScheduleItemWriteOutbox(
+    state,
     taskId,
-    payload: {
-      relation: "today",
-      scheduleId,
-      id: scheduleId,
-      ...item
-    },
-    supersedeReason: "Local task schedule item was recreated; stale schedule operation was superseded.",
-    updatedAt: now
-  });
+    item,
+    now,
+    "Local task schedule item was recreated; stale schedule operation was superseded."
+  );
   await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
   await refreshManifestStats(state);
   return item;
@@ -2234,18 +2611,27 @@ export async function addLocalTaskToToday(
 export async function removeLocalTaskFromToday(
   state: DaemonState,
   taskId: string,
-  scheduledDate: string
+  scheduledDate: string,
+  occurrenceDate?: string,
+  scheduleId?: number
 ): Promise<Record<string, unknown> | undefined> {
   const now = new Date().toISOString();
   const task = localTaskPayloadForUpdate(state, taskId);
   if (!task || task.deleted === true) return undefined;
-  const existing = taskScheduleItems(task).filter((item) => item.scheduledDate === scheduledDate);
-  if (existing.length === 0) return { taskId, scheduledDate, removed: 0 };
-  updateTaskScheduleItems(state, taskId, (items) => items.filter((item) => item.scheduledDate !== scheduledDate), now);
+  const exactIdentityAvailable = scheduleId !== undefined || Boolean(occurrenceDate);
+  const identity = { scheduleId, occurrenceDate, scheduledDate };
+  const matches = (item: Record<string, unknown>): boolean => {
+    if (exactIdentityAvailable) return scheduleItemIdentityMatches(taskId, item, identity, "exact");
+    return scheduleItemDates(item)?.scheduledDate === scheduledDate;
+  };
+  const existing = taskScheduleItems(task).filter(matches);
+  if (existing.length === 0) return { taskId, scheduledDate, occurrenceDate, scheduleId, removed: 0 };
+  updateTaskScheduleItems(state, taskId, (items) => items.filter((item) => !matches(item)), now);
   for (const item of existing) {
-    const scheduleId = scheduleItemIdValue(item);
-    if (scheduleId === undefined) continue;
-    const path = scheduleItemOutboxPath(taskId, scheduleId);
+    const itemScheduleId = scheduleItemIdValue(item);
+    if (itemScheduleId === undefined) continue;
+    const dates = scheduleItemDates(item);
+    const path = scheduleItemOutboxPath(taskId, itemScheduleId);
     supersedeOpenOutboxForPath(
       state,
       path,
@@ -2253,7 +2639,7 @@ export async function removeLocalTaskFromToday(
       "Local task schedule item was removed; stale schedule operation was superseded.",
       now
     );
-    if (scheduleId > 0) {
+    if (itemScheduleId > 0) {
       enqueueManifestOutbox(state.manifestStore, {
         relativePath: path,
         domain: "tasks",
@@ -2262,16 +2648,17 @@ export async function removeLocalTaskFromToday(
         payload: {
           relation: "today",
           taskId,
-          scheduleId,
-          id: scheduleId,
-          scheduledDate
+          scheduleId: itemScheduleId,
+          id: itemScheduleId,
+          scheduledDate: dates?.scheduledDate ?? scheduledDate,
+          occurrenceDate: dates?.occurrenceDate ?? occurrenceDate ?? scheduledDate
         }
       });
     }
   }
   await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
   await refreshManifestStats(state);
-  return { taskId, scheduledDate, removed: existing.length };
+  return { taskId, scheduledDate, occurrenceDate, scheduleId, removed: existing.length };
 }
 
 export async function updateLocalTaskScheduleItem(
@@ -2282,25 +2669,78 @@ export async function updateLocalTaskScheduleItem(
   const found = findLocalScheduleItem(state, scheduleId);
   if (!found) return undefined;
   const now = new Date().toISOString();
-  const item = normalizeScheduleItemPayload(found.taskId, { ...found.item, ...input, id: scheduleId }, found.item);
-  updateTaskScheduleItems(state, found.taskId, (items) => items.map((candidate) => (
-    scheduleItemIdValue(candidate) === scheduleId ? item : candidate
-  )), now);
-  const path = scheduleItemOutboxPath(found.taskId, scheduleId);
-  const action = scheduleId < 0 ? "create" : "update";
-  enqueueTaskRelationOutbox(state, {
-    path,
-    action,
-    taskId: found.taskId,
-    payload: {
-      relation: scheduleId < 0 ? "today" : "scheduleItem",
-      scheduleId,
-      id: scheduleId,
-      ...item
-    },
-    supersedeReason: "Local task schedule item was updated; stale schedule operation was superseded.",
-    updatedAt: now
-  });
+  const draftItem = normalizeScheduleItemPayload(found.taskId, { ...found.item, ...input, id: scheduleId }, found.item);
+  const draftNaturalKey = scheduleItemNaturalKeyValue(found.taskId, draftItem);
+  const conflictItem = draftNaturalKey
+    ? taskScheduleItems(found.task).find((candidate) => (
+      scheduleItemIdValue(candidate) !== scheduleId
+      && scheduleItemNaturalKeyValue(found.taskId, candidate) === draftNaturalKey
+    ))
+    : undefined;
+  const item = conflictItem
+    ? normalizeScheduleItemPayload(found.taskId, {
+      ...conflictItem,
+      ...input,
+      id: scheduleItemIdValue(conflictItem),
+      scheduleId: scheduleItemIdValue(conflictItem)
+    }, conflictItem)
+    : draftItem;
+  const itemId = scheduleItemIdValue(item);
+  const itemNaturalKey = scheduleItemNaturalKeyValue(found.taskId, item);
+  updateTaskScheduleItems(state, found.taskId, (items) => {
+    let inserted = false;
+    const nextItems: Record<string, unknown>[] = [];
+    for (const candidate of items) {
+      const candidateId = scheduleItemIdValue(candidate);
+      const sameOriginal = candidateId === scheduleId;
+      const sameTargetId = itemId !== undefined && candidateId === itemId;
+      const sameNaturalKey = itemNaturalKey !== undefined
+        && scheduleItemNaturalKeyValue(found.taskId, candidate) === itemNaturalKey;
+      if (sameOriginal || sameTargetId || sameNaturalKey) {
+        if (!inserted) {
+          nextItems.push(item);
+          inserted = true;
+        }
+        continue;
+      }
+      nextItems.push(candidate);
+    }
+    if (!inserted) nextItems.push(item);
+    return nextItems;
+  }, now);
+  enqueueLocalScheduleItemWriteOutbox(
+    state,
+    found.taskId,
+    item,
+    now,
+    "Local task schedule item was updated; stale schedule operation was superseded."
+  );
+  if (conflictItem) {
+    const path = scheduleItemOutboxPath(found.taskId, scheduleId);
+    supersedeOpenOutboxForPath(
+      state,
+      path,
+      () => true,
+      "Local task schedule item was merged into another occurrence membership; stale schedule operation was superseded.",
+      now
+    );
+    if (scheduleId > 0) {
+      enqueueManifestOutbox(state.manifestStore, {
+        relativePath: path,
+        domain: "tasks",
+        action: "delete",
+        resourceId: found.taskId,
+        payload: {
+          relation: "scheduleItem",
+          taskId: found.taskId,
+          scheduleId,
+          id: scheduleId,
+          scheduledDate: found.item.scheduledDate,
+          occurrenceDate: found.item.occurrenceDate
+        }
+      });
+    }
+  }
   await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
   await refreshManifestStats(state);
   return item;
@@ -2347,22 +2787,51 @@ export async function recordLocalTaskOccurrence(
 ): Promise<Record<string, unknown> | undefined> {
   const task = localTaskPayloadForUpdate(state, taskId);
   if (!task || task.deleted === true) return undefined;
-  const operation = asString(input.operation);
+  const rawOperation = asString(input.operation);
+  const operation = rawOperation === "skip-exception" ? "skipException" : rawOperation;
   const targetDate = asString(input.targetDate);
   if (!operation || !targetDate) return undefined;
   const now = new Date().toISOString();
+  const sourceDate = asString(input.sourceDate);
+  const occurrenceDate = operation === "move" ? sourceDate ?? targetDate : targetDate;
   const occurrence = {
     relation: "occurrence",
     taskId,
-    operation,
     ...input,
+    operation,
+    targetDate,
+    occurrenceDate,
     updatedAt: now
   };
+  const movedScheduleItems: Record<string, unknown>[] = [];
+  let scheduleItems = taskScheduleItems(task);
+  if (operation === "move" && sourceDate && sourceDate !== targetDate) {
+    scheduleItems = scheduleItems.map((item) => {
+      const dates = scheduleItemDates(item);
+      if (!dates || dates.occurrenceDate !== sourceDate) return item;
+      const moved = normalizeScheduleItemPayload(taskId, {
+        ...item,
+        occurrenceDate: targetDate
+      }, item);
+      movedScheduleItems.push(moved);
+      return moved;
+    });
+  }
   upsertLocalTaskPayload(state, taskId, {
     ...task,
-    ...(operation === "complete" && asString(input.status) ? { status: input.status } : {}),
+    ...(shouldUpdateTaskStatusFromOccurrence(task, operation, input.status) ? { status: input.status } : {}),
+    scheduleItems,
     occurrenceActions: [...taskOccurrenceActions(task), occurrence]
   }, now);
+  for (const item of movedScheduleItems) {
+    enqueueLocalScheduleItemWriteOutbox(
+      state,
+      taskId,
+      item,
+      now,
+      "Local task occurrence was moved; stale schedule operation was superseded."
+    );
+  }
   enqueueTaskRelationOutbox(state, {
     path: occurrenceOutboxPath(taskId, operation, targetDate),
     action: "update",
@@ -6274,7 +6743,9 @@ function startStatusServer(state: DaemonState): void {
           writeJson(res, { message: "scheduledDate query parameter is required" }, 400);
           return;
         }
-        const result = await removeLocalTaskFromToday(state, taskId, scheduledDate);
+        const occurrenceDate = asString(url.searchParams.get("occurrenceDate"));
+        const scheduleId = scheduleItemId(url.searchParams.get("scheduleId")) ?? scheduleItemId(url.searchParams.get("id"));
+        const result = await removeLocalTaskFromToday(state, taskId, scheduledDate, occurrenceDate, scheduleId);
         if (!result) {
           writeJson(res, { message: "Local task not found" }, 404);
           return;

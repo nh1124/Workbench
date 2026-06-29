@@ -8,8 +8,10 @@ import {
   normalizeResponseTask,
   resolveStatusTargetDate,
   toDueDateOnly,
+  toLbsWeekdayMon1,
   toLbsStatus,
   toUiStatus,
+  toUiWeekdayIndex,
   toValidRecurrence,
   todayInTimezone,
   type LbsConfig,
@@ -364,7 +366,7 @@ function buildLbsPayload(input: TaskInput, config: LbsConfig): Record<string, un
   }
   if (input.monthDay !== undefined) payload.month_day = input.monthDay;
   if (input.nthInMonth !== undefined) payload.nth_in_month = input.nthInMonth;
-  if (input.weekdayMon1 !== undefined) payload.weekday_mon1 = input.weekdayMon1;
+  if (input.weekdayMon1 !== undefined) payload.weekday_mon1 = toLbsWeekdayMon1(input.weekdayMon1);
 
   return payload;
 }
@@ -437,7 +439,7 @@ export async function updateTask(
     anchorDate: updates.anchorDate !== undefined ? (updates.anchorDate || undefined) : (toDueDateOnly(current.anchor_date) ?? undefined),
     monthDay: updates.monthDay !== undefined ? updates.monthDay : (current.month_day ?? undefined),
     nthInMonth: updates.nthInMonth !== undefined ? updates.nthInMonth : (current.nth_in_month ?? undefined),
-    weekdayMon1: updates.weekdayMon1 !== undefined ? updates.weekdayMon1 : (current.weekday_mon1 ?? undefined),
+    weekdayMon1: updates.weekdayMon1 !== undefined ? updates.weekdayMon1 : toUiWeekdayIndex(current.weekday_mon1),
     status: updates.status
   };
 

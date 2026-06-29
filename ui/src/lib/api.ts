@@ -1140,11 +1140,18 @@ export const tasksApi = {
       "/api/tasks/today",
       { method: "POST", body: JSON.stringify({ taskId, scheduledDate, occurrenceDate, ...opts }) }
     ),
-  removeFromToday: (taskId: string, scheduledDate: string): Promise<{ taskId: string; scheduledDate: string; removed: number }> =>
-    fetchTasksFacadeJson<{ taskId: string; scheduledDate: string; removed: number }>(
-      `/api/tasks/today/${encodeURIComponent(taskId)}?scheduledDate=${encodeURIComponent(scheduledDate)}`,
+  removeFromToday: (
+    taskId: string,
+    scheduledDate: string,
+    occurrenceDate?: string
+  ): Promise<{ taskId: string; scheduledDate: string; occurrenceDate?: string; removed: number }> => {
+    const params = new URLSearchParams({ scheduledDate });
+    if (occurrenceDate) params.set("occurrenceDate", occurrenceDate);
+    return fetchTasksFacadeJson<{ taskId: string; scheduledDate: string; occurrenceDate?: string; removed: number }>(
+      `/api/tasks/today/${encodeURIComponent(taskId)}?${params.toString()}`,
       { method: "DELETE" }
-    ),
+    );
+  },
   scheduleCalendar: (startDate: string, endDate: string): Promise<ScheduleCalendarDay[]> => {
     const params = new URLSearchParams({ startDate, endDate });
     return fetchTasksFacadeJson<ScheduleCalendarDay[]>(`/api/tasks/schedule-calendar?${params.toString()}`);

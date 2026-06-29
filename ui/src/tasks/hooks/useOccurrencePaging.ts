@@ -12,6 +12,7 @@ import type { TaskOccurrenceRow } from "../types";
 import { OCCURRENCE_PAGE_DAYS, toTaskStatus } from "../types";
 import type { ScheduleCalendarDay, TaskScheduleDay } from "../../types/models";
 import { computeOccurrenceHasMore } from "../lib/occurrencePagingUtils";
+import { taskOccurrenceRowKey } from "../lib/taskOccurrenceIdentity";
 
 /** Build flat occurrence rows from a raw schedule response. */
 function buildOccurrenceRowsFromSchedule(
@@ -28,9 +29,14 @@ function buildOccurrenceRowsFromSchedule(
       const status = toTaskStatus(item.status);
       if (mode === "overdue" && status === "done") continue;
       rows.push({
-        key: `${dateKey}::${item.taskId}`,
+        key: taskOccurrenceRowKey({
+          taskId: item.taskId,
+          occurrenceDate: dateKey,
+          scheduledDate: dateKey
+        }),
         taskId: item.taskId,
         date: dateKey,
+        occurrenceDate: dateKey,
         title: item.title,
         context: item.context,
         status,
@@ -60,10 +66,17 @@ function buildOccurrenceRowsFromScheduleCalendar(
     for (const item of day.items) {
       if (contextFilter && item.context !== contextFilter) continue;
       rows.push({
-        key: `${item.scheduledDate}::${item.occurrenceDate}::${item.taskId}::${item.scheduleId ?? "auto"}`,
+        key: taskOccurrenceRowKey({
+          taskId: item.taskId,
+          occurrenceDate: item.occurrenceDate,
+          scheduledDate: item.scheduledDate,
+          scheduleId: item.scheduleId
+        }),
         taskId: item.taskId,
         date: item.scheduledDate,
         occurrenceDate: item.occurrenceDate,
+        scheduledDate: item.scheduledDate,
+        scheduleId: item.scheduleId,
         title: item.title,
         context: item.context,
         status: toTaskStatus(item.status),

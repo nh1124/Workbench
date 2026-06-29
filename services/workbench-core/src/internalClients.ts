@@ -690,10 +690,10 @@ export const tasksClient = {
       }
     ),
 
-  removeFromToday: (token: string, taskId: string, scheduledDate: string) =>
+  removeFromToday: (token: string, taskId: string, scheduledDate: string, occurrenceDate?: string) =>
     serviceRequest<{ taskId: string; scheduledDate: string; removed: number }>(
       tasksService,
-      `/tasks/today/${encodeURIComponent(taskId)}${buildQuery({ scheduledDate })}`,
+      `/tasks/today/${encodeURIComponent(taskId)}${buildQuery({ scheduledDate, occurrenceDate })}`,
       token,
       { method: "DELETE" }
     ),

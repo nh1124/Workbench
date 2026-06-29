@@ -23,12 +23,13 @@ import {
   type TaskOccurrenceRow,
   toTaskStatus
 } from "../types";
+import { occurrenceMembershipKey, taskOccurrenceRowKey } from "../lib/taskOccurrenceIdentity";
 
 export interface TaskDataState {
   tasks: Task[];
   projectOptions: ProjectOption[];
   todayTaskIds: Set<string>;
-  myDayFlaggedIds: Set<string>;
+  todayMembershipKeys: Set<string>;
   todayRows: TaskOccurrenceRow[];
   inboxUpcomingRows: TaskOccurrenceRow[];
   inboxDoneRows: TaskOccurrenceRow[];
@@ -45,7 +46,7 @@ export interface TaskDataLoaderActions {
   setTasks: React.Dispatch<React.SetStateAction<Task[]>>;
   setProjectOptions: React.Dispatch<React.SetStateAction<ProjectOption[]>>;
   setTodayRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>;
-  setMyDayFlaggedIds: React.Dispatch<React.SetStateAction<Set<string>>>;
+  setTodayMembershipKeys: React.Dispatch<React.SetStateAction<Set<string>>>;
   setInboxUpcomingRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>;
   setInboxDoneRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>;
 }
@@ -63,7 +64,7 @@ export function useTaskDataLoader(
   const [tasks, setTasks] = useState<Task[]>([]);
   const [projectOptions, setProjectOptions] = useState<ProjectOption[]>([]);
   const [todayTaskIds, setTodayTaskIds] = useState<Set<string>>(new Set());
-  const [myDayFlaggedIds, setMyDayFlaggedIds] = useState<Set<string>>(new Set());
+  const [todayMembershipKeys, setTodayMembershipKeys] = useState<Set<string>>(new Set());
   const [todayRows, setTodayRows] = useState<TaskOccurrenceRow[]>([]);
   const [inboxUpcomingRows, setInboxUpcomingRows] = useState<TaskOccurrenceRow[]>([]);
   const [inboxDoneRows, setInboxDoneRows] = useState<TaskOccurrenceRow[]>([]);
@@ -122,21 +123,32 @@ export function useTaskDataLoader(
         }
       }
 
-      // Today rows: built ENTIRELY from the task_today DB table (myDayTasks).
-      // Each TodayTask has occurrenceDate = the LBS execution date for that task.
-      // This is the single source of truth for the Today view display.
-      const builtTodayRows: TaskOccurrenceRow[] = myDayTasks.map((t) => ({
-        key: `${t.occurrenceDate}::${t.id}`,
-        taskId: t.id,
-        date: t.occurrenceDate,
-        title: t.title,
-        context: t.contextName ?? t.context,
-        status: todayStatusMap.get(t.id) ?? t.status, // prefer live LBS status
-        load: t.baseLoadScore,
-        startTime: t.startTime ?? undefined,
-        endTime: t.endTime ?? undefined,
-        isLocked: t.isLocked
-      }));
+      const todayMemberships = new Set<string>();
+      const builtTodayRows: TaskOccurrenceRow[] = myDayTasks.map((t) => {
+        const occurrenceDate = t.occurrenceDate || t.scheduledDate || todayKey;
+        const scheduledDate = t.scheduledDate || todayKey;
+        todayMemberships.add(occurrenceMembershipKey(t.id, occurrenceDate, scheduledDate));
+        return {
+          key: taskOccurrenceRowKey({
+            taskId: t.id,
+            occurrenceDate,
+            scheduledDate,
+            scheduleId: t.scheduleId
+          }),
+          taskId: t.id,
+          date: scheduledDate,
+          occurrenceDate,
+          scheduledDate,
+          scheduleId: t.scheduleId,
+          title: t.title,
+          context: t.contextName ?? t.context,
+          status: toTaskStatus(t.status),
+          load: t.baseLoadScore,
+          startTime: t.startTime ?? undefined,
+          endTime: t.endTime ?? undefined,
+          isLocked: t.isLocked
+        };
+      });
       setTodayRows(builtTodayRows);
 
       // Planned/overdue counts
@@ -190,8 +202,7 @@ export function useTaskDataLoader(
 
       setTasks(mergedTasks);
       setTodayTaskIds(todayIds);
-      // myDayFlaggedIds: task IDs in Today DB (the authoritative source for Today filter)
-      setMyDayFlaggedIds(new Set(myDayTasks.map((t: TodayTask) => t.id)));
+      setTodayMembershipKeys(todayMemberships);
       setProjectOptions(
         projectsResult.ok
           ? mergeProjectOptions(
@@ -208,6 +219,7 @@ export function useTaskDataLoader(
     } catch (e) {
       const message = e instanceof Error ? e.message : "Failed to load tasks.";
       setTodayTaskIds(new Set());
+      setTodayMembershipKeys(new Set());
       if (isAuthErrorMessage(message)) {
         setError(message);
       } else {
@@ -222,7 +234,7 @@ export function useTaskDataLoader(
     tasks,
     projectOptions,
     todayTaskIds,
-    myDayFlaggedIds,
+    todayMembershipKeys,
     todayRows,
     inboxUpcomingRows,
     inboxDoneRows,
@@ -235,7 +247,7 @@ export function useTaskDataLoader(
     setTasks,
     setProjectOptions,
     setTodayRows,
-    setMyDayFlaggedIds,
+    setTodayMembershipKeys,
     setInboxUpcomingRows,
     setInboxDoneRows
   };
