@@ -159,6 +159,18 @@ function makeSidecarEntry() {
   );
   source = replaceOnce(
     source,
+    '} from "./projectContextCache.js";',
+    '} from "../../src/projectContextCache.ts";',
+    "projectContextCache import"
+  );
+  source = replaceOnce(
+    source,
+    '} from "./projectContextExport.js";',
+    '} from "../../src/projectContextExport.ts";',
+    "projectContextExport import"
+  );
+  source = replaceOnce(
+    source,
     'export { readIdentity } from "./identityStorage.js";',
     'export { readIdentity } from "../../src/identityStorage.ts";',
     "identityStorage value export"
