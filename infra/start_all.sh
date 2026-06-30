@@ -9,4 +9,5 @@ node "${SCRIPT_DIR}/scripts/workbench-env.mjs" check
 
 echo "Starting Workbench web stack (services + web UI)..."
 cd "${PROJECT_ROOT}"
+docker compose up -d workbench-core-db notes-db artifacts-db tasks-db projects-db images-db mindmaps-db
 npm run dev

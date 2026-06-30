@@ -22,7 +22,7 @@ for %%P in (%WORKBENCH_PORTS%) do (
 
 echo Starting Workbench web stack (services + web UI)...
 cd /d "%PROJECT_ROOT%"
-docker compose up -d
+docker compose up -d workbench-core-db notes-db artifacts-db tasks-db projects-db images-db mindmaps-db
 if errorlevel 1 (
   echo [ERROR] Failed to start PostgreSQL containers. Please ensure Docker Desktop is running.
   exit /b 1
