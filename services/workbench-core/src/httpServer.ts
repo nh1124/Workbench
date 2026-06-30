@@ -17,6 +17,7 @@ import { getIntegrationManifests } from "./integrations/index.js";
 import { registerArtifactsTools } from "./mcp/registerArtifactsTools.js";
 import { registerDeepResearchTools } from "./mcp/registerDeepResearchTools.js";
 import { registerImageTools } from "./mcp/registerImageTools.js";
+import { registerMindmapTools } from "./mcp/registerMindmapTools.js";
 import { registerNotesTools } from "./mcp/registerNotesTools.js";
 import { registerProjectsTools } from "./mcp/registerProjectsTools.js";
 import { registerProjectContextTools } from "./mcp/registerProjectContextTools.js";
@@ -26,6 +27,7 @@ import { artifactsClient, imagesClient, InternalServiceError, mindmapsClient, no
 import { getOAuthDynamicClient, saveOAuthDynamicClient } from "./oauthDynamicClientsStore.js";
 import {
   createArtifactNoteWithIndex,
+  cleanupDeletedMindmapBestEffort,
   createProjectLinkWithValidation,
   deleteProjectWithGuard,
   getArtifactProjectMemberships,
@@ -34,13 +36,18 @@ import {
   listArtifactProjectIdsBestEffort,
   listProjectLinksResolved,
   linkArtifactToProject,
+  maintainMindmapIndexBestEffort,
+  mindmapProjectIdsBestEffort,
   maintainArtifactIndexBestEffort,
   ProjectContextError,
   projectIdsFromArtifactDeletionSnapshot,
-  rebuildProjectArtifactIndex,
+  reconcileMindmapMutationBestEffort,
+  rebuildProjectIndex,
+  rebuildProjectMindmapIndex,
   reconcileArtifactMutationBestEffort,
   removeArtifactItemWithProjectCleanup,
   removeProjectLinkWithValidation,
+  saveMindmapExportArtifact,
   unlinkArtifactFromProject,
   uploadArtifactFileWithIndex
 } from "./projectContext.js";
@@ -86,6 +93,12 @@ import {
   type ProjectContextChanged
 } from "./projectContextSync.js";
 import { buildProjectContextExportResponse } from "./projectContextExport.js";
+import {
+  configuredServiceIds,
+  ensureImagesAccountProvisioned,
+  ensureMindmapsAccountProvisioned,
+  provisionAccountToServices
+} from "./serviceProvisioning.js";
 import { DeepResearchError } from "./deepResearch/errors.js";
 import {
   cancelDeepResearch,
@@ -102,8 +115,7 @@ import {
   listProvisionings,
   loginUser,
   registerUser,
-  saveIntegrationConfig,
-  upsertProvisioning
+  saveIntegrationConfig
 } from "./store.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -861,50 +873,6 @@ export const app = express();
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
 
-type ServiceTarget = {
-  id: "notes" | "artifacts" | "tasks" | "projects" | "images" | "mindmaps";
-  baseUrl: string;
-  apiKey: string;
-};
-
-const serviceTargets: ServiceTarget[] = [
-  {
-    id: "notes",
-    baseUrl: requireEnv("NOTES_SERVICE_URL"),
-    apiKey: requireEnv("INTERNAL_API_KEY_NOTES")
-  },
-  {
-    id: "artifacts",
-    baseUrl: requireEnv("ARTIFACTS_SERVICE_URL"),
-    apiKey: requireEnv("INTERNAL_API_KEY_ARTIFACTS")
-  },
-  {
-    id: "tasks",
-    baseUrl: requireEnv("TASKS_SERVICE_URL"),
-    apiKey: requireEnv("INTERNAL_API_KEY_TASKS")
-  },
-  {
-    id: "images",
-    baseUrl: requireEnv("IMAGES_SERVICE_URL"),
-    apiKey: requireEnv("INTERNAL_API_KEY_IMAGES")
-  },
-  {
-    id: "mindmaps",
-    baseUrl: requireEnv("MINDMAPS_SERVICE_URL"),
-    apiKey: requireEnv("INTERNAL_API_KEY_MINDMAPS")
-  }
-];
-
-const projectsServiceUrl = optionalEnv("PROJECTS_SERVICE_URL");
-const projectsInternalApiKey = optionalEnv("INTERNAL_API_KEY_PROJECTS");
-if (projectsServiceUrl && projectsInternalApiKey) {
-  serviceTargets.push({
-    id: "projects",
-    baseUrl: projectsServiceUrl,
-    apiKey: projectsInternalApiKey
-  });
-}
-
 const accountSchema = z.object({
   username: z.string().min(1),
   password: z.string().min(1)
@@ -1299,6 +1267,14 @@ async function invalidateArtifactIndexFromApi(
   artifactItemId: string
 ): Promise<void> {
   await invalidateProjectContextFromApi(userId, projectIds, "index", "index", artifactItemId);
+}
+
+async function invalidateMindmapIndexFromApi(
+  userId: string,
+  projectIds: Array<string | undefined>,
+  documentId: string
+): Promise<void> {
+  await invalidateProjectContextFromApi(userId, projectIds, "index", "index", documentId);
 }
 
 function asJsonRecord(value: unknown): Record<string, unknown> {
@@ -2393,159 +2369,6 @@ async function autoSaveCompletedImageAssets(
   };
 }
 
-function mindmapExportExtension(format: "json" | "markdown" | "svg"): string {
-  return format === "json" ? "json" : format === "svg" ? "svg" : "md";
-}
-
-async function saveMindmapExportToArtifacts(
-  authContext: AuthenticatedContext,
-  documentId: string,
-  options: {
-    format: "json" | "markdown" | "svg";
-    artifactTitle?: string;
-    artifactPath?: string;
-    projectId?: string;
-    projectName?: string;
-  }
-): Promise<{ artifact: unknown; exportRecord: unknown }> {
-  const exported = asJsonRecord(
-    await mindmapsClient.exportContent(authContext.accessToken, documentId, { format: options.format })
-  );
-  const title = asNonEmptyString(exported.title) ?? options.artifactTitle ?? "Mindmap";
-  const sourceVersion = typeof exported.sourceVersion === "number" ? exported.sourceVersion : 1;
-  const projectId = options.projectId ?? asNonEmptyString(exported.projectId);
-  const projectName = options.projectName ?? asNonEmptyString(exported.projectName);
-  const { directoryPath, filename } = splitArtifactPath(options.artifactPath);
-  const tags = [
-    "mindmap-export",
-    asNonEmptyString(exported.mode) === "logical_tree" ? "logical-tree" : "mindmap"
-  ];
-
-  let created: unknown;
-  if (options.format === "markdown") {
-    const notePath =
-      options.artifactPath?.trim() ||
-      `mindmaps/${slugifyFileName(options.artifactTitle ?? title)}.${mindmapExportExtension(options.format)}`;
-    created = await createArtifactNoteWithIndex(authContext.accessToken, {
-      projectId,
-      projectName,
-      path: notePath,
-      title: options.artifactTitle ?? title,
-      scope: "project",
-      tags,
-      contentMarkdown: asNonEmptyString(exported.contentText) ?? ""
-    });
-  } else {
-    const uploadFilename =
-      filename ||
-      (options.artifactTitle
-        ? `${slugifyFileName(options.artifactTitle)}.${mindmapExportExtension(options.format)}`
-        : asNonEmptyString(exported.filename) ?? `${slugifyFileName(title)}.${mindmapExportExtension(options.format)}`);
-    created = await uploadArtifactFileWithIndex(authContext.accessToken, {
-      projectId,
-      projectName,
-      directoryPath: directoryPath ?? "mindmaps",
-      scope: "project",
-      tags,
-      filename: uploadFilename,
-      mimeType: asNonEmptyString(exported.mimeType),
-      contentBase64: asNonEmptyString(exported.contentBase64) ?? Buffer.from("", "utf8").toString("base64")
-    });
-  }
-
-  const artifactItemId = objectId(created);
-  if (!artifactItemId) {
-    throw new Error("Mindmap export did not create an artifact item id.");
-  }
-
-  const projectIds = await listArtifactProjectIdsBestEffort(authContext.accessToken, created);
-  await invalidateArtifactIndexFromApi(authContext.userId, projectIds, artifactItemId);
-  const createdRecord = asJsonRecord(created);
-  const exportRecord = await mindmapsClient.recordArtifactExport(authContext.accessToken, documentId, {
-    sourceVersion,
-    artifactItemId,
-    artifactItemPath: asNonEmptyString(createdRecord.path),
-    artifactTitle: asNonEmptyString(createdRecord.title) ?? options.artifactTitle ?? title,
-    projectId: asNonEmptyString(createdRecord.projectId) ?? projectId,
-    projectName: asNonEmptyString(createdRecord.projectName) ?? projectName,
-    exportFormat: options.format
-  });
-
-  return { artifact: created, exportRecord };
-}
-
-async function provisionAccountToServices(userId: string, username: string) {
-  const results = await Promise.all(
-    serviceTargets.map(async (service) => {
-      try {
-        const response = await fetch(`${service.baseUrl}/internal/accounts`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-api-key": service.apiKey
-          },
-          body: JSON.stringify({ coreUserId: userId, username })
-        });
-
-        if (!response.ok) {
-          const text = await response.text();
-          await upsertProvisioning(userId, service.id, "error", text || `HTTP ${response.status}`);
-          return { serviceId: service.id, status: "error" as const, message: text || `HTTP ${response.status}` };
-        }
-
-        await upsertProvisioning(userId, service.id, "ok");
-        return { serviceId: service.id, status: "ok" as const };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Provisioning failed";
-        await upsertProvisioning(userId, service.id, "error", message);
-        return { serviceId: service.id, status: "error" as const, message };
-      }
-    })
-  );
-
-  return results;
-}
-
-async function ensureServiceAccountProvisioned(
-  authContext: AuthenticatedContext,
-  serviceId: ServiceTarget["id"]
-): Promise<void> {
-  const service = serviceTargets.find((target) => target.id === serviceId);
-  if (!service) return;
-
-  try {
-    const response = await fetch(`${service.baseUrl}/internal/accounts`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": service.apiKey
-      },
-      body: JSON.stringify({ coreUserId: authContext.userId, username: authContext.username })
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      const message = text || `HTTP ${response.status}`;
-      await upsertProvisioning(authContext.userId, service.id, "error", message);
-      throw new Error(`${service.id} service provisioning failed: ${message}`);
-    }
-
-    await upsertProvisioning(authContext.userId, service.id, "ok");
-  } catch (error) {
-    const message = error instanceof Error ? error.message : `${service.id} service provisioning failed`;
-    await upsertProvisioning(authContext.userId, service.id, "error", message);
-    throw error;
-  }
-}
-
-async function ensureImagesAccountProvisioned(authContext: AuthenticatedContext): Promise<void> {
-  await ensureServiceAccountProvisioned(authContext, "images");
-}
-
-async function ensureMindmapsAccountProvisioned(authContext: AuthenticatedContext): Promise<void> {
-  await ensureServiceAccountProvisioned(authContext, "mindmaps");
-}
-
 app.get("/health", (_req, res) => {
   res.json({
     service: "workbench-core",
@@ -3099,7 +2922,7 @@ app.get("/auth/me", async (req, res) => {
 });
 
 app.get("/integrations/manifests", async (_req, res) => {
-  const enabledIntegrationIds = new Set<string>(serviceTargets.map((service) => service.id));
+  const enabledIntegrationIds = new Set<string>(configuredServiceIds());
   enabledIntegrationIds.add("image_generation");
   enabledIntegrationIds.add("deep_research");
   return res.json(getIntegrationManifests(enabledIntegrationIds));
@@ -3249,7 +3072,8 @@ app.get("/api/mindmaps", async (req, res) => {
       projectId: typeof req.query.projectId === "string" ? req.query.projectId : undefined,
       q: typeof req.query.q === "string" ? req.query.q : undefined,
       mode,
-      limit: Number.isFinite(limit) ? limit : undefined
+      limit: Number.isFinite(limit) ? limit : undefined,
+      cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined
     });
     return res.json(result);
   } catch (error) {
@@ -3269,6 +3093,8 @@ app.post("/api/mindmaps", async (req, res) => {
   try {
     await ensureMindmapsAccountProvisioned(authContext);
     const created = await mindmapsClient.create(authContext.accessToken, parsed.data);
+    await maintainMindmapIndexBestEffort(authContext.accessToken, created);
+    await invalidateMindmapIndexFromApi(authContext.userId, mindmapProjectIdsBestEffort(created), objectId(created) ?? "unknown");
     return res.status(201).json(created);
   } catch (error) {
     return respondInternalError(res, error);
@@ -3299,7 +3125,19 @@ app.patch("/api/mindmaps/:documentId", async (req, res) => {
 
   try {
     await ensureMindmapsAccountProvisioned(authContext);
+    let before: unknown;
+    let projectIds: string[] = [];
+    try {
+      before = await mindmapsClient.get(authContext.accessToken, String(req.params.documentId));
+      projectIds = mindmapProjectIdsBestEffort(before);
+    } catch {
+      before = undefined;
+    }
     const updated = await mindmapsClient.update(authContext.accessToken, String(req.params.documentId), parsed.data);
+    if (before) await reconcileMindmapMutationBestEffort(authContext.accessToken, before, updated);
+    else await maintainMindmapIndexBestEffort(authContext.accessToken, updated);
+    projectIds.push(...mindmapProjectIdsBestEffort(updated));
+    await invalidateMindmapIndexFromApi(authContext.userId, projectIds, String(req.params.documentId));
     return res.json(updated);
   } catch (error) {
     return respondInternalError(res, error);
@@ -3312,8 +3150,26 @@ app.delete("/api/mindmaps/:documentId", async (req, res) => {
 
   try {
     await ensureMindmapsAccountProvisioned(authContext);
+    const before = await mindmapsClient.get(authContext.accessToken, String(req.params.documentId));
+    const projectIds = mindmapProjectIdsBestEffort(before);
     await mindmapsClient.remove(authContext.accessToken, String(req.params.documentId));
+    await cleanupDeletedMindmapBestEffort(authContext.accessToken, before);
+    await invalidateProjectContextFromApi(authContext.userId, projectIds, "index", "index", String(req.params.documentId), "delete");
     return res.status(204).send();
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/mindmaps/projects/:projectId/index/rebuild", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  try {
+    await ensureMindmapsAccountProvisioned(authContext);
+    const rebuilt = await rebuildProjectMindmapIndex(authContext.accessToken, String(req.params.projectId));
+    await invalidateMindmapIndexFromApi(authContext.userId, [String(req.params.projectId)], String(req.params.projectId));
+    return res.json(rebuilt);
   } catch (error) {
     return respondInternalError(res, error);
   }
@@ -3348,7 +3204,12 @@ app.post("/api/mindmaps/:documentId/artifact", async (req, res) => {
 
   try {
     await ensureMindmapsAccountProvisioned(authContext);
-    const result = await saveMindmapExportToArtifacts(authContext, String(req.params.documentId), parsed.data);
+    const result = await saveMindmapExportArtifact(authContext.accessToken, String(req.params.documentId), parsed.data);
+    const artifactItemId = objectId(result.artifact);
+    if (artifactItemId) {
+      const projectIds = await listArtifactProjectIdsBestEffort(authContext.accessToken, result.artifact);
+      await invalidateArtifactIndexFromApi(authContext.userId, projectIds, artifactItemId);
+    }
     return res.status(201).json({ status: "ok", ...result });
   } catch (error) {
     return respondInternalError(res, error);
@@ -4483,7 +4344,7 @@ app.post("/api/projects/:projectId/index/rebuild", async (req, res) => {
   const authContext = await requireAuthenticatedContext(req, res);
   if (!authContext) return;
   try {
-    const result = await rebuildProjectArtifactIndex(authContext.accessToken, String(req.params.projectId));
+    const result = await rebuildProjectIndex(authContext.accessToken, String(req.params.projectId));
     await invalidateProjectContextFromApi(
       authContext.userId,
       [String(req.params.projectId)],
@@ -5963,6 +5824,7 @@ function createMcpServerInstance(injectedContext: McpInjectedContext): McpServer
   registerProjectContextTools(server, injectedContext);
   registerDeepResearchTools(server, injectedContext);
   registerImageTools(server, injectedContext);
+  registerMindmapTools(server, injectedContext);
   return server;
 }
 

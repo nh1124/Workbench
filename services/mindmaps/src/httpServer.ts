@@ -156,7 +156,8 @@ app.get("/mindmaps", requireUserAuth, asyncRoute(async (req, res) => {
       projectId: typeof req.query.projectId === "string" ? req.query.projectId : undefined,
       q: typeof req.query.q === "string" ? req.query.q : undefined,
       mode,
-      limit: Number.isFinite(limit) ? limit : undefined
+      limit: Number.isFinite(limit) ? limit : undefined,
+      cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined
     });
     return res.json(result);
   } catch (error) {

@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { registerArtifactsTools } from "./mcp/registerArtifactsTools.js";
 import { registerAuthTools } from "./mcp/registerAuthTools.js";
 import { registerDeepResearchTools } from "./mcp/registerDeepResearchTools.js";
+import { registerMindmapTools } from "./mcp/registerMindmapTools.js";
 import { registerNotesTools } from "./mcp/registerNotesTools.js";
 import { registerProjectsTools } from "./mcp/registerProjectsTools.js";
 import { registerProjectContextTools } from "./mcp/registerProjectContextTools.js";
@@ -24,6 +25,7 @@ if (accessToken) {
   registerProjectsTools(server, ctx);
   registerProjectContextTools(server, ctx);
   registerDeepResearchTools(server, ctx);
+  registerMindmapTools(server, ctx);
 }
 
 const transport = new StdioServerTransport();

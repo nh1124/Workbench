@@ -5,6 +5,7 @@ process.env.NOTES_SERVICE_URL ||= "http://notes.test";
 process.env.ARTIFACTS_SERVICE_URL ||= "http://artifacts.test";
 process.env.TASKS_SERVICE_URL ||= "http://tasks.test";
 process.env.IMAGES_SERVICE_URL ||= "http://images.test";
+process.env.MINDMAPS_SERVICE_URL ||= "http://mindmaps.test";
 process.env.PROJECTS_SERVICE_URL ||= "http://projects.test";
 process.env.JWT_SECRET ||= "test-secret-that-is-long-enough";
 process.env.JWT_ISSUER ||= "workbench-test";
@@ -14,10 +15,16 @@ process.env.CORE_DB_PORT ||= "5432";
 process.env.CORE_DB_NAME ||= "workbench-test";
 process.env.CORE_DB_USER ||= "workbench-test";
 process.env.CORE_DB_PASSWORD ||= "workbench-test";
+process.env.INTERNAL_API_KEY_NOTES ||= "test-internal-key";
+process.env.INTERNAL_API_KEY_ARTIFACTS ||= "test-internal-key";
+process.env.INTERNAL_API_KEY_TASKS ||= "test-internal-key";
+process.env.INTERNAL_API_KEY_IMAGES ||= "test-internal-key";
+process.env.INTERNAL_API_KEY_MINDMAPS ||= "test-internal-key";
 
-const [{ registerProjectContextTools }, { registerArtifactsTools }, readModels] = await Promise.all([
+const [{ registerProjectContextTools }, { registerArtifactsTools }, { registerMindmapTools }, readModels] = await Promise.all([
   import("../mcp/registerProjectContextTools.js"),
   import("../mcp/registerArtifactsTools.js"),
+  import("../mcp/registerMindmapTools.js"),
   import("../mcp/projectContextReadModels.js")
 ]);
 
@@ -32,6 +39,7 @@ describe("Project context MCP contract", () => {
 
     registerProjectContextTools(fakeServer as never, { accessToken: "unused" });
     registerArtifactsTools(fakeServer as never, { accessToken: "unused" });
+    registerMindmapTools(fakeServer as never, { accessToken: "unused" });
 
     const expected = [
       "projects.context.get",
@@ -43,6 +51,14 @@ describe("Project context MCP contract", () => {
       "projects.memory.archive",
       "projects.index.search",
       "projects.index.rebuild",
+      "mindmaps.list",
+      "mindmaps.get",
+      "mindmaps.create",
+      "mindmaps.update",
+      "mindmaps.delete",
+      "mindmaps.export",
+      "mindmaps.artifact.save",
+      "mindmaps.projectIndex.rebuild",
       "artifacts.item.projects.list",
       "artifacts.item.projects.link",
       "artifacts.item.projects.unlink",

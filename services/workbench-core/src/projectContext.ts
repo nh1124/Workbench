@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   artifactsClient,
   InternalServiceError,
+  mindmapsClient,
   notesClient,
   projectsClient,
   tasksClient
@@ -10,6 +11,8 @@ import {
 export const SECONDARY_MEMBERSHIP_RELATION = "secondary_membership";
 export const ARTIFACT_TARGET_SERVICE = "artifacts";
 export const ARTIFACT_TARGET_RESOURCE_TYPE = "artifact_item";
+export const MINDMAP_TARGET_SERVICE = "mindmaps";
+export const MINDMAP_TARGET_RESOURCE_TYPE = "mindmap_document";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -43,6 +46,26 @@ export type ProjectLinkRecord = JsonRecord & {
 export type ArtifactDeletionSnapshot = {
   rootArtifactItemId: string;
   items: Array<{ item: ArtifactItemRecord; links: ProjectLinkRecord[] }>;
+};
+
+type MindmapNodeRecord = JsonRecord & {
+  id: string;
+  title: string;
+  note?: string;
+  children?: MindmapNodeRecord[];
+};
+
+export type MindmapDocumentRecord = JsonRecord & {
+  id: string;
+  title: string;
+  description?: string;
+  mode: "mindmap" | "logical_tree";
+  projectId?: string;
+  projectName?: string;
+  body: JsonRecord & { root?: MindmapNodeRecord };
+  tags?: string[];
+  version: number;
+  updatedAt?: string;
 };
 
 export function projectIdsFromArtifactDeletionSnapshot(snapshot: ArtifactDeletionSnapshot): string[] {
@@ -100,6 +123,29 @@ export function parseArtifactItem(value: unknown): ArtifactItemRecord {
     throw new ProjectContextError(502, "INVALID_ARTIFACT_RESPONSE", "Artifacts service returned an invalid item");
   }
   return record as ArtifactItemRecord;
+}
+
+export function parseMindmapDocument(value: unknown): MindmapDocumentRecord {
+  const record = asRecord(value);
+  const mode = record.mode;
+  const body = asRecord(record.body);
+  if (
+    typeof record.id !== "string" ||
+    typeof record.title !== "string" ||
+    (mode !== "mindmap" && mode !== "logical_tree") ||
+    !body.root ||
+    typeof record.version !== "number"
+  ) {
+    throw new ProjectContextError(502, "INVALID_MINDMAP_RESPONSE", "Mindmaps service returned an invalid document");
+  }
+  return {
+    ...record,
+    description: boundedText(record.description, 2000),
+    projectId: boundedText(record.projectId, 200),
+    projectName: boundedText(record.projectName, 500),
+    tags: Array.isArray(record.tags) ? record.tags.filter((tag): tag is string => typeof tag === "string") : [],
+    body
+  } as MindmapDocumentRecord;
 }
 
 function parseProjectLink(value: unknown): ProjectLinkRecord | undefined {
@@ -366,6 +412,64 @@ export function buildArtifactIndexEntry(
   };
 }
 
+function collectMindmapNodeText(value: unknown, parts: string[], count: { value: number }, maxNodes = 80): void {
+  if (count.value >= maxNodes) return;
+  const node = asRecord(value);
+  const title = boundedText(node.title, 240);
+  const note = boundedText(node.note, 360);
+  if (title) parts.push(title);
+  if (note) parts.push(note);
+  count.value += 1;
+  const children = node.children;
+  if (!Array.isArray(children)) return;
+  for (const child of children) collectMindmapNodeText(child, parts, count, maxNodes);
+}
+
+function mindmapSummary(document: MindmapDocumentRecord): { summaryText: string; nodeCount: number } {
+  const parts: string[] = [];
+  const nodeCount = { value: 0 };
+  collectMindmapNodeText(document.body.root, parts, nodeCount);
+  const modeLabel = document.mode === "logical_tree" ? "Logical Tree" : "Mindmap";
+  const description = boundedText(document.description, 360);
+  const nodeSummary = parts.slice(0, 16).join(" / ");
+  return {
+    nodeCount: nodeCount.value,
+    summaryText: boundedText([modeLabel, description, nodeSummary].filter(Boolean).join(": "), 500) ?? modeLabel
+  };
+}
+
+export function buildMindmapIndexEntry(document: MindmapDocumentRecord): JsonRecord {
+  const { summaryText, nodeCount } = mindmapSummary(document);
+  const tags = document.tags ?? [];
+  const contentForHash = [
+    document.title,
+    document.description ?? "",
+    document.mode,
+    JSON.stringify(tags),
+    JSON.stringify(document.body)
+  ].join("\n");
+
+  return {
+    sourceService: MINDMAP_TARGET_SERVICE,
+    resourceType: MINDMAP_TARGET_RESOURCE_TYPE,
+    resourceId: document.id,
+    associationKind: "primary",
+    path: `mindmaps/${document.id}`,
+    title: document.title,
+    summaryText,
+    summarySource: "deterministic",
+    sourceVersion: String(document.version),
+    contentHash: createHash("sha256").update(contentForHash).digest("hex"),
+    sourceUpdatedAt: document.updatedAt ?? new Date().toISOString(),
+    metadataJson: {
+      mode: document.mode,
+      projectName: document.projectName,
+      tags,
+      nodeCount
+    }
+  };
+}
+
 async function listSecondaryLinks(token: string, artifactItemId: string): Promise<ProjectLinkRecord[]> {
   const links: ProjectLinkRecord[] = [];
   let cursor: string | undefined;
@@ -481,6 +585,237 @@ export async function maintainArtifactIndexBestEffort(token: string, rawItem: un
   } catch (error) {
     logDerivedFailure("upsert", itemId, error);
   }
+}
+
+function logMindmapDerivedFailure(operation: string, documentId: string, error: unknown): void {
+  console.warn("[project-index] mindmap derived update failed", {
+    operation,
+    documentId,
+    message: error instanceof Error ? error.message : String(error)
+  });
+}
+
+async function upsertMindmapEntry(token: string, document: MindmapDocumentRecord): Promise<void> {
+  if (!document.projectId) return;
+  await projectsClient.upsertIndexEntry(token, document.projectId, {
+    entry: buildMindmapIndexEntry(document)
+  });
+}
+
+async function tombstoneMindmapEntry(token: string, projectId: string, documentId: string): Promise<void> {
+  await projectsClient.tombstoneIndexEntry(token, projectId, {
+    sourceService: MINDMAP_TARGET_SERVICE,
+    resourceType: MINDMAP_TARGET_RESOURCE_TYPE,
+    resourceId: documentId
+  });
+}
+
+export function mindmapProjectIdsBestEffort(rawDocument: unknown): string[] {
+  try {
+    const document = parseMindmapDocument(rawDocument);
+    return document.projectId ? [document.projectId] : [];
+  } catch (error) {
+    console.warn("[project-context-sync] failed to identify the Mindmap Project", {
+      message: error instanceof Error ? error.message : String(error)
+    });
+    return [];
+  }
+}
+
+export async function maintainMindmapIndex(token: string, rawDocument: unknown): Promise<void> {
+  const document = parseMindmapDocument(rawDocument);
+  await upsertMindmapEntry(token, document);
+}
+
+export async function maintainMindmapIndexBestEffort(token: string, rawDocument: unknown): Promise<void> {
+  const documentId = typeof asRecord(rawDocument).id === "string" ? String(asRecord(rawDocument).id) : "unknown";
+  try {
+    await maintainMindmapIndex(token, rawDocument);
+  } catch (error) {
+    logMindmapDerivedFailure("upsert", documentId, error);
+  }
+}
+
+export async function reconcileMindmapMutationBestEffort(
+  token: string,
+  beforeValue: unknown,
+  afterValue: unknown
+): Promise<void> {
+  const documentId = typeof asRecord(afterValue).id === "string" ? String(asRecord(afterValue).id) : "unknown";
+  try {
+    const before = parseMindmapDocument(beforeValue);
+    const after = parseMindmapDocument(afterValue);
+    if (before.projectId && before.projectId !== after.projectId) {
+      await tombstoneMindmapEntry(token, before.projectId, before.id);
+    }
+    await maintainMindmapIndex(token, after);
+  } catch (error) {
+    logMindmapDerivedFailure("reconcile", documentId, error);
+  }
+}
+
+export async function cleanupDeletedMindmapBestEffort(token: string, rawDocument: unknown): Promise<void> {
+  const documentId = typeof asRecord(rawDocument).id === "string" ? String(asRecord(rawDocument).id) : "unknown";
+  try {
+    const document = parseMindmapDocument(rawDocument);
+    if (document.projectId) {
+      await tombstoneMindmapEntry(token, document.projectId, document.id);
+    }
+  } catch (error) {
+    logMindmapDerivedFailure("delete", documentId, error);
+  }
+}
+
+async function listAllMindmapsForProject(token: string, projectId: string): Promise<MindmapDocumentRecord[]> {
+  const documents: MindmapDocumentRecord[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await mindmapsClient.list(token, {
+      projectId,
+      limit: 100,
+      cursor
+    });
+    documents.push(...pageItems(page).map(parseMindmapDocument));
+    cursor = nextCursor(page);
+  } while (cursor);
+  return documents;
+}
+
+export async function rebuildProjectMindmapIndex(token: string, projectId: string): Promise<JsonRecord> {
+  await projectsClient.get(token, projectId);
+  const documents = await listAllMindmapsForProject(token, projectId);
+  const entries = documents.map(buildMindmapIndexEntry);
+  const activeResourceIds = new Set(documents.map((document) => document.id));
+
+  const batchSize = 100;
+  for (let offset = 0; offset < entries.length; offset += batchSize) {
+    await projectsClient.bulkUpsertIndexEntries(token, projectId, { entries: entries.slice(offset, offset + batchSize) });
+  }
+
+  let cursor: string | undefined;
+  let tombstoned = 0;
+  do {
+    const indexed = await projectsClient.listIndexEntries(token, projectId, {
+      sourceService: MINDMAP_TARGET_SERVICE,
+      resourceType: MINDMAP_TARGET_RESOURCE_TYPE,
+      limit: 200,
+      cursor
+    });
+    for (const rawEntry of pageItems(indexed)) {
+      const entry = asRecord(rawEntry);
+      const resourceId = boundedText(entry.resourceId, 200);
+      if (resourceId && !activeResourceIds.has(resourceId)) {
+        await projectsClient.tombstoneIndexEntry(token, projectId, {
+          sourceService: MINDMAP_TARGET_SERVICE,
+          resourceType: MINDMAP_TARGET_RESOURCE_TYPE,
+          resourceId
+        });
+        tombstoned += 1;
+      }
+    }
+    cursor = nextCursor(indexed);
+  } while (cursor);
+
+  return {
+    projectId,
+    indexed: entries.length,
+    tombstoned
+  };
+}
+
+function mindmapExportExtension(format: "json" | "markdown" | "svg"): string {
+  return format === "json" ? "json" : format === "svg" ? "svg" : "md";
+}
+
+function slugifyResourceName(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80) || "mindmap";
+}
+
+function splitResourcePath(pathValue: string | undefined): { directoryPath?: string; filename?: string } {
+  const normalized = pathValue?.trim().replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!normalized) return {};
+  const parts = normalized.split("/").filter(Boolean);
+  const filename = parts.pop();
+  const directoryPath = parts.length > 0 ? parts.join("/") : undefined;
+  return { directoryPath, filename };
+}
+
+export async function saveMindmapExportArtifact(
+  token: string,
+  documentId: string,
+  options: {
+    format: "json" | "markdown" | "svg";
+    artifactTitle?: string;
+    artifactPath?: string;
+    projectId?: string;
+    projectName?: string;
+  }
+): Promise<{ artifact: unknown; exportRecord: unknown }> {
+  const exported = asRecord(await mindmapsClient.exportContent(token, documentId, { format: options.format }));
+  const title = boundedText(exported.title, 240) ?? options.artifactTitle ?? "Mindmap";
+  const sourceVersion = typeof exported.sourceVersion === "number" ? exported.sourceVersion : 1;
+  const projectId = options.projectId ?? boundedText(exported.projectId, 200);
+  const projectName = options.projectName ?? boundedText(exported.projectName, 500);
+  const { directoryPath, filename } = splitResourcePath(options.artifactPath);
+  const tags = [
+    "mindmap-export",
+    boundedText(exported.mode, 80) === "logical_tree" ? "logical-tree" : "mindmap"
+  ];
+
+  let created: unknown;
+  if (options.format === "markdown") {
+    const notePath =
+      options.artifactPath?.trim() ||
+      `mindmaps/${slugifyResourceName(options.artifactTitle ?? title)}.${mindmapExportExtension(options.format)}`;
+    created = await createArtifactNoteWithIndex(token, {
+      projectId,
+      projectName,
+      path: notePath,
+      title: options.artifactTitle ?? title,
+      scope: "project",
+      tags,
+      contentMarkdown: typeof exported.contentText === "string" ? exported.contentText : ""
+    });
+  } else {
+    const uploadFilename =
+      filename ||
+      (options.artifactTitle
+        ? `${slugifyResourceName(options.artifactTitle)}.${mindmapExportExtension(options.format)}`
+        : boundedText(exported.filename, 240) ?? `${slugifyResourceName(title)}.${mindmapExportExtension(options.format)}`);
+    created = await uploadArtifactFileWithIndex(token, {
+      projectId,
+      projectName,
+      directoryPath: directoryPath ?? "mindmaps",
+      scope: "project",
+      tags,
+      filename: uploadFilename,
+      mimeType: boundedText(exported.mimeType, 120),
+      contentBase64: typeof exported.contentBase64 === "string" ? exported.contentBase64 : Buffer.from("", "utf8").toString("base64")
+    });
+  }
+
+  const createdRecord = asRecord(created);
+  const artifactItemId = boundedText(createdRecord.id, 200);
+  if (!artifactItemId) {
+    throw new ProjectContextError(502, "MINDMAP_ARTIFACT_EXPORT_FAILED", "Mindmap export did not create an artifact item id");
+  }
+
+  const exportRecord = await mindmapsClient.recordArtifactExport(token, documentId, {
+    sourceVersion,
+    artifactItemId,
+    artifactItemPath: boundedText(createdRecord.path, 800),
+    artifactTitle: boundedText(createdRecord.title, 240) ?? options.artifactTitle ?? title,
+    projectId: boundedText(createdRecord.projectId, 200) ?? projectId,
+    projectName: boundedText(createdRecord.projectName, 500) ?? projectName,
+    exportFormat: options.format
+  });
+
+  return { artifact: created, exportRecord };
 }
 
 export async function createArtifactNoteWithIndex(token: string, payload: unknown): Promise<unknown> {
@@ -906,4 +1241,35 @@ export async function rebuildProjectArtifactIndex(token: string, projectId: stri
     tombstoned,
     staleLinksRemoved
   };
+}
+
+function optionalServiceRebuildFailure(service: string, error: unknown): JsonRecord {
+  if (error instanceof InternalServiceError) {
+    return {
+      status: "error",
+      service,
+      statusCode: error.status,
+      message: `${error.service} service request failed with HTTP ${error.status}`
+    };
+  }
+  return {
+    status: "error",
+    service,
+    message: boundedText(error instanceof Error ? error.message : String(error), 500) ?? "Rebuild failed"
+  };
+}
+
+export async function rebuildProjectIndex(token: string, projectId: string): Promise<JsonRecord> {
+  const artifacts = await rebuildProjectArtifactIndex(token, projectId);
+  let mindmaps: unknown;
+  try {
+    mindmaps = await rebuildProjectMindmapIndex(token, projectId);
+  } catch (error) {
+    mindmaps = optionalServiceRebuildFailure(MINDMAP_TARGET_SERVICE, error);
+    console.warn("[project-index] mindmap rebuild failed; preserving artifact rebuild result", {
+      projectId,
+      mindmaps
+    });
+  }
+  return { projectId, artifacts, mindmaps };
 }

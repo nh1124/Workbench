@@ -467,6 +467,7 @@ export const mindmapsClient = {
       q?: string;
       mode?: string;
       limit?: number;
+      cursor?: string;
     } = {}
   ) =>
     serviceRequest<unknown>(
@@ -475,7 +476,8 @@ export const mindmapsClient = {
         projectId: options.projectId,
         q: options.q,
         mode: options.mode,
-        limit: options.limit
+        limit: options.limit,
+        cursor: options.cursor
       })}`,
       token
     ),

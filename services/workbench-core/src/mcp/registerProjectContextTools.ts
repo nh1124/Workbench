@@ -6,7 +6,7 @@ import {
   getProjectContextWithResolvedLinks,
   getProjectDeletionImpact,
   listProjectLinksResolved,
-  rebuildProjectArtifactIndex,
+  rebuildProjectIndex,
   removeProjectLinkWithValidation
 } from "../projectContext.js";
 import {
@@ -243,12 +243,12 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
     "projects.index.rebuild",
     {
       title: "Rebuild Project Index",
-      description: "Explicitly repair a Project Artifact index by scanning primary and secondary memberships, upserting current entries, tombstoning drift, and invalidating context. This can be expensive.",
+      description: "Explicitly repair a Project index by scanning Artifact memberships and Mindmap documents, upserting current entries, tombstoning drift, and invalidating context. This can be expensive.",
       inputSchema: { projectId: z.string().min(1) }
     },
     async ({ projectId }) => {
       const result = await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
-        const rebuilt = await rebuildProjectArtifactIndex(ctx.accessToken, projectId);
+        const rebuilt = await rebuildProjectIndex(ctx.accessToken, projectId);
         await invalidateProjectContextFromMcp(userId, [projectId], "index", projectId);
         return rebuilt;
       });

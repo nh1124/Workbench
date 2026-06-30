@@ -5,6 +5,7 @@ process.env.NOTES_SERVICE_URL ||= "http://notes.test";
 process.env.ARTIFACTS_SERVICE_URL ||= "http://artifacts.test";
 process.env.TASKS_SERVICE_URL ||= "http://tasks.test";
 process.env.IMAGES_SERVICE_URL ||= "http://images.test";
+process.env.MINDMAPS_SERVICE_URL ||= "http://mindmaps.test";
 process.env.PROJECTS_SERVICE_URL ||= "http://projects.test";
 
 const contextModule = await import("../projectContext.js");
@@ -30,6 +31,28 @@ const artifactItem = {
   tags: ["design"]
 };
 
+const mindmapDocument = {
+  id: "mindmap-1",
+  title: "Launch map",
+  description: "Decision tree for launch planning.",
+  mode: "logical_tree" as const,
+  projectId: "project-primary",
+  projectName: "Primary",
+  body: {
+    root: {
+      id: "root",
+      title: "Launch",
+      children: [
+        { id: "risk", title: "Risk", note: "Capacity" },
+        { id: "action", title: "Action", children: [{ id: "owner", title: "Owner" }] }
+      ]
+    }
+  },
+  tags: ["planning"],
+  version: 4,
+  updatedAt: "2026-06-29T00:00:00.000Z"
+};
+
 before(() => {
   // Tests replace fetch per case because all service clients use the platform fetch API.
 });
@@ -39,6 +62,31 @@ after(() => {
 });
 
 describe("Project context Artifact orchestration", () => {
+  it("builds a deterministic Mindmap index entry for Project context discovery", () => {
+    const parsed = contextModule.parseMindmapDocument(mindmapDocument);
+    const entry = contextModule.buildMindmapIndexEntry(parsed) as Record<string, unknown>;
+
+    assert.equal(entry.sourceService, "mindmaps");
+    assert.equal(entry.resourceType, "mindmap_document");
+    assert.equal(entry.resourceId, "mindmap-1");
+    assert.equal(entry.associationKind, "primary");
+    assert.equal(entry.path, "mindmaps/mindmap-1");
+    assert.equal(entry.title, "Launch map");
+    assert.equal(entry.summarySource, "deterministic");
+    assert.equal(entry.sourceVersion, "4");
+    assert.equal(entry.sourceUpdatedAt, "2026-06-29T00:00:00.000Z");
+    assert.match(String(entry.summaryText), /Logical Tree/);
+    assert.match(String(entry.summaryText), /Launch/);
+    assert.match(String(entry.summaryText), /Capacity/);
+    assert.match(String(entry.contentHash), /^[a-f0-9]{64}$/);
+    assert.deepEqual(entry.metadataJson, {
+      mode: "logical_tree",
+      projectName: "Primary",
+      tags: ["planning"],
+      nodeCount: 4
+    });
+  });
+
   it("live-resolves supported Project link metadata with the caller bearer and never returns target bodies", async () => {
     const links = [
       {
@@ -753,5 +801,155 @@ describe("Project context Artifact orchestration", () => {
     assert.deepEqual(tombstones, [
       { sourceService: "artifacts", resourceType: "file", resourceId: "stale-artifact" }
     ]);
+  });
+
+  it("upserts and tombstones Mindmap index entries on document mutations", async () => {
+    const calls: Array<{ action: string; projectId: string; body: Record<string, unknown> }> = [];
+
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(String(input));
+      const method = (init?.method ?? "GET").toUpperCase();
+      const match = url.pathname.match(/^\/projects\/([^/]+)\/index-entries\/(upsert|tombstone)$/);
+      if (url.origin === "http://projects.test" && method === "POST" && match) {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        calls.push({ action: match[2], projectId: match[1], body });
+        return jsonResponse({ status: "ok" });
+      }
+      throw new Error(`Unexpected request: ${method} ${url}`);
+    };
+
+    const movedDocument = {
+      ...mindmapDocument,
+      projectId: "project-next",
+      projectName: "Next",
+      version: 5,
+      updatedAt: "2026-06-30T00:00:00.000Z"
+    };
+
+    await contextModule.maintainMindmapIndex("token", mindmapDocument);
+    await contextModule.reconcileMindmapMutationBestEffort("token", mindmapDocument, movedDocument);
+    await contextModule.cleanupDeletedMindmapBestEffort("token", movedDocument);
+
+    assert.equal(calls.length, 4);
+    assert.deepEqual(
+      calls.map((call) => [call.action, call.projectId]),
+      [
+        ["upsert", "project-primary"],
+        ["tombstone", "project-primary"],
+        ["upsert", "project-next"],
+        ["tombstone", "project-next"]
+      ]
+    );
+    const upsertEntry = calls[0]?.body.entry as Record<string, unknown>;
+    assert.equal(upsertEntry.sourceService, "mindmaps");
+    assert.equal(upsertEntry.resourceType, "mindmap_document");
+    assert.equal(upsertEntry.resourceId, "mindmap-1");
+    assert.deepEqual(calls[1]?.body, {
+      sourceService: "mindmaps",
+      resourceType: "mindmap_document",
+      resourceId: "mindmap-1"
+    });
+  });
+
+  it("rebuilds Mindmap index entries with pagination and tombstones drift", async () => {
+    const secondDocument = {
+      ...mindmapDocument,
+      id: "mindmap-2",
+      title: "Follow-up map",
+      version: 2,
+      updatedAt: "2026-06-28T00:00:00.000Z"
+    };
+    const bulkEntries: unknown[] = [];
+    const tombstones: unknown[] = [];
+    let mindmapPages = 0;
+
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(String(input));
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.origin === "http://projects.test" && url.pathname === "/projects/project-primary" && method === "GET") {
+        return jsonResponse({ id: "project-primary", name: "Primary" });
+      }
+      if (url.origin === "http://mindmaps.test" && url.pathname === "/mindmaps" && method === "GET") {
+        mindmapPages += 1;
+        assert.equal(url.searchParams.get("projectId"), "project-primary");
+        assert.equal(url.searchParams.get("limit"), "100");
+        return url.searchParams.get("cursor") === "mindmaps-2"
+          ? jsonResponse({ items: [secondDocument] })
+          : jsonResponse({ items: [mindmapDocument], nextCursor: "mindmaps-2" });
+      }
+      if (url.origin === "http://projects.test" && url.pathname.endsWith("/index-entries/bulk-upsert")) {
+        const payload = JSON.parse(String(init?.body)) as { entries: unknown[] };
+        bulkEntries.push(...payload.entries);
+        return jsonResponse({ items: payload.entries });
+      }
+      if (url.origin === "http://projects.test" && url.pathname.endsWith("/index-entries") && method === "GET") {
+        assert.equal(url.searchParams.get("sourceService"), "mindmaps");
+        assert.equal(url.searchParams.get("resourceType"), "mindmap_document");
+        return jsonResponse({
+          items: [
+            { sourceService: "mindmaps", resourceType: "mindmap_document", resourceId: "mindmap-1" },
+            { sourceService: "mindmaps", resourceType: "mindmap_document", resourceId: "stale-map" }
+          ]
+        });
+      }
+      if (url.origin === "http://projects.test" && url.pathname.endsWith("/index-entries/tombstone")) {
+        tombstones.push(JSON.parse(String(init?.body)));
+        return jsonResponse({ tombstoned: true });
+      }
+      throw new Error(`Unexpected request: ${method} ${url}`);
+    };
+
+    const result = await contextModule.rebuildProjectMindmapIndex("token", "project-primary");
+
+    assert.equal(mindmapPages, 2);
+    assert.equal(bulkEntries.length, 2);
+    assert.deepEqual(
+      bulkEntries.map((entry) => (entry as Record<string, unknown>).resourceId),
+      ["mindmap-1", "mindmap-2"]
+    );
+    assert.equal(result.indexed, 2);
+    assert.equal(result.tombstoned, 1);
+    assert.deepEqual(tombstones, [
+      { sourceService: "mindmaps", resourceType: "mindmap_document", resourceId: "stale-map" }
+    ]);
+  });
+
+  it("keeps Project index rebuild useful when the Mindmap service is unavailable", async () => {
+    let artifactIndexListed = false;
+
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(String(input));
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.origin === "http://projects.test" && url.pathname === "/projects/project-primary" && method === "GET") {
+        return jsonResponse({ id: "project-primary", name: "Primary" });
+      }
+      if (url.origin === "http://artifacts.test" && url.pathname === "/artifacts/tree/list") {
+        return jsonResponse({ items: [] });
+      }
+      if (url.origin === "http://projects.test" && url.pathname === "/projects/project-primary/links") {
+        return jsonResponse({ items: [] });
+      }
+      if (url.origin === "http://projects.test" && url.pathname.endsWith("/index-entries") && method === "GET") {
+        if (url.searchParams.get("sourceService") === "artifacts") {
+          artifactIndexListed = true;
+          return jsonResponse({ items: [] });
+        }
+        return jsonResponse({ items: [] });
+      }
+      if (url.origin === "http://mindmaps.test" && url.pathname === "/mindmaps") {
+        return jsonResponse({ message: "temporarily down" }, 503);
+      }
+      throw new Error(`Unexpected request: ${method} ${url}`);
+    };
+
+    const result = await contextModule.rebuildProjectIndex("token", "project-primary");
+    const artifacts = result.artifacts as Record<string, unknown>;
+    const mindmaps = result.mindmaps as Record<string, unknown>;
+
+    assert.equal(artifactIndexListed, true);
+    assert.equal(artifacts.indexed, 0);
+    assert.equal(mindmaps.status, "error");
+    assert.equal(mindmaps.service, "mindmaps");
+    assert.equal(mindmaps.statusCode, 503);
   });
 });

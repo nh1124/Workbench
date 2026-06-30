@@ -149,6 +149,7 @@ export async function listMindmaps(
     q?: string;
     mode?: MindmapMode;
     limit?: number;
+    cursor?: string;
   } = {}
 ): Promise<MindmapListResult> {
   const limit = Math.min(Math.max(options.limit ?? 50, 1), 100);
@@ -167,7 +168,13 @@ export async function listMindmaps(
     params.push(`%${options.q.trim().toLowerCase()}%`);
     filters.push(`search_text LIKE $${params.length}`);
   }
-  params.push(limit);
+
+  const cursor = parseListCursor(options.cursor);
+  if (cursor) {
+    params.push(cursor.updatedAt, cursor.id);
+    filters.push(`(updated_at, id) < ($${params.length - 1}::timestamptz, $${params.length})`);
+  }
+  params.push(limit + 1);
 
   const pool = getMindmapsPool();
   const result = await pool.query<DocumentRow>(
@@ -181,10 +188,35 @@ export async function listMindmaps(
     `,
     params
   );
+  const rows = result.rows.slice(0, limit);
+  const last = rows.at(-1);
 
   return {
-    items: result.rows.map(mapDocument)
+    items: rows.map(mapDocument),
+    nextCursor: result.rows.length > limit && last ? toListCursor(last.updated_at, last.id) : undefined
   };
+}
+
+function parseListCursor(value: string | undefined): { updatedAt: string; id: string } | undefined {
+  if (!value) return undefined;
+  try {
+    const decoded = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as unknown;
+    if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
+      throw new Error("Malformed cursor");
+    }
+    const updatedAt = (decoded as { updatedAt?: unknown }).updatedAt;
+    const id = (decoded as { id?: unknown }).id;
+    if (typeof updatedAt !== "string" || typeof id !== "string" || !updatedAt || !id) {
+      throw new Error("Malformed cursor");
+    }
+    return { updatedAt, id };
+  } catch {
+    throw new MindmapServiceError(400, "INVALID_CURSOR", "Invalid mindmap list cursor");
+  }
+}
+
+function toListCursor(updatedAt: Date | string, id: string): string {
+  return Buffer.from(JSON.stringify({ updatedAt: iso(updatedAt), id }), "utf8").toString("base64url");
 }
 
 export async function createMindmap(ownerCoreUserId: string, input: MindmapCreateInput): Promise<MindmapDocumentRecord> {
