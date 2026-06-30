@@ -1,0 +1,441 @@
+.page-frame.mindmaps-page-frame {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.mindmaps-page {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr) 320px;
+  gap: 0.9rem;
+  height: 100%;
+  min-height: calc(100vh - 96px);
+  color: #e5e7eb;
+}
+
+.mindmaps-sidebar,
+.mindmaps-board,
+.mindmaps-inspector {
+  min-height: 0;
+  border: 1px solid rgba(58, 72, 91, 0.78);
+  border-radius: 12px;
+  background: #10151d;
+}
+
+.mindmaps-sidebar,
+.mindmaps-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 0.85rem;
+  overflow: auto;
+}
+
+.mindmaps-board {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.mindmaps-section-head,
+.mindmaps-toolbar,
+.mindmaps-actions,
+.mindmaps-inspector-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+}
+
+.mindmaps-section-head h1,
+.mindmaps-section-head h2 {
+  margin: 0;
+  color: #f8fafc;
+  line-height: 1.15;
+}
+
+.mindmaps-section-head h1 {
+  font-size: 1.32rem;
+}
+
+.mindmaps-section-head h2 {
+  font-size: 1rem;
+}
+
+.mindmaps-section-head.compact {
+  align-items: flex-end;
+}
+
+.mindmaps-section-head.compact span {
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #9ca3af;
+  font-size: 0.78rem;
+}
+
+.mindmaps-page .eyebrow {
+  margin: 0 0 0.22rem;
+  color: #8fa1b7;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mindmaps-create,
+.mindmaps-export {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.mindmaps-filter-grid {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.mindmaps-title-fields {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) 220px;
+  gap: 0.6rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.mindmaps-page input,
+.mindmaps-page select,
+.mindmaps-page textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid rgba(76, 91, 112, 0.9);
+  border-radius: 9px;
+  background: #151d28;
+  color: #e5e7eb;
+  font: inherit;
+  outline: none;
+}
+
+.mindmaps-page input,
+.mindmaps-page select {
+  height: 2.45rem;
+  padding: 0 0.7rem;
+}
+
+.mindmaps-page textarea {
+  min-height: 8.5rem;
+  resize: vertical;
+  padding: 0.7rem;
+  line-height: 1.45;
+}
+
+.mindmaps-page input:focus,
+.mindmaps-page select:focus,
+.mindmaps-page textarea:focus {
+  border-color: rgba(52, 211, 153, 0.72);
+  box-shadow: 0 0 0 2px rgba(52, 211, 153, 0.14);
+}
+
+.mindmaps-segment {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.18rem;
+  padding: 0.18rem;
+  border: 1px solid rgba(76, 91, 112, 0.82);
+  border-radius: 10px;
+  background: #0c1118;
+}
+
+.mindmaps-segment button,
+.mindmaps-primary,
+.mindmaps-secondary,
+.mindmaps-danger,
+.mindmaps-icon-button,
+.mindmaps-inspector-actions button,
+.mindmaps-export button,
+.mindmaps-canvas-empty button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.38rem;
+  border: 1px solid rgba(76, 91, 112, 0.88);
+  border-radius: 9px;
+  background: #17202b;
+  color: #dbe7f5;
+  cursor: pointer;
+  font-weight: 760;
+}
+
+.mindmaps-segment button {
+  height: 2.1rem;
+  border: 0;
+  background: transparent;
+  color: #9fb0c5;
+  font-size: 0.78rem;
+}
+
+.mindmaps-segment button.active {
+  background: #1e6f55;
+  color: #f0fdf4;
+}
+
+.mindmaps-primary,
+.mindmaps-secondary,
+.mindmaps-export button,
+.mindmaps-canvas-empty button {
+  height: 2.45rem;
+  padding: 0 0.8rem;
+}
+
+.mindmaps-primary {
+  border-color: rgba(52, 211, 153, 0.52);
+  background: #1f7a5d;
+  color: #f0fdf4;
+}
+
+.mindmaps-secondary:hover,
+.mindmaps-inspector-actions button:hover,
+.mindmaps-export button:hover {
+  border-color: rgba(52, 211, 153, 0.42);
+  background: #1c2937;
+}
+
+.mindmaps-danger,
+.mindmaps-inspector-actions button.danger {
+  width: 2.45rem;
+  height: 2.45rem;
+  color: #fecaca;
+  border-color: rgba(248, 113, 113, 0.4);
+}
+
+.mindmaps-icon-button {
+  width: 2.3rem;
+  height: 2.3rem;
+  padding: 0;
+}
+
+.mindmaps-page button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.mindmaps-document-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.42rem;
+  min-height: 0;
+  overflow: auto;
+}
+
+.mindmaps-document-list button {
+  display: grid;
+  gap: 0.25rem;
+  width: 100%;
+  min-height: 4.2rem;
+  padding: 0.72rem;
+  border: 1px solid rgba(58, 72, 91, 0.72);
+  border-radius: 9px;
+  background: #151b24;
+  color: #dbe7f5;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mindmaps-document-list button.active {
+  border-color: rgba(52, 211, 153, 0.62);
+  background: #183025;
+}
+
+.mindmaps-document-list span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 760;
+}
+
+.mindmaps-document-list small {
+  color: #9ca3af;
+  font-size: 0.75rem;
+}
+
+.mindmaps-empty,
+.mindmaps-canvas-empty {
+  display: grid;
+  place-items: center;
+  color: #9ca3af;
+}
+
+.mindmaps-empty {
+  min-height: 8rem;
+  border: 1px dashed rgba(76, 91, 112, 0.7);
+  border-radius: 9px;
+}
+
+.mindmaps-toolbar {
+  padding: 0.75rem;
+  border-bottom: 1px solid rgba(58, 72, 91, 0.78);
+  background: #0e141c;
+}
+
+.mindmaps-status {
+  min-width: 4.8rem;
+  border: 1px solid rgba(76, 91, 112, 0.84);
+  border-radius: 999px;
+  padding: 0.33rem 0.65rem;
+  color: #b8c4d5;
+  font-size: 0.78rem;
+  font-weight: 760;
+  text-align: center;
+}
+
+.mindmaps-status.dirty {
+  border-color: rgba(250, 204, 21, 0.42);
+  color: #fde68a;
+}
+
+.mindmaps-error {
+  margin: 0.65rem 0.75rem 0;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid rgba(248, 113, 113, 0.48);
+  border-radius: 9px;
+  background: rgba(69, 10, 10, 0.36);
+  color: #fecaca;
+  font-size: 0.88rem;
+}
+
+.mindmaps-canvas {
+  min-height: 0;
+  overflow: auto;
+  background: #0c1118;
+}
+
+.mindmaps-canvas-inner {
+  position: relative;
+}
+
+.mindmaps-lines {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.mindmaps-lines path {
+  fill: none;
+  stroke: #5b6b80;
+  stroke-width: 2;
+}
+
+.mindmaps-node {
+  position: absolute;
+  display: grid;
+  gap: 0.2rem;
+  width: 188px;
+  min-height: 54px;
+  padding: 0.55rem 0.68rem;
+  border: 1px solid rgba(92, 108, 130, 0.9);
+  border-radius: 8px;
+  background: #18212d;
+  color: #eef2f7;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mindmaps-node.root {
+  border-color: rgba(52, 211, 153, 0.78);
+  background: #1f7a5d;
+  color: #f8fafc;
+}
+
+.mindmaps-node.selected {
+  box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.22);
+}
+
+.mindmaps-node span,
+.mindmaps-node small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mindmaps-node span {
+  font-size: 0.88rem;
+  font-weight: 780;
+}
+
+.mindmaps-node small {
+  color: #aebccc;
+  font-size: 0.72rem;
+}
+
+.mindmaps-node.root small {
+  color: #d1fae5;
+}
+
+.mindmaps-inspector label {
+  display: grid;
+  gap: 0.38rem;
+  color: #aebccc;
+  font-size: 0.76rem;
+  font-weight: 760;
+}
+
+.mindmaps-inspector-actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.mindmaps-inspector-actions button {
+  min-width: 5.5rem;
+  height: 2.35rem;
+  padding: 0 0.7rem;
+}
+
+.mindmaps-count {
+  min-width: 2.15rem;
+  height: 2.15rem;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid rgba(52, 211, 153, 0.4);
+  border-radius: 999px;
+  color: #bbf7d0;
+  font-weight: 800;
+}
+
+.mindmaps-export {
+  margin-top: auto;
+  padding-top: 0.85rem;
+  border-top: 1px solid rgba(58, 72, 91, 0.78);
+}
+
+@media (max-width: 1280px) {
+  .mindmaps-page {
+    grid-template-columns: 280px minmax(0, 1fr);
+  }
+
+  .mindmaps-inspector {
+    grid-column: 1 / -1;
+    min-height: auto;
+  }
+}
+
+@media (max-width: 860px) {
+  .mindmaps-page {
+    grid-template-columns: 1fr;
+    min-height: auto;
+  }
+
+  .mindmaps-title-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .mindmaps-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .mindmaps-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+}

@@ -3,6 +3,7 @@ export const integrationManifestIds = [
   "artifacts",
   "tasks",
   "projects",
+  "mindmaps",
   "image_generation",
   "deep_research"
 ] as const;

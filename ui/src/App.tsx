@@ -4,6 +4,7 @@ import { ArtifactsPage } from "./pages/ArtifactsPage";
 import { HomePage } from "./pages/HomePage";
 import { ImagesPage } from "./pages/ImagesPage";
 import { LoginPage } from "./pages/LoginPage";
+import { MindmapsPage } from "./pages/MindmapsPage";
 import { NotesPage } from "./pages/NotesPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { ProjectDetailPage } from "./pages/ProjectDetailPage";
@@ -23,7 +24,7 @@ function resolveStartPage(): string {
     }
 
     const parsed = JSON.parse(raw) as { startPage?: string };
-    const allowed = new Set(["/", "/projects", "/tasks", "/notes", "/research", "/images", "/artifacts"]);
+    const allowed = new Set(["/", "/projects", "/tasks", "/notes", "/research", "/images", "/mindmaps", "/artifacts"]);
     if (parsed.startPage && allowed.has(parsed.startPage)) {
       return parsed.startPage;
     }
@@ -57,6 +58,7 @@ export default function App() {
           <Route path="notes" element={<NotesPage />} />
           <Route path="research" element={<ResearchPage />} />
           <Route path="images" element={<ImagesPage />} />
+          <Route path="mindmaps" element={<MindmapsPage />} />
           <Route path="artifacts" element={<ArtifactsPage />} />
           <Route path="projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="settings" element={<SettingsPage />} />

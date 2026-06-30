@@ -76,6 +76,7 @@ function canonicalEnv() {
     "TASKS_PORT",
     "PROJECTS_PORT",
     "IMAGES_PORT",
+    "MINDMAPS_PORT",
     "LBS_PORT",
     "LBS_API_PREFIX",
     "LBS_BIND_HOST",
@@ -108,6 +109,7 @@ function desiredRuntimeUpdates(env) {
   const tasksUrl = serviceUrl(env, "TASKS_PORT");
   const projectsUrl = serviceUrl(env, "PROJECTS_PORT");
   const imagesUrl = serviceUrl(env, "IMAGES_PORT");
+  const mindmapsUrl = serviceUrl(env, "MINDMAPS_PORT");
   const lbsBaseUrl = lbsUrl(env);
   const uiDevUrl = `http://${env.UI_DEV_HOST}:${env.UI_DEV_PORT}`;
   const requireCoreMutationOrigin = env.WORKBENCH_REQUIRE_CORE_MUTATION_ORIGIN || "false";
@@ -166,6 +168,14 @@ function desiredRuntimeUpdates(env) {
       },
     },
     {
+      file: "services/mindmaps/.env",
+      sample: "services/mindmaps/.env.example",
+      updates: {
+        MINDMAPS_SERVICE_HOST: env.WORKBENCH_HOST,
+        MINDMAPS_SERVICE_PORT: env.MINDMAPS_PORT,
+      },
+    },
+    {
       file: "services/lbs/.env",
       sample: "services/lbs/.env.example",
       updates: {
@@ -187,8 +197,10 @@ function desiredRuntimeUpdates(env) {
         TASKS_SERVICE_URL: tasksUrl,
         PROJECTS_SERVICE_URL: projectsUrl,
         IMAGES_SERVICE_URL: imagesUrl,
+        MINDMAPS_SERVICE_URL: mindmapsUrl,
         LBS_SERVICE_URL: lbsBaseUrl,
         INTERNAL_API_KEY_IMAGES: "workbench-internal-images",
+        INTERNAL_API_KEY_MINDMAPS: "workbench-internal-mindmaps",
         WORKBENCH_CORE_MUTATION_TOKEN: coreMutationToken,
       },
     },
@@ -240,6 +252,10 @@ function desiredExampleUpdates(env) {
     {
       file: "infra/env_samples/images.env.example",
       updates: desiredRuntimeUpdates(env).find((target) => target.file === "services/images/.env").updates,
+    },
+    {
+      file: "infra/env_samples/mindmaps.env.example",
+      updates: desiredRuntimeUpdates(env).find((target) => target.file === "services/mindmaps/.env").updates,
     },
     {
       file: "infra/env_samples/lbs.env.example",
@@ -349,6 +365,7 @@ function printPorts(env) {
     env.TASKS_PORT,
     env.PROJECTS_PORT,
     env.IMAGES_PORT,
+    env.MINDMAPS_PORT,
     env.LBS_PORT,
   ];
   if (args.has("--ui")) {

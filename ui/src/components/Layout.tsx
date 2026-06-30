@@ -63,6 +63,14 @@ const navIconMap: Record<string, ReactNode> = {
       <circle cx="15.5" cy="9.5" r="1.2" />
     </svg>
   ),
+  Mindmap: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <circle cx="6" cy="12" r="2.4" />
+      <circle cx="16.5" cy="6.5" r="2.2" />
+      <circle cx="17" cy="17" r="2.2" />
+      <path d="M8.1 10.8l6.4-3.2M8.2 13.1l6.7 2.8" />
+    </svg>
+  ),
   Artifacts: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
       <path d="M3 7h6l2 2h10v11H3z" />
@@ -82,7 +90,7 @@ const sidebarNavSections: Array<{ label?: string; items: NavItem[] }> = [
   },
   {
     label: "Tool",
-    items: navItems.filter((item) => ["Research", "Images"].includes(item.label))
+    items: navItems.filter((item) => ["Research", "Images", "Mindmap"].includes(item.label))
   }
 ];
 
@@ -100,6 +108,7 @@ export function Layout() {
   const isArtifactsRoute = location.pathname.startsWith("/artifacts");
   const isResearchRoute = location.pathname.startsWith("/research");
   const isImagesRoute = location.pathname.startsWith("/images");
+  const isMindmapsRoute = location.pathname.startsWith("/mindmaps");
   const userMenuRef = useRef<HTMLDivElement>(null);
   const notificationMenuRef = useRef<HTMLDivElement>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -612,7 +621,9 @@ export function Layout() {
                   ? "page-frame research-page-frame"
                   : isImagesRoute
                     ? "page-frame images-page-frame"
-                    : "page-frame"
+                    : isMindmapsRoute
+                      ? "page-frame mindmaps-page-frame"
+                      : "page-frame"
           }
         >
           <Outlet />

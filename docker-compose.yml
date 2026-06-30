@@ -103,6 +103,19 @@ services:
     volumes:
       - images_pgdata:/var/lib/postgresql/data
 
+  mindmaps-db:
+    image: postgres:16-alpine
+    container_name: workbench-mindmaps-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mindmaps_db
+      POSTGRES_USER: mindmaps_user
+      POSTGRES_PASSWORD: mindmaps_pass
+    ports:
+      - "5548:5432"
+    volumes:
+      - mindmaps_pgdata:/var/lib/postgresql/data
+
 volumes:
   workbench_core_pgdata:
   notes_pgdata:
@@ -111,3 +124,4 @@ volumes:
   tasks_pgdata:
   projects_pgdata:
   images_pgdata:
+  mindmaps_pgdata:

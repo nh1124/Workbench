@@ -19,7 +19,7 @@ function optionalEnv(name: string): string | undefined {
   return value && value.length > 0 ? value : undefined;
 }
 
-type ServiceId = "notes" | "artifacts" | "tasks" | "projects" | "lbs" | "images";
+type ServiceId = "notes" | "artifacts" | "tasks" | "projects" | "lbs" | "images" | "mindmaps";
 
 type ServiceConfig = {
   id: ServiceId;
@@ -30,6 +30,7 @@ const notesService: ServiceConfig = { id: "notes", baseUrl: requireEnv("NOTES_SE
 const artifactsService: ServiceConfig = { id: "artifacts", baseUrl: requireEnv("ARTIFACTS_SERVICE_URL") };
 const tasksService: ServiceConfig = { id: "tasks", baseUrl: requireEnv("TASKS_SERVICE_URL") };
 const imagesService: ServiceConfig = { id: "images", baseUrl: requireEnv("IMAGES_SERVICE_URL") };
+const mindmapsService: ServiceConfig = { id: "mindmaps", baseUrl: requireEnv("MINDMAPS_SERVICE_URL") };
 const projectsBaseUrl = optionalEnv("PROJECTS_SERVICE_URL");
 const projectsService: ServiceConfig | undefined = projectsBaseUrl ? { id: "projects", baseUrl: projectsBaseUrl } : undefined;
 
@@ -45,6 +46,7 @@ export const serviceBaseUrls = {
   artifacts: artifactsService.baseUrl,
   tasks: tasksService.baseUrl,
   images: imagesService.baseUrl,
+  mindmaps: mindmapsService.baseUrl,
   projects: projectsService?.baseUrl,
   lbs: lbsService?.baseUrl
 } as const;
@@ -306,9 +308,7 @@ export const artifactsClient = {
 
     const response = await fetch(`${artifactsService.baseUrl}/artifacts/upload`, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`
-      },
+      headers: buildServiceHeaders(token, { method: "POST" }),
       body: formData
     });
 
@@ -347,9 +347,7 @@ export const artifactsClient = {
 
     const response = await fetch(`${artifactsService.baseUrl}/artifacts/items/${encodeURIComponent(id)}/file`, {
       method: "PUT",
-      headers: {
-        Authorization: `Bearer ${token}`
-      },
+      headers: buildServiceHeaders(token, { method: "PUT" }),
       body: formData
     });
 
@@ -459,6 +457,56 @@ export const imagesClient = {
   },
   deleteAsset: (token: string, assetId: string) =>
     serviceRequest<void>(imagesService, `/images/assets/${encodeURIComponent(assetId)}`, token, { method: "DELETE" })
+};
+
+export const mindmapsClient = {
+  list: (
+    token: string,
+    options: {
+      projectId?: string;
+      q?: string;
+      mode?: string;
+      limit?: number;
+    } = {}
+  ) =>
+    serviceRequest<unknown>(
+      mindmapsService,
+      `/mindmaps${buildQuery({
+        projectId: options.projectId,
+        q: options.q,
+        mode: options.mode,
+        limit: options.limit
+      })}`,
+      token
+    ),
+  create: (token: string, payload: unknown) =>
+    serviceRequest<unknown>(mindmapsService, "/mindmaps", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  get: (token: string, documentId: string) =>
+    serviceRequest<unknown>(mindmapsService, `/mindmaps/${encodeURIComponent(documentId)}`, token),
+  update: (token: string, documentId: string, payload: unknown) =>
+    serviceRequest<unknown>(mindmapsService, `/mindmaps/${encodeURIComponent(documentId)}`, token, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  remove: (token: string, documentId: string) =>
+    serviceRequest<void>(mindmapsService, `/mindmaps/${encodeURIComponent(documentId)}`, token, { method: "DELETE" }),
+  exportContent: (token: string, documentId: string, payload: unknown) =>
+    serviceRequest<unknown>(mindmapsService, `/mindmaps/${encodeURIComponent(documentId)}/export`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload ?? {})
+    }),
+  recordArtifactExport: (token: string, documentId: string, payload: unknown) =>
+    serviceRequest<unknown>(mindmapsService, `/mindmaps/${encodeURIComponent(documentId)}/artifact-exports`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    })
 };
 
 export const tasksClient = {
