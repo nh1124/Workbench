@@ -116,6 +116,19 @@ services:
     volumes:
       - mindmaps_pgdata:/var/lib/postgresql/data
 
+  wbs-db:
+    image: postgres:16-alpine
+    container_name: workbench-wbs-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: wbs_db
+      POSTGRES_USER: wbs_user
+      POSTGRES_PASSWORD: wbs_pass
+    ports:
+      - "5549:5432"
+    volumes:
+      - wbs_pgdata:/var/lib/postgresql/data
+
 volumes:
   workbench_core_pgdata:
   notes_pgdata:
@@ -125,3 +138,4 @@ volumes:
   projects_pgdata:
   images_pgdata:
   mindmaps_pgdata:
+  wbs_pgdata:

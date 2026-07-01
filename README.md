@@ -216,5 +216,7 @@ For stable remote OAuth or MCP clients, set `CORE_EXTERNAL_BASE_URL` in `service
 - Tasks DB: `5545`
 - Projects DB: `5546`
 - Images DB: `5547`
+- Mindmaps DB: `5548`
+- WBS DB: `5549`
 
 LBS defaults to local sqlite for development when `services/lbs/.env` does not set `DATABASE_URL`.
