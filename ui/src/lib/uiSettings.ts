@@ -1,4 +1,4 @@
-export type StartPage = "/" | "/projects" | "/tasks" | "/notes" | "/research" | "/artifacts";
+export type StartPage = "/" | "/projects" | "/tasks" | "/notes" | "/research" | "/images" | "/mindmaps" | "/wbs" | "/artifacts";
 export type LocationMode = "preset" | "auto";
 
 export interface UiSettings {
@@ -85,7 +85,7 @@ export function normalizeUiSettings(raw: Partial<UiSettings> | null | undefined)
 
   const locationMode: LocationMode = raw?.locationMode === "auto" ? "auto" : "preset";
 
-  const startPage: StartPage = raw?.startPage && ["/", "/projects", "/tasks", "/notes", "/research", "/artifacts"].includes(raw.startPage)
+  const startPage: StartPage = raw?.startPage && ["/", "/projects", "/tasks", "/notes", "/research", "/images", "/mindmaps", "/wbs", "/artifacts"].includes(raw.startPage)
     ? raw.startPage as StartPage
     : defaultSettings.startPage;
 

@@ -135,6 +135,134 @@ export interface MindmapArtifactSaveResponse {
   exportRecord: unknown;
 }
 
+export type WbsItemStatus = "todo" | "doing" | "blocked" | "done";
+export type WbsDependencyType = "finish_to_start" | "start_to_start" | "finish_to_finish" | "start_to_finish";
+export type WbsExportFormat = "markdown" | "csv" | "json";
+
+export interface WbsRollup {
+  effortHours?: number;
+  progress?: number;
+  startDate?: string;
+  dueDate?: string;
+}
+
+export interface WbsPlan {
+  id: string;
+  ownerCoreUserId?: string;
+  projectId?: string;
+  projectName?: string;
+  title: string;
+  description?: string;
+  settings?: Record<string, unknown>;
+  version: number;
+  rollup?: WbsRollup;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WbsItem {
+  id: string;
+  planId: string;
+  parentId?: string;
+  code: string;
+  title: string;
+  description?: string;
+  sortOrder: number;
+  ownerLabel?: string;
+  startDate?: string;
+  dueDate?: string;
+  effortHours?: number;
+  status: WbsItemStatus;
+  progress?: number;
+  linkedTaskId?: string;
+  metadata?: Record<string, unknown>;
+  rollup?: WbsRollup;
+  version: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface WbsDependency {
+  id: string;
+  planId: string;
+  fromItemId: string;
+  toItemId: string;
+  dependencyType: WbsDependencyType;
+  lagDays: number;
+}
+
+export interface WbsPlanListResult {
+  items: WbsPlan[];
+  nextCursor?: string;
+}
+
+export interface WbsCreatePlanInput {
+  title: string;
+  description?: string;
+  projectId?: string;
+  projectName?: string;
+  settings?: Record<string, unknown>;
+}
+
+export interface WbsUpdatePlanInput {
+  expectedVersion: number;
+  title?: string;
+  description?: string;
+  projectId?: string | null;
+  projectName?: string | null;
+  settings?: Record<string, unknown>;
+}
+
+export interface WbsCreateItemInput {
+  parentId?: string;
+  title: string;
+  description?: string;
+  ownerLabel?: string;
+  startDate?: string;
+  dueDate?: string;
+  effortHours?: number;
+  status?: WbsItemStatus;
+  progress?: number;
+}
+
+export interface WbsUpdateItemInput {
+  expectedVersion: number;
+  title?: string;
+  description?: string;
+  ownerLabel?: string | null;
+  startDate?: string | null;
+  dueDate?: string | null;
+  effortHours?: number | null;
+  status?: WbsItemStatus;
+  progress?: number | null;
+}
+
+export interface WbsMoveItemInput {
+  expectedVersion: number;
+  parentId?: string | null;
+  beforeItemId?: string;
+  afterItemId?: string;
+}
+
+export interface WbsExportContent {
+  planId: string;
+  title: string;
+  projectId?: string;
+  projectName?: string;
+  sourceVersion: number;
+  format: WbsExportFormat;
+  filename: string;
+  mimeType: string;
+  contentText: string;
+  contentBase64: string;
+}
+
+export interface WbsArtifactSaveResponse {
+  status: string;
+  artifact: unknown;
+  exportRecord: unknown;
+}
+
 export interface Task {
   id: string;
   title: string;

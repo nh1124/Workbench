@@ -6,6 +6,7 @@ process.env.ARTIFACTS_SERVICE_URL ||= "http://artifacts.test";
 process.env.TASKS_SERVICE_URL ||= "http://tasks.test";
 process.env.IMAGES_SERVICE_URL ||= "http://images.test";
 process.env.MINDMAPS_SERVICE_URL ||= "http://mindmaps.test";
+process.env.WBS_SERVICE_URL ||= "http://wbs.test";
 process.env.PROJECTS_SERVICE_URL ||= "http://projects.test";
 process.env.JWT_SECRET ||= "test-secret-that-is-long-enough";
 process.env.JWT_ISSUER ||= "workbench-test";
@@ -20,11 +21,19 @@ process.env.INTERNAL_API_KEY_ARTIFACTS ||= "test-internal-key";
 process.env.INTERNAL_API_KEY_TASKS ||= "test-internal-key";
 process.env.INTERNAL_API_KEY_IMAGES ||= "test-internal-key";
 process.env.INTERNAL_API_KEY_MINDMAPS ||= "test-internal-key";
+process.env.INTERNAL_API_KEY_WBS ||= "test-internal-key";
 
-const [{ registerProjectContextTools }, { registerArtifactsTools }, { registerMindmapTools }, readModels] = await Promise.all([
+const [
+  { registerProjectContextTools },
+  { registerArtifactsTools },
+  { registerMindmapTools },
+  { registerWbsTools },
+  readModels
+] = await Promise.all([
   import("../mcp/registerProjectContextTools.js"),
   import("../mcp/registerArtifactsTools.js"),
   import("../mcp/registerMindmapTools.js"),
+  import("../mcp/registerWbsTools.js"),
   import("../mcp/projectContextReadModels.js")
 ]);
 
@@ -40,6 +49,7 @@ describe("Project context MCP contract", () => {
     registerProjectContextTools(fakeServer as never, { accessToken: "unused" });
     registerArtifactsTools(fakeServer as never, { accessToken: "unused" });
     registerMindmapTools(fakeServer as never, { accessToken: "unused" });
+    registerWbsTools(fakeServer as never, { accessToken: "unused" });
 
     const expected = [
       "projects.context.get",
@@ -59,6 +69,22 @@ describe("Project context MCP contract", () => {
       "mindmaps.export",
       "mindmaps.artifact.save",
       "mindmaps.projectIndex.rebuild",
+      "wbs.list",
+      "wbs.get",
+      "wbs.create",
+      "wbs.update",
+      "wbs.delete",
+      "wbs.items.list",
+      "wbs.items.create",
+      "wbs.items.update",
+      "wbs.items.delete",
+      "wbs.items.move",
+      "wbs.dependencies.list",
+      "wbs.dependencies.create",
+      "wbs.dependencies.delete",
+      "wbs.export",
+      "wbs.artifact.save",
+      "wbs.projectIndex.rebuild",
       "artifacts.item.projects.list",
       "artifacts.item.projects.link",
       "artifacts.item.projects.unlink",

@@ -158,9 +158,12 @@ export interface WbsDependency {
 Suggested tables:
 
 ```sql
-wbs_service_accounts (
-  core_user_id text primary key,
-  username_snapshot text not null,
+service_accounts (
+  id text primary key,
+  core_user_id text unique,
+  username_snapshot text,
+  username text,
+  password_hash text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 )

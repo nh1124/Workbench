@@ -291,5 +291,6 @@ export const navItems = [
   { path: "/research", label: "Research" },
   { path: "/images", label: "Images" },
   { path: "/mindmaps", label: "Mindmap" },
+  { path: "/wbs", label: "WBS" },
   { path: "/artifacts", label: "Artifacts" }
 ] as const;

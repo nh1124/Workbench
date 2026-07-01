@@ -5,7 +5,8 @@ import {
   mindmapsClient,
   notesClient,
   projectsClient,
-  tasksClient
+  tasksClient,
+  wbsClient
 } from "./internalClients.js";
 
 export const SECONDARY_MEMBERSHIP_RELATION = "secondary_membership";
@@ -13,6 +14,8 @@ export const ARTIFACT_TARGET_SERVICE = "artifacts";
 export const ARTIFACT_TARGET_RESOURCE_TYPE = "artifact_item";
 export const MINDMAP_TARGET_SERVICE = "mindmaps";
 export const MINDMAP_TARGET_RESOURCE_TYPE = "mindmap_document";
+export const WBS_TARGET_SERVICE = "wbs";
+export const WBS_TARGET_RESOURCE_TYPE = "wbs_plan";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -64,6 +67,18 @@ export type MindmapDocumentRecord = JsonRecord & {
   projectName?: string;
   body: JsonRecord & { root?: MindmapNodeRecord };
   tags?: string[];
+  version: number;
+  updatedAt?: string;
+};
+
+export type WbsPlanRecord = JsonRecord & {
+  id: string;
+  title: string;
+  description?: string;
+  projectId?: string;
+  projectName?: string;
+  settings?: JsonRecord;
+  rollup?: JsonRecord;
   version: number;
   updatedAt?: string;
 };
@@ -146,6 +161,25 @@ export function parseMindmapDocument(value: unknown): MindmapDocumentRecord {
     tags: Array.isArray(record.tags) ? record.tags.filter((tag): tag is string => typeof tag === "string") : [],
     body
   } as MindmapDocumentRecord;
+}
+
+export function parseWbsPlan(value: unknown): WbsPlanRecord {
+  const record = asRecord(value);
+  if (
+    typeof record.id !== "string" ||
+    typeof record.title !== "string" ||
+    typeof record.version !== "number"
+  ) {
+    throw new ProjectContextError(502, "INVALID_WBS_RESPONSE", "WBS service returned an invalid plan");
+  }
+  return {
+    ...record,
+    description: boundedText(record.description, 2000),
+    projectId: boundedText(record.projectId, 200),
+    projectName: boundedText(record.projectName, 500),
+    settings: asRecord(record.settings),
+    rollup: asRecord(record.rollup)
+  } as WbsPlanRecord;
 }
 
 function parseProjectLink(value: unknown): ProjectLinkRecord | undefined {
@@ -470,6 +504,50 @@ export function buildMindmapIndexEntry(document: MindmapDocumentRecord): JsonRec
   };
 }
 
+function wbsSummary(plan: WbsPlanRecord): string {
+  const rollup = asRecord(plan.rollup);
+  const effort = typeof rollup.effortHours === "number" ? `${rollup.effortHours}h` : undefined;
+  const progress = typeof rollup.progress === "number" ? `${Math.round(rollup.progress)}%` : undefined;
+  const dates = [boundedText(rollup.startDate, 40), boundedText(rollup.dueDate, 40)].filter(Boolean).join(" to ");
+  const parts = [
+    "WBS",
+    boundedText(plan.description, 360),
+    plan.projectName,
+    effort ? `effort ${effort}` : undefined,
+    progress ? `progress ${progress}` : undefined,
+    dates || undefined
+  ].filter(Boolean);
+  return boundedText(parts.join(": "), 500) ?? "WBS";
+}
+
+export function buildWbsIndexEntry(plan: WbsPlanRecord): JsonRecord {
+  const contentForHash = [
+    plan.title,
+    plan.description ?? "",
+    plan.projectName ?? "",
+    JSON.stringify(plan.settings ?? {}),
+    JSON.stringify(plan.rollup ?? {})
+  ].join("\n");
+
+  return {
+    sourceService: WBS_TARGET_SERVICE,
+    resourceType: WBS_TARGET_RESOURCE_TYPE,
+    resourceId: plan.id,
+    associationKind: "primary",
+    path: `wbs/${plan.id}`,
+    title: plan.title,
+    summaryText: wbsSummary(plan),
+    summarySource: "deterministic",
+    sourceVersion: String(plan.version),
+    contentHash: createHash("sha256").update(contentForHash).digest("hex"),
+    sourceUpdatedAt: plan.updatedAt ?? new Date().toISOString(),
+    metadataJson: {
+      projectName: plan.projectName,
+      rollup: plan.rollup ?? {}
+    }
+  };
+}
+
 async function listSecondaryLinks(token: string, artifactItemId: string): Promise<ProjectLinkRecord[]> {
   const links: ProjectLinkRecord[] = [];
   let cursor: string | undefined;
@@ -723,8 +801,148 @@ export async function rebuildProjectMindmapIndex(token: string, projectId: strin
   };
 }
 
+function logWbsDerivedFailure(operation: string, planId: string, error: unknown): void {
+  console.warn("[project-index] wbs derived update failed", {
+    operation,
+    planId,
+    message: error instanceof Error ? error.message : String(error)
+  });
+}
+
+async function upsertWbsEntry(token: string, plan: WbsPlanRecord): Promise<void> {
+  if (!plan.projectId) return;
+  await projectsClient.upsertIndexEntry(token, plan.projectId, {
+    entry: buildWbsIndexEntry(plan)
+  });
+}
+
+async function tombstoneWbsEntry(token: string, projectId: string, planId: string): Promise<void> {
+  await projectsClient.tombstoneIndexEntry(token, projectId, {
+    sourceService: WBS_TARGET_SERVICE,
+    resourceType: WBS_TARGET_RESOURCE_TYPE,
+    resourceId: planId
+  });
+}
+
+export function wbsProjectIdsBestEffort(rawPlan: unknown): string[] {
+  try {
+    const plan = parseWbsPlan(rawPlan);
+    return plan.projectId ? [plan.projectId] : [];
+  } catch (error) {
+    console.warn("[project-context-sync] failed to identify the WBS Project", {
+      message: error instanceof Error ? error.message : String(error)
+    });
+    return [];
+  }
+}
+
+export async function maintainWbsIndex(token: string, rawPlan: unknown): Promise<void> {
+  const plan = parseWbsPlan(rawPlan);
+  await upsertWbsEntry(token, plan);
+}
+
+export async function maintainWbsIndexBestEffort(token: string, rawPlan: unknown): Promise<void> {
+  const planId = typeof asRecord(rawPlan).id === "string" ? String(asRecord(rawPlan).id) : "unknown";
+  try {
+    await maintainWbsIndex(token, rawPlan);
+  } catch (error) {
+    logWbsDerivedFailure("upsert", planId, error);
+  }
+}
+
+export async function reconcileWbsMutationBestEffort(
+  token: string,
+  beforeValue: unknown,
+  afterValue: unknown
+): Promise<void> {
+  const planId = typeof asRecord(afterValue).id === "string" ? String(asRecord(afterValue).id) : "unknown";
+  try {
+    const before = parseWbsPlan(beforeValue);
+    const after = parseWbsPlan(afterValue);
+    if (before.projectId && before.projectId !== after.projectId) {
+      await tombstoneWbsEntry(token, before.projectId, before.id);
+    }
+    await maintainWbsIndex(token, after);
+  } catch (error) {
+    logWbsDerivedFailure("reconcile", planId, error);
+  }
+}
+
+export async function cleanupDeletedWbsBestEffort(token: string, rawPlan: unknown): Promise<void> {
+  const planId = typeof asRecord(rawPlan).id === "string" ? String(asRecord(rawPlan).id) : "unknown";
+  try {
+    const plan = parseWbsPlan(rawPlan);
+    if (plan.projectId) {
+      await tombstoneWbsEntry(token, plan.projectId, plan.id);
+    }
+  } catch (error) {
+    logWbsDerivedFailure("delete", planId, error);
+  }
+}
+
+async function listAllWbsPlansForProject(token: string, projectId: string): Promise<WbsPlanRecord[]> {
+  const plans: WbsPlanRecord[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await wbsClient.listPlans(token, {
+      projectId,
+      limit: 100,
+      cursor
+    });
+    plans.push(...pageItems(page).map(parseWbsPlan));
+    cursor = nextCursor(page);
+  } while (cursor);
+  return plans;
+}
+
+export async function rebuildProjectWbsIndex(token: string, projectId: string): Promise<JsonRecord> {
+  await projectsClient.get(token, projectId);
+  const plans = await listAllWbsPlansForProject(token, projectId);
+  const entries = plans.map(buildWbsIndexEntry);
+  const activeResourceIds = new Set(plans.map((plan) => plan.id));
+
+  const batchSize = 100;
+  for (let offset = 0; offset < entries.length; offset += batchSize) {
+    await projectsClient.bulkUpsertIndexEntries(token, projectId, { entries: entries.slice(offset, offset + batchSize) });
+  }
+
+  let cursor: string | undefined;
+  let tombstoned = 0;
+  do {
+    const indexed = await projectsClient.listIndexEntries(token, projectId, {
+      sourceService: WBS_TARGET_SERVICE,
+      resourceType: WBS_TARGET_RESOURCE_TYPE,
+      limit: 200,
+      cursor
+    });
+    for (const rawEntry of pageItems(indexed)) {
+      const entry = asRecord(rawEntry);
+      const resourceId = boundedText(entry.resourceId, 200);
+      if (resourceId && !activeResourceIds.has(resourceId)) {
+        await projectsClient.tombstoneIndexEntry(token, projectId, {
+          sourceService: WBS_TARGET_SERVICE,
+          resourceType: WBS_TARGET_RESOURCE_TYPE,
+          resourceId
+        });
+        tombstoned += 1;
+      }
+    }
+    cursor = nextCursor(indexed);
+  } while (cursor);
+
+  return {
+    projectId,
+    indexed: entries.length,
+    tombstoned
+  };
+}
+
 function mindmapExportExtension(format: "json" | "markdown" | "svg"): string {
   return format === "json" ? "json" : format === "svg" ? "svg" : "md";
+}
+
+function wbsExportExtension(format: "json" | "markdown" | "csv"): string {
+  return format === "markdown" ? "md" : format;
 }
 
 function slugifyResourceName(value: string): string {
@@ -813,6 +1031,73 @@ export async function saveMindmapExportArtifact(
     projectId: boundedText(createdRecord.projectId, 200) ?? projectId,
     projectName: boundedText(createdRecord.projectName, 500) ?? projectName,
     exportFormat: options.format
+  });
+
+  return { artifact: created, exportRecord };
+}
+
+export async function saveWbsExportArtifact(
+  token: string,
+  planId: string,
+  options: {
+    format: "json" | "markdown" | "csv";
+    artifactTitle?: string;
+    artifactPath?: string;
+    projectId?: string;
+    projectName?: string;
+  }
+): Promise<{ artifact: unknown; exportRecord: unknown }> {
+  const exported = asRecord(await wbsClient.exportContent(token, planId, { format: options.format }));
+  const title = boundedText(exported.title, 240) ?? options.artifactTitle ?? "WBS";
+  const sourceVersion = typeof exported.sourceVersion === "number" ? exported.sourceVersion : 1;
+  const projectId = options.projectId ?? boundedText(exported.projectId, 200);
+  const projectName = options.projectName ?? boundedText(exported.projectName, 500);
+  const { directoryPath, filename } = splitResourcePath(options.artifactPath);
+  const tags = ["wbs-export"];
+
+  let created: unknown;
+  if (options.format === "markdown") {
+    const notePath =
+      options.artifactPath?.trim() ||
+      `wbs/${slugifyResourceName(options.artifactTitle ?? title)}.${wbsExportExtension(options.format)}`;
+    created = await createArtifactNoteWithIndex(token, {
+      projectId,
+      projectName,
+      path: notePath,
+      title: options.artifactTitle ?? title,
+      scope: "project",
+      tags,
+      contentMarkdown: typeof exported.contentText === "string" ? exported.contentText : ""
+    });
+  } else {
+    const uploadFilename =
+      filename ||
+      (options.artifactTitle
+        ? `${slugifyResourceName(options.artifactTitle)}.${wbsExportExtension(options.format)}`
+        : boundedText(exported.filename, 240) ?? `${slugifyResourceName(title)}.${wbsExportExtension(options.format)}`);
+    created = await uploadArtifactFileWithIndex(token, {
+      projectId,
+      projectName,
+      directoryPath: directoryPath ?? "wbs",
+      scope: "project",
+      tags,
+      filename: uploadFilename,
+      mimeType: boundedText(exported.mimeType, 120),
+      contentBase64: typeof exported.contentBase64 === "string" ? exported.contentBase64 : Buffer.from("", "utf8").toString("base64")
+    });
+  }
+
+  const createdRecord = asRecord(created);
+  const artifactItemId = boundedText(createdRecord.id, 200);
+  if (!artifactItemId) {
+    throw new ProjectContextError(502, "WBS_ARTIFACT_EXPORT_FAILED", "WBS export did not create an artifact item id");
+  }
+
+  const exportRecord = await wbsClient.recordArtifactExport(token, planId, {
+    sourceVersion,
+    artifactItemId,
+    artifactPath: boundedText(createdRecord.path, 800),
+    format: options.format
   });
 
   return { artifact: created, exportRecord };
@@ -1271,5 +1556,15 @@ export async function rebuildProjectIndex(token: string, projectId: string): Pro
       mindmaps
     });
   }
-  return { projectId, artifacts, mindmaps };
+  let wbs: unknown;
+  try {
+    wbs = await rebuildProjectWbsIndex(token, projectId);
+  } catch (error) {
+    wbs = optionalServiceRebuildFailure(WBS_TARGET_SERVICE, error);
+    console.warn("[project-index] wbs rebuild failed; preserving other rebuild results", {
+      projectId,
+      wbs
+    });
+  }
+  return { projectId, artifacts, mindmaps, wbs };
 }

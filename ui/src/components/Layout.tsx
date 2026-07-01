@@ -71,6 +71,13 @@ const navIconMap: Record<string, ReactNode> = {
       <path d="M8.1 10.8l6.4-3.2M8.2 13.1l6.7 2.8" />
     </svg>
   ),
+  WBS: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <path d="M4 5h16M4 12h16M4 19h16" />
+      <path d="M8 5v14M14 5v14" />
+      <path d="M4 9h16M4 16h16" opacity="0.55" />
+    </svg>
+  ),
   Artifacts: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
       <path d="M3 7h6l2 2h10v11H3z" />
@@ -90,7 +97,7 @@ const sidebarNavSections: Array<{ label?: string; items: NavItem[] }> = [
   },
   {
     label: "Tool",
-    items: navItems.filter((item) => ["Research", "Images", "Mindmap"].includes(item.label))
+    items: navItems.filter((item) => ["Research", "Images", "Mindmap", "WBS"].includes(item.label))
   }
 ];
 
@@ -109,6 +116,7 @@ export function Layout() {
   const isResearchRoute = location.pathname.startsWith("/research");
   const isImagesRoute = location.pathname.startsWith("/images");
   const isMindmapsRoute = location.pathname.startsWith("/mindmaps");
+  const isWbsRoute = location.pathname.startsWith("/wbs");
   const userMenuRef = useRef<HTMLDivElement>(null);
   const notificationMenuRef = useRef<HTMLDivElement>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -623,7 +631,9 @@ export function Layout() {
                     ? "page-frame images-page-frame"
                     : isMindmapsRoute
                       ? "page-frame mindmaps-page-frame"
-                      : "page-frame"
+                      : isWbsRoute
+                        ? "page-frame wbs-page-frame"
+                        : "page-frame"
           }
         >
           <Outlet />

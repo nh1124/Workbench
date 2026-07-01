@@ -15,6 +15,7 @@ import { RegisterPage } from "./pages/RegisterPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { ShortcutsPage } from "./pages/ShortcutsPage";
 import { TasksPage } from "./pages/TasksPage";
+import { WbsPage } from "./pages/WbsPage";
 
 function resolveStartPage(): string {
   try {
@@ -24,7 +25,7 @@ function resolveStartPage(): string {
     }
 
     const parsed = JSON.parse(raw) as { startPage?: string };
-    const allowed = new Set(["/", "/projects", "/tasks", "/notes", "/research", "/images", "/mindmaps", "/artifacts"]);
+    const allowed = new Set(["/", "/projects", "/tasks", "/notes", "/research", "/images", "/mindmaps", "/wbs", "/artifacts"]);
     if (parsed.startPage && allowed.has(parsed.startPage)) {
       return parsed.startPage;
     }
@@ -59,6 +60,7 @@ export default function App() {
           <Route path="research" element={<ResearchPage />} />
           <Route path="images" element={<ImagesPage />} />
           <Route path="mindmaps" element={<MindmapsPage />} />
+          <Route path="wbs" element={<WbsPage />} />
           <Route path="artifacts" element={<ArtifactsPage />} />
           <Route path="projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="settings" element={<SettingsPage />} />

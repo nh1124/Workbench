@@ -6,6 +6,7 @@ process.env.ARTIFACTS_SERVICE_URL ||= "http://artifacts.test";
 process.env.TASKS_SERVICE_URL ||= "http://tasks.test";
 process.env.IMAGES_SERVICE_URL ||= "http://images.test";
 process.env.MINDMAPS_SERVICE_URL ||= "http://mindmaps.test";
+process.env.WBS_SERVICE_URL ||= "http://wbs.test";
 process.env.PROJECTS_SERVICE_URL ||= "http://projects.test";
 
 const contextModule = await import("../projectContext.js");
@@ -53,6 +54,23 @@ const mindmapDocument = {
   updatedAt: "2026-06-29T00:00:00.000Z"
 };
 
+const wbsPlan = {
+  id: "wbs-1",
+  title: "Launch WBS",
+  description: "Execution work breakdown.",
+  projectId: "project-primary",
+  projectName: "Primary",
+  settings: { calendar: "standard" },
+  rollup: {
+    effortHours: 42,
+    progress: 50,
+    itemCount: 6,
+    doneCount: 3
+  },
+  version: 7,
+  updatedAt: "2026-06-30T00:00:00.000Z"
+};
+
 before(() => {
   // Tests replace fetch per case because all service clients use the platform fetch API.
 });
@@ -84,6 +102,29 @@ describe("Project context Artifact orchestration", () => {
       projectName: "Primary",
       tags: ["planning"],
       nodeCount: 4
+    });
+  });
+
+  it("builds a deterministic WBS index entry for Project context discovery", () => {
+    const parsed = contextModule.parseWbsPlan(wbsPlan);
+    const entry = contextModule.buildWbsIndexEntry(parsed) as Record<string, unknown>;
+
+    assert.equal(entry.sourceService, "wbs");
+    assert.equal(entry.resourceType, "wbs_plan");
+    assert.equal(entry.resourceId, "wbs-1");
+    assert.equal(entry.associationKind, "primary");
+    assert.equal(entry.path, "wbs/wbs-1");
+    assert.equal(entry.title, "Launch WBS");
+    assert.equal(entry.summarySource, "deterministic");
+    assert.equal(entry.sourceVersion, "7");
+    assert.equal(entry.sourceUpdatedAt, "2026-06-30T00:00:00.000Z");
+    assert.match(String(entry.summaryText), /WBS/);
+    assert.match(String(entry.summaryText), /42h/);
+    assert.match(String(entry.summaryText), /50%/);
+    assert.match(String(entry.contentHash), /^[a-f0-9]{64}$/);
+    assert.deepEqual(entry.metadataJson, {
+      projectName: "Primary",
+      rollup: wbsPlan.rollup
     });
   });
 

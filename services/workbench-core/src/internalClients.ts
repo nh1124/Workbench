@@ -19,7 +19,7 @@ function optionalEnv(name: string): string | undefined {
   return value && value.length > 0 ? value : undefined;
 }
 
-type ServiceId = "notes" | "artifacts" | "tasks" | "projects" | "lbs" | "images" | "mindmaps";
+type ServiceId = "notes" | "artifacts" | "tasks" | "projects" | "lbs" | "images" | "mindmaps" | "wbs";
 
 type ServiceConfig = {
   id: ServiceId;
@@ -31,6 +31,7 @@ const artifactsService: ServiceConfig = { id: "artifacts", baseUrl: requireEnv("
 const tasksService: ServiceConfig = { id: "tasks", baseUrl: requireEnv("TASKS_SERVICE_URL") };
 const imagesService: ServiceConfig = { id: "images", baseUrl: requireEnv("IMAGES_SERVICE_URL") };
 const mindmapsService: ServiceConfig = { id: "mindmaps", baseUrl: requireEnv("MINDMAPS_SERVICE_URL") };
+const wbsService: ServiceConfig = { id: "wbs", baseUrl: requireEnv("WBS_SERVICE_URL") };
 const projectsBaseUrl = optionalEnv("PROJECTS_SERVICE_URL");
 const projectsService: ServiceConfig | undefined = projectsBaseUrl ? { id: "projects", baseUrl: projectsBaseUrl } : undefined;
 
@@ -47,6 +48,7 @@ export const serviceBaseUrls = {
   tasks: tasksService.baseUrl,
   images: imagesService.baseUrl,
   mindmaps: mindmapsService.baseUrl,
+  wbs: wbsService.baseUrl,
   projects: projectsService?.baseUrl,
   lbs: lbsService?.baseUrl
 } as const;
@@ -505,6 +507,100 @@ export const mindmapsClient = {
     }),
   recordArtifactExport: (token: string, documentId: string, payload: unknown) =>
     serviceRequest<unknown>(mindmapsService, `/mindmaps/${encodeURIComponent(documentId)}/artifact-exports`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    })
+};
+
+export const wbsClient = {
+  listPlans: (
+    token: string,
+    options: {
+      projectId?: string;
+      q?: string;
+      limit?: number;
+      cursor?: string;
+    } = {}
+  ) =>
+    serviceRequest<unknown>(
+      wbsService,
+      `/wbs/plans${buildQuery({
+        projectId: options.projectId,
+        q: options.q,
+        limit: options.limit,
+        cursor: options.cursor
+      })}`,
+      token
+    ),
+  createPlan: (token: string, payload: unknown) =>
+    serviceRequest<unknown>(wbsService, "/wbs/plans", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  getPlan: (token: string, planId: string) =>
+    serviceRequest<unknown>(wbsService, `/wbs/plans/${encodeURIComponent(planId)}`, token),
+  updatePlan: (token: string, planId: string, payload: unknown) =>
+    serviceRequest<unknown>(wbsService, `/wbs/plans/${encodeURIComponent(planId)}`, token, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  removePlan: (token: string, planId: string, expectedVersion?: number) =>
+    serviceRequest<void>(wbsService, `/wbs/plans/${encodeURIComponent(planId)}`, token, {
+      method: "DELETE",
+      ...(expectedVersion !== undefined
+        ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedVersion }) }
+        : {})
+    }),
+  listItems: (token: string, planId: string) =>
+    serviceRequest<unknown>(wbsService, `/wbs/plans/${encodeURIComponent(planId)}/items`, token),
+  getItem: (token: string, itemId: string) =>
+    serviceRequest<unknown>(wbsService, `/wbs/items/${encodeURIComponent(itemId)}`, token),
+  createItem: (token: string, planId: string, payload: unknown) =>
+    serviceRequest<unknown>(wbsService, `/wbs/plans/${encodeURIComponent(planId)}/items`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  updateItem: (token: string, itemId: string, payload: unknown) =>
+    serviceRequest<unknown>(wbsService, `/wbs/items/${encodeURIComponent(itemId)}`, token, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  removeItem: (token: string, itemId: string, expectedVersion?: number) =>
+    serviceRequest<unknown>(wbsService, `/wbs/items/${encodeURIComponent(itemId)}`, token, {
+      method: "DELETE",
+      ...(expectedVersion !== undefined
+        ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedVersion }) }
+        : {})
+    }),
+  moveItem: (token: string, itemId: string, payload: unknown) =>
+    serviceRequest<unknown>(wbsService, `/wbs/items/${encodeURIComponent(itemId)}/move`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  listDependencies: (token: string, planId: string) =>
+    serviceRequest<unknown>(wbsService, `/wbs/plans/${encodeURIComponent(planId)}/dependencies`, token),
+  createDependency: (token: string, planId: string, payload: unknown) =>
+    serviceRequest<unknown>(wbsService, `/wbs/plans/${encodeURIComponent(planId)}/dependencies`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  removeDependency: (token: string, dependencyId: string) =>
+    serviceRequest<void>(wbsService, `/wbs/dependencies/${encodeURIComponent(dependencyId)}`, token, { method: "DELETE" }),
+  exportContent: (token: string, planId: string, payload: unknown) =>
+    serviceRequest<unknown>(wbsService, `/wbs/plans/${encodeURIComponent(planId)}/export`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload ?? {})
+    }),
+  recordArtifactExport: (token: string, planId: string, payload: unknown) =>
+    serviceRequest<unknown>(wbsService, `/wbs/plans/${encodeURIComponent(planId)}/artifact-exports`, token, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)

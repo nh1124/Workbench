@@ -1,0 +1,473 @@
+.page-frame.wbs-page-frame {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.wbs-page {
+  display: grid;
+  grid-template-columns: 18rem minmax(0, 1fr) 21rem;
+  gap: 0.8rem;
+  height: 100%;
+  min-height: calc(100vh - 96px);
+  color: #e5e7eb;
+}
+
+.wbs-sidebar,
+.wbs-main,
+.wbs-inspector {
+  min-height: 0;
+  border: 1px solid rgba(58, 72, 91, 0.78);
+  border-radius: 8px;
+  background: #101721;
+}
+
+.wbs-sidebar,
+.wbs-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.85rem;
+  overflow: auto;
+}
+
+.wbs-main {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.wbs-page .eyebrow {
+  margin: 0 0 0.2rem;
+  color: #8fa1b7;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.wbs-sidebar-head,
+.wbs-toolbar,
+.wbs-actions,
+.wbs-inspector-head,
+.wbs-export-head,
+.wbs-export-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.wbs-sidebar-head,
+.wbs-toolbar,
+.wbs-inspector-head,
+.wbs-export-head {
+  justify-content: space-between;
+}
+
+.wbs-sidebar-head strong,
+.wbs-inspector-head strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: #f8fafc;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbs-inspector-head span {
+  min-width: 2.1rem;
+  height: 2.1rem;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid rgba(52, 211, 153, 0.42);
+  border-radius: 999px;
+  color: #bbf7d0;
+  font-weight: 800;
+}
+
+.wbs-create,
+.wbs-filters,
+.wbs-export {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.wbs-plan-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.42rem;
+  min-height: 0;
+  overflow: auto;
+}
+
+.wbs-plan-list button {
+  display: grid;
+  gap: 0.25rem;
+  width: 100%;
+  min-height: 3.65rem;
+  padding: 0.68rem;
+  border: 1px solid rgba(58, 72, 91, 0.72);
+  border-radius: 8px;
+  background: #151d28;
+  color: #dbe7f5;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wbs-plan-list button.active {
+  border-color: rgba(52, 211, 153, 0.62);
+  background: #183025;
+}
+
+.wbs-plan-list span,
+.wbs-plan-list small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wbs-plan-list span {
+  font-weight: 760;
+}
+
+.wbs-plan-list small {
+  color: #9ca3af;
+  font-size: 0.75rem;
+}
+
+.wbs-toolbar {
+  min-height: 3.65rem;
+  padding: 0.65rem;
+  border-bottom: 1px solid rgba(58, 72, 91, 0.78);
+  background: rgba(11, 16, 23, 0.96);
+}
+
+.wbs-title-fields {
+  display: grid;
+  grid-template-columns: minmax(16rem, 1fr) 13rem;
+  gap: 0.55rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.wbs-actions {
+  flex-shrink: 0;
+  justify-content: flex-end;
+}
+
+.wbs-page input,
+.wbs-page select,
+.wbs-page textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid rgba(76, 91, 112, 0.9);
+  border-radius: 8px;
+  background: #151d28;
+  color: #e5e7eb;
+  font: inherit;
+  outline: none;
+}
+
+.wbs-page input,
+.wbs-page select {
+  height: 2.28rem;
+  padding: 0 0.62rem;
+}
+
+.wbs-page textarea {
+  min-height: 10rem;
+  resize: vertical;
+  padding: 0.68rem;
+  line-height: 1.45;
+}
+
+.wbs-page label {
+  display: grid;
+  gap: 0.38rem;
+  color: #aebccc;
+  font-size: 0.76rem;
+  font-weight: 760;
+}
+
+.wbs-page input:focus,
+.wbs-page select:focus,
+.wbs-page textarea:focus {
+  border-color: rgba(52, 211, 153, 0.72);
+  box-shadow: 0 0 0 2px rgba(52, 211, 153, 0.14);
+}
+
+.wbs-icon-button,
+.wbs-primary,
+.wbs-secondary,
+.wbs-danger-action,
+.wbs-grid-empty button,
+.wbs-move-grid button,
+.wbs-export-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.38rem;
+  min-height: 2.35rem;
+  border: 1px solid rgba(76, 91, 112, 0.88);
+  border-radius: 8px;
+  background: #141c27;
+  color: #dbe7f5;
+  cursor: pointer;
+  font-weight: 760;
+}
+
+.wbs-icon-button {
+  width: 2.35rem;
+  height: 2.35rem;
+  padding: 0;
+}
+
+.wbs-icon-button svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.wbs-primary,
+.wbs-secondary,
+.wbs-export-actions button {
+  padding: 0 0.75rem;
+}
+
+.wbs-primary {
+  border-color: rgba(52, 211, 153, 0.52);
+  background: #24704f;
+  color: #f0fdf4;
+}
+
+.wbs-icon-button:hover,
+.wbs-secondary:hover,
+.wbs-move-grid button:hover,
+.wbs-export-actions button:hover {
+  border-color: rgba(52, 211, 153, 0.46);
+  background: #1b2835;
+}
+
+.wbs-icon-button.danger,
+.wbs-danger-action {
+  color: #fecaca;
+  border-color: rgba(248, 113, 113, 0.42);
+}
+
+.wbs-page button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.wbs-save-state {
+  min-width: 4.8rem;
+  padding: 0.33rem 0.62rem;
+  border: 1px solid rgba(76, 91, 112, 0.72);
+  border-radius: 999px;
+  color: #aebccc;
+  font-size: 0.75rem;
+  font-weight: 760;
+  text-align: center;
+}
+
+.wbs-save-state.dirty {
+  color: #fde68a;
+  border-color: rgba(250, 204, 21, 0.42);
+}
+
+.wbs-error {
+  margin: 0.65rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid rgba(248, 113, 113, 0.48);
+  border-radius: 8px;
+  background: rgba(69, 10, 10, 0.48);
+  color: #fecaca;
+  font-size: 0.88rem;
+}
+
+.wbs-grid-wrap {
+  min-height: 0;
+  overflow: auto;
+}
+
+.wbs-grid {
+  width: 100%;
+  min-width: 72rem;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.wbs-grid th,
+.wbs-grid td {
+  border-bottom: 1px solid rgba(58, 72, 91, 0.7);
+  padding: 0.35rem 0.4rem;
+  vertical-align: middle;
+}
+
+.wbs-grid th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: 2.4rem;
+  background: #101721;
+  color: #8fa1b7;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.wbs-grid tr {
+  background: #0f1620;
+}
+
+.wbs-grid tr:nth-child(even) {
+  background: #121a25;
+}
+
+.wbs-grid tr.selected {
+  background: #183025;
+}
+
+.wbs-grid th:nth-child(1),
+.wbs-grid td:nth-child(1) {
+  width: 6rem;
+}
+
+.wbs-grid th:nth-child(2),
+.wbs-grid td:nth-child(2) {
+  width: 24rem;
+}
+
+.wbs-grid th:nth-child(3),
+.wbs-grid td:nth-child(3) {
+  width: 10rem;
+}
+
+.wbs-grid th:nth-child(4),
+.wbs-grid td:nth-child(4) {
+  width: 8.5rem;
+}
+
+.wbs-grid th:nth-child(5),
+.wbs-grid td:nth-child(5),
+.wbs-grid th:nth-child(6),
+.wbs-grid td:nth-child(6) {
+  width: 9rem;
+}
+
+.wbs-grid th:nth-child(7),
+.wbs-grid td:nth-child(7),
+.wbs-grid th:nth-child(8),
+.wbs-grid td:nth-child(8) {
+  width: 7.5rem;
+}
+
+.wbs-grid td input,
+.wbs-grid td select {
+  height: 2rem;
+  border-color: transparent;
+  background: transparent;
+}
+
+.wbs-grid tr.selected td input,
+.wbs-grid tr.selected td select,
+.wbs-grid td input:focus,
+.wbs-grid td select:focus {
+  border-color: rgba(76, 91, 112, 0.9);
+  background: #151d28;
+}
+
+.wbs-code {
+  color: #bbf7d0;
+  font-weight: 800;
+}
+
+.wbs-work-cell > div {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.wbs-child-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #607089;
+}
+
+.wbs-child-dot.has-children {
+  background: #34d399;
+}
+
+.wbs-grid-empty {
+  height: 15rem;
+  text-align: center;
+}
+
+.wbs-empty {
+  display: grid;
+  min-height: 7rem;
+  place-items: center;
+  border: 1px dashed rgba(76, 91, 112, 0.7);
+  border-radius: 8px;
+  color: #9ca3af;
+}
+
+.wbs-move-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.wbs-danger-action {
+  width: 100%;
+  margin-top: auto;
+}
+
+.wbs-export {
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(58, 72, 91, 0.78);
+}
+
+.wbs-export-actions {
+  align-items: stretch;
+}
+
+.wbs-export-actions button {
+  flex: 1;
+}
+
+@media (max-width: 1280px) {
+  .wbs-page {
+    grid-template-columns: 16rem minmax(0, 1fr);
+  }
+
+  .wbs-inspector {
+    grid-column: 1 / -1;
+    min-height: 18rem;
+  }
+}
+
+@media (max-width: 900px) {
+  .wbs-page {
+    grid-template-columns: 1fr;
+    min-height: auto;
+  }
+
+  .wbs-title-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .wbs-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .wbs-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+}

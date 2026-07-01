@@ -22,12 +22,14 @@ import { registerNotesTools } from "./mcp/registerNotesTools.js";
 import { registerProjectsTools } from "./mcp/registerProjectsTools.js";
 import { registerProjectContextTools } from "./mcp/registerProjectContextTools.js";
 import { registerTasksTools } from "./mcp/registerTasksTools.js";
+import { registerWbsTools } from "./mcp/registerWbsTools.js";
 import { ensureIntegrationLinked } from "./integrationLinking.js";
-import { artifactsClient, imagesClient, InternalServiceError, mindmapsClient, notesClient, projectsClient, serviceBaseUrls, tasksClient } from "./internalClients.js";
+import { artifactsClient, imagesClient, InternalServiceError, mindmapsClient, notesClient, projectsClient, serviceBaseUrls, tasksClient, wbsClient } from "./internalClients.js";
 import { getOAuthDynamicClient, saveOAuthDynamicClient } from "./oauthDynamicClientsStore.js";
 import {
   createArtifactNoteWithIndex,
   cleanupDeletedMindmapBestEffort,
+  cleanupDeletedWbsBestEffort,
   createProjectLinkWithValidation,
   deleteProjectWithGuard,
   getArtifactProjectMemberships,
@@ -37,17 +39,22 @@ import {
   listProjectLinksResolved,
   linkArtifactToProject,
   maintainMindmapIndexBestEffort,
+  maintainWbsIndexBestEffort,
   mindmapProjectIdsBestEffort,
+  wbsProjectIdsBestEffort,
   maintainArtifactIndexBestEffort,
   ProjectContextError,
   projectIdsFromArtifactDeletionSnapshot,
   reconcileMindmapMutationBestEffort,
+  reconcileWbsMutationBestEffort,
   rebuildProjectIndex,
   rebuildProjectMindmapIndex,
+  rebuildProjectWbsIndex,
   reconcileArtifactMutationBestEffort,
   removeArtifactItemWithProjectCleanup,
   removeProjectLinkWithValidation,
   saveMindmapExportArtifact,
+  saveWbsExportArtifact,
   unlinkArtifactFromProject,
   uploadArtifactFileWithIndex
 } from "./projectContext.js";
@@ -97,6 +104,7 @@ import {
   configuredServiceIds,
   ensureImagesAccountProvisioned,
   ensureMindmapsAccountProvisioned,
+  ensureWbsAccountProvisioned,
   provisionAccountToServices
 } from "./serviceProvisioning.js";
 import { DeepResearchError } from "./deepResearch/errors.js";
@@ -989,6 +997,74 @@ const mindmapArtifactSaveSchema = z.object({
   projectName: z.string().optional()
 });
 
+const wbsStatusSchema = z.enum(["todo", "doing", "blocked", "done"]);
+const wbsDependencyTypeSchema = z.enum(["finish_to_start", "start_to_start", "finish_to_finish", "start_to_finish"]);
+const wbsExportFormatSchema = z.enum(["json", "markdown", "csv"]);
+
+const wbsPlanCreateSchema = z.object({
+  title: z.string().min(1),
+  description: z.string().optional(),
+  projectId: z.string().optional(),
+  projectName: z.string().optional(),
+  settings: z.record(z.unknown()).optional()
+});
+
+const wbsPlanUpdateSchema = z.object({
+  expectedVersion: z.number().int().positive(),
+  title: z.string().min(1).optional(),
+  description: z.string().optional(),
+  projectId: z.string().nullable().optional(),
+  projectName: z.string().nullable().optional(),
+  settings: z.record(z.unknown()).optional()
+});
+
+const wbsItemCreateSchema = z.object({
+  parentId: z.string().optional(),
+  title: z.string().min(1),
+  description: z.string().optional(),
+  ownerLabel: z.string().optional(),
+  startDate: z.string().optional(),
+  dueDate: z.string().optional(),
+  effortHours: z.number().nonnegative().optional(),
+  status: wbsStatusSchema.optional(),
+  progress: z.number().int().min(0).max(100).optional()
+});
+
+const wbsItemUpdateSchema = z.object({
+  expectedVersion: z.number().int().positive(),
+  title: z.string().min(1).optional(),
+  description: z.string().optional(),
+  ownerLabel: z.string().nullable().optional(),
+  startDate: z.string().nullable().optional(),
+  dueDate: z.string().nullable().optional(),
+  effortHours: z.number().nonnegative().nullable().optional(),
+  status: wbsStatusSchema.optional(),
+  progress: z.number().int().min(0).max(100).nullable().optional(),
+  linkedTaskId: z.string().nullable().optional()
+});
+
+const wbsItemMoveSchema = z.object({
+  expectedVersion: z.number().int().positive(),
+  parentId: z.string().nullable().optional(),
+  beforeItemId: z.string().optional(),
+  afterItemId: z.string().optional()
+});
+
+const wbsDependencyCreateSchema = z.object({
+  fromItemId: z.string().min(1),
+  toItemId: z.string().min(1),
+  dependencyType: wbsDependencyTypeSchema.default("finish_to_start"),
+  lagDays: z.number().int().optional()
+});
+
+const wbsArtifactSaveSchema = z.object({
+  format: wbsExportFormatSchema.default("markdown"),
+  artifactTitle: z.string().optional(),
+  artifactPath: z.string().optional(),
+  projectId: z.string().optional(),
+  projectName: z.string().optional()
+});
+
 const jsonRecordSchema = z.record(z.unknown());
 
 const localClientRegisterSchema = z.object({
@@ -1277,8 +1353,27 @@ async function invalidateMindmapIndexFromApi(
   await invalidateProjectContextFromApi(userId, projectIds, "index", "index", documentId);
 }
 
+async function invalidateWbsIndexFromApi(
+  userId: string,
+  projectIds: Array<string | undefined>,
+  planId: string
+): Promise<void> {
+  await invalidateProjectContextFromApi(userId, projectIds, "index", "index", planId);
+}
+
 function asJsonRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function responseItems(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  const items = asJsonRecord(value).items;
+  return Array.isArray(items) ? items : [];
+}
+
+function wbsPlanIdFromItem(value: unknown): string | undefined {
+  const planId = asJsonRecord(value).planId;
+  return typeof planId === "string" && planId.trim() ? planId.trim() : undefined;
 }
 
 function jsonRecordFromBuffer(buffer: Buffer): Record<string, unknown> {
@@ -3205,6 +3300,313 @@ app.post("/api/mindmaps/:documentId/artifact", async (req, res) => {
   try {
     await ensureMindmapsAccountProvisioned(authContext);
     const result = await saveMindmapExportArtifact(authContext.accessToken, String(req.params.documentId), parsed.data);
+    const artifactItemId = objectId(result.artifact);
+    if (artifactItemId) {
+      const projectIds = await listArtifactProjectIdsBestEffort(authContext.accessToken, result.artifact);
+      await invalidateArtifactIndexFromApi(authContext.userId, projectIds, artifactItemId);
+    }
+    return res.status(201).json({ status: "ok", ...result });
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.get("/api/wbs/plans", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
+  try {
+    await ensureWbsAccountProvisioned(authContext);
+    const result = await wbsClient.listPlans(authContext.accessToken, {
+      projectId: typeof req.query.projectId === "string" ? req.query.projectId : undefined,
+      q: typeof req.query.q === "string" ? req.query.q : undefined,
+      limit: Number.isFinite(limit) ? limit : undefined,
+      cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined
+    });
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/wbs/plans", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const parsed = wbsPlanCreateSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json({ message: parsed.error.flatten(), code: "INVALID_INPUT" });
+  }
+
+  try {
+    await ensureWbsAccountProvisioned(authContext);
+    const created = await wbsClient.createPlan(authContext.accessToken, parsed.data);
+    await maintainWbsIndexBestEffort(authContext.accessToken, created);
+    await invalidateWbsIndexFromApi(authContext.userId, wbsProjectIdsBestEffort(created), objectId(created) ?? "unknown");
+    return res.status(201).json(created);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.get("/api/wbs/plans/:planId", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  try {
+    await ensureWbsAccountProvisioned(authContext);
+    const plan = await wbsClient.getPlan(authContext.accessToken, String(req.params.planId));
+    return res.json(plan);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.patch("/api/wbs/plans/:planId", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const parsed = wbsPlanUpdateSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json({ message: parsed.error.flatten(), code: "INVALID_INPUT" });
+  }
+
+  try {
+    await ensureWbsAccountProvisioned(authContext);
+    let before: unknown;
+    let projectIds: string[] = [];
+    try {
+      before = await wbsClient.getPlan(authContext.accessToken, String(req.params.planId));
+      projectIds = wbsProjectIdsBestEffort(before);
+    } catch {
+      before = undefined;
+    }
+    const updated = await wbsClient.updatePlan(authContext.accessToken, String(req.params.planId), parsed.data);
+    if (before) await reconcileWbsMutationBestEffort(authContext.accessToken, before, updated);
+    else await maintainWbsIndexBestEffort(authContext.accessToken, updated);
+    projectIds.push(...wbsProjectIdsBestEffort(updated));
+    await invalidateWbsIndexFromApi(authContext.userId, projectIds, String(req.params.planId));
+    return res.json(updated);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.delete("/api/wbs/plans/:planId", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  try {
+    await ensureWbsAccountProvisioned(authContext);
+    const before = await wbsClient.getPlan(authContext.accessToken, String(req.params.planId));
+    const projectIds = wbsProjectIdsBestEffort(before);
+    await wbsClient.removePlan(authContext.accessToken, String(req.params.planId));
+    await cleanupDeletedWbsBestEffort(authContext.accessToken, before);
+    await invalidateProjectContextFromApi(authContext.userId, projectIds, "index", "index", String(req.params.planId), "delete");
+    return res.status(204).send();
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/wbs/projects/:projectId/index/rebuild", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  try {
+    await ensureWbsAccountProvisioned(authContext);
+    const rebuilt = await rebuildProjectWbsIndex(authContext.accessToken, String(req.params.projectId));
+    await invalidateWbsIndexFromApi(authContext.userId, [String(req.params.projectId)], String(req.params.projectId));
+    return res.json(rebuilt);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.get("/api/wbs/plans/:planId/items", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  try {
+    await ensureWbsAccountProvisioned(authContext);
+    const items = await wbsClient.listItems(authContext.accessToken, String(req.params.planId));
+    return res.json(responseItems(items));
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/wbs/plans/:planId/items", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const parsed = wbsItemCreateSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json({ message: parsed.error.flatten(), code: "INVALID_INPUT" });
+  }
+
+  try {
+    await ensureWbsAccountProvisioned(authContext);
+    await wbsClient.createItem(authContext.accessToken, String(req.params.planId), parsed.data);
+    const plan = await wbsClient.getPlan(authContext.accessToken, String(req.params.planId));
+    const items = await wbsClient.listItems(authContext.accessToken, String(req.params.planId));
+    await maintainWbsIndexBestEffort(authContext.accessToken, plan);
+    await invalidateWbsIndexFromApi(authContext.userId, wbsProjectIdsBestEffort(plan), String(req.params.planId));
+    return res.status(201).json(responseItems(items));
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.patch("/api/wbs/items/:itemId", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const parsed = wbsItemUpdateSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json({ message: parsed.error.flatten(), code: "INVALID_INPUT" });
+  }
+
+  try {
+    await ensureWbsAccountProvisioned(authContext);
+    const updated = await wbsClient.updateItem(authContext.accessToken, String(req.params.itemId), parsed.data);
+    const planId = wbsPlanIdFromItem(updated);
+    if (!planId) {
+      return res.status(502).json({ message: "WBS service returned an item without planId", code: "INVALID_WBS_RESPONSE" });
+    }
+    const plan = await wbsClient.getPlan(authContext.accessToken, planId);
+    const items = await wbsClient.listItems(authContext.accessToken, planId);
+    await maintainWbsIndexBestEffort(authContext.accessToken, plan);
+    await invalidateWbsIndexFromApi(authContext.userId, wbsProjectIdsBestEffort(plan), planId);
+    return res.json(responseItems(items));
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.delete("/api/wbs/items/:itemId", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  try {
+    await ensureWbsAccountProvisioned(authContext);
+    const beforeItem = await wbsClient.getItem(authContext.accessToken, String(req.params.itemId));
+    const planId = wbsPlanIdFromItem(beforeItem);
+    if (!planId) {
+      return res.status(502).json({ message: "WBS service returned an item without planId", code: "INVALID_WBS_RESPONSE" });
+    }
+    await wbsClient.removeItem(authContext.accessToken, String(req.params.itemId));
+    const plan = await wbsClient.getPlan(authContext.accessToken, planId);
+    const items = await wbsClient.listItems(authContext.accessToken, planId);
+    await maintainWbsIndexBestEffort(authContext.accessToken, plan);
+    await invalidateWbsIndexFromApi(authContext.userId, wbsProjectIdsBestEffort(plan), planId);
+    return res.json(responseItems(items));
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/wbs/items/:itemId/move", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const parsed = wbsItemMoveSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json({ message: parsed.error.flatten(), code: "INVALID_INPUT" });
+  }
+
+  try {
+    await ensureWbsAccountProvisioned(authContext);
+    const moved = await wbsClient.moveItem(authContext.accessToken, String(req.params.itemId), parsed.data);
+    const planId = wbsPlanIdFromItem(moved);
+    if (!planId) {
+      return res.status(502).json({ message: "WBS service returned an item without planId", code: "INVALID_WBS_RESPONSE" });
+    }
+    const plan = await wbsClient.getPlan(authContext.accessToken, planId);
+    const items = await wbsClient.listItems(authContext.accessToken, planId);
+    await maintainWbsIndexBestEffort(authContext.accessToken, plan);
+    await invalidateWbsIndexFromApi(authContext.userId, wbsProjectIdsBestEffort(plan), planId);
+    return res.json(responseItems(items));
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.get("/api/wbs/plans/:planId/dependencies", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  try {
+    await ensureWbsAccountProvisioned(authContext);
+    const dependencies = await wbsClient.listDependencies(authContext.accessToken, String(req.params.planId));
+    return res.json(responseItems(dependencies));
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/wbs/plans/:planId/dependencies", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const parsed = wbsDependencyCreateSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json({ message: parsed.error.flatten(), code: "INVALID_INPUT" });
+  }
+
+  try {
+    await ensureWbsAccountProvisioned(authContext);
+    const dependency = await wbsClient.createDependency(authContext.accessToken, String(req.params.planId), parsed.data);
+    return res.status(201).json(dependency);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.delete("/api/wbs/dependencies/:dependencyId", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  try {
+    await ensureWbsAccountProvisioned(authContext);
+    await wbsClient.removeDependency(authContext.accessToken, String(req.params.dependencyId));
+    return res.status(204).send();
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/wbs/plans/:planId/export", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const parsed = z.object({ format: wbsExportFormatSchema.default("markdown") }).safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json({ message: parsed.error.flatten(), code: "INVALID_INPUT" });
+  }
+
+  try {
+    await ensureWbsAccountProvisioned(authContext);
+    const exported = await wbsClient.exportContent(authContext.accessToken, String(req.params.planId), parsed.data);
+    return res.json(exported);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/wbs/plans/:planId/artifact", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const parsed = wbsArtifactSaveSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json({ message: parsed.error.flatten(), code: "INVALID_INPUT" });
+  }
+
+  try {
+    await ensureWbsAccountProvisioned(authContext);
+    const result = await saveWbsExportArtifact(authContext.accessToken, String(req.params.planId), parsed.data);
     const artifactItemId = objectId(result.artifact);
     if (artifactItemId) {
       const projectIds = await listArtifactProjectIdsBestEffort(authContext.accessToken, result.artifact);
@@ -5825,6 +6227,7 @@ function createMcpServerInstance(injectedContext: McpInjectedContext): McpServer
   registerDeepResearchTools(server, injectedContext);
   registerImageTools(server, injectedContext);
   registerMindmapTools(server, injectedContext);
+  registerWbsTools(server, injectedContext);
   return server;
 }
 
