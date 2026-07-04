@@ -92,8 +92,14 @@ export async function searchProjectIndex(
   }
   const query = options?.query?.trim();
   if (query) {
-    values.push(`%${query}%`);
-    sql += ` AND (path ILIKE $${values.length} OR title ILIKE $${values.length} OR summary_text ILIKE $${values.length})`;
+    // Split on whitespace and require every term to match at least one field
+    // (AND across terms, OR across fields). A single ILIKE on the whole query
+    // string would return nothing for multi-word queries such as "豚こま 生姜焼き".
+    // metadata_json is included so tags (e.g. "recipe") are searchable too.
+    for (const term of query.split(/\s+/)) {
+      values.push(`%${term}%`);
+      sql += ` AND (path ILIKE $${values.length} OR title ILIKE $${values.length} OR summary_text ILIKE $${values.length} OR metadata_json::text ILIKE $${values.length})`;
+    }
   }
   if (cursor) {
     values.push(cursor.t, cursor.id);

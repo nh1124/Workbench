@@ -56,6 +56,23 @@ const upload = multer({
   }
 });
 
+/**
+ * busboy (used by multer) decodes the Content-Disposition filename as latin1
+ * unless the client sends an RFC 5987 `filename*` parameter. A UTF-8 filename
+ * sent as plain `filename` therefore arrives mojibake (e.g. "ã­ã£ãªã¢...").
+ * Re-decode as UTF-8 only when the value looks like a latin1 misdecode
+ * (every char <= U+00FF, at least one in 0x80-0xFF) and the re-decoded bytes
+ * form valid UTF-8; otherwise keep the original string.
+ */
+function decodeUploadFilename(name: string): string {
+  if (!name) return name;
+  const isLatin1Range = !/[^\u0000-\u00ff]/.test(name);
+  const hasHighBytes = /[\u0080-\u00ff]/.test(name);
+  if (!isLatin1Range || !hasHighBytes) return name;
+  const decoded = Buffer.from(name, "latin1").toString("utf8");
+  return decoded.includes("\ufffd") ? name : decoded;
+}
+
 function optionalEnv(name: string): string | undefined {
   const value = process.env[name]?.trim();
   return value && value.length > 0 ? value : undefined;
@@ -674,7 +691,7 @@ app.post("/artifacts/upload", requireUserAuth, upload.single("file"), async (req
         directoryPath,
         scope: scope === "private" || scope === "org" || scope === "project" ? scope : undefined,
         tags,
-        originalFilename: req.file.originalname,
+        originalFilename: decodeUploadFilename(req.file.originalname),
         mimeType: req.file.mimetype,
         buffer: req.file.buffer,
         sizeBytes: req.file.size
@@ -868,4 +885,3 @@ void ensureArtifactsSchema().then(() => {
     console.log(`Artifacts service HTTP listening on ${host}:${port}`);
   });
 });
-
