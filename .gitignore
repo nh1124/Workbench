@@ -16,3 +16,4 @@ native/desktop/src-tauri/tauri.conf.json
 .mcp.json
 .claude/
 services/lbs/.venv*/
+CLAUDE.md
