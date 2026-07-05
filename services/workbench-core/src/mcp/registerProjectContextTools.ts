@@ -31,6 +31,7 @@ type ToolContext = { accessToken: string };
 const memoryKindSchema = z.enum(["decision", "fact", "preference", "pitfall", "observation"]);
 const memoryAuthoritySchema = z.enum(["user_confirmed", "agent_observed", "imported"]);
 const memoryStatusSchema = z.enum(["active", "archived", "superseded"]);
+const mcpLifecycleStateSchema = z.enum(["raw", "triaged"]);
 const relationTypeSchema = z.enum(["related", "depends_on", "supports", "informs", "overlaps"]);
 const directionalitySchema = z.enum(["directed", "bidirectional"]);
 
@@ -162,7 +163,8 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
         sourceService: z.string().optional(),
         sourceResourceType: z.string().optional(),
         sourceResourceId: z.string().optional(),
-        supersedesId: z.string().optional()
+        supersedesId: z.string().optional(),
+        lifecycleState: mcpLifecycleStateSchema.optional()
       }
     },
     async ({ projectId, ...payload }) => {

@@ -175,7 +175,11 @@ export const notesClient = {
     }),
   remove: (token: string, id: string) =>
     serviceRequest<void>(notesService, `/notes/${encodeURIComponent(id)}`, token, { method: "DELETE" }),
-  projects: (token: string) => serviceRequest<unknown[]>(notesService, "/projects", token)
+  projects: (token: string) => serviceRequest<unknown[]>(notesService, "/projects", token),
+  listMaintenanceQueue: (
+    token: string,
+    options: { projectId?: string; reason?: string; cursor?: string; limit?: number } = {}
+  ) => serviceRequest<unknown>(notesService, `/maintenance/note-queue${buildQuery(options)}`, token)
 };
 
 export const artifactsClient = {
@@ -1250,5 +1254,26 @@ export const projectsClient = {
       token,
       { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }
     );
+  },
+  listMemoryMaintenanceQueue: (
+    token: string,
+    options: { projectId?: string; reason?: string; cursor?: string; limit?: number } = {}
+  ) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(projectsService, `/maintenance/memory-queue${buildQuery(options)}`, token);
+  },
+  listBriefMaintenanceQueue: (
+    token: string,
+    options: { projectId?: string; reason?: string; cursor?: string; limit?: number } = {}
+  ) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(projectsService, `/maintenance/brief-queue${buildQuery(options)}`, token);
+  },
+  listIndexDriftMaintenanceQueue: (
+    token: string,
+    options: { projectId?: string; reason?: string; cursor?: string; limit?: number } = {}
+  ) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(projectsService, `/maintenance/index-drift${buildQuery(options)}`, token);
   }
 };

@@ -17,6 +17,7 @@ import { getIntegrationManifests } from "./integrations/index.js";
 import { registerArtifactsTools } from "./mcp/registerArtifactsTools.js";
 import { registerDeepResearchTools } from "./mcp/registerDeepResearchTools.js";
 import { registerImageTools } from "./mcp/registerImageTools.js";
+import { registerMaintenanceTools } from "./mcp/registerMaintenanceTools.js";
 import { registerMindmapTools } from "./mcp/registerMindmapTools.js";
 import { registerNotesTools } from "./mcp/registerNotesTools.js";
 import { registerProjectsTools } from "./mcp/registerProjectsTools.js";
@@ -25,6 +26,7 @@ import { registerTasksTools } from "./mcp/registerTasksTools.js";
 import { registerWbsTools } from "./mcp/registerWbsTools.js";
 import { ensureIntegrationLinked } from "./integrationLinking.js";
 import { artifactsClient, imagesClient, InternalServiceError, mindmapsClient, notesClient, projectsClient, serviceBaseUrls, tasksClient, wbsClient } from "./internalClients.js";
+import { aggregateMaintenanceQueue, MaintenanceQueueInputError } from "./maintenanceQueue.js";
 import { getOAuthDynamicClient, saveOAuthDynamicClient } from "./oauthDynamicClientsStore.js";
 import {
   createArtifactNoteWithIndex,
@@ -1287,6 +1289,10 @@ function respondInternalError(res: express.Response, error: unknown): express.Re
   }
 
   if (error instanceof ProjectContextSyncError) {
+    return res.status(error.status).json({ message: error.message, code: error.code });
+  }
+
+  if (error instanceof MaintenanceQueueInputError) {
     return res.status(error.status).json({ message: error.message, code: error.code });
   }
 
@@ -4534,6 +4540,26 @@ app.post("/api/sync/push", async (req, res) => {
   });
 });
 
+// External facade for maintenance queue
+app.get("/api/maintenance/queue", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
+  try {
+    const result = await aggregateMaintenanceQueue(authContext.accessToken, {
+      kind: typeof req.query.kind === "string" ? req.query.kind : undefined,
+      reason: typeof req.query.reason === "string" ? req.query.reason : undefined,
+      projectId: typeof req.query.projectId === "string" ? req.query.projectId : undefined,
+      cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
+      limit: Number.isFinite(limit) ? limit : undefined
+    });
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
 // External facade for projects
 app.get("/api/projects", async (req, res) => {
   const authContext = await requireAuthenticatedContext(req, res);
@@ -6224,6 +6250,7 @@ function createMcpServerInstance(injectedContext: McpInjectedContext): McpServer
   registerTasksTools(server, injectedContext);
   registerProjectsTools(server, injectedContext);
   registerProjectContextTools(server, injectedContext);
+  registerMaintenanceTools(server, injectedContext);
   registerDeepResearchTools(server, injectedContext);
   registerImageTools(server, injectedContext);
   registerMindmapTools(server, injectedContext);
