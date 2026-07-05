@@ -101,9 +101,23 @@ export async function ensureNotesSchema(): Promise<void> {
             project_id TEXT NOT NULL,
             project_name TEXT,
             tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+            lifecycle_state TEXT NOT NULL DEFAULT 'triaged' CHECK (lifecycle_state IN ('raw','triaged','curated','verified')),
+            review_after TIMESTAMPTZ,
+            last_confirmed_at TIMESTAMPTZ,
+            review_reason TEXT CHECK (review_reason IS NULL OR review_reason IN ('conflict','manual')),
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
           );
+        `);
+
+        await pool.query(`
+          ALTER TABLE notes
+            ADD COLUMN IF NOT EXISTS lifecycle_state TEXT NOT NULL DEFAULT 'triaged'
+              CHECK (lifecycle_state IN ('raw','triaged','curated','verified')),
+            ADD COLUMN IF NOT EXISTS review_after TIMESTAMPTZ,
+            ADD COLUMN IF NOT EXISTS last_confirmed_at TIMESTAMPTZ,
+            ADD COLUMN IF NOT EXISTS review_reason TEXT
+              CHECK (review_reason IS NULL OR review_reason IN ('conflict','manual'));
         `);
 
         await pool.query(`

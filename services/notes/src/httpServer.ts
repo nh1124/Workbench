@@ -15,6 +15,13 @@ import {
   listNotesPage,
   updateNote
 } from "./store.js";
+import { InvalidNoteQueueCursorError, listNoteMaintenanceQueue } from "./maintenanceQueueStore.js";
+import {
+  NOTE_LIFECYCLE_STATES,
+  NOTE_MAINTENANCE_QUEUE_REASONS,
+  NOTE_REVIEW_REASONS,
+  type NoteMaintenanceQueueReason
+} from "./types.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -77,7 +84,7 @@ function requireCoreMutationOriginMiddleware(
   next();
 }
 
-const app = express();
+export const app = express();
 app.use(cors());
 app.use(express.json());
 
@@ -86,7 +93,10 @@ const noteInputSchema = z.object({
   content: z.string().default(""),
   projectId: z.string().min(1),
   projectName: z.string().optional(),
-  tags: z.array(z.string()).optional()
+  tags: z.array(z.string()).optional(),
+  lifecycleState: z.enum(NOTE_LIFECYCLE_STATES).optional(),
+  reviewAfter: z.string().datetime().nullable().optional(),
+  reviewReason: z.enum(NOTE_REVIEW_REASONS).nullable().optional()
 });
 
 const internalAccountSchema = z.object({
@@ -113,6 +123,52 @@ app.post("/internal/accounts", requireInternalApiKey, async (req, res) => {
 });
 
 app.use(requireCoreMutationOriginMiddleware);
+
+function sanitizeLimit(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+type QueueRouteOptions = {
+  projectId?: string;
+  reason?: NoteMaintenanceQueueReason;
+  cursor?: string;
+  limit?: number;
+};
+
+function readQueueRouteOptions(req: express.Request, res: express.Response): QueueRouteOptions | undefined {
+  if (req.query.reason !== undefined && typeof req.query.reason !== "string") {
+    res.status(400).json({ message: "Invalid maintenance reason" });
+    return undefined;
+  }
+  const reason = typeof req.query.reason === "string" ? req.query.reason : undefined;
+  if (reason && !NOTE_MAINTENANCE_QUEUE_REASONS.includes(reason as NoteMaintenanceQueueReason)) {
+    res.status(400).json({ message: "Invalid maintenance reason" });
+    return undefined;
+  }
+  return {
+    projectId: typeof req.query.projectId === "string" ? req.query.projectId : undefined,
+    reason: reason as NoteMaintenanceQueueReason | undefined,
+    cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
+    limit: sanitizeLimit(typeof req.query.limit === "string" ? req.query.limit : undefined)
+  };
+}
+
+app.get("/maintenance/note-queue", requireUserAuth, async (req, res) => {
+  const owner = req.authUser?.coreUserId;
+  if (!owner) return res.status(401).json({ message: "Missing auth context" });
+  try {
+    const options = readQueueRouteOptions(req, res);
+    if (!options) return;
+    return res.json(await listNoteMaintenanceQueue(owner, options));
+  } catch (error) {
+    if (error instanceof InvalidNoteQueueCursorError) {
+      return res.status(400).json({ code: "INVALID_CURSOR", message: error.message });
+    }
+    throw error;
+  }
+});
 
 app.get("/notes", requireUserAuth, async (req, res) => {
   const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
@@ -209,8 +265,11 @@ if (!Number.isFinite(port)) {
   throw new Error(`Invalid NOTES_SERVICE_PORT value: ${process.env.NOTES_SERVICE_PORT}`);
 }
 
-void ensureNotesSchema().then(() => {
-  app.listen(port, host, () => {
-    console.log(`Notes service HTTP listening on ${host}:${port}`);
+const isDirectExecution = process.argv[1] ? path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url)) : false;
+if (isDirectExecution) {
+  void ensureNotesSchema().then(() => {
+    app.listen(port, host, () => {
+      console.log(`Notes service HTTP listening on ${host}:${port}`);
+    });
   });
-});
+}
