@@ -32,6 +32,7 @@ export type ProjectContextInvalidationInput = {
   entityId: string;
   source: ProjectContextSyncSource;
   action?: Extract<SyncAction, "update" | "delete">;
+  extraPayload?: JsonRecord;
 };
 
 type SyncEventRecorder = (
@@ -72,7 +73,8 @@ export function buildProjectContextInvalidationPayload(input: ProjectContextInva
     changed: [...new Set(input.changed)],
     entityType: input.entityType,
     entityId: input.entityId,
-    source: input.source
+    source: input.source,
+    ...(input.extraPayload ?? {})
   };
 }
 

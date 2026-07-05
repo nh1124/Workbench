@@ -1,11 +1,16 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
+  flagMaintenanceTarget,
+  MAINTENANCE_FLAG_REASONS,
+  MAINTENANCE_FLAG_TARGET_TYPES
+} from "../maintenanceActions.js";
+import {
   aggregateMaintenanceQueue,
   MAINTENANCE_QUEUE_KINDS,
   MAINTENANCE_QUEUE_REASONS
 } from "../maintenanceQueue.js";
-import { asMcpText, runWithAuth } from "./helpers.js";
+import { asMcpText, runWithAuth, runWithAuthContext } from "./helpers.js";
 
 type ToolContext = {
   accessToken: string;
@@ -13,6 +18,8 @@ type ToolContext = {
 
 const queueKindSchema = z.enum(MAINTENANCE_QUEUE_KINDS);
 const queueReasonSchema = z.enum(MAINTENANCE_QUEUE_REASONS);
+const flagTargetTypeSchema = z.enum(MAINTENANCE_FLAG_TARGET_TYPES);
+const flagReasonSchema = z.enum(MAINTENANCE_FLAG_REASONS);
 
 export function registerMaintenanceTools(server: McpServer, ctx: ToolContext): void;
 export function registerMaintenanceTools(server: McpServer): void;
@@ -37,6 +44,32 @@ export function registerMaintenanceTools(server: McpServer, ctx?: ToolContext): 
     async (options) =>
       asMcpText(
         await runWithAuth(ctx.accessToken, () => aggregateMaintenanceQueue(ctx.accessToken, options))
+      )
+  );
+
+  server.registerTool(
+    "maintenance.flag",
+    {
+      title: "Flag Maintenance Target",
+      description: "Set only the review_reason on a memory or note for later maintenance review; this cannot promote, confirm, snooze, or clear an item.",
+      inputSchema: {
+        target: z.object({
+          type: flagTargetTypeSchema,
+          id: z.string().min(1)
+        }),
+        reason: flagReasonSchema,
+        note: z.string().optional()
+      }
+    },
+    async (input) =>
+      asMcpText(
+        await runWithAuthContext(ctx.accessToken, ({ userId }) =>
+          flagMaintenanceTarget({
+            accessToken: ctx.accessToken,
+            userId,
+            source: "core-mcp"
+          }, input)
+        )
       )
   );
 }

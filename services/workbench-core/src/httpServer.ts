@@ -26,6 +26,15 @@ import { registerTasksTools } from "./mcp/registerTasksTools.js";
 import { registerWbsTools } from "./mcp/registerWbsTools.js";
 import { ensureIntegrationLinked } from "./integrationLinking.js";
 import { artifactsClient, imagesClient, InternalServiceError, mindmapsClient, notesClient, projectsClient, serviceBaseUrls, tasksClient, wbsClient } from "./internalClients.js";
+import {
+  confirmMaintenanceMemory,
+  confirmMaintenanceNote,
+  flagMaintenanceTarget,
+  MAINTENANCE_FLAG_REASONS,
+  MAINTENANCE_FLAG_TARGET_TYPES,
+  snoozeMaintenanceMemory,
+  snoozeMaintenanceNote
+} from "./maintenanceActions.js";
 import { aggregateMaintenanceQueue, MaintenanceQueueInputError } from "./maintenanceQueue.js";
 import { getOAuthDynamicClient, saveOAuthDynamicClient } from "./oauthDynamicClientsStore.js";
 import {
@@ -1132,6 +1141,32 @@ const syncBlobPutSchema = z.object({
   expectedVersion: z.number().int().positive().optional()
 });
 
+const maintenanceMemoryConfirmSchema = z.object({
+  reviewAfter: z.string().datetime().nullable().optional()
+});
+
+const maintenanceMemorySnoozeSchema = z.object({
+  until: z.string().datetime()
+});
+
+const maintenanceNoteConfirmSchema = z.object({
+  lifecycleState: z.enum(["curated", "verified"]).optional(),
+  reviewAfter: z.string().datetime().nullable().optional()
+});
+
+const maintenanceNoteSnoozeSchema = z.object({
+  until: z.string().datetime()
+});
+
+const maintenanceFlagSchema = z.object({
+  target: z.object({
+    type: z.enum(MAINTENANCE_FLAG_TARGET_TYPES),
+    id: z.string().min(1)
+  }),
+  reason: z.enum(MAINTENANCE_FLAG_REASONS),
+  note: z.string().optional()
+});
+
 type AuthenticatedContext = {
   userId: string;
   username: string;
@@ -1266,7 +1301,7 @@ async function requireSyncAccessContext(
   };
 }
 
-function respondInternalError(res: express.Response, error: unknown): express.Response {
+export function respondInternalError(res: express.Response, error: unknown): express.Response {
   if (error instanceof LocalClientStoreError) {
     return res.status(error.status).json({ message: error.message, code: error.code });
   }
@@ -4560,6 +4595,24 @@ app.get("/api/maintenance/queue", async (req, res) => {
   }
 });
 
+app.post("/api/maintenance/flags", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  const parsed = maintenanceFlagSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
+
+  try {
+    const result = await flagMaintenanceTarget({
+      accessToken: authContext.accessToken,
+      userId: authContext.userId,
+      source: "core-api"
+    }, parsed.data);
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
 // External facade for projects
 app.get("/api/projects", async (req, res) => {
   const authContext = await requireAuthenticatedContext(req, res);
@@ -4744,6 +4797,42 @@ app.patch("/api/project-memories/:memoryId", async (req, res) => {
       "memory",
       String(req.params.memoryId)
     );
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/project-memories/:memoryId/confirm", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  const parsed = maintenanceMemoryConfirmSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
+
+  try {
+    const result = await confirmMaintenanceMemory({
+      accessToken: authContext.accessToken,
+      userId: authContext.userId,
+      source: "core-api"
+    }, String(req.params.memoryId), parsed.data);
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/project-memories/:memoryId/snooze", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  const parsed = maintenanceMemorySnoozeSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
+
+  try {
+    const result = await snoozeMaintenanceMemory({
+      accessToken: authContext.accessToken,
+      userId: authContext.userId,
+      source: "core-api"
+    }, String(req.params.memoryId), parsed.data);
     return res.json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -5097,6 +5186,42 @@ app.patch("/api/notes/:id", async (req, res) => {
       patch: req.body as Record<string, unknown>,
       resource: result as Record<string, unknown>
     });
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/notes/:noteId/confirm", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  const parsed = maintenanceNoteConfirmSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
+
+  try {
+    const result = await confirmMaintenanceNote({
+      accessToken: authContext.accessToken,
+      userId: authContext.userId,
+      source: "core-api"
+    }, String(req.params.noteId), parsed.data);
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/notes/:noteId/snooze", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  const parsed = maintenanceNoteSnoozeSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
+
+  try {
+    const result = await snoozeMaintenanceNote({
+      accessToken: authContext.accessToken,
+      userId: authContext.userId,
+      source: "core-api"
+    }, String(req.params.noteId), parsed.data);
     return res.json(result);
   } catch (error) {
     return respondInternalError(res, error);

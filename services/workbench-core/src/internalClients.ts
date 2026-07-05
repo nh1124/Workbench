@@ -176,6 +176,24 @@ export const notesClient = {
   remove: (token: string, id: string) =>
     serviceRequest<void>(notesService, `/notes/${encodeURIComponent(id)}`, token, { method: "DELETE" }),
   projects: (token: string) => serviceRequest<unknown[]>(notesService, "/projects", token),
+  confirmNote: (token: string, id: string, payload: unknown) =>
+    serviceRequest<unknown>(notesService, `/notes/${encodeURIComponent(id)}/confirm`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  snoozeNote: (token: string, id: string, payload: unknown) =>
+    serviceRequest<unknown>(notesService, `/notes/${encodeURIComponent(id)}/snooze`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  flagNote: (token: string, id: string, payload: unknown) =>
+    serviceRequest<unknown>(notesService, `/notes/${encodeURIComponent(id)}/flag`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
   listMaintenanceQueue: (
     token: string,
     options: { projectId?: string; reason?: string; cursor?: string; limit?: number } = {}
@@ -1110,6 +1128,30 @@ export const projectsClient = {
     if (!projectsService) throw new Error("Projects service is not configured");
     return serviceRequest<unknown>(projectsService, `/project-memories/${encodeURIComponent(memoryId)}`, token, {
       method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+  },
+  confirmMemory: (token: string, memoryId: string, payload: unknown) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(projectsService, `/project-memories/${encodeURIComponent(memoryId)}/confirm`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+  },
+  snoozeMemory: (token: string, memoryId: string, payload: unknown) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(projectsService, `/project-memories/${encodeURIComponent(memoryId)}/snooze`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+  },
+  flagMemory: (token: string, memoryId: string, payload: unknown) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(projectsService, `/project-memories/${encodeURIComponent(memoryId)}/flag`, token, {
+      method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });

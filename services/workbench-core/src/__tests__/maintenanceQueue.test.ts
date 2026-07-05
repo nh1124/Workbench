@@ -29,6 +29,8 @@ process.env.CORE_DB_PASSWORD ||= "workbench-test-unused";
 
 const [
   { aggregateMaintenanceQueue },
+  { confirmMaintenanceMemory, flagMaintenanceTarget },
+  { InternalServiceError },
   { registerMaintenanceTools },
   { registerProjectContextTools },
   { registerNotesTools },
@@ -41,6 +43,8 @@ const [
   { registerWbsTools }
 ] = await Promise.all([
   import("../maintenanceQueue.js"),
+  import("../maintenanceActions.js"),
+  import("../internalClients.js"),
   import("../mcp/registerMaintenanceTools.js"),
   import("../mcp/registerProjectContextTools.js"),
   import("../mcp/registerNotesTools.js"),
@@ -101,14 +105,25 @@ describe("Maintenance queue facade", () => {
     });
   });
 
-  it("rejects unauthenticated HTTP reads", async () => {
+  it("rejects unauthenticated HTTP maintenance routes", async () => {
     const { app } = await import("../httpServer.js");
     server = app.listen(0, "127.0.0.1");
     await once(server, "listening");
     const address = server.address() as AddressInfo;
-    const response = await fetch(`http://127.0.0.1:${address.port}/api/maintenance/queue`);
-    assert.equal(response.status, 401);
-    assert.deepEqual(await response.json(), { message: "Missing bearer token" });
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const routes = [
+      { method: "GET", path: "/api/maintenance/queue" },
+      { method: "POST", path: "/api/project-memories/memory-1/confirm" },
+      { method: "POST", path: "/api/project-memories/memory-1/snooze" },
+      { method: "POST", path: "/api/notes/note-1/confirm" },
+      { method: "POST", path: "/api/notes/note-1/snooze" },
+      { method: "POST", path: "/api/maintenance/flags" }
+    ];
+    for (const route of routes) {
+      const response = await fetch(`${baseUrl}${route.path}`, { method: route.method });
+      assert.equal(response.status, 401, `${route.method} ${route.path}`);
+      assert.deepEqual(await response.json(), { message: "Missing bearer token" });
+    }
   });
 
   it("merges source pages by updatedAt, sums totals, and resumes with a compound cursor", async () => {
@@ -189,6 +204,127 @@ describe("Maintenance queue facade", () => {
   });
 });
 
+describe("Maintenance actions", () => {
+  function makeActionClients(calls: Array<{ service: string; id: string; payload: unknown }>) {
+    return {
+      projects: {
+        confirmMemory: async () => ({ id: "unused-confirm", projectId: "project-1" }),
+        snoozeMemory: async () => ({ id: "unused-snooze", projectId: "project-1" }),
+        flagMemory: async (_token: string, id: string, payload: unknown) => {
+          calls.push({ service: "projects", id, payload });
+          return { id, projectId: "project-1", reviewReason: (payload as { reason?: string }).reason };
+        }
+      },
+      notes: {
+        confirmNote: async () => ({ id: "unused-confirm" }),
+        snoozeNote: async () => ({ id: "unused-snooze" }),
+        flagNote: async (_token: string, id: string, payload: unknown) => {
+          calls.push({ service: "notes", id, payload });
+          return { id, reviewReason: (payload as { reason?: string }).reason };
+        }
+      }
+    };
+  }
+
+  it("dispatches flags by target type and includes note text in sync payloads", async () => {
+    const calls: Array<{ service: string; id: string; payload: unknown }> = [];
+    const invalidations: Array<{ projectIds: Array<string | undefined>; input: Record<string, unknown> }> = [];
+    const syncEvents: Array<{ domain: string; resourceId: string; payload: Record<string, unknown> }> = [];
+    const recorders = {
+      recordSyncEvent: async (
+        userId: string,
+        domain: "projects" | "notes" | "artifacts" | "tasks" | "project_context",
+        resourceId: string,
+        action: "create" | "update" | "delete" | "upsert",
+        payload: Record<string, unknown> = {}
+      ) => {
+        syncEvents.push({ domain, resourceId, payload });
+        return { cursor: "1", userId, domain, resourceId, action, version: 1, payload, createdAt: "2026-07-06T00:00:00.000Z" };
+      },
+      recordProjectContextInvalidations: async (
+        _userId: string,
+        projectIds: Array<string | undefined>,
+        input: Record<string, unknown>
+      ) => {
+        invalidations.push({ projectIds, input });
+      }
+    };
+    const context = { accessToken: "token", userId: "user-1", source: "core-api" as const };
+
+    await flagMaintenanceTarget(
+      context,
+      { target: { type: "memory", id: "memory-1" }, reason: "conflict", note: "source disagreement" },
+      makeActionClients(calls),
+      recorders
+    );
+    await flagMaintenanceTarget(
+      context,
+      { target: { type: "note", id: "note-1" }, reason: "manual", note: "needs review" },
+      makeActionClients(calls),
+      recorders
+    );
+
+    assert.deepEqual(calls, [
+      { service: "projects", id: "memory-1", payload: { reason: "conflict", note: "source disagreement" } },
+      { service: "notes", id: "note-1", payload: { reason: "manual", note: "needs review" } }
+    ]);
+    assert.deepEqual(invalidations[0]?.projectIds, ["project-1"]);
+    assert.equal((invalidations[0]?.input.extraPayload as Record<string, unknown>).note, "source disagreement");
+    assert.equal(syncEvents[0]?.domain, "notes");
+    assert.equal(syncEvents[0]?.resourceId, "note-1");
+    assert.equal((syncEvents[0]?.payload.patch as Record<string, unknown>).note, "needs review");
+  });
+
+  it("preserves downstream memory 409 errors for HTTP forwarding", async () => {
+    const clients = makeActionClients([]);
+    clients.projects.confirmMemory = async () => {
+      throw new InternalServiceError("projects", 409, JSON.stringify({
+        code: "PROJECT_MEMORY_NOT_ACTIVE",
+        message: "Project memory must be active"
+      }));
+    };
+
+    await assert.rejects(
+      () => confirmMaintenanceMemory(
+        { accessToken: "token", userId: "user-1", source: "core-api" },
+        "memory-1",
+        {},
+        clients
+      ),
+      (error: unknown) => error instanceof InternalServiceError
+        && error.status === 409
+        && error.body.includes("PROJECT_MEMORY_NOT_ACTIVE")
+    );
+  });
+
+  it("forwards downstream 409 JSON bodies unchanged", async () => {
+    const { respondInternalError } = await import("../httpServer.js");
+    let statusCode = 0;
+    let body: unknown;
+    const fakeResponse = {
+      status(code: number) {
+        statusCode = code;
+        return fakeResponse;
+      },
+      json(value: unknown) {
+        body = value;
+        return fakeResponse;
+      }
+    };
+
+    respondInternalError(fakeResponse as never, new InternalServiceError("projects", 409, JSON.stringify({
+      code: "PROJECT_MEMORY_NOT_ACTIVE",
+      message: "Project memory must be active"
+    })));
+
+    assert.equal(statusCode, 409);
+    assert.deepEqual(body, {
+      code: "PROJECT_MEMORY_NOT_ACTIVE",
+      message: "Project memory must be active"
+    });
+  });
+});
+
 describe("Maintenance MCP contract", () => {
   function captureTools(register: (server: never, ctx: { accessToken: string }) => void) {
     const tools = new Map<string, { inputSchema?: z.ZodRawShape; description?: string }>();
@@ -210,6 +346,32 @@ describe("Maintenance MCP contract", () => {
     assert.equal(schema.safeParse({ kind: "task" }).success, false);
     assert.equal(schema.safeParse({ reason: "source_changed" }).success, true);
     assert.equal(schema.safeParse({ reason: "unused" }).success, false);
+  });
+
+  it("registers maintenance.flag with the frozen write schema", () => {
+    const tools = captureTools(registerMaintenanceTools);
+    const definition = tools.get("maintenance.flag");
+    assert.ok(definition);
+    assert.match(definition.description ?? "", /review_reason/);
+    assert.match(definition.description ?? "", /cannot promote/i);
+    const schema = z.object(definition.inputSchema ?? {});
+    assert.equal(schema.safeParse({
+      target: { type: "memory", id: "memory-1" },
+      reason: "conflict",
+      note: "duplicate claim"
+    }).success, true);
+    assert.equal(schema.safeParse({
+      target: { type: "note", id: "note-1" },
+      reason: "manual"
+    }).success, true);
+    assert.equal(schema.safeParse({
+      target: { type: "brief", id: "project-1" },
+      reason: "manual"
+    }).success, false);
+    assert.equal(schema.safeParse({
+      target: { type: "memory", id: "memory-1" },
+      reason: "raw"
+    }).success, false);
   });
 
   it("allows MCP capture lifecycle only as raw or triaged", () => {
@@ -249,6 +411,7 @@ describe("Maintenance MCP contract", () => {
     registerWbsTools(fakeServer as never, ctx);
 
     assert.equal(names.has("maintenance.queue.list"), true);
+    assert.equal(names.has("maintenance.flag"), true);
     for (const name of names) {
       assert.equal(/\b(confirm|snooze)\b/i.test(name), false, `${name} must not be exposed yet`);
     }
