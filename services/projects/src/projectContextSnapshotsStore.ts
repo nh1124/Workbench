@@ -11,6 +11,8 @@ import type {
   ProjectMemoryAuthority,
   ProjectMemoryEntry,
   ProjectMemoryKind,
+  ProjectMemoryLifecycleState,
+  ProjectMemoryReviewReason,
   ProjectMemoryStatus,
   ProjectRelation,
   ProjectRelationDirection,
@@ -92,6 +94,10 @@ type MemoryRow = {
   confidence: number | null;
   status: ProjectMemoryStatus;
   supersedes_id: string | null;
+  lifecycle_state?: ProjectMemoryLifecycleState;
+  review_after?: string | null;
+  last_confirmed_at?: string | null;
+  review_reason?: ProjectMemoryReviewReason | null;
   created_by_kind: "user" | "agent" | "system";
   created_at: string;
   updated_at: string;
@@ -212,6 +218,10 @@ function toMemory(row: MemoryRow): ProjectMemoryEntry {
     confidence: row.confidence ?? undefined,
     status: row.status,
     supersedesId: row.supersedes_id ?? undefined,
+    lifecycleState: row.lifecycle_state ?? "triaged",
+    reviewAfter: row.review_after ? iso(row.review_after) : null,
+    lastConfirmedAt: row.last_confirmed_at ? iso(row.last_confirmed_at) : null,
+    reviewReason: row.review_reason ?? null,
     createdByKind: row.created_by_kind,
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at)
@@ -401,7 +411,8 @@ async function readMemories(client: SnapshotTransactionClient, projectId: string
   const result = await client.query<MemoryRow>(`
     /* project_context_snapshot:memories */
     SELECT id, project_id, kind, body_markdown, authority, source_service, source_resource_type,
-           source_resource_id, confidence, status, supersedes_id, created_by_kind, created_at, updated_at
+           source_resource_id, confidence, status, supersedes_id, lifecycle_state, review_after,
+           last_confirmed_at, review_reason, created_by_kind, created_at, updated_at
     FROM project_memory_entries
     WHERE project_id = $1 ${activeOnly ? "AND status = 'active'" : ""}
     ORDER BY created_at ASC, id ASC

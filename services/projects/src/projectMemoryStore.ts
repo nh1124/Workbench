@@ -6,7 +6,9 @@ import type {
   ProjectMemoryEntry,
   ProjectMemoryInput,
   ProjectMemoryKind,
+  ProjectMemoryLifecycleState,
   ProjectMemoryListResult,
+  ProjectMemoryReviewReason,
   ProjectMemoryStatus,
   ProjectMemoryUpdateInput
 } from "./types.js";
@@ -23,6 +25,10 @@ type MemoryRow = {
   confidence: number | null;
   status: ProjectMemoryStatus;
   supersedes_id: string | null;
+  lifecycle_state: ProjectMemoryLifecycleState;
+  review_after: string | null;
+  last_confirmed_at: string | null;
+  review_reason: ProjectMemoryReviewReason | null;
   created_by_kind: "user" | "agent" | "system";
   created_at: string;
   updated_at: string;
@@ -50,6 +56,10 @@ function toMemory(row: MemoryRow): ProjectMemoryEntry {
     confidence: row.confidence ?? undefined,
     status: row.status,
     supersedesId: row.supersedes_id ?? undefined,
+    lifecycleState: row.lifecycle_state,
+    reviewAfter: row.review_after ? iso(row.review_after) : null,
+    lastConfirmedAt: row.last_confirmed_at ? iso(row.last_confirmed_at) : null,
+    reviewReason: row.review_reason,
     createdByKind: row.created_by_kind,
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at)
@@ -59,7 +69,8 @@ function toMemory(row: MemoryRow): ProjectMemoryEntry {
 const MEMORY_SELECT = `
   SELECT m.id, m.project_id, m.kind, m.body_markdown, m.authority, m.source_service,
          m.source_resource_type, m.source_resource_id, m.confidence, m.status,
-         m.supersedes_id, m.created_by_kind, m.created_at, m.updated_at
+         m.supersedes_id, m.lifecycle_state, m.review_after, m.last_confirmed_at,
+         m.review_reason, m.created_by_kind, m.created_at, m.updated_at
   FROM project_memory_entries m
 `;
 
@@ -136,17 +147,20 @@ export async function appendProjectMemory(
       `
         INSERT INTO project_memory_entries (
           id, project_id, kind, body_markdown, authority, source_service, source_resource_type,
-          source_resource_id, confidence, supersedes_id, created_by_kind
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+          source_resource_id, confidence, supersedes_id, lifecycle_state, review_after,
+          review_reason, created_by_kind
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
         RETURNING id, project_id, kind, body_markdown, authority, source_service,
                   source_resource_type, source_resource_id, confidence, status,
-                  supersedes_id, created_by_kind, created_at, updated_at
+                  supersedes_id, lifecycle_state, review_after, last_confirmed_at,
+                  review_reason, created_by_kind, created_at, updated_at
       `,
       [
         randomUUID(), projectId, input.kind, input.bodyMarkdown.trim(), input.authority,
         input.sourceService?.trim() || null, input.sourceResourceType?.trim() || null,
         input.sourceResourceId?.trim() || null, input.confidence ?? null,
-        input.supersedesId ?? null, input.createdByKind
+        input.supersedesId ?? null, input.lifecycleState ?? "triaged",
+        input.reviewAfter ?? null, input.reviewReason ?? null, input.createdByKind
       ]
     );
     await client.query("COMMIT");
@@ -165,20 +179,46 @@ export async function updateProjectMemory(
   ownerAccountId: string
 ): Promise<ProjectMemoryEntry | undefined> {
   await ensureProjectsSchema();
+  const values: Array<string | null> = [memoryId, normalizeOwner(ownerAccountId)];
+  const setClauses = ["updated_at = NOW()"];
+  const body = input.bodyMarkdown?.trim();
+  if (body) {
+    values.push(body);
+    setClauses.push(`body_markdown = $${values.length}`);
+  }
+  if (input.status !== undefined) {
+    values.push(input.status);
+    setClauses.push(`status = $${values.length}`);
+  }
+  if (input.authority !== undefined) {
+    values.push(input.authority);
+    setClauses.push(`authority = $${values.length}`);
+  }
+  if (input.lifecycleState !== undefined) {
+    values.push(input.lifecycleState);
+    setClauses.push(`lifecycle_state = $${values.length}`);
+  }
+  if (Object.hasOwn(input, "reviewAfter")) {
+    values.push(input.reviewAfter ?? null);
+    setClauses.push(`review_after = $${values.length}::timestamptz`);
+  }
+  if (Object.hasOwn(input, "reviewReason")) {
+    values.push(input.reviewReason ?? null);
+    setClauses.push(`review_reason = $${values.length}`);
+  }
+
   const result = await getProjectsPool().query<MemoryRow>(
     `
       UPDATE project_memory_entries m
-      SET body_markdown = COALESCE($3, m.body_markdown),
-          status = COALESCE($4, m.status),
-          authority = COALESCE($5, m.authority),
-          updated_at = NOW()
+      SET ${setClauses.join(", ")}
       FROM projects p
       WHERE m.id = $1 AND m.project_id = p.id AND p.owner_account_id = $2
       RETURNING m.id, m.project_id, m.kind, m.body_markdown, m.authority, m.source_service,
                 m.source_resource_type, m.source_resource_id, m.confidence, m.status,
-                m.supersedes_id, m.created_by_kind, m.created_at, m.updated_at
+                m.supersedes_id, m.lifecycle_state, m.review_after, m.last_confirmed_at,
+                m.review_reason, m.created_by_kind, m.created_at, m.updated_at
     `,
-    [memoryId, normalizeOwner(ownerAccountId), input.bodyMarkdown?.trim() || null, input.status ?? null, input.authority ?? null]
+    values
   );
   return result.rows[0] ? toMemory(result.rows[0]) : undefined;
 }

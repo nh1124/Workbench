@@ -181,11 +181,27 @@ export async function ensureProjectsSchema(): Promise<void> {
             confidence DOUBLE PRECISION CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
             status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'superseded', 'archived')),
             supersedes_id TEXT REFERENCES project_memory_entries(id) ON DELETE SET NULL,
+            lifecycle_state TEXT NOT NULL DEFAULT 'triaged' CHECK (lifecycle_state IN ('raw','triaged','curated','verified')),
+            review_after TIMESTAMPTZ,
+            last_confirmed_at TIMESTAMPTZ,
+            review_reason TEXT CHECK (review_reason IS NULL OR review_reason IN ('conflict','manual')),
             created_by_kind TEXT NOT NULL CHECK (created_by_kind IN ('user', 'agent', 'system')),
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
           );
         `);
+
+        await pool.query(`
+          ALTER TABLE project_memory_entries
+            ADD COLUMN IF NOT EXISTS lifecycle_state TEXT NOT NULL DEFAULT 'triaged'
+              CHECK (lifecycle_state IN ('raw','triaged','curated','verified')),
+            ADD COLUMN IF NOT EXISTS review_after TIMESTAMPTZ,
+            ADD COLUMN IF NOT EXISTS last_confirmed_at TIMESTAMPTZ,
+            ADD COLUMN IF NOT EXISTS review_reason TEXT
+              CHECK (review_reason IS NULL OR review_reason IN ('conflict','manual'));
+        `);
+
+        await runProjectMemoryLifecycleBackfill();
 
         await pool.query(`
           CREATE INDEX IF NOT EXISTS idx_project_memory_project_status_updated
@@ -317,6 +333,22 @@ export async function ensureProjectsSchema(): Promise<void> {
     schemaReady = undefined;
     throw error;
   }
+}
+
+async function runProjectMemoryLifecycleBackfill(): Promise<void> {
+  await pool.query(`
+    UPDATE project_memory_entries
+    SET lifecycle_state = 'verified',
+        last_confirmed_at = updated_at
+    WHERE authority = 'user_confirmed'
+      AND last_confirmed_at IS NULL
+      AND lifecycle_state = 'triaged';
+  `);
+}
+
+export async function backfillProjectMemoryLifecycle(): Promise<void> {
+  await ensureProjectsSchema();
+  await runProjectMemoryLifecycleBackfill();
 }
 
 function accountIdFromCoreUserId(coreUserId: string): string {

@@ -39,6 +39,11 @@ import {
 } from "./projectRelationsStore.js";
 import { getProjectContext } from "./projectContextStore.js";
 import {
+  listBriefMaintenanceQueue,
+  listIndexDriftMaintenanceQueue,
+  listMemoryMaintenanceQueue
+} from "./maintenanceQueueStore.js";
+import {
   getProjectContextExportSnapshot,
   getProjectSyncContextSnapshot,
   ProjectContextSnapshotLimitError
@@ -53,13 +58,17 @@ import {
 import {
   CREATED_BY_KINDS,
   PROJECT_INDEX_ASSOCIATION_KINDS,
+  MAINTENANCE_QUEUE_REASONS,
   PROJECT_MEMORY_AUTHORITIES,
   PROJECT_MEMORY_KINDS,
+  PROJECT_MEMORY_LIFECYCLE_STATES,
+  PROJECT_MEMORY_REVIEW_REASONS,
   PROJECT_MEMORY_STATUSES,
   PROJECT_RELATION_DIRECTIONS,
   PROJECT_RELATION_ORIGINS,
   PROJECT_RELATION_TYPES,
   PROJECT_STATUSES,
+  type MaintenanceQueueReason,
   type ProjectContextSection
 } from "./types.js";
 
@@ -184,13 +193,19 @@ const memoryInputSchema = z.object({
   sourceResourceId: z.string().min(1).optional(),
   confidence: z.number().min(0).max(1).optional(),
   supersedesId: z.string().min(1).optional(),
+  lifecycleState: z.enum(PROJECT_MEMORY_LIFECYCLE_STATES).optional(),
+  reviewAfter: z.string().datetime().nullable().optional(),
+  reviewReason: z.enum(PROJECT_MEMORY_REVIEW_REASONS).nullable().optional(),
   createdByKind: z.enum(CREATED_BY_KINDS)
 });
 
 const memoryUpdateSchema = z.object({
   bodyMarkdown: z.string().min(1).optional(),
   status: z.enum(PROJECT_MEMORY_STATUSES).optional(),
-  authority: z.enum(PROJECT_MEMORY_AUTHORITIES).optional()
+  authority: z.enum(PROJECT_MEMORY_AUTHORITIES).optional(),
+  lifecycleState: z.enum(PROJECT_MEMORY_LIFECYCLE_STATES).optional(),
+  reviewAfter: z.string().datetime().nullable().optional(),
+  reviewReason: z.enum(PROJECT_MEMORY_REVIEW_REASONS).nullable().optional()
 }).refine((value) => Object.keys(value).length > 0, "At least one update is required");
 
 const indexEntryInputSchema = z.object({
@@ -284,6 +299,70 @@ app.get("/internal/default-project", requireInternalApiKey, async (req, res) => 
 });
 
 app.use(requireCoreMutationOriginMiddleware);
+
+type QueueRouteOptions = {
+  projectId?: string;
+  reason?: MaintenanceQueueReason;
+  cursor?: string;
+  limit?: number;
+};
+
+function readQueueRouteOptions(req: express.Request, res: express.Response): QueueRouteOptions | undefined {
+  if (req.query.reason !== undefined && typeof req.query.reason !== "string") {
+    res.status(400).json({ message: "Invalid maintenance reason" });
+    return undefined;
+  }
+  const reason = typeof req.query.reason === "string" ? req.query.reason : undefined;
+  if (reason && !MAINTENANCE_QUEUE_REASONS.includes(reason as MaintenanceQueueReason)) {
+    res.status(400).json({ message: "Invalid maintenance reason" });
+    return undefined;
+  }
+  return {
+    projectId: typeof req.query.projectId === "string" ? req.query.projectId : undefined,
+    reason: reason as MaintenanceQueueReason | undefined,
+    cursor: validatedCursorQuery(req.query.cursor),
+    limit: sanitizeLimit(typeof req.query.limit === "string" ? req.query.limit : undefined)
+  };
+}
+
+app.get("/maintenance/memory-queue", requireUserAuth, async (req, res) => {
+  const owner = req.authUser?.coreUserId;
+  if (!owner) return res.status(401).json({ message: "Missing auth context" });
+  try {
+    const options = readQueueRouteOptions(req, res);
+    if (!options) return;
+    return res.json(await listMemoryMaintenanceQueue(owner, options));
+  } catch (error) {
+    if (respondInvalidCursor(res, error)) return;
+    throw error;
+  }
+});
+
+app.get("/maintenance/brief-queue", requireUserAuth, async (req, res) => {
+  const owner = req.authUser?.coreUserId;
+  if (!owner) return res.status(401).json({ message: "Missing auth context" });
+  try {
+    const options = readQueueRouteOptions(req, res);
+    if (!options) return;
+    return res.json(await listBriefMaintenanceQueue(owner, options));
+  } catch (error) {
+    if (respondInvalidCursor(res, error)) return;
+    throw error;
+  }
+});
+
+app.get("/maintenance/index-drift", requireUserAuth, async (req, res) => {
+  const owner = req.authUser?.coreUserId;
+  if (!owner) return res.status(401).json({ message: "Missing auth context" });
+  try {
+    const options = readQueueRouteOptions(req, res);
+    if (!options) return;
+    return res.json(await listIndexDriftMaintenanceQueue(owner, options));
+  } catch (error) {
+    if (respondInvalidCursor(res, error)) return;
+    throw error;
+  }
+});
 
 app.get("/projects", requireUserAuth, async (req, res) => {
   const owner = req.authUser?.coreUserId;

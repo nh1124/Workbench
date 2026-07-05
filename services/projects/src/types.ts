@@ -72,6 +72,10 @@ export const PROJECT_MEMORY_AUTHORITIES = ["user_confirmed", "agent_observed", "
 export type ProjectMemoryAuthority = (typeof PROJECT_MEMORY_AUTHORITIES)[number];
 export const PROJECT_MEMORY_STATUSES = ["active", "superseded", "archived"] as const;
 export type ProjectMemoryStatus = (typeof PROJECT_MEMORY_STATUSES)[number];
+export const PROJECT_MEMORY_LIFECYCLE_STATES = ["raw", "triaged", "curated", "verified"] as const;
+export type ProjectMemoryLifecycleState = (typeof PROJECT_MEMORY_LIFECYCLE_STATES)[number];
+export const PROJECT_MEMORY_REVIEW_REASONS = ["conflict", "manual"] as const;
+export type ProjectMemoryReviewReason = (typeof PROJECT_MEMORY_REVIEW_REASONS)[number];
 export const CREATED_BY_KINDS = ["user", "agent", "system"] as const;
 export type CreatedByKind = (typeof CREATED_BY_KINDS)[number];
 
@@ -101,6 +105,10 @@ export interface ProjectMemoryEntry {
   confidence?: number;
   status: ProjectMemoryStatus;
   supersedesId?: string;
+  lifecycleState?: ProjectMemoryLifecycleState;
+  reviewAfter?: string | null;
+  lastConfirmedAt?: string | null;
+  reviewReason?: ProjectMemoryReviewReason | null;
   createdByKind: CreatedByKind;
   createdAt: string;
   updatedAt: string;
@@ -115,6 +123,9 @@ export interface ProjectMemoryInput {
   sourceResourceId?: string;
   confidence?: number;
   supersedesId?: string;
+  lifecycleState?: ProjectMemoryLifecycleState;
+  reviewAfter?: string | null;
+  reviewReason?: ProjectMemoryReviewReason | null;
   createdByKind: CreatedByKind;
 }
 
@@ -122,11 +133,51 @@ export interface ProjectMemoryUpdateInput {
   bodyMarkdown?: string;
   status?: ProjectMemoryStatus;
   authority?: ProjectMemoryAuthority;
+  lifecycleState?: ProjectMemoryLifecycleState;
+  reviewAfter?: string | null;
+  reviewReason?: ProjectMemoryReviewReason | null;
 }
 
 export interface ProjectMemoryListResult {
   items: ProjectMemoryEntry[];
   nextCursor?: string;
+}
+
+export const MAINTENANCE_QUEUE_REASONS = [
+  "raw",
+  "expired",
+  "unconfirmed",
+  "conflict",
+  "manual",
+  "source_changed",
+  "brief_unmaintained"
+] as const;
+export type MaintenanceQueueReason = (typeof MAINTENANCE_QUEUE_REASONS)[number];
+export type MaintenanceQueueKind = "memory" | "brief" | "index_drift";
+
+export interface MaintenanceQueueItem {
+  id: string;
+  kind: MaintenanceQueueKind;
+  projectId: string;
+  projectName: string;
+  resourceId: string;
+  title: string;
+  excerpt: string;
+  reasons: MaintenanceQueueReason[];
+  authority?: ProjectMemoryAuthority;
+  lifecycleState?: ProjectMemoryLifecycleState;
+  lastConfirmedAt?: string | null;
+  reviewAfter?: string | null;
+  updatedAt: string;
+  suggestedActions: string[];
+}
+
+export interface MaintenanceQueueListResult {
+  items: MaintenanceQueueItem[];
+  nextCursor?: string;
+  totals: {
+    byReason: Partial<Record<MaintenanceQueueReason, number>>;
+  };
 }
 
 export const PROJECT_INDEX_ASSOCIATION_KINDS = ["primary", "secondary"] as const;
