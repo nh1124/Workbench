@@ -196,22 +196,45 @@ function normalizeEmptyStrings(data: Record<string, unknown>): Record<string, un
   return result;
 }
 
+const LBS_TOKEN_FRESHNESS_MARGIN_SECONDS = 60;
+
+function isLbsTokenFresh(token: string): boolean {
+  try {
+    const payloadPart = token.split(".")[1];
+    if (!payloadPart) {
+      return false;
+    }
+    const payload = JSON.parse(Buffer.from(payloadPart, "base64url").toString("utf8")) as { exp?: unknown };
+    if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp)) {
+      return false;
+    }
+    return payload.exp * 1000 > Date.now() + LBS_TOKEN_FRESHNESS_MARGIN_SECONDS * 1000;
+  } catch {
+    return false;
+  }
+}
+
 async function ensureLbsAccessToken(req: express.Request): Promise<string | undefined> {
   const existing = req.authUser?.lbsAccessToken;
-  if (existing) {
+  if (existing && isLbsTokenFresh(existing)) {
     return existing;
   }
 
   const coreUserId = req.authUser?.coreUserId;
   const usernameSnapshot = req.authUser?.usernameSnapshot;
   if (!coreUserId || !usernameSnapshot) {
-    return undefined;
+    // No core identity to re-provision with; fall back to the stored token (if any)
+    // and let LBS decide, instead of failing hard with "not provisioned".
+    return existing;
   }
 
+  // Token is missing or expired (LBS access tokens expire; see LBS ACCESS_TOKEN_EXPIRE_MINUTES).
+  // Re-provision: this re-logs into LBS with the deterministic service-account password
+  // and persists fresh tokens, so the account self-heals without a core re-login.
   await provisionLbsAccount(coreUserId, usernameSnapshot);
   const refreshed = await findServiceAccountByCoreUserId(coreUserId);
   if (!refreshed?.lbsAccessToken) {
-    return undefined;
+    return existing;
   }
 
   if (req.authUser) {
