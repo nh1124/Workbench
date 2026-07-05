@@ -9,6 +9,10 @@ export interface Note {
   projectId: string;
   projectName?: string;
   tags: string[];
+  lifecycleState?: "raw" | "triaged" | "curated" | "verified";
+  reviewAfter?: string | null;
+  lastConfirmedAt?: string | null;
+  reviewReason?: "conflict" | "manual" | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -456,6 +460,16 @@ export interface ProjectBriefRecord {
 export type ProjectMemoryKind = "decision" | "fact" | "preference" | "pitfall" | "observation";
 export type ProjectMemoryAuthority = "user_confirmed" | "agent_observed" | "imported";
 export type ProjectMemoryStatus = "active" | "superseded" | "archived";
+export type ProjectMemoryLifecycleState = "raw" | "triaged" | "curated" | "verified";
+export type MaintenanceQueueKind = "memory" | "note" | "brief" | "index_drift";
+export type MaintenanceQueueReason =
+  | "raw"
+  | "expired"
+  | "unconfirmed"
+  | "conflict"
+  | "manual"
+  | "source_changed"
+  | "brief_unmaintained";
 
 export interface ProjectMemoryEntry {
   id: string;
@@ -469,6 +483,10 @@ export interface ProjectMemoryEntry {
   confidence?: number;
   status: ProjectMemoryStatus;
   supersedesId?: string;
+  lifecycleState?: ProjectMemoryLifecycleState;
+  reviewAfter?: string | null;
+  lastConfirmedAt?: string | null;
+  reviewReason?: "conflict" | "manual" | null;
   createdByKind: "user" | "agent" | "system";
   createdAt: string;
   updatedAt: string;
@@ -477,6 +495,31 @@ export interface ProjectMemoryEntry {
 export interface ProjectMemoryListResult {
   items: ProjectMemoryEntry[];
   nextCursor?: string;
+}
+
+export interface MaintenanceQueueItem {
+  id: string;
+  kind: MaintenanceQueueKind;
+  projectId: string;
+  projectName: string;
+  resourceId: string;
+  title: string;
+  excerpt: string;
+  reasons: MaintenanceQueueReason[];
+  authority?: ProjectMemoryAuthority;
+  lifecycleState?: ProjectMemoryLifecycleState;
+  lastConfirmedAt?: string | null;
+  reviewAfter?: string | null;
+  updatedAt: string;
+  suggestedActions: string[];
+}
+
+export interface MaintenanceQueueResult {
+  items: MaintenanceQueueItem[];
+  nextCursor?: string;
+  totals: {
+    byReason: Partial<Record<MaintenanceQueueReason, number>>;
+  };
 }
 
 export type ProjectIndexAssociationKind = "primary" | "secondary";

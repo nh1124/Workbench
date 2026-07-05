@@ -47,6 +47,9 @@ import type {
   MindmapListResult,
   MindmapMode,
   MindmapUpdateInput,
+  MaintenanceQueueKind,
+  MaintenanceQueueReason,
+  MaintenanceQueueResult,
   Note,
   NoteProjectSummary,
   ProjectDefaultSelection,
@@ -798,6 +801,59 @@ export const notesApi = {
       method: "DELETE"
     }),
   projects: (): Promise<NoteProjectSummary[]> => fetchNotesFacadeJson<NoteProjectSummary[]>("/api/notes/projects")
+};
+
+export const maintenanceApi = {
+  queue: (
+    options: {
+      kind?: MaintenanceQueueKind;
+      reason?: MaintenanceQueueReason;
+      projectId?: string;
+      cursor?: string;
+      limit?: number;
+    } = {}
+  ): Promise<MaintenanceQueueResult> => {
+    const params = new URLSearchParams();
+    if (options.kind) params.set("kind", options.kind);
+    if (options.reason) params.set("reason", options.reason);
+    if (options.projectId) params.set("projectId", options.projectId);
+    if (options.cursor) params.set("cursor", options.cursor);
+    if (options.limit) params.set("limit", String(options.limit));
+    const query = params.toString();
+    return fetchJson<MaintenanceQueueResult>(coreApiPath(`/api/maintenance/queue${query ? `?${query}` : ""}`));
+  },
+  confirmMemory: (memoryId: string, payload: { reviewAfter?: string | null } = {}): Promise<ProjectMemoryEntry> =>
+    fetchJson<ProjectMemoryEntry>(coreApiPath(`/api/project-memories/${encodeURIComponent(memoryId)}/confirm`), {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  snoozeMemory: (memoryId: string, payload: { until: string }): Promise<ProjectMemoryEntry> =>
+    fetchJson<ProjectMemoryEntry>(coreApiPath(`/api/project-memories/${encodeURIComponent(memoryId)}/snooze`), {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  confirmNote: (
+    noteId: string,
+    payload: { lifecycleState?: "curated" | "verified"; reviewAfter?: string | null } = {}
+  ): Promise<Note> =>
+    fetchJson<Note>(coreApiPath(`/api/notes/${encodeURIComponent(noteId)}/confirm`), {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  snoozeNote: (noteId: string, payload: { until: string }): Promise<Note> =>
+    fetchJson<Note>(coreApiPath(`/api/notes/${encodeURIComponent(noteId)}/snooze`), {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  flag: (payload: {
+    target: { type: "memory" | "note"; id: string };
+    reason: "conflict" | "manual";
+    note?: string;
+  }): Promise<ProjectMemoryEntry | Note> =>
+    fetchJson<ProjectMemoryEntry | Note>(coreApiPath("/api/maintenance/flags"), {
+      method: "POST",
+      body: JSON.stringify(payload)
+    })
 };
 
 export const artifactsApi = {

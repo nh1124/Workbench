@@ -286,6 +286,7 @@ export function getWorkbenchLocalDaemonTokenInitialValue(): string {
 export const navItems = [
   { path: "/", label: "Home" },
   { path: "/projects", label: "Project" },
+  { path: "/maintenance", label: "Maintenance" },
   { path: "/tasks", label: "Tasks" },
   { path: "/notes", label: "Notes" },
   { path: "/research", label: "Research" },
