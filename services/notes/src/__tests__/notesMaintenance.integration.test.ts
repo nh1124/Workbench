@@ -46,7 +46,10 @@ test("Notes maintenance queue is owner-scoped and derives lifecycle reasons", { 
   const otherHeaders = { authorization: `Bearer ${otherToken}`, "content-type": "application/json" };
   const projectId = `notes-project-${suffix}`;
 
-  async function createNote(body: Record<string, unknown>, authHeaders = headers): Promise<{ id: string; lifecycleState?: string; reviewReason?: string | null }> {
+  async function createNote(
+    body: Record<string, unknown>,
+    authHeaders = headers
+  ): Promise<{ id: string; lifecycleState?: string; reviewAfter?: string | null; reviewReason?: string | null }> {
     const response = await fetch(`${base}/notes`, {
       method: "POST",
       headers: authHeaders,
@@ -120,6 +123,116 @@ test("Notes maintenance queue is owner-scoped and derives lifecycle reasons", { 
     const ownerQueueResponse = await fetch(`${base}/maintenance/note-queue`, { headers });
     const ownerQueue = await ownerQueueResponse.json() as { items: Array<{ resourceId: string }> };
     assert.ok(!ownerQueue.items.some((item) => item.resourceId === otherOwnerNote.id));
+
+    const confirmQueueNote = await createNote({
+      title: "P2 confirm queue note",
+      lifecycleState: "raw",
+      reviewAfter: "2099-01-01T00:00:00.000Z",
+      reviewReason: "manual"
+    });
+    const confirmQueueBeforeResponse = await fetch(`${base}/maintenance/note-queue?projectId=${projectId}`, { headers });
+    const confirmQueueBefore = await confirmQueueBeforeResponse.json() as { items: Array<{ resourceId: string }> };
+    assert.ok(confirmQueueBefore.items.some((item) => item.resourceId === confirmQueueNote.id));
+    const confirmResponse = await fetch(`${base}/notes/${confirmQueueNote.id}/confirm`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({})
+    });
+    assert.equal(confirmResponse.status, 200);
+    const confirmed = await confirmResponse.json() as {
+      lifecycleState: string;
+      lastConfirmedAt: string | null;
+      reviewReason: string | null;
+      reviewAfter: string | null;
+    };
+    assert.equal(confirmed.lifecycleState, "curated");
+    assert.ok(confirmed.lastConfirmedAt);
+    assert.equal(confirmed.reviewReason, null);
+    assert.equal(confirmed.reviewAfter, null);
+    const confirmQueueAfterResponse = await fetch(`${base}/maintenance/note-queue?projectId=${projectId}`, { headers });
+    const confirmQueueAfter = await confirmQueueAfterResponse.json() as { items: Array<{ resourceId: string }> };
+    assert.ok(!confirmQueueAfter.items.some((item) => item.resourceId === confirmQueueNote.id));
+
+    const confirmTtlNote = await createNote({ title: "P2 confirm TTL note", lifecycleState: "raw" });
+    const confirmTtlResponse = await fetch(`${base}/notes/${confirmTtlNote.id}/confirm`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ lifecycleState: "verified", reviewAfter: "2099-02-01T00:00:00.000Z" })
+    });
+    assert.equal(confirmTtlResponse.status, 200);
+    const confirmedTtl = await confirmTtlResponse.json() as { lifecycleState: string; reviewAfter: string | null };
+    assert.equal(confirmedTtl.lifecycleState, "verified");
+    assert.equal(confirmedTtl.reviewAfter, "2099-02-01T00:00:00.000Z");
+
+    const snoozeNote = await createNote({
+      title: "P2 snooze note",
+      lifecycleState: "raw",
+      reviewReason: "manual"
+    });
+    const snoozeResponse = await fetch(`${base}/notes/${snoozeNote.id}/snooze`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ until: "2099-03-01T00:00:00.000Z" })
+    });
+    assert.equal(snoozeResponse.status, 200);
+    const snoozed = await snoozeResponse.json() as {
+      lifecycleState: string;
+      lastConfirmedAt: string | null;
+      reviewReason: string | null;
+      reviewAfter: string | null;
+    };
+    assert.equal(snoozed.lifecycleState, "raw");
+    assert.equal(snoozed.lastConfirmedAt, null);
+    assert.equal(snoozed.reviewReason, "manual");
+    assert.equal(snoozed.reviewAfter, "2099-03-01T00:00:00.000Z");
+    const pastSnoozeResponse = await fetch(`${base}/notes/${snoozeNote.id}/snooze`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ until: "2000-01-01T00:00:00.000Z" })
+    });
+    assert.equal(pastSnoozeResponse.status, 400);
+
+    const flagNote = await createNote({
+      title: "P2 flag note",
+      lifecycleState: "verified",
+      reviewAfter: "2099-04-01T00:00:00.000Z"
+    });
+    const flagResponse = await fetch(`${base}/notes/${flagNote.id}/flag`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ reason: "conflict", note: "needs merge" })
+    });
+    assert.equal(flagResponse.status, 200);
+    const flagged = await flagResponse.json() as {
+      lifecycleState: string;
+      reviewReason: string | null;
+      reviewAfter: string | null;
+      note?: string;
+    };
+    assert.equal(flagged.lifecycleState, "verified");
+    assert.equal(flagged.reviewReason, "conflict");
+    assert.equal(flagged.reviewAfter, "2099-04-01T00:00:00.000Z");
+    assert.equal(flagged.note, "needs merge");
+
+    const ownerOnlyNote = await createNote({ title: "P2 owner scoped note", lifecycleState: "raw" });
+    const otherConfirmResponse = await fetch(`${base}/notes/${ownerOnlyNote.id}/confirm`, {
+      method: "POST",
+      headers: otherHeaders,
+      body: JSON.stringify({})
+    });
+    assert.equal(otherConfirmResponse.status, 404);
+    const otherSnoozeResponse = await fetch(`${base}/notes/${ownerOnlyNote.id}/snooze`, {
+      method: "POST",
+      headers: otherHeaders,
+      body: JSON.stringify({ until: "2099-05-01T00:00:00.000Z" })
+    });
+    assert.equal(otherSnoozeResponse.status, 404);
+    const otherFlagResponse = await fetch(`${base}/notes/${ownerOnlyNote.id}/flag`, {
+      method: "POST",
+      headers: otherHeaders,
+      body: JSON.stringify({ reason: "manual" })
+    });
+    assert.equal(otherFlagResponse.status, 404);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     await db.getNotesPool().query(`DELETE FROM notes WHERE owner_username = ANY($1::text[])`, [[owner, otherOwner]]);

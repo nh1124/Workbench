@@ -77,6 +77,11 @@ function normalizeLimit(limit: number | undefined, fallback: number): number {
   return Math.min(Math.floor(limit), 500);
 }
 
+const NOTE_RETURNING = `
+  id, owner_username, title, content, project_id, project_name, tags,
+  lifecycle_state, review_after, last_confirmed_at, review_reason, created_at, updated_at
+`;
+
 export async function listNotes(projectId: string | undefined, limit: number | undefined, ownerUsername: string): Promise<Note[]> {
   await ensureNotesSchema();
   const pool = getNotesPool();
@@ -169,6 +174,72 @@ export async function getNote(id: string, ownerUsername: string): Promise<Note |
   }
 
   return toNote(result.rows[0]);
+}
+
+export async function confirmNote(
+  id: string,
+  input: { lifecycleState?: Extract<NoteLifecycleState, "curated" | "verified">; reviewAfter?: string | null },
+  ownerUsername: string
+): Promise<Note | undefined> {
+  const existing = await getNote(id, ownerUsername);
+  if (!existing) {
+    return undefined;
+  }
+
+  await ensureNotesSchema();
+  const pool = getNotesPool();
+  const owner = normalizeOwner(ownerUsername);
+  const result = await pool.query<NoteRow>(
+    `
+      UPDATE notes
+      SET lifecycle_state = $3,
+          last_confirmed_at = NOW(),
+          review_reason = NULL,
+          review_after = $4::timestamptz,
+          updated_at = NOW()
+      WHERE id = $1 AND owner_username = $2
+      RETURNING ${NOTE_RETURNING}
+    `,
+    [id, owner, input.lifecycleState ?? "curated", input.reviewAfter ?? null]
+  );
+
+  return result.rows[0] ? toNote(result.rows[0]) : undefined;
+}
+
+export async function snoozeNote(id: string, until: string, ownerUsername: string): Promise<Note | undefined> {
+  await ensureNotesSchema();
+  const pool = getNotesPool();
+  const owner = normalizeOwner(ownerUsername);
+  const result = await pool.query<NoteRow>(
+    `
+      UPDATE notes
+      SET review_after = $3::timestamptz,
+          updated_at = NOW()
+      WHERE id = $1 AND owner_username = $2
+      RETURNING ${NOTE_RETURNING}
+    `,
+    [id, owner, until]
+  );
+
+  return result.rows[0] ? toNote(result.rows[0]) : undefined;
+}
+
+export async function flagNote(id: string, reason: NoteReviewReason, ownerUsername: string): Promise<Note | undefined> {
+  await ensureNotesSchema();
+  const pool = getNotesPool();
+  const owner = normalizeOwner(ownerUsername);
+  const result = await pool.query<NoteRow>(
+    `
+      UPDATE notes
+      SET review_reason = $3,
+          updated_at = NOW()
+      WHERE id = $1 AND owner_username = $2
+      RETURNING ${NOTE_RETURNING}
+    `,
+    [id, owner, reason]
+  );
+
+  return result.rows[0] ? toNote(result.rows[0]) : undefined;
 }
 
 export async function createNote(input: NoteInput, ownerUsername: string): Promise<Note> {

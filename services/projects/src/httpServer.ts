@@ -22,7 +22,15 @@ import {
   updateProject
 } from "./store.js";
 import { getProjectBrief, updateProjectBrief } from "./projectBriefStore.js";
-import { appendProjectMemory, listProjectMemories, updateProjectMemory } from "./projectMemoryStore.js";
+import {
+  appendProjectMemory,
+  confirmProjectMemory,
+  flagProjectMemory,
+  listProjectMemories,
+  ProjectMemoryStateConflictError,
+  snoozeProjectMemory,
+  updateProjectMemory
+} from "./projectMemoryStore.js";
 import {
   bulkUpsertProjectIndexEntries,
   searchProjectIndex,
@@ -207,6 +215,23 @@ const memoryUpdateSchema = z.object({
   reviewAfter: z.string().datetime().nullable().optional(),
   reviewReason: z.enum(PROJECT_MEMORY_REVIEW_REASONS).nullable().optional()
 }).refine((value) => Object.keys(value).length > 0, "At least one update is required");
+
+const memoryConfirmSchema = z.object({
+  reviewAfter: z.string().datetime().nullable().optional()
+});
+
+const futureDateTimeSchema = z.string().datetime().refine((value) => Date.parse(value) > Date.now(), {
+  message: "Datetime must be in the future"
+});
+
+const memorySnoozeSchema = z.object({
+  until: futureDateTimeSchema
+});
+
+const memoryFlagSchema = z.object({
+  reason: z.enum(PROJECT_MEMORY_REVIEW_REASONS),
+  note: z.string().optional()
+});
 
 const indexEntryInputSchema = z.object({
   sourceService: z.string().min(1),
@@ -691,6 +716,45 @@ app.patch("/project-memories/:memoryId", requireUserAuth, async (req, res) => {
   if (!owner) return res.status(401).json({ message: "Missing auth context" });
   const memory = await updateProjectMemory(String(req.params.memoryId), parsed.data, owner);
   return memory ? res.json(memory) : res.status(404).json({ message: "Project memory not found" });
+});
+
+app.post("/project-memories/:memoryId/confirm", requireUserAuth, async (req, res) => {
+  const parsed = memoryConfirmSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
+  const owner = req.authUser?.coreUserId;
+  if (!owner) return res.status(401).json({ message: "Missing auth context" });
+  try {
+    const memory = await confirmProjectMemory(
+      String(req.params.memoryId),
+      { reviewAfter: parsed.data.reviewAfter ?? null },
+      owner
+    );
+    return memory ? res.json(memory) : res.status(404).json({ message: "Project memory not found" });
+  } catch (error) {
+    if (error instanceof ProjectMemoryStateConflictError) {
+      return res.status(error.status).json({ code: error.code, message: error.message });
+    }
+    throw error;
+  }
+});
+
+app.post("/project-memories/:memoryId/snooze", requireUserAuth, async (req, res) => {
+  const parsed = memorySnoozeSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
+  const owner = req.authUser?.coreUserId;
+  if (!owner) return res.status(401).json({ message: "Missing auth context" });
+  const memory = await snoozeProjectMemory(String(req.params.memoryId), parsed.data.until, owner);
+  return memory ? res.json(memory) : res.status(404).json({ message: "Project memory not found" });
+});
+
+app.post("/project-memories/:memoryId/flag", requireUserAuth, async (req, res) => {
+  const parsed = memoryFlagSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
+  const owner = req.authUser?.coreUserId;
+  if (!owner) return res.status(401).json({ message: "Missing auth context" });
+  const memory = await flagProjectMemory(String(req.params.memoryId), parsed.data.reason, owner);
+  if (!memory) return res.status(404).json({ message: "Project memory not found" });
+  return res.json(parsed.data.note === undefined ? memory : { ...memory, note: parsed.data.note });
 });
 
 app.get("/projects/:projectId/index-entries", requireUserAuth, async (req, res) => {

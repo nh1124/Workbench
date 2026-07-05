@@ -33,6 +33,7 @@ test("Projects HTTP context routes return owner-scoped 404, 409 and 400 response
   assert.ok(address && typeof address === "object");
   const base = `http://127.0.0.1:${address.port}`;
   const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
+  const otherHeaders = { authorization: `Bearer ${otherToken}`, "content-type": "application/json" };
   try {
     const createdResponse = await fetch(`${base}/projects`, { method: "POST", headers, body: JSON.stringify({ name: "HTTP project" }) });
     const project = await createdResponse.json() as { id: string };
@@ -142,7 +143,7 @@ test("Projects HTTP context routes return owner-scoped 404, 409 and 400 response
     const queueProject = await queueProjectResponse.json() as { id: string; name: string };
     const otherQueueProjectResponse = await fetch(`${base}/projects`, {
       method: "POST",
-      headers: { authorization: `Bearer ${otherToken}`, "content-type": "application/json" },
+      headers: otherHeaders,
       body: JSON.stringify({ name: "Other owner maintenance queue project" })
     });
     const otherQueueProject = await otherQueueProjectResponse.json() as { id: string };
@@ -196,7 +197,7 @@ test("Projects HTTP context routes return owner-scoped 404, 409 and 400 response
       authority: "user_confirmed",
       lifecycleState: "raw",
       createdByKind: "user"
-    }, { authorization: `Bearer ${otherToken}`, "content-type": "application/json" });
+    }, otherHeaders);
 
     const memoryQueueResponse = await fetch(`${base}/maintenance/memory-queue?projectId=${queueProject.id}&limit=2`, { headers });
     assert.equal(memoryQueueResponse.status, 200);
@@ -299,6 +300,162 @@ test("Projects HTTP context routes return owner-scoped 404, 409 and 400 response
       memories?: Array<{ id: string; bodyMarkdown: string; lifecycleState?: string; reviewAfter?: string | null }>;
     };
     assert.ok(context.memories?.some((item) => item.id === rawMemory.id && item.bodyMarkdown === "raw queue memory" && item.lifecycleState === "raw"));
+
+    const confirmQueueMemory = await postMemory(queueProject.id, {
+      kind: "fact",
+      bodyMarkdown: "P2 confirm queue memory",
+      authority: "agent_observed",
+      lifecycleState: "raw",
+      reviewAfter: "2099-01-01T00:00:00.000Z",
+      reviewReason: "manual",
+      createdByKind: "agent"
+    });
+    const confirmQueueBeforeResponse = await fetch(`${base}/maintenance/memory-queue?projectId=${queueProject.id}`, { headers });
+    const confirmQueueBefore = await confirmQueueBeforeResponse.json() as { items: Array<{ resourceId: string }> };
+    assert.ok(confirmQueueBefore.items.some((item) => item.resourceId === confirmQueueMemory.id));
+    const confirmResponse = await fetch(`${base}/project-memories/${confirmQueueMemory.id}/confirm`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({})
+    });
+    assert.equal(confirmResponse.status, 200);
+    const confirmed = await confirmResponse.json() as {
+      authority: string;
+      lifecycleState: string;
+      lastConfirmedAt: string | null;
+      reviewReason: string | null;
+      reviewAfter: string | null;
+    };
+    assert.equal(confirmed.authority, "user_confirmed");
+    assert.equal(confirmed.lifecycleState, "verified");
+    assert.ok(confirmed.lastConfirmedAt);
+    assert.equal(confirmed.reviewReason, null);
+    assert.equal(confirmed.reviewAfter, null);
+    const confirmQueueAfterResponse = await fetch(`${base}/maintenance/memory-queue?projectId=${queueProject.id}`, { headers });
+    const confirmQueueAfter = await confirmQueueAfterResponse.json() as { items: Array<{ resourceId: string }> };
+    assert.ok(!confirmQueueAfter.items.some((item) => item.resourceId === confirmQueueMemory.id));
+
+    const ttlMemory = await postMemory(queueProject.id, {
+      kind: "fact",
+      bodyMarkdown: "P2 confirm TTL memory",
+      authority: "agent_observed",
+      lifecycleState: "raw",
+      createdByKind: "agent"
+    });
+    const confirmWithTtlResponse = await fetch(`${base}/project-memories/${ttlMemory.id}/confirm`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ reviewAfter: "2099-02-01T00:00:00.000Z" })
+    });
+    assert.equal(confirmWithTtlResponse.status, 200);
+    const confirmedWithTtl = await confirmWithTtlResponse.json() as { lifecycleState: string; reviewAfter: string | null };
+    assert.equal(confirmedWithTtl.lifecycleState, "verified");
+    assert.equal(confirmedWithTtl.reviewAfter, "2099-02-01T00:00:00.000Z");
+
+    const archivedMemory = await postMemory(queueProject.id, {
+      kind: "fact",
+      bodyMarkdown: "P2 archived confirm memory",
+      authority: "user_confirmed",
+      createdByKind: "user"
+    });
+    const archiveMemoryResponse = await fetch(`${base}/project-memories/${archivedMemory.id}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ status: "archived" })
+    });
+    assert.equal(archiveMemoryResponse.status, 200);
+    const archivedConfirmResponse = await fetch(`${base}/project-memories/${archivedMemory.id}/confirm`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({})
+    });
+    assert.equal(archivedConfirmResponse.status, 409);
+
+    const snoozeMemory = await postMemory(queueProject.id, {
+      kind: "observation",
+      bodyMarkdown: "P2 snooze memory",
+      authority: "agent_observed",
+      lifecycleState: "raw",
+      reviewReason: "manual",
+      createdByKind: "agent"
+    });
+    const snoozeResponse = await fetch(`${base}/project-memories/${snoozeMemory.id}/snooze`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ until: "2099-03-01T00:00:00.000Z" })
+    });
+    assert.equal(snoozeResponse.status, 200);
+    const snoozed = await snoozeResponse.json() as {
+      authority: string;
+      lifecycleState: string;
+      lastConfirmedAt: string | null;
+      reviewReason: string | null;
+      reviewAfter: string | null;
+    };
+    assert.equal(snoozed.authority, "agent_observed");
+    assert.equal(snoozed.lifecycleState, "raw");
+    assert.equal(snoozed.lastConfirmedAt, null);
+    assert.equal(snoozed.reviewReason, "manual");
+    assert.equal(snoozed.reviewAfter, "2099-03-01T00:00:00.000Z");
+    const pastSnoozeResponse = await fetch(`${base}/project-memories/${snoozeMemory.id}/snooze`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ until: "2000-01-01T00:00:00.000Z" })
+    });
+    assert.equal(pastSnoozeResponse.status, 400);
+
+    const flagMemory = await postMemory(queueProject.id, {
+      kind: "decision",
+      bodyMarkdown: "P2 flag memory",
+      authority: "user_confirmed",
+      lifecycleState: "verified",
+      reviewAfter: "2099-04-01T00:00:00.000Z",
+      createdByKind: "user"
+    });
+    const flagResponse = await fetch(`${base}/project-memories/${flagMemory.id}/flag`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ reason: "conflict", note: "duplicate with source" })
+    });
+    assert.equal(flagResponse.status, 200);
+    const flagged = await flagResponse.json() as {
+      authority: string;
+      lifecycleState: string;
+      reviewReason: string | null;
+      reviewAfter: string | null;
+      note?: string;
+    };
+    assert.equal(flagged.authority, "user_confirmed");
+    assert.equal(flagged.lifecycleState, "verified");
+    assert.equal(flagged.reviewReason, "conflict");
+    assert.equal(flagged.reviewAfter, "2099-04-01T00:00:00.000Z");
+    assert.equal(flagged.note, "duplicate with source");
+
+    const ownerOnlyMemory = await postMemory(queueProject.id, {
+      kind: "fact",
+      bodyMarkdown: "P2 owner scoped memory",
+      authority: "agent_observed",
+      lifecycleState: "raw",
+      createdByKind: "agent"
+    });
+    const otherConfirmResponse = await fetch(`${base}/project-memories/${ownerOnlyMemory.id}/confirm`, {
+      method: "POST",
+      headers: otherHeaders,
+      body: JSON.stringify({})
+    });
+    assert.equal(otherConfirmResponse.status, 404);
+    const otherSnoozeResponse = await fetch(`${base}/project-memories/${ownerOnlyMemory.id}/snooze`, {
+      method: "POST",
+      headers: otherHeaders,
+      body: JSON.stringify({ until: "2099-05-01T00:00:00.000Z" })
+    });
+    assert.equal(otherSnoozeResponse.status, 404);
+    const otherFlagResponse = await fetch(`${base}/project-memories/${ownerOnlyMemory.id}/flag`, {
+      method: "POST",
+      headers: otherHeaders,
+      body: JSON.stringify({ reason: "manual" })
+    });
+    assert.equal(otherFlagResponse.status, 404);
 
     const relationDelete = await fetch(`${base}/project-relations/${relation.id}`, { method: "DELETE", headers });
     assert.equal(relationDelete.status, 204);
