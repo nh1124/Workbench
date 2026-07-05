@@ -1,6 +1,6 @@
 # Workbench Maintenance Loop Implementation Plan
 
-Status: Gate P0 approved (2026-07-06) — P1 実装中
+Status: P1+P2 実装完了(masterへマージ済み) — 次はP3。P2 UIのOwner受入とlive DB smokeが残
 Last updated: 2026-07-06
 
 関連文書:
@@ -34,7 +34,7 @@ Last updated: 2026-07-06
 |---|---|---|---|---|---|
 | P0 | Contract freeze(§4の決定事項の承認) | - | - | `[approved]` | 2026-07-06 承認 |
 | P1 | Lifecycle metadata + maintenance queue | 小 | P0 | `[implemented]` | 10/10 |
-| P2 | 昇格フロー(レビューキューUI + confirm API) | 中 | P1 | `[pending]` | 0/9 |
+| P2 | 昇格フロー(レビューキューUI + confirm API) | 中 | P1 | `[implemented]` | 9/9 (Owner受入待ち) |
 | P3 | 変更フィードMCP露出 + maintenance skill + digest手順 | 小〜中 | P0 (skill最終化はP1、digest手順はP4) | `[pending]` | 0/9 |
 | P4 | usage_events計測 | 小 | P0 (queue統合はP1) | `[pending]` | 0/7 |
 | P6 | Capture client | 大 | P1+P2安定後 | `[deferred]` | 別contract文書で再開 |
@@ -331,7 +331,8 @@ npm run test --workspace services/workbench-core
 
 ## 6. Phase P2: 昇格フロー(レビューキューUI + confirm API)
 
-Branch: `codex/maintenance-p2` / Status: `[pending]` / 依存: P1
+Branch: `codex/maintenance-p2` / Status: `[implemented]` / 依存: P1
+(commits: `004d0c9`, `efe0fb4`, `3c4ce3c`。Ownerの実操作受入は§10.2で実施)
 
 ### 6.1 動作仕様
 
@@ -356,15 +357,15 @@ Branch: `codex/maintenance-p2` / Status: `[pending]` / 依存: P1
 
 | ID | Status | Scope | Task |
 |---|---|---|---|
-| P2-1 | `[pending]` | projects | memory confirm/snooze store + internal routes(`POST /project-memories/:id/confirm` 等) |
-| P2-2 | `[pending]` | notes | note confirm/snooze store + internal routes |
-| P2-3 | `[pending]` | projects/notes | flag store + internal routes(review_reason = conflict/manual設定) |
-| P2-4 | `[pending]` | core | external facade(§4.2のP2 routes) + sync event記録。MCPにはconfirm/snoozeを**登録しない** |
-| P2-5 | `[pending]` | core | MCP `maintenance.flag` 登録 |
-| P2-6 | `[pending]` | ui | `/maintenance` page: queue表示 + filter + totals |
-| P2-7 | `[pending]` | ui | item操作(confirm/supersede/archive/破棄/snooze) + 楽観更新 |
-| P2-8 | `[pending]` | all | tests(§6.4) |
-| P2-9 | `[pending]` | root | レビュー・検証・commit・本文書更新 |
+| P2-1 | `[implemented]` | projects | memory confirm/snooze store + internal routes(`POST /project-memories/:id/confirm` 等) |
+| P2-2 | `[implemented]` | notes | note confirm/snooze store + internal routes |
+| P2-3 | `[implemented]` | projects/notes | flag store + internal routes(review_reason = conflict/manual設定。note?は行に永続化せず応答echoのみ、Coreがsync event payloadへ載せる) |
+| P2-4 | `[implemented]` | core | external facade(§4.2のP2 routes) + sync event記録。MCPにはconfirm/snoozeを**登録しない** |
+| P2-5 | `[implemented]` | core | MCP `maintenance.flag` 登録 |
+| P2-6 | `[implemented]` | ui | `/maintenance` page: queue表示 + filter + totals |
+| P2-7 | `[implemented]` | ui | item操作(confirm/supersede/archive/破棄/snooze) + 楽観更新 |
+| P2-8 | `[implemented]` | all | tests(§6.4。confirm/snooze非登録auditは core maintenanceQueue.test.ts に固定) |
+| P2-9 | `[implemented]` | root | レビュー・検証・commit・本文書更新(2026-07-06)。Ownerの実操作受入(§10.2)は未実施 |
 
 ### 6.4 Tests
 
@@ -589,7 +590,7 @@ Verification log(root agentが各フェーズcommit時に更新):
 | Phase | Command set | Status | Notes |
 |---|---|---|---|
 | P1 | projects/notes/core build+test | `[implemented]` | 2026-07-06: projects 12 pass/2 skip、notes DB test skip、core 52 pass/13 skip(DB未起動分)。live DB smokeは§10.2で実施 |
-| P2 | - | `[pending]` | |
+| P2 | projects/notes/core/ui build+test + full build | `[implemented]` | 2026-07-06: ui 16 files/98 tests pass、core 56 pass/13 skip、full workspace build成功。live DB smokeとOwner UI受入が残 |
 | P3 | - | `[pending]` | |
 | P4 | - | `[pending]` | |
 
