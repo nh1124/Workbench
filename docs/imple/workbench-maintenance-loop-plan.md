@@ -33,7 +33,7 @@ Last updated: 2026-07-06
 | Phase | 内容 | 規模 | 依存 | Status | 進捗 |
 |---|---|---|---|---|---|
 | P0 | Contract freeze(§4の決定事項の承認) | - | - | `[approved]` | 2026-07-06 承認 |
-| P1 | Lifecycle metadata + maintenance queue | 小 | P0 | `[in-progress]` | 0/10 |
+| P1 | Lifecycle metadata + maintenance queue | 小 | P0 | `[implemented]` | 10/10 |
 | P2 | 昇格フロー(レビューキューUI + confirm API) | 中 | P1 | `[pending]` | 0/9 |
 | P3 | 変更フィードMCP露出 + maintenance skill + digest手順 | 小〜中 | P0 (skill最終化はP1、digest手順はP4) | `[pending]` | 0/9 |
 | P4 | usage_events計測 | 小 | P0 (queue統合はP1) | `[pending]` | 0/7 |
@@ -250,8 +250,19 @@ reason enum と導出条件:
 
 ## 5. Phase P1: Lifecycle Metadata + Maintenance Queue
 
-Branch: `codex/maintenance-p1` / Status: `[in-progress]`
-(Wave 1: P1-1〜P1-4, P1-8 をCodexへ割当済み)
+Branch: `codex/maintenance-p1` / Status: `[implemented]`
+(commits: `b2de8de`, `2f90e6a`, `221be6c`)
+
+実装ノート:
+
+- 集約facadeの複合cursorは per-source cursor を base64url JSON に包んだ v1 形式。
+- 全kind集約はheap-merge方式で1 itemごとに下流へ limit=1 リクエストを発行する。
+  単一ユーザーでは十分だが、データ肥大時はソースごとのpage取得+メモリ内mergeへの
+  最適化をfollow-up(§11)とする。
+- MCPの `projects.memory.append` / `notes.create` の lifecycleState は raw|triaged のみ
+  許可(curated/verifiedはUI/HTTP直呼びのuser pathでのみ設定可能)。
+- 残リスク: PostgreSQL未起動のためDB-gated integration testsはskip。
+  live DB / E2E smoke は§10.2受入時に実施する。
 
 ### 5.1 Schema
 
@@ -283,16 +294,16 @@ flag操作による `conflict` / `manual` のみ。
 
 | ID | Status | Scope | Task |
 |---|---|---|---|
-| P1-1 | `[in-progress]` | projects | memory 4カラム追加 + backfill + 型/zod schema更新 |
-| P1-2 | `[in-progress]` | projects | memory store: append/updateでlifecycle系フィールドを受理。list/contextのresponseへ含める |
-| P1-3 | `[in-progress]` | projects | queue read route追加: `GET /maintenance/memory-queue`(reason導出: raw/expired/unconfirmed/conflict/manual) + `GET /maintenance/brief-queue`(brief_unmaintained導出) + `GET /maintenance/index-drift`(source_changed導出) |
-| P1-4 | `[in-progress]` | notes | notes 4カラム追加 + create/update受理 + `GET /maintenance/note-queue` |
-| P1-5 | `[pending]` | core | internal clients拡張(projects/notes queue routes) |
-| P1-6 | `[pending]` | core | `GET /api/maintenance/queue` 集約facade(kind/reason/projectId filter、cursor pagination、totals) |
-| P1-7 | `[pending]` | core | MCP `maintenance.queue.list` 登録(stdio/HTTP両方、compact response) |
-| P1-8 | `[in-progress]` | projects/notes | unit/integration tests(§5.3) |
-| P1-9 | `[pending]` | core | facade/MCP tests(§5.3) |
-| P1-10 | `[pending]` | root | レビュー・検証・commit・本文書更新 |
+| P1-1 | `[implemented]` | projects | memory 4カラム追加 + backfill + 型/zod schema更新 |
+| P1-2 | `[implemented]` | projects | memory store: append/updateでlifecycle系フィールドを受理。list/contextのresponseへ含める |
+| P1-3 | `[implemented]` | projects | queue read route追加: `GET /maintenance/memory-queue`(reason導出: raw/expired/unconfirmed/conflict/manual) + `GET /maintenance/brief-queue`(brief_unmaintained導出) + `GET /maintenance/index-drift`(source_changed導出) |
+| P1-4 | `[implemented]` | notes | notes 4カラム追加 + create/update受理 + `GET /maintenance/note-queue` |
+| P1-5 | `[implemented]` | core | internal clients拡張(projects/notes queue routes) |
+| P1-6 | `[implemented]` | core | `GET /api/maintenance/queue` 集約facade(kind/reason/projectId filter、複合cursor、totals合算) |
+| P1-7 | `[implemented]` | core | MCP `maintenance.queue.list` 登録(stdio/HTTP両方)。併せてMCPの `projects.memory.append` / `notes.create` へ lifecycleState(raw/triagedのみ)を追加 |
+| P1-8 | `[implemented]` | projects/notes | unit/integration tests(§5.3)。DB-gated分は `RUN_PROJECTS_DB_TESTS=1` / `RUN_NOTES_DB_TESTS=1` で実行 |
+| P1-9 | `[implemented]` | core | facade/MCP tests(§5.3) |
+| P1-10 | `[implemented]` | root | レビュー・検証・commit・本文書更新(2026-07-06) |
 
 ### 5.3 Tests
 
@@ -577,7 +588,7 @@ Verification log(root agentが各フェーズcommit時に更新):
 
 | Phase | Command set | Status | Notes |
 |---|---|---|---|
-| P1 | - | `[pending]` | |
+| P1 | projects/notes/core build+test | `[implemented]` | 2026-07-06: projects 12 pass/2 skip、notes DB test skip、core 52 pass/13 skip(DB未起動分)。live DB smokeは§10.2で実施 |
 | P2 | - | `[pending]` | |
 | P3 | - | `[pending]` | |
 | P4 | - | `[pending]` | |
@@ -603,6 +614,9 @@ Verification log(root agentが各フェーズcommit時に更新):
   skill規律で担保(D-103)。
 - memory自動昇格(modelによる) — design doc §11の先送り判断を維持。
 - usage_eventsのretention/rollup(単一ユーザーの間は不要。肥大時にpartition/削除を検討)。
+- maintenance queue集約(P1-6)のパフォーマンス最適化 — 現状は全kind集約時に
+  1 itemごとの下流リクエスト(heap-merge)。データ肥大時はソースごとのpage一括取得 +
+  メモリ内mergeへ切り替える。
 - Core内のdeterministic digest builder — ルーチン生成(§7.3)が不安定または
   トークン高コストになった場合に再検討する。read model群(queue / changes / usage)は
   残るため、追加実装は小規模で済む。
