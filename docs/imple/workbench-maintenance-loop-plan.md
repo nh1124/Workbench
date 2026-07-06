@@ -35,7 +35,7 @@ Last updated: 2026-07-06
 | P0 | Contract freeze(§4の決定事項の承認) | - | - | `[approved]` | 2026-07-06 承認 |
 | P1 | Lifecycle metadata + maintenance queue | 小 | P0 | `[implemented]` | 10/10 |
 | P2 | 昇格フロー(レビューキューUI + confirm API) | 中 | P1 | `[implemented]` | 9/9 (Owner受入待ち) |
-| P3 | 変更フィードMCP露出 + maintenance skill + digest手順 | 小〜中 | P0 (skill最終化はP1、digest手順はP4) | `[pending]` | 0/9 |
+| P3 | 変更フィードMCP露出 + maintenance skill + digest手順 | 小〜中 | P0 (skill最終化はP1、digest手順はP4) | `[in-progress]` | 4/9 (core完了。skillはP4後) |
 | P4 | usage_events計測 | 小 | P0 (queue統合はP1) | `[pending]` | 0/7 |
 | P6 | Capture client | 大 | P1+P2安定後 | `[deferred]` | 別contract文書で再開 |
 
@@ -459,10 +459,10 @@ Core側にdigest builderは実装しない(D-107)。週次ダイジェストは�
 
 | ID | Status | Scope | Task |
 |---|---|---|---|
-| P3-1 | `[pending]` | core | sync_consumer_cursors table + store |
-| P3-2 | `[pending]` | core | `GET /api/sync/changes` + `POST /api/sync/changes/commit` |
-| P3-3 | `[pending]` | core | MCP `sync.changes.pull` / `sync.changes.commit` 登録 |
-| P3-4 | `[pending]` | core | tests: cursor分離(daemon非干渉)、at-least-once、owner isolation |
+| P3-1 | `[implemented]` | core | sync_consumer_cursors table + store |
+| P3-2 | `[implemented]` | core | `GET /api/sync/changes` + `POST /api/sync/changes/commit`(user bearer auth専用。未知domainは400) |
+| P3-3 | `[implemented]` | core | MCP `sync.changes.pull` / `sync.changes.commit` 登録 |
+| P3-4 | `[implemented]` | core | tests: cursor分離(daemon非干渉)、at-least-once、owner isolation |
 | P3-5 | `[pending]` | skill | skill scaffold + SKILL.md(500行未満、workflow §7.2) |
 | P3-6 | `[pending]` | skill | 週次ダイジェスト手順(§7.3)をSKILL.mdへ追記(tool名はP4完了後に照合) |
 | P3-7 | `[pending]` | skill | tool-contracts.md を実装済みMCP schemaと照合 |
