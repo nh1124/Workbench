@@ -231,6 +231,7 @@ export async function ensureProjectsSchema(): Promise<void> {
             content_hash TEXT,
             source_updated_at TIMESTAMPTZ NOT NULL,
             indexed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            last_read_at TIMESTAMPTZ,
             metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
             is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
             CHECK (
@@ -238,6 +239,11 @@ export async function ensureProjectsSchema(): Promise<void> {
               OR (association_kind = 'secondary' AND association_id IS NOT NULL)
             )
           );
+        `);
+
+        await pool.query(`
+          ALTER TABLE project_index_entries
+            ADD COLUMN IF NOT EXISTS last_read_at TIMESTAMPTZ;
         `);
 
         await pool.query(`

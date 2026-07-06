@@ -286,6 +286,143 @@ test("Projects HTTP context routes return owner-scoped 404, 409 and 400 response
     assert.deepEqual(indexDriftQueue.items[0]?.reasons, ["source_changed"]);
     assert.equal(indexDriftQueue.totals.byReason.source_changed, 1);
 
+    const readMarkActiveResourceId = `read-active-${Date.now()}`;
+    const readMarkDeletedResourceId = `read-deleted-${Date.now()}`;
+    const readMarkOtherResourceId = `read-other-${Date.now()}`;
+    const readMarkActiveResponse = await fetch(`${base}/projects/${queueProject.id}/index-entries/upsert`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        sourceService: "artifacts",
+        resourceType: "note",
+        resourceId: readMarkActiveResourceId,
+        associationKind: "primary",
+        title: "Read mark active",
+        summaryText: "active read mark target",
+        sourceUpdatedAt: "2026-01-01T00:00:00.000Z"
+      })
+    });
+    const readMarkActive = await readMarkActiveResponse.json() as { id: string };
+    const readMarkDeletedResponse = await fetch(`${base}/projects/${queueProject.id}/index-entries/upsert`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        sourceService: "artifacts",
+        resourceType: "note",
+        resourceId: readMarkDeletedResourceId,
+        associationKind: "primary",
+        title: "Read mark deleted",
+        summaryText: "deleted read mark target",
+        sourceUpdatedAt: "2026-01-01T00:00:00.000Z"
+      })
+    });
+    const readMarkDeleted = await readMarkDeletedResponse.json() as { id: string };
+    await fetch(`${base}/projects/${queueProject.id}/index-entries/tombstone`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        sourceService: "artifacts",
+        resourceType: "note",
+        resourceId: readMarkDeletedResourceId
+      })
+    });
+    const readMarkOtherResponse = await fetch(`${base}/projects/${otherQueueProject.id}/index-entries/upsert`, {
+      method: "POST",
+      headers: otherHeaders,
+      body: JSON.stringify({
+        sourceService: "artifacts",
+        resourceType: "note",
+        resourceId: readMarkOtherResourceId,
+        associationKind: "primary",
+        title: "Read mark other owner",
+        summaryText: "other owner read mark target",
+        sourceUpdatedAt: "2026-01-01T00:00:00.000Z"
+      })
+    });
+    const readMarkOther = await readMarkOtherResponse.json() as { id: string };
+    const readMarkResponse = await fetch(`${base}/maintenance/index-read-marks`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        marks: [
+          { sourceService: "artifacts", resourceId: readMarkActiveResourceId },
+          { sourceService: "artifacts", resourceId: readMarkDeletedResourceId },
+          { sourceService: "artifacts", resourceId: readMarkOtherResourceId }
+        ],
+        readAt: "2026-07-01T00:00:00.000Z"
+      })
+    });
+    assert.equal(readMarkResponse.status, 200);
+    assert.deepEqual(await readMarkResponse.json(), { updated: 1 });
+    const readMarks = await db.getProjectsPool().query<{ id: string; last_read_at: string | null }>(
+      `SELECT id, last_read_at::text FROM project_index_entries WHERE id = ANY($1::text[]) ORDER BY id`,
+      [[readMarkActive.id, readMarkDeleted.id, readMarkOther.id]]
+    );
+    const readMarkMap = new Map(readMarks.rows.map((row) => [row.id, row.last_read_at]));
+    assert.ok(readMarkMap.get(readMarkActive.id));
+    assert.equal(readMarkMap.get(readMarkDeleted.id), null);
+    assert.equal(readMarkMap.get(readMarkOther.id), null);
+
+    const unusedResourceId = `unused-${Date.now()}`;
+    const recentReadResourceId = `recent-read-${Date.now()}`;
+    const unusedResponse = await fetch(`${base}/projects/${queueProject.id}/index-entries/upsert`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        sourceService: "artifacts",
+        resourceType: "note",
+        resourceId: unusedResourceId,
+        associationKind: "primary",
+        title: "Unused index entry",
+        summaryText: "old and unread",
+        sourceUpdatedAt: "2025-01-01T00:00:00.000Z"
+      })
+    });
+    const unusedEntry = await unusedResponse.json() as { id: string };
+    const recentReadResponse = await fetch(`${base}/projects/${queueProject.id}/index-entries/upsert`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        sourceService: "artifacts",
+        resourceType: "note",
+        resourceId: recentReadResourceId,
+        associationKind: "primary",
+        title: "Recently read old index entry",
+        summaryText: "old but read recently",
+        sourceUpdatedAt: "2025-01-01T00:00:00.000Z"
+      })
+    });
+    const recentReadEntry = await recentReadResponse.json() as { id: string };
+    await db.getProjectsPool().query(
+      `UPDATE project_index_entries
+       SET indexed_at = NOW() - INTERVAL '120 days',
+           source_updated_at = NOW() - INTERVAL '130 days',
+           last_read_at = NULL
+       WHERE id = $1`,
+      [unusedEntry.id]
+    );
+    await db.getProjectsPool().query(
+      `UPDATE project_index_entries
+       SET indexed_at = NOW() - INTERVAL '120 days',
+           source_updated_at = NOW() - INTERVAL '130 days',
+           last_read_at = NOW() - INTERVAL '1 day'
+       WHERE id = $1`,
+      [recentReadEntry.id]
+    );
+    const unusedQueueResponse = await fetch(`${base}/maintenance/index-drift?projectId=${queueProject.id}&reason=unused`, { headers });
+    assert.equal(unusedQueueResponse.status, 200);
+    const unusedQueue = await unusedQueueResponse.json() as {
+      items: Array<{ resourceId: string; reasons: string[]; suggestedActions: string[] }>;
+      totals: { byReason: Record<string, number> };
+    };
+    assert.ok(unusedQueue.items.some((item) =>
+      item.resourceId === unusedEntry.id &&
+      item.reasons.includes("unused") &&
+      item.suggestedActions.includes("review_relevance")
+    ));
+    assert.ok(!unusedQueue.items.some((item) => item.resourceId === recentReadEntry.id));
+    assert.equal(unusedQueue.totals.byReason.unused, 1);
+
     const memoryListResponse = await fetch(`${base}/projects/${queueProject.id}/memories`, { headers });
     const memoryList = await memoryListResponse.json() as {
       items: Array<{ id: string; bodyMarkdown: string; lifecycleState?: string; reviewAfter?: string | null; lastConfirmedAt?: string | null }>;

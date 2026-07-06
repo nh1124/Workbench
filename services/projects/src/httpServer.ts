@@ -33,6 +33,7 @@ import {
 } from "./projectMemoryStore.js";
 import {
   bulkUpsertProjectIndexEntries,
+  markProjectIndexEntriesRead,
   searchProjectIndex,
   tombstoneProjectIndexEntry,
   upsertProjectIndexEntry
@@ -262,6 +263,14 @@ const indexTombstoneSchema = z.object({
   resourceId: z.string().min(1)
 });
 
+const indexReadMarksSchema = z.object({
+  marks: z.array(z.object({
+    sourceService: z.string().min(1),
+    resourceId: z.string().min(1)
+  })).min(1).max(100),
+  readAt: z.string().datetime().optional()
+});
+
 const relationInputSchema = z.object({
   targetProjectId: z.string().min(1),
   relationType: z.enum(PROJECT_RELATION_TYPES),
@@ -387,6 +396,19 @@ app.get("/maintenance/index-drift", requireUserAuth, async (req, res) => {
     if (respondInvalidCursor(res, error)) return;
     throw error;
   }
+});
+
+app.post("/maintenance/index-read-marks", requireUserAuth, async (req, res) => {
+  const parsed = indexReadMarksSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
+  const owner = req.authUser?.coreUserId;
+  if (!owner) return res.status(401).json({ message: "Missing auth context" });
+  const result = await markProjectIndexEntriesRead(
+    owner,
+    parsed.data.marks,
+    parsed.data.readAt ?? new Date().toISOString()
+  );
+  return res.json(result);
 });
 
 app.get("/projects", requireUserAuth, async (req, res) => {

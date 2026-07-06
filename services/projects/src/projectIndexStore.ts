@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { ensureProjectsSchema, getProjectsPool } from "./db.js";
-import { clampLimit, iso, parseCursor, projectExistsForOwner, toCursor } from "./projectStoreUtils.js";
+import { clampLimit, iso, normalizeOwner, parseCursor, projectExistsForOwner, toCursor } from "./projectStoreUtils.js";
 import type {
   ProjectIndexAssociationKind,
   ProjectIndexEntry,
@@ -25,6 +25,7 @@ type IndexRow = {
   content_hash: string | null;
   source_updated_at: string;
   indexed_at: string;
+  last_read_at: string | null;
   metadata_json: unknown;
 };
 
@@ -40,6 +41,11 @@ export type SearchProjectIndexOptions = {
 export type TombstoneProjectIndexInput = {
   sourceService: string;
   resourceType: string;
+  resourceId: string;
+};
+
+export type ProjectIndexReadMark = {
+  sourceService: string;
   resourceId: string;
 };
 
@@ -60,13 +66,14 @@ function toIndexEntry(row: IndexRow): ProjectIndexEntry {
     contentHash: row.content_hash ?? undefined,
     sourceUpdatedAt: iso(row.source_updated_at),
     indexedAt: iso(row.indexed_at),
+    lastReadAt: row.last_read_at ? iso(row.last_read_at) : undefined,
     metadataJson: row.metadata_json && typeof row.metadata_json === "object" ? row.metadata_json as Record<string, unknown> : {}
   };
 }
 
 const INDEX_COLUMNS = `id, project_id, source_service, resource_type, resource_id, association_kind,
   association_id, path, title, summary_text, summary_source, source_version, content_hash,
-  source_updated_at, indexed_at, metadata_json`;
+  source_updated_at, indexed_at, last_read_at, metadata_json`;
 
 export async function searchProjectIndex(
   projectId: string,
@@ -204,4 +211,37 @@ export async function tombstoneProjectIndexEntry(
     [projectId, input.sourceService.trim(), input.resourceType.trim(), input.resourceId.trim()]
   );
   return (result.rowCount ?? 0) > 0;
+}
+
+export async function markProjectIndexEntriesRead(
+  ownerAccountId: string,
+  marks: ProjectIndexReadMark[],
+  readAt: string
+): Promise<{ updated: number }> {
+  await ensureProjectsSchema();
+  const owner = normalizeOwner(ownerAccountId);
+  const normalizedMarks = marks.map((mark) => ({
+    source_service: mark.sourceService.trim(),
+    resource_id: mark.resourceId.trim()
+  })).filter((mark) => mark.source_service && mark.resource_id);
+  if (normalizedMarks.length === 0) return { updated: 0 };
+
+  const result = await getProjectsPool().query(
+    `
+      WITH marks AS (
+        SELECT DISTINCT source_service, resource_id
+        FROM jsonb_to_recordset($2::jsonb) AS mark(source_service text, resource_id text)
+      )
+      UPDATE project_index_entries i
+      SET last_read_at = GREATEST(COALESCE(i.last_read_at, $3::timestamptz), $3::timestamptz)
+      FROM projects p, marks m
+      WHERE p.id = i.project_id
+        AND p.owner_account_id = $1
+        AND i.is_deleted = FALSE
+        AND i.source_service = m.source_service
+        AND i.resource_id = m.resource_id
+    `,
+    [owner, JSON.stringify(normalizedMarks), readAt]
+  );
+  return { updated: result.rowCount ?? 0 };
 }

@@ -93,6 +93,9 @@ function briefItem(row: QueueRow): MaintenanceQueueItem {
 }
 
 function indexDriftItem(row: QueueRow): MaintenanceQueueItem {
+  const suggestedActions = new Set<string>();
+  if (row.reasons.includes("source_changed")) suggestedActions.add("rebuild_index");
+  if (row.reasons.includes("unused")) suggestedActions.add("review_relevance");
   return {
     id: `index_drift:${row.resource_id}`,
     kind: "index_drift",
@@ -103,7 +106,7 @@ function indexDriftItem(row: QueueRow): MaintenanceQueueItem {
     excerpt: truncateText(row.excerpt_text ?? "", EXCERPT_MAX_CHARS),
     reasons: row.reasons,
     updatedAt: iso(row.updated_at),
-    suggestedActions: ["rebuild_index"]
+    suggestedActions: [...suggestedActions]
   };
 }
 
@@ -270,7 +273,8 @@ export async function listIndexDriftMaintenanceQueue(
 ): Promise<MaintenanceQueueListResult> {
   await ensureProjectsSchema();
   const owner = normalizeOwner(ownerAccountId);
-  const values: Array<string | number> = [owner];
+  const unusedDays = positiveEnvInt("WORKBENCH_MAINTENANCE_UNUSED_DAYS", 90);
+  const values: Array<string | number> = [owner, unusedDays];
   let projectFilter = "";
   if (options?.projectId) {
     values.push(options.projectId);
@@ -293,14 +297,20 @@ export async function listIndexDriftMaintenanceQueue(
         NULL::text AS lifecycle_state,
         NULL::timestamptz AS review_after,
         NULL::timestamptz AS last_confirmed_at,
-        i.source_updated_at AS updated_at,
-        ARRAY['source_changed'::text] AS reasons
+        GREATEST(i.source_updated_at, i.indexed_at) AS updated_at,
+        ARRAY_REMOVE(ARRAY[
+          CASE WHEN i.source_updated_at > i.indexed_at THEN 'source_changed'::text END,
+          CASE
+            WHEN i.indexed_at < NOW() - ($2::int * INTERVAL '1 day')
+             AND (i.last_read_at IS NULL OR i.last_read_at < NOW() - ($2::int * INTERVAL '1 day'))
+            THEN 'unused'::text
+          END
+        ], NULL)::text[] AS reasons
       FROM project_index_entries i
       JOIN projects p ON p.id = i.project_id
       WHERE p.owner_account_id = $1
         AND p.status = 'active'
         AND i.is_deleted = FALSE
-        AND i.source_updated_at > i.indexed_at
         ${projectFilter}
     ),
     filtered AS (

@@ -150,6 +150,7 @@ export const MAINTENANCE_QUEUE_REASONS = [
   "conflict",
   "manual",
   "source_changed",
+  "unused",
   "brief_unmaintained"
 ] as const;
 export type MaintenanceQueueReason = (typeof MAINTENANCE_QUEUE_REASONS)[number];
@@ -199,6 +200,7 @@ export interface ProjectIndexEntry {
   contentHash?: string;
   sourceUpdatedAt: string;
   indexedAt: string;
+  lastReadAt?: string;
   metadataJson: Record<string, unknown>;
 }
 
