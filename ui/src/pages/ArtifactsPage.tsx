@@ -56,6 +56,7 @@ import {
 } from "../artifacts/utils/notionMarkdown";
 import { parseMarkdownOutline, type MarkdownOutlineItem } from "../artifacts/utils/markdownOutline";
 import { insertBelowOutlineEntry, moveOutlineSection } from "../artifacts/utils/markdownOutlineOps";
+import { recordRecentArtifact } from "../artifacts/utils/recents";
 import { useArtifactsMarkdownEditor } from "../artifacts/hooks/useArtifactsMarkdownEditor";
 import {
   IcoClose,
@@ -268,7 +269,7 @@ export function ArtifactsPage() {
   const contextMenuPosition = useMemo(() => {
     if (!contextMenu) return null;
     const menuWidth = 180;
-    const menuHeight = 280;
+    const menuHeight = 320;
     const margin = 8;
     const maxX = window.innerWidth - menuWidth - margin;
     const maxY = window.innerHeight - menuHeight - margin;
@@ -528,6 +529,7 @@ export function ArtifactsPage() {
       .then((item) => {
         if (cancelled) return;
         const nextDraft = itemToDraft(item);
+        recordRecentArtifact(item);
         setDraft(nextDraft);
         setMode("view");
       })
@@ -888,37 +890,26 @@ export function ArtifactsPage() {
     });
   };
 
-  const handleArtifactSurfaceContextMenu = (event: MouseEvent<HTMLElement>) => {
-    if (event.defaultPrevented) {
-      return;
-    }
-
-    event.preventDefault();
-    event.stopPropagation();
-    setTableContextMenu(null);
-    setEditorContextMenu(null);
-    setOutlineContextMenu(null);
-
-    if (hasDetailSelection) {
-      setContextMenu(null);
-      return;
-    }
-
-    setContextMenu({
-      x: event.clientX,
-      y: event.clientY,
-      target: {
-        type: "background",
-        folderPath: currentFolderPath
-      }
-    });
-  };
-
   const resolveContextTargetPath = (target: TreeContextTarget): string => {
     if (target.type === "item") {
       return normalizePath(target.item.path);
     }
     return normalizePath(target.folderPath);
+  };
+
+  const artifactItemUrl = (itemId: string) => `/artifacts?item=${encodeURIComponent(itemId)}`;
+
+  const openArtifactItemInNewWindow = async (item: ArtifactItem) => {
+    const url = artifactItemUrl(item.id);
+    if (isTauriNativeRuntime()) {
+      try {
+        await window.__TAURI_INTERNALS__?.invoke("open_app_window", { url });
+        return;
+      } catch {
+        // The native command lands in the next wave; browser fallback keeps the action useful.
+      }
+    }
+    window.open(url, "_blank", "noopener");
   };
 
   const copyTextToClipboard = async (value: string) => {
@@ -2444,7 +2435,7 @@ export function ArtifactsPage() {
           </header>
         ) : null}
 
-        <div className="va-shell-content" onContextMenu={handleArtifactSurfaceContextMenu}>
+        <div className="va-shell-content">
           {error ? <p className="va-inline-error">{error}</p> : null}
 
           {!hasDetailSelection ? (
@@ -2455,12 +2446,6 @@ export function ArtifactsPage() {
             ]
               .filter(Boolean)
               .join(" ")}
-            onContextMenu={(event) =>
-              openContextMenu(event, {
-                type: "background",
-                folderPath: currentFolderPath
-              })
-            }
             onDragEnter={handleRootDragOver}
             onDragOver={handleRootDragOver}
             onDrop={handleRootDrop}
@@ -2863,6 +2848,21 @@ export function ArtifactsPage() {
           >
             Open
           </button>
+          {contextMenu.target.type === "item" ? (
+            <button
+              type="button"
+              onClick={() =>
+                executeContextAction(async () => {
+                  if (contextMenu.target.type !== "item") {
+                    return;
+                  }
+                  await openArtifactItemInNewWindow(contextMenu.target.item);
+                })
+              }
+            >
+              Open in New Window
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={() =>

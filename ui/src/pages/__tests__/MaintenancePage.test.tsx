@@ -116,6 +116,38 @@ afterEach(() => {
 });
 
 describe("MaintenancePage", () => {
+  it("shows the all-clear empty state when no queue items are waiting", async () => {
+    vi.mocked(maintenanceApi.queue).mockResolvedValue(queueResult([], {}));
+    renderPage();
+
+    expect(await screen.findByRole("heading", { name: "All clear" })).toBeTruthy();
+    expect(screen.getByText("No maintenance work is waiting right now.")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Refresh" }).length).toBeGreaterThan(0);
+    expect(screen.queryByText("Review memory, notes, briefs, and index drift across active Projects.")).toBeNull();
+  });
+
+  it("shows a filtered empty state and can clear filters", async () => {
+    vi.mocked(maintenanceApi.queue).mockResolvedValue(queueResult([], {}));
+    renderPage();
+
+    expect(await screen.findByRole("heading", { name: "All clear" })).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "raw" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(await screen.findByRole("heading", { name: "No matching items" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+
+    await waitFor(() => {
+      expect(maintenanceApi.queue).toHaveBeenLastCalledWith({
+        kind: undefined,
+        reason: undefined,
+        projectId: undefined,
+        cursor: undefined,
+        limit: 20
+      });
+    });
+  });
+
   it("loads queue items and sends filter query options to the API", async () => {
     renderPage();
 

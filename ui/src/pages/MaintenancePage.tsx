@@ -92,6 +92,15 @@ function decrementTotals(
   return { byReason };
 }
 
+function EmptyStateIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+      <path d="M5 12.5l4 4L19 6.5" />
+      <circle cx="12" cy="12" r="9" />
+    </svg>
+  );
+}
+
 export function MaintenancePage() {
   const [filters, setFilters] = useState<FilterState>(initialFilters);
   const [appliedFilters, setAppliedFilters] = useState<FilterState>(initialFilters);
@@ -139,6 +148,13 @@ export function MaintenancePage() {
     () => QUEUE_REASONS.filter((reason) => (totals.byReason[reason] ?? 0) > 0),
     [totals]
   );
+  const visibleItems = useMemo(
+    () => items.filter((item) => itemMatchesReasonFilter(item, appliedFilters.reason)),
+    [appliedFilters.reason, items]
+  );
+  const hasAppliedFilters = Boolean(
+    appliedFilters.kind || appliedFilters.reason || appliedFilters.projectId.trim()
+  );
 
   const patchDraft = (itemId: string, patch: ItemDraft) => {
     setDrafts((prev) => ({ ...prev, [itemId]: { ...prev[itemId], ...patch } }));
@@ -147,6 +163,11 @@ export function MaintenancePage() {
   const applyFilters = (event: FormEvent) => {
     event.preventDefault();
     setAppliedFilters({ ...filters, projectId: filters.projectId.trim() });
+  };
+
+  const clearFilters = () => {
+    setFilters(initialFilters);
+    setAppliedFilters(initialFilters);
   };
 
   const removeOptimistically = async (item: MaintenanceQueueItem, operation: () => Promise<unknown>) => {
@@ -333,7 +354,6 @@ export function MaintenancePage() {
       <header className="maintenance-header">
         <div>
           <h1>Maintenance</h1>
-          <p>Review memory, notes, briefs, and index drift across active Projects.</p>
         </div>
         <button type="button" className="ghost-button" onClick={() => void load()} disabled={isLoading}>Refresh</button>
       </header>
@@ -391,8 +411,23 @@ export function MaintenancePage() {
 
       <section className="maintenance-list" aria-label="Maintenance queue">
         {isLoading ? <p className="maintenance-muted">Loading maintenance queue...</p> : null}
-        {!isLoading && items.length === 0 ? <p className="maintenance-muted">No maintenance items match the current filters.</p> : null}
-        {items.filter((item) => itemMatchesReasonFilter(item, appliedFilters.reason)).map((item) => (
+        {!isLoading && visibleItems.length === 0 ? (
+          <div className="maintenance-empty-card">
+            <span className="maintenance-empty-icon"><EmptyStateIcon /></span>
+            <h2>{hasAppliedFilters ? "No matching items" : "All clear"}</h2>
+            <p>
+              {hasAppliedFilters
+                ? "No maintenance items match the current filters."
+                : "No maintenance work is waiting right now."}
+            </p>
+            {hasAppliedFilters ? (
+              <button type="button" className="ghost-button" onClick={clearFilters}>Clear filters</button>
+            ) : (
+              <button type="button" onClick={() => void load()} disabled={isLoading}>Refresh</button>
+            )}
+          </div>
+        ) : null}
+        {visibleItems.map((item) => (
           <article className="maintenance-item" key={item.id} aria-label={item.title}>
             <div className="maintenance-item-main">
               <div className="maintenance-item-top">

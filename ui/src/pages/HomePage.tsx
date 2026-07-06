@@ -1,5 +1,6 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { readRecentArtifacts, type RecentArtifact } from "../artifacts/utils/recents";
 import { projectsApi, readWorkbenchSession, tasksApi } from "../lib/api";
 import {
   getDefaultLocationPreset,
@@ -204,6 +205,24 @@ function buildMonthCells(monthDate: Date): CalendarCell[] {
   return cells;
 }
 
+function formatRecentArtifactTime(value: string, now: Date): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "unknown";
+  const diffMs = Math.max(0, now.getTime() - date.getTime());
+  const diffMinutes = Math.floor(diffMs / 60000);
+  if (diffMinutes < 1) return "just now";
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function artifactLink(item: RecentArtifact): string {
+  return `/artifacts?item=${encodeURIComponent(item.itemId)}`;
+}
+
 export function HomePage() {
   const navigate = useNavigate();
   const currentUser = readWorkbenchSession();
@@ -223,6 +242,7 @@ export function HomePage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isCalendarListView, setIsCalendarListView] = useState(false);
   const [calendarStatusMap, setCalendarStatusMap] = useState<Map<string, Map<string, TaskStatus>>>(new Map());
+  const [recentArtifacts, setRecentArtifacts] = useState<RecentArtifact[]>(() => readRecentArtifacts(8));
   const weatherPanelRef = useRef<HTMLDivElement | null>(null);
   const calendarPanelRef = useRef<HTMLElement | null>(null);
 
@@ -304,6 +324,20 @@ export function HomePage() {
     return () => {
       window.removeEventListener("storage", reloadSettings);
       window.removeEventListener("workbench-ui-settings-changed", reloadSettings);
+    };
+  }, []);
+
+  useEffect(() => {
+    const reloadRecentArtifacts = () => {
+      setRecentArtifacts(readRecentArtifacts(8));
+    };
+
+    window.addEventListener("storage", reloadRecentArtifacts);
+    window.addEventListener("workbench-recent-artifacts-changed", reloadRecentArtifacts);
+
+    return () => {
+      window.removeEventListener("storage", reloadRecentArtifacts);
+      window.removeEventListener("workbench-recent-artifacts-changed", reloadRecentArtifacts);
     };
   }, []);
 
@@ -628,6 +662,45 @@ export function HomePage() {
           </div>
         </article>
 
+        <article className="panel home-panel home-panel-recent">
+          <div className="panel-heading compact">
+            <div className="panel-title-group">
+              <span className="panel-title-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <path d="M5 5.5A2.5 2.5 0 0 1 7.5 3h6L19 8.5v10A2.5 2.5 0 0 1 16.5 21h-9A2.5 2.5 0 0 1 5 18.5v-13z" />
+                  <path d="M13 3v5.5h6" />
+                  <path d="M8.5 13h7M8.5 16h5" />
+                </svg>
+              </span>
+              <h3>Recent Artifacts</h3>
+            </div>
+            <Link to="/artifacts" className="panel-jump-link">
+              <span>Open Artifacts</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                <path d="M7 17L17 7" />
+                <path d="M9 7h8v8" />
+              </svg>
+            </Link>
+          </div>
+
+          <div className="recent-artifacts-list">
+            {recentArtifacts.length === 0 ? (
+              <p className="recent-artifacts-empty">No recent artifacts yet</p>
+            ) : recentArtifacts.map((item) => (
+              <Link key={item.itemId} className="recent-artifact-row" to={artifactLink(item)}>
+                <span className={`recent-artifact-kind kind-${item.kind}`} aria-hidden="true">
+                  {item.kind === "note" ? "N" : "F"}
+                </span>
+                <span className="recent-artifact-main">
+                  <strong>{item.title}</strong>
+                  <span>{item.path || "/"}</span>
+                </span>
+                <time dateTime={item.at}>{formatRecentArtifactTime(item.at, now)}</time>
+              </Link>
+            ))}
+          </div>
+        </article>
+
         <article
           className={`panel home-panel home-panel-calendar${isCalendarListView ? " is-list" : ""}`}
           ref={calendarPanelRef}
@@ -739,4 +812,3 @@ export function HomePage() {
     </section>
   );
 }
-

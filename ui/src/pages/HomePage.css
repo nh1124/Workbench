@@ -294,6 +294,13 @@
   height: auto;
 }
 
+.home-panel-recent {
+  border-color: rgba(56, 71, 98, 0.85);
+  background:
+    linear-gradient(170deg, rgba(17, 26, 48, 0.92), rgba(10, 18, 34, 0.98));
+  box-shadow: none;
+}
+
 .home-panel-calendar {
   min-width: 0;
   height: auto;
@@ -478,6 +485,95 @@
   height: 100%;
   border-radius: inherit;
   background: linear-gradient(90deg, #67e8f9, #60a5fa 75%);
+}
+
+.recent-artifacts-list {
+  padding: 0.7rem 0.82rem 0.86rem;
+  display: grid;
+  gap: 0.38rem;
+  align-content: start;
+}
+
+.recent-artifacts-empty {
+  margin: 0;
+  padding: 0.6rem 0.2rem;
+  color: #657590;
+  font-size: 0.76rem;
+  text-align: center;
+}
+
+.recent-artifact-row {
+  min-width: 0;
+  min-height: 2.8rem;
+  border: 1px solid rgba(56, 71, 98, 0.68);
+  border-radius: 12px;
+  background: rgba(12, 20, 38, 0.74);
+  color: inherit;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.62rem;
+  padding: 0.52rem 0.62rem;
+  text-decoration: none;
+}
+
+.recent-artifact-row:hover {
+  border-color: rgba(103, 232, 249, 0.4);
+  background: rgba(24, 41, 68, 0.58);
+}
+
+.recent-artifact-kind {
+  width: 1.45rem;
+  height: 1.45rem;
+  border: 1px solid rgba(92, 128, 170, 0.65);
+  border-radius: 9px;
+  background: rgba(18, 32, 55, 0.9);
+  color: #a9c7ee;
+  display: inline-grid;
+  place-items: center;
+  font-size: 0.66rem;
+  font-weight: 800;
+}
+
+.recent-artifact-kind.kind-note {
+  border-color: rgba(103, 232, 249, 0.34);
+  color: #a5f3fc;
+}
+
+.recent-artifact-kind.kind-file {
+  border-color: rgba(147, 197, 253, 0.34);
+  color: #bfdbfe;
+}
+
+.recent-artifact-main {
+  min-width: 0;
+  display: grid;
+  gap: 0.08rem;
+}
+
+.recent-artifact-main strong {
+  color: #dbe7f7;
+  font-size: 0.82rem;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-artifact-main span {
+  color: #788daa;
+  font-family: "JetBrains Mono", "Consolas", monospace;
+  font-size: 0.65rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-artifact-row time {
+  color: #6f809c;
+  font-size: 0.68rem;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .mini-calendar-wrap {
@@ -672,6 +768,11 @@
     grid-template-columns: minmax(380px, 1.05fr) minmax(560px, 0.95fr);
     align-items: start;
   }
+
+  .home-panel-calendar {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
 }
 
 @media (max-width: 1340px) {
@@ -713,6 +814,7 @@
   }
 
   .progress-list,
+  .recent-artifacts-list,
   .mini-calendar-wrap,
   .mini-calendar-list {
     padding-left: 0.82rem;

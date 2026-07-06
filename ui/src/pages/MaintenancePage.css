@@ -1,7 +1,7 @@
 .maintenance-page {
   display: flex;
   flex-direction: column;
-  gap: 0.9rem;
+  gap: 0.78rem;
   width: min(1160px, calc(100% - 1rem));
   height: 100%;
   min-height: 0;
@@ -15,32 +15,28 @@
 .maintenance-header {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: center;
   gap: 1rem;
   border-bottom: 1px solid rgba(51, 65, 85, 0.65);
-  padding-bottom: 0.75rem;
+  padding-bottom: 0.7rem;
 }
 
 .maintenance-header h1 {
   margin: 0;
   color: #f8fafc;
-  font-size: 2rem;
-}
-
-.maintenance-header p {
-  margin: 0.25rem 0 0;
-  color: #94a3b8;
+  font-size: 1.86rem;
+  line-height: 1.05;
 }
 
 .maintenance-filter-bar {
   display: grid;
   grid-template-columns: 180px 220px minmax(220px, 1fr) auto;
-  gap: 0.7rem;
+  gap: 0.62rem;
   align-items: end;
-  padding: 0.72rem;
+  padding: 0.66rem;
   border: 1px solid rgba(51, 65, 85, 0.8);
-  border-radius: 14px;
-  background: linear-gradient(160deg, rgba(17, 30, 53, 0.85), rgba(10, 18, 34, 0.95));
+  border-radius: 12px;
+  background: linear-gradient(170deg, rgba(17, 26, 48, 0.9), rgba(10, 18, 34, 0.98));
 }
 
 .maintenance-filter-bar label,
@@ -61,10 +57,10 @@
 .maintenance-actions textarea {
   min-width: 0;
   border: 1px solid rgba(71, 85, 105, 0.72);
-  border-radius: 10px;
+  border-radius: 9px;
   background: rgba(15, 23, 42, 0.82);
   color: #e5e7eb;
-  padding: 0.5rem 0.62rem;
+  padding: 0.46rem 0.58rem;
 }
 
 .maintenance-filter-bar button,
@@ -72,10 +68,11 @@
 .maintenance-load-more button,
 .maintenance-link-button {
   border: 1px solid rgba(103, 232, 249, 0.35);
-  border-radius: 10px;
+  border-radius: 9px;
   background: rgba(8, 145, 178, 0.18);
   color: #a5f3fc;
-  padding: 0.55rem 0.75rem;
+  min-height: 2rem;
+  padding: 0.46rem 0.72rem;
   font-weight: 800;
   text-decoration: none;
 }
@@ -91,20 +88,33 @@
 .maintenance-totals {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.45rem;
+  gap: 0.38rem;
+  align-items: center;
 }
 
 .maintenance-total {
-  border: 1px solid rgba(71, 85, 105, 0.72);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 1.75rem;
+  border: 1px solid rgba(71, 85, 105, 0.7);
   border-radius: 999px;
-  background: rgba(15, 23, 42, 0.76);
+  background: rgba(15, 23, 42, 0.72);
   color: #cbd5e1;
-  padding: 0.28rem 0.6rem;
+  padding: 0.22rem 0.58rem;
   font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.maintenance-total strong {
+  color: #e2e8f0;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .maintenance-total.active {
   border-color: rgba(103, 232, 249, 0.55);
+  background: rgba(8, 145, 178, 0.18);
   color: #a5f3fc;
 }
 
@@ -114,23 +124,30 @@
 
 .maintenance-list {
   display: grid;
-  gap: 0.72rem;
+  gap: 0.6rem;
   min-height: 0;
 }
 
 .maintenance-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
-  gap: 0.8rem;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
+  gap: 0.72rem;
   border: 1px solid rgba(51, 65, 85, 0.72);
-  border-radius: 14px;
+  border-radius: 12px;
   background: linear-gradient(180deg, rgba(13, 22, 38, 0.88), rgba(8, 14, 27, 0.96));
-  padding: 0.85rem;
+  padding: 0.72rem;
+  transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
+}
+
+.maintenance-item:hover {
+  border-color: rgba(86, 118, 158, 0.85);
+  background: linear-gradient(180deg, rgba(17, 29, 50, 0.92), rgba(9, 16, 30, 0.98));
+  transform: translateY(-1px);
 }
 
 .maintenance-item-main {
   display: grid;
-  gap: 0.45rem;
+  gap: 0.38rem;
   min-width: 0;
 }
 
@@ -150,12 +167,12 @@
 .maintenance-badges {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem;
+  gap: 0.3rem;
 }
 
 .maintenance-badges span {
   border: 1px solid rgba(71, 85, 105, 0.7);
-  border-radius: 8px;
+  border-radius: 7px;
   padding: 0.12rem 0.45rem;
   font-size: 0.62rem;
   font-weight: 800;
@@ -206,7 +223,8 @@
 .maintenance-item p {
   margin: 0;
   color: #c4d1e4;
-  line-height: 1.45;
+  font-size: 0.84rem;
+  line-height: 1.42;
   white-space: pre-wrap;
 }
 
@@ -225,7 +243,7 @@
 .maintenance-actions {
   display: grid;
   align-content: start;
-  gap: 0.48rem;
+  gap: 0.42rem;
 }
 
 .maintenance-actions button:disabled {
@@ -277,6 +295,64 @@
 .maintenance-muted {
   margin: 0;
   color: #94a3b8;
+}
+
+.maintenance-empty-card {
+  width: min(420px, 100%);
+  justify-self: center;
+  margin: 1.6rem 0 0.6rem;
+  border: 1px solid rgba(56, 71, 98, 0.78);
+  border-radius: 14px;
+  background: linear-gradient(170deg, rgba(17, 26, 48, 0.92), rgba(10, 18, 34, 0.98));
+  display: grid;
+  justify-items: center;
+  gap: 0.48rem;
+  padding: 1.25rem 1.1rem;
+  text-align: center;
+}
+
+.maintenance-empty-icon {
+  width: 2.35rem;
+  height: 2.35rem;
+  border: 1px solid rgba(103, 232, 249, 0.28);
+  border-radius: 12px;
+  background: rgba(8, 145, 178, 0.14);
+  color: #a5f3fc;
+  display: grid;
+  place-items: center;
+}
+
+.maintenance-empty-icon svg {
+  width: 1.35rem;
+  height: 1.35rem;
+}
+
+.maintenance-empty-card h2 {
+  margin: 0.08rem 0 0;
+  color: #eef5ff;
+  font-size: 1.02rem;
+}
+
+.maintenance-empty-card p {
+  margin: 0;
+  color: #8fa4c0;
+  font-size: 0.82rem;
+}
+
+.maintenance-empty-card button {
+  margin-top: 0.16rem;
+  border: 1px solid rgba(103, 232, 249, 0.35);
+  border-radius: 9px;
+  background: rgba(8, 145, 178, 0.18);
+  color: #a5f3fc;
+  min-height: 2rem;
+  padding: 0.46rem 0.72rem;
+  font-weight: 800;
+}
+
+.maintenance-empty-card button:hover {
+  border-color: rgba(103, 232, 249, 0.62);
+  background: rgba(8, 145, 178, 0.3);
 }
 
 .maintenance-load-more {
