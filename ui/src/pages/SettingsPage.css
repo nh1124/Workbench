@@ -1060,6 +1060,94 @@
   overflow-wrap: anywhere;
 }
 
+.account-capture-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.42rem;
+  align-items: center;
+}
+
+.account-capture-actions button,
+.account-capture-save-row button {
+  min-height: 1.95rem;
+  border-radius: 9px;
+  font-size: 0.72rem;
+  padding: 0.36rem 0.58rem;
+}
+
+.account-capture-config {
+  border: 1px solid rgba(51, 65, 85, 0.68);
+  border-radius: 9px;
+  background: rgba(15, 23, 42, 0.58);
+  padding: 0.64rem;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(160px, 1fr));
+  gap: 0.58rem;
+  align-items: start;
+}
+
+.account-capture-config label {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.account-capture-config label span {
+  color: #cbd5e1;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.account-capture-config input,
+.account-capture-config textarea {
+  width: 100%;
+  border: 1px solid #334155;
+  border-radius: 9px;
+  background: #1f2a41;
+  color: #e5eefb;
+  font-size: 0.82rem;
+  padding: 0.5rem 0.62rem;
+}
+
+.account-capture-config input {
+  height: 2.2rem;
+}
+
+.account-capture-config textarea {
+  min-height: 6.4rem;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.account-capture-config input:disabled,
+.account-capture-config textarea:disabled {
+  color: #64748b;
+  cursor: not-allowed;
+}
+
+.account-capture-patterns,
+.account-capture-save-row {
+  grid-column: 1 / -1;
+}
+
+.account-capture-save-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.account-capture-privacy {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
+.account-capture-message {
+  margin: 0;
+}
+
 .account-local-confirmations {
   display: grid;
   gap: 0.48rem;
@@ -1242,6 +1330,10 @@
   }
 
   .account-local-controls-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .account-capture-config {
     grid-template-columns: 1fr;
   }
 

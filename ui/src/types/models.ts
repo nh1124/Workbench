@@ -836,6 +836,40 @@ export interface LocalDaemonPendingJobConfirmation {
   };
 }
 
+export interface CaptureDaemonConfig {
+  enabled: boolean;
+  intervalSeconds: number;
+  retentionDays: number;
+  excludePatterns: string[];
+}
+
+export type CaptureDaemonConfigPatch = Partial<
+  Pick<CaptureDaemonConfig, "intervalSeconds" | "retentionDays" | "excludePatterns">
+>;
+
+export interface CaptureDaemonStatus {
+  enabled: boolean;
+  collectorAlive: boolean;
+  lastSampleAt?: string;
+  lastSummaryAt?: string;
+  sampleCount24h: number;
+}
+
+export interface CaptureDaemonState {
+  dbPath?: string;
+  config: CaptureDaemonConfig;
+  status: CaptureDaemonStatus;
+}
+
+export interface CaptureSummaryResult {
+  summaryDate: string;
+  noteResourceId?: string;
+  generatedAt: string;
+  sampleCount: number;
+  action: "create" | "update";
+  title: string;
+}
+
 export interface LocalDaemonStatus {
   status: string;
   coreUrl: string;
@@ -867,6 +901,7 @@ export interface LocalDaemonStatus {
   outboxPending?: number;
   outboxFailed?: number;
   conflictsOpen?: number;
+  capture?: CaptureDaemonStatus;
 }
 
 export type LocalDaemonSyncErrorCategory =

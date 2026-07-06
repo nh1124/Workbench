@@ -30,6 +30,10 @@ import type {
   ImageSize,
   ArtifactItem,
   ArtifactProjectSummary,
+  CaptureDaemonConfig,
+  CaptureDaemonConfigPatch,
+  CaptureDaemonState,
+  CaptureSummaryResult,
   IntegrationManifest,
   LocalClientAuditEventRecord,
   LocalClientRecord,
@@ -1900,6 +1904,28 @@ export const coreApi = {
 export const localDaemonApi = {
   status: (): Promise<LocalDaemonStatus> =>
     requestLocalDaemonJson<LocalDaemonStatus>("/status"),
+  captureStatus: (): Promise<CaptureDaemonState> =>
+    requestLocalDaemonJson<CaptureDaemonState>("/capture/status"),
+  captureConfig: (): Promise<CaptureDaemonConfig> =>
+    requestLocalDaemonJson<CaptureDaemonConfig>("/capture/config"),
+  updateCaptureConfig: (payload: CaptureDaemonConfigPatch): Promise<CaptureDaemonState> =>
+    requestLocalDaemonJson<CaptureDaemonState>("/capture/config", {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }),
+  enableCapture: (): Promise<CaptureDaemonState> =>
+    requestLocalDaemonJson<CaptureDaemonState>("/capture/enable", {
+      method: "POST"
+    }),
+  disableCapture: (): Promise<CaptureDaemonState> =>
+    requestLocalDaemonJson<CaptureDaemonState>("/capture/disable", {
+      method: "POST"
+    }),
+  summarizeCapture: (date?: string): Promise<CaptureSummaryResult> =>
+    requestLocalDaemonJson<CaptureSummaryResult>("/capture/summarize", {
+      method: "POST",
+      body: JSON.stringify(date ? { date } : {})
+    }),
   requestRescan: (): Promise<{ scheduled: boolean; status: LocalDaemonStatus }> =>
     requestLocalDaemonJson<{ scheduled: boolean; status: LocalDaemonStatus }>("/api/sync/rescan", {
       method: "POST"

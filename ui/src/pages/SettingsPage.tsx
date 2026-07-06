@@ -29,6 +29,7 @@ import {
 import type {
   IntegrationConfigState,
   IntegrationManifest,
+  CaptureDaemonState,
   LocalClientAuditEventRecord,
   LocalClientRecord,
   LocalDaemonConflictRecord,
@@ -190,6 +191,286 @@ function toStateMapFromDb(configs: StoredIntegrationConfig[]): Record<string, In
         values: config.values
       }
     ])
+  );
+}
+
+const CAPTURE_STATUS_POLL_MS = 30000;
+
+type CaptureDaemonApi = Pick<
+  typeof localDaemonApi,
+  "captureStatus" | "enableCapture" | "disableCapture" | "updateCaptureConfig" | "summarizeCapture"
+>;
+
+function formatCaptureTimestamp(value?: string): string {
+  if (!value) return "Never";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString();
+}
+
+function formatCaptureDate(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function splitCaptureExcludePatterns(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function captureErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
+export function CaptureSettingsSection({
+  nativeRuntimeAvailable,
+  api = localDaemonApi,
+  pollIntervalMs = CAPTURE_STATUS_POLL_MS
+}: {
+  nativeRuntimeAvailable: boolean;
+  api?: CaptureDaemonApi;
+  pollIntervalMs?: number;
+}) {
+  const [captureState, setCaptureState] = useState<CaptureDaemonState | undefined>(undefined);
+  const [captureMessage, setCaptureMessage] = useState("");
+  const [captureLoading, setCaptureLoading] = useState(false);
+  const [captureActionLoading, setCaptureActionLoading] = useState(false);
+  const [intervalSeconds, setIntervalSeconds] = useState("15");
+  const [retentionDays, setRetentionDays] = useState("14");
+  const [excludePatterns, setExcludePatterns] = useState("");
+  const captureFormInitializedRef = useRef(false);
+
+  function applyCaptureState(next: CaptureDaemonState, options: { syncForm?: boolean } = {}): void {
+    setCaptureState(next);
+    if (options.syncForm === false && captureFormInitializedRef.current) return;
+    setIntervalSeconds(String(next.config.intervalSeconds));
+    setRetentionDays(String(next.config.retentionDays));
+    setExcludePatterns(next.config.excludePatterns.join("\n"));
+    captureFormInitializedRef.current = true;
+  }
+
+  async function readCaptureState(options: { showMessage?: boolean; quiet?: boolean } = {}): Promise<void> {
+    if (!nativeRuntimeAvailable) return;
+    if (!options.quiet) setCaptureLoading(true);
+    try {
+      const next = await api.captureStatus();
+      applyCaptureState(next);
+      if (options.showMessage) {
+        setCaptureMessage("Capture status loaded.");
+      } else {
+        setCaptureMessage((current) => current.startsWith("Capture daemon is not reachable") ? "" : current);
+      }
+    } catch (error) {
+      setCaptureState(undefined);
+      setCaptureMessage(`Capture daemon is not reachable: ${captureErrorMessage(error, "status unavailable")}`);
+    } finally {
+      if (!options.quiet) setCaptureLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!nativeRuntimeAvailable) return;
+    let cancelled = false;
+
+    const poll = async () => {
+      try {
+        const next = await api.captureStatus();
+        if (cancelled) return;
+        applyCaptureState(next, { syncForm: false });
+        setCaptureMessage((current) => current.startsWith("Capture daemon is not reachable") ? "" : current);
+      } catch (error) {
+        if (cancelled) return;
+        setCaptureState(undefined);
+        setCaptureMessage(`Capture daemon is not reachable: ${captureErrorMessage(error, "status unavailable")}`);
+      }
+    };
+
+    void poll();
+    if (pollIntervalMs <= 0) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const intervalId = window.setInterval(() => void poll(), pollIntervalMs);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [api, nativeRuntimeAvailable, pollIntervalMs]);
+
+  async function setCaptureEnabled(enabled: boolean): Promise<void> {
+    setCaptureActionLoading(true);
+    setCaptureMessage("");
+    try {
+      const next = enabled ? await api.enableCapture() : await api.disableCapture();
+      applyCaptureState(next);
+      setCaptureMessage(enabled ? "Capture enabled." : "Capture disabled.");
+    } catch (error) {
+      setCaptureMessage(
+        `${enabled ? "Capture could not start" : "Capture could not stop"}: ${captureErrorMessage(error, "request failed")}`
+      );
+    } finally {
+      setCaptureActionLoading(false);
+    }
+  }
+
+  async function saveCaptureConfig(): Promise<void> {
+    const nextInterval = Number(intervalSeconds);
+    const nextRetention = Number(retentionDays);
+    if (!Number.isInteger(nextInterval) || nextInterval < 5 || nextInterval > 300) {
+      setCaptureMessage("Interval must be a whole number from 5 to 300 seconds.");
+      return;
+    }
+    if (!Number.isInteger(nextRetention) || nextRetention < 1 || nextRetention > 90) {
+      setCaptureMessage("Retention must be a whole number from 1 to 90 days.");
+      return;
+    }
+
+    setCaptureActionLoading(true);
+    setCaptureMessage("");
+    try {
+      const next = await api.updateCaptureConfig({
+        intervalSeconds: nextInterval,
+        retentionDays: nextRetention,
+        excludePatterns: splitCaptureExcludePatterns(excludePatterns)
+      });
+      applyCaptureState(next);
+      setCaptureMessage("Capture settings saved.");
+    } catch (error) {
+      setCaptureMessage(`Capture settings were not saved: ${captureErrorMessage(error, "request failed")}`);
+    } finally {
+      setCaptureActionLoading(false);
+    }
+  }
+
+  async function generateTodaySummary(): Promise<void> {
+    setCaptureActionLoading(true);
+    setCaptureMessage("");
+    try {
+      const result = await api.summarizeCapture(formatCaptureDate());
+      setCaptureMessage(`${result.title} ${result.action === "update" ? "updated" : "created"}.`);
+      await readCaptureState({ quiet: true });
+    } catch (error) {
+      setCaptureMessage(`Capture summary was not generated: ${captureErrorMessage(error, "request failed")}`);
+    } finally {
+      setCaptureActionLoading(false);
+    }
+  }
+
+  if (!nativeRuntimeAvailable) return null;
+
+  const status = captureState?.status;
+  const controlsDisabled = !captureState || captureActionLoading;
+
+  return (
+    <section className="account-local-daemon account-capture-section" aria-label="Capture">
+      <div className="account-local-clients-header">
+        <div>
+          <div className="settings-title-with-info">
+            <h3>Capture</h3>
+            <InfoHint label="Collects local app and window-title activity for daily Workbench notes. Desktop runtime only." />
+          </div>
+        </div>
+        <button type="button" onClick={() => void readCaptureState({ showMessage: true })} disabled={captureLoading}>
+          {captureLoading ? "Refreshing..." : "Refresh"}
+        </button>
+      </div>
+
+      {status ? (
+        <div className="account-local-daemon-status account-capture-status">
+          <span className={status.enabled ? "online" : "offline"}>{status.enabled ? "Enabled" : "Disabled"}</span>
+          <span className={status.collectorAlive ? "online" : "offline"}>
+            {status.collectorAlive ? "Collector Alive" : "Collector Idle"}
+          </span>
+          <span>Last sample {formatCaptureTimestamp(status.lastSampleAt)}</span>
+          <span>Last summary {formatCaptureTimestamp(status.lastSummaryAt)}</span>
+          <span>{status.sampleCount24h} samples / 24h</span>
+        </div>
+      ) : (
+        <p className="info">Capture status is not loaded. The daemon may be offline.</p>
+      )}
+
+      <div className="account-capture-actions">
+        <button
+          type="button"
+          onClick={() => void setCaptureEnabled(true)}
+          disabled={controlsDisabled || status?.enabled === true}
+        >
+          Enable
+        </button>
+        <button
+          type="button"
+          onClick={() => void setCaptureEnabled(false)}
+          disabled={controlsDisabled || status?.enabled !== true}
+        >
+          Disable
+        </button>
+        <button type="button" onClick={() => void generateTodaySummary()} disabled={controlsDisabled}>
+          Generate today's summary
+        </button>
+      </div>
+
+      <form
+        className="account-capture-config"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void saveCaptureConfig();
+        }}
+      >
+        <label>
+          <span>Interval Seconds</span>
+          <input
+            aria-label="Capture interval seconds"
+            type="number"
+            min="5"
+            max="300"
+            step="1"
+            value={intervalSeconds}
+            onChange={(event) => setIntervalSeconds(event.target.value)}
+            disabled={controlsDisabled}
+          />
+        </label>
+        <label>
+          <span>Retention Days</span>
+          <input
+            aria-label="Capture retention days"
+            type="number"
+            min="1"
+            max="90"
+            step="1"
+            value={retentionDays}
+            onChange={(event) => setRetentionDays(event.target.value)}
+            disabled={controlsDisabled}
+          />
+        </label>
+        <label className="account-capture-patterns">
+          <span>Exclude Patterns</span>
+          <textarea
+            aria-label="Capture exclude patterns"
+            value={excludePatterns}
+            onChange={(event) => setExcludePatterns(event.target.value)}
+            disabled={controlsDisabled}
+            rows={4}
+            placeholder="One regular expression per line"
+          />
+        </label>
+        <div className="account-capture-save-row">
+          <button type="submit" disabled={controlsDisabled}>
+            {captureActionLoading ? "Saving..." : "Save capture settings"}
+          </button>
+        </div>
+      </form>
+
+      <p className="account-capture-privacy">
+        収集はアプリ名とウィンドウタイトルのみ。生データはこのPCから出ません(要約noteのみ送信)。
+      </p>
+      {captureMessage ? <p className="info account-capture-message">{captureMessage}</p> : null}
+    </section>
   );
 }
 
@@ -1873,6 +2154,7 @@ export function SettingsPage() {
               </div>
               {localDaemonMessage ? <p className="info">{localDaemonMessage}</p> : null}
             </section>
+            <CaptureSettingsSection nativeRuntimeAvailable={nativeRuntimeAvailable} />
           </article>
         ) : null}
       </div>
