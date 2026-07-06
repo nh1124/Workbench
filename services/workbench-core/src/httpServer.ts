@@ -37,6 +37,8 @@ import {
 } from "./maintenanceActions.js";
 import { aggregateMaintenanceQueue, MaintenanceQueueInputError } from "./maintenanceQueue.js";
 import { getOAuthDynamicClient, saveOAuthDynamicClient } from "./oauthDynamicClientsStore.js";
+import { commitSyncChangesCursor, pullSyncChanges } from "./syncChanges.js";
+import { SyncConsumerCursorInputError } from "./syncConsumerCursorsStore.js";
 import {
   createArtifactNoteWithIndex,
   cleanupDeletedMindmapBestEffort,
@@ -1302,6 +1304,10 @@ async function requireSyncAccessContext(
 }
 
 export function respondInternalError(res: express.Response, error: unknown): express.Response {
+  if (error instanceof SyncConsumerCursorInputError) {
+    return res.status(error.status).json({ message: error.message, code: error.code });
+  }
+
   if (error instanceof LocalClientStoreError) {
     return res.status(error.status).json({ message: error.message, code: error.code });
   }
@@ -4366,6 +4372,49 @@ app.get("/api/sync/snapshot", async (req, res) => {
       baselineCursor,
       supportedDomains: SYNC_SUPPORTED_DOMAINS,
       domains: snapshot
+    });
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.get("/api/sync/changes", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const domains = typeof req.query.domains === "string"
+    ? req.query.domains
+    : Array.isArray(req.query.domains)
+      ? req.query.domains.filter((value): value is string => typeof value === "string")
+      : undefined;
+
+  try {
+    const result = await pullSyncChanges(authContext.userId, {
+      consumer: typeof req.query.consumer === "string" ? req.query.consumer : undefined,
+      cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
+      domains,
+      limit: typeof req.query.limit === "string" ? req.query.limit : undefined
+    });
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/sync/changes/commit", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const body = asJsonRecord(req.body);
+  try {
+    const committed = await commitSyncChangesCursor(authContext.userId, {
+      consumer: body.consumer,
+      cursor: body.cursor
+    });
+    return res.json({
+      consumer: committed.consumerId,
+      cursor: committed.cursor,
+      updatedAt: committed.updatedAt
     });
   } catch (error) {
     return respondInternalError(res, error);

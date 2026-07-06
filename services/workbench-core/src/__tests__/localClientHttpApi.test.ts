@@ -771,6 +771,129 @@ describe("local client HTTP APIs", () => {
     }
   });
 
+  it("serves bearer-only sync changes with consumer cursors and domain filters", async (t) => {
+    const harness = await requireHarness(t);
+    if (!harness) return;
+
+    const pool = harness.db.getCorePool();
+    const { userId, username } = await createTestUser(pool, "changes-a");
+    const { userId: otherUserId, username: otherUsername } = await createTestUser(pool, "changes-b");
+    const { accessToken } = harness.auth.issueTokenBundle({ userId, username });
+    const { accessToken: otherAccessToken } = harness.auth.issueTokenBundle({
+      userId: otherUserId,
+      username: otherUsername
+    });
+    const server = await startTestServer(harness);
+    try {
+      const unauthenticatedPull = await requestJson(server.baseUrl, "GET", "/api/sync/changes");
+      assert.equal(unauthenticatedPull.status, 401);
+      const unauthenticatedCommit = await requestJson(server.baseUrl, "POST", "/api/sync/changes/commit", {
+        body: { cursor: "1" }
+      });
+      assert.equal(unauthenticatedCommit.status, 401);
+
+      const registerResponse = await requestJson(server.baseUrl, "POST", "/api/local-clients/register", {
+        headers: bearerHeaders(accessToken),
+        body: {
+          deviceId: "device-sync-changes-a",
+          clientName: "Sync Changes Daemon",
+          platform: "linux",
+          capabilities: { scopes: ["sync.pull"] },
+          syncRootId: "changes",
+          syncRootLabel: "Changes"
+        }
+      });
+      assert.equal(registerResponse.status, 201);
+      const localClientId = String((registerResponse.body.client as Record<string, unknown>).id);
+      const clientToken = String(registerResponse.body.clientToken);
+      const localOnlyPull = await requestJson(server.baseUrl, "GET", "/api/sync/changes", {
+        headers: localClientHeaders(localClientId, clientToken)
+      });
+      assert.equal(localOnlyPull.status, 401);
+      assert.deepEqual(localOnlyPull.body, { message: "Missing bearer token" });
+
+      const noteEvent = await harness.syncStore.recordSyncEvent(userId, "notes", "note-change-a", "update", {
+        title: "Note change"
+      });
+      const projectEvent = await harness.syncStore.recordSyncEvent(userId, "projects", "project-change-a", "update", {
+        name: "Project change"
+      });
+      const otherEvent = await harness.syncStore.recordSyncEvent(otherUserId, "notes", "note-change-b", "update", {
+        title: "Other owner note"
+      });
+
+      const filtered = await requestJson(server.baseUrl, "GET", "/api/sync/changes?cursor=0&domains=notes&limit=5000", {
+        headers: bearerHeaders(accessToken)
+      });
+      assert.equal(filtered.status, 200);
+      assert.equal(filtered.body.consumer, "maintenance-agent");
+      assert.equal(filtered.body.cursor, "0");
+      const filteredEvents = filtered.body.events as Array<Record<string, unknown>>;
+      assert.deepEqual(filteredEvents.map((event) => event.resourceId), ["note-change-a"]);
+      assert.equal(filtered.body.nextCursor, noteEvent.cursor);
+
+      const defaultCommit = await requestJson(server.baseUrl, "POST", "/api/sync/changes/commit", {
+        headers: bearerHeaders(accessToken),
+        body: { cursor: noteEvent.cursor }
+      });
+      assert.equal(defaultCommit.status, 200);
+      assert.equal(defaultCommit.body.consumer, "maintenance-agent");
+      assert.equal(defaultCommit.body.cursor, noteEvent.cursor);
+      assert.equal(typeof defaultCommit.body.updatedAt, "string");
+
+      const secondaryCommit = await requestJson(server.baseUrl, "POST", "/api/sync/changes/commit", {
+        headers: bearerHeaders(accessToken),
+        body: { consumer: "secondary-agent", cursor: "0" }
+      });
+      assert.equal(secondaryCommit.status, 200);
+      assert.equal(secondaryCommit.body.consumer, "secondary-agent");
+
+      const defaultPull = await requestJson(server.baseUrl, "GET", "/api/sync/changes?limit=10", {
+        headers: bearerHeaders(accessToken)
+      });
+      assert.equal(defaultPull.status, 200);
+      assert.equal(defaultPull.body.cursor, noteEvent.cursor);
+      const defaultEvents = defaultPull.body.events as Array<Record<string, unknown>>;
+      assert.deepEqual(defaultEvents.map((event) => event.resourceId), ["project-change-a"]);
+      assert.equal(defaultPull.body.nextCursor, projectEvent.cursor);
+
+      const secondaryPull = await requestJson(server.baseUrl, "GET", "/api/sync/changes?consumer=secondary-agent&limit=10", {
+        headers: bearerHeaders(accessToken)
+      });
+      assert.equal(secondaryPull.status, 200);
+      assert.equal(secondaryPull.body.cursor, "0");
+      const secondaryEvents = secondaryPull.body.events as Array<Record<string, unknown>>;
+      assert.deepEqual(secondaryEvents.map((event) => event.resourceId), ["note-change-a", "project-change-a"]);
+
+      const secondDefaultCommit = await requestJson(server.baseUrl, "POST", "/api/sync/changes/commit", {
+        headers: bearerHeaders(accessToken),
+        body: { cursor: projectEvent.cursor }
+      });
+      assert.equal(secondDefaultCommit.status, 200);
+
+      const userSeparatedPull = await requestJson(server.baseUrl, "GET", "/api/sync/changes?limit=10", {
+        headers: bearerHeaders(otherAccessToken)
+      });
+      assert.equal(userSeparatedPull.status, 200);
+      assert.equal(userSeparatedPull.body.cursor, "0");
+      const otherEvents = userSeparatedPull.body.events as Array<Record<string, unknown>>;
+      assert.deepEqual(otherEvents.map((event) => event.resourceId), ["note-change-b"]);
+      assert.equal(userSeparatedPull.body.nextCursor, otherEvent.cursor);
+
+      const exhaustedDefaultPull = await requestJson(server.baseUrl, "GET", "/api/sync/changes?limit=10", {
+        headers: bearerHeaders(accessToken)
+      });
+      assert.equal(exhaustedDefaultPull.status, 200);
+      assert.equal(exhaustedDefaultPull.body.cursor, projectEvent.cursor);
+      assert.deepEqual(exhaustedDefaultPull.body.events, []);
+      assert.equal(exhaustedDefaultPull.body.nextCursor, projectEvent.cursor);
+    } finally {
+      await server.close();
+      await cleanupTestUser(pool, userId);
+      await cleanupTestUser(pool, otherUserId);
+    }
+  });
+
   it("serves Project context snapshots and emits equivalent HTTP/MCP relation invalidations", async (t) => {
     const harness = await requireHarness(t);
     if (!harness) return;

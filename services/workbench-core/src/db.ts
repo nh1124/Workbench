@@ -322,6 +322,16 @@ export async function ensureCoreSchema(): Promise<void> {
         `);
 
         await pool.query(`
+          CREATE TABLE IF NOT EXISTS sync_consumer_cursors (
+            user_id TEXT NOT NULL REFERENCES workbench_users(id) ON DELETE CASCADE,
+            consumer_id TEXT NOT NULL,
+            cursor TEXT NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (user_id, consumer_id)
+          );
+        `);
+
+        await pool.query(`
           CREATE INDEX IF NOT EXISTS idx_sync_events_user_id
             ON sync_events (user_id, id ASC);
         `);

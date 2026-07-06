@@ -117,7 +117,9 @@ describe("Maintenance queue facade", () => {
       { method: "POST", path: "/api/project-memories/memory-1/snooze" },
       { method: "POST", path: "/api/notes/note-1/confirm" },
       { method: "POST", path: "/api/notes/note-1/snooze" },
-      { method: "POST", path: "/api/maintenance/flags" }
+      { method: "POST", path: "/api/maintenance/flags" },
+      { method: "GET", path: "/api/sync/changes" },
+      { method: "POST", path: "/api/sync/changes/commit" }
     ];
     for (const route of routes) {
       const response = await fetch(`${baseUrl}${route.path}`, { method: route.method });
@@ -374,6 +376,37 @@ describe("Maintenance MCP contract", () => {
     }).success, false);
   });
 
+  it("registers sync.changes.pull with the frozen at-least-once schema", () => {
+    const tools = captureTools(registerMaintenanceTools);
+    const definition = tools.get("sync.changes.pull");
+    assert.ok(definition);
+    assert.match(definition.description ?? "", /at-least-once/i);
+    assert.match(definition.description ?? "", /sync\.changes\.commit/);
+    const schema = z.object(definition.inputSchema ?? {});
+    assert.equal(schema.safeParse({
+      consumer: "maintenance-agent",
+      cursor: "42",
+      domains: ["notes", "project_context"],
+      limit: 500
+    }).success, true);
+    assert.equal(schema.safeParse({ domains: ["bogus"] }).success, false);
+    assert.equal(schema.safeParse({ limit: 501 }).success, false);
+    assert.equal(schema.safeParse({ consumer: " " }).success, false);
+  });
+
+  it("registers sync.changes.commit with the frozen cursor persistence schema", () => {
+    const tools = captureTools(registerMaintenanceTools);
+    const definition = tools.get("sync.changes.commit");
+    assert.ok(definition);
+    assert.match(definition.description ?? "", /Persist only/i);
+    const schema = z.object(definition.inputSchema ?? {});
+    assert.equal(schema.safeParse({ cursor: "42" }).success, true);
+    assert.equal(schema.safeParse({ consumer: "agent-a", cursor: "42" }).success, true);
+    assert.equal(schema.safeParse({ consumer: "agent-a" }).success, false);
+    assert.equal(schema.safeParse({ cursor: " " }).success, false);
+    assert.equal(schema.safeParse({ consumer: "x".repeat(101), cursor: "42" }).success, false);
+  });
+
   it("allows MCP capture lifecycle only as raw or triaged", () => {
     const projectTools = captureTools(registerProjectContextTools);
     const memoryAppend = z.object(projectTools.get("projects.memory.append")?.inputSchema ?? {});
@@ -412,6 +445,8 @@ describe("Maintenance MCP contract", () => {
 
     assert.equal(names.has("maintenance.queue.list"), true);
     assert.equal(names.has("maintenance.flag"), true);
+    assert.equal(names.has("sync.changes.pull"), true);
+    assert.equal(names.has("sync.changes.commit"), true);
     for (const name of names) {
       assert.equal(/\b(confirm|snooze)\b/i.test(name), false, `${name} must not be exposed yet`);
     }

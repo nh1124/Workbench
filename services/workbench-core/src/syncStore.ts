@@ -1,6 +1,7 @@
 import { ensureCoreSchema, getCorePool } from "./db.js";
 
-export type SyncDomain = "projects" | "notes" | "artifacts" | "tasks" | "project_context";
+export const SYNC_DOMAINS = ["projects", "notes", "artifacts", "tasks", "project_context"] as const;
+export type SyncDomain = (typeof SYNC_DOMAINS)[number];
 export type SyncAction = "create" | "update" | "delete" | "upsert";
 
 export interface SyncEvent {
@@ -198,10 +199,21 @@ export async function getSyncResourceVersion(
 export async function listSyncEvents(
   userId: string,
   cursor: string | undefined,
-  limit: number
+  limit: number,
+  domains?: SyncDomain[]
 ): Promise<{ events: SyncEvent[]; nextCursor?: string }> {
   await ensureCoreSchema();
-  const pool = getCorePool();
+  return listSyncEventsWithPool(getCorePool(), userId, cursor, limit, domains);
+}
+
+/** @internal Exported so event filtering can be tested without a live database. */
+export async function listSyncEventsWithPool(
+  pool: SyncCursorQueryPool,
+  userId: string,
+  cursor: string | undefined,
+  limit: number,
+  domains?: SyncDomain[]
+): Promise<{ events: SyncEvent[]; nextCursor?: string }> {
   const parsedCursor = cursor && /^\d+$/.test(cursor) ? Number(cursor) : 0;
   const safeLimit = Math.max(1, Math.min(500, Math.floor(limit)));
   const result = await pool.query<SyncEventRow>(
@@ -213,11 +225,13 @@ export async function listSyncEvents(
         ON v.user_id = e.user_id
        AND v.domain = e.domain
        AND v.resource_id = e.resource_id
-      WHERE e.user_id = $1 AND e.id > $2
+      WHERE e.user_id = $1
+        AND e.id > $2
+        AND ($4::text[] IS NULL OR e.domain = ANY($4::text[]))
       ORDER BY e.id ASC
       LIMIT $3
     `,
-    [userId, parsedCursor, safeLimit]
+    [userId, parsedCursor, safeLimit, domains ?? null]
   );
   const events = result.rows.map(toEvent);
   return {
@@ -253,7 +267,7 @@ export async function listSyncResourceVersions(
   const pool = getCorePool();
   const safeLimit = Math.max(1, Math.min(1000, Math.floor(limit)));
   const domainFilter = domains?.filter((domain): domain is SyncDomain =>
-    ["projects", "notes", "artifacts", "tasks", "project_context"].includes(domain)
+    (SYNC_DOMAINS as readonly string[]).includes(domain)
   );
   const result = await pool.query<SyncResourceVersionRow>(
     `
