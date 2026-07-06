@@ -1,6 +1,6 @@
 # Workbench Capture Client Implementation Plan
 
-Status: Contract freeze済み(2026-07-07) — 実装中
+Status: 実装完了(2026-07-07、commits 71da5d8, c3d029e, 844a5cb)。残: §4受入(Owner実機確認)とsidecarパッケージ時のsampler同梱確認
 Last updated: 2026-07-07
 
 関連: [workbench-maintenance-loop-plan.md](workbench-maintenance-loop-plan.md) D-108 / §9
@@ -18,11 +18,11 @@ Status legend は maintenance-loop-plan §1 と同一。
 
 | Phase | 内容 | Scope | Status | 進捗 |
 |---|---|---|---|---|
-| C1 | sync push notes ops への lifecycle passthrough | core | `[pending]` | 0/2 |
-| C2 | capture基盤: 設定・専用DB・collector(子プロセス)監視 | sync-daemon | `[pending]` | 0/4 |
-| C3 | 日次summarizer + outbox投入 + retention + loopback API | sync-daemon | `[pending]` | 0/5 |
-| C4 | native Settings UI(Tauri専用) + daemon status連携 | ui/native | `[pending]` | 0/3 |
-| C5 | root検証・受入・commit | root | `[pending]` | 0/2 |
+| C1 | sync push notes ops への lifecycle passthrough | core | `[implemented]` | 2/2 |
+| C2 | capture基盤: 設定・専用DB・collector(子プロセス)監視 | sync-daemon | `[implemented]` | 4/4 |
+| C3 | 日次summarizer + outbox投入 + retention + loopback API | sync-daemon | `[implemented]` | 5/5 |
+| C4 | native Settings UI(Tauri専用) + daemon status連携 | ui/native | `[implemented]` | 3/3 |
+| C5 | root検証・受入・commit | root | `[in-progress]` | 1/2 |
 
 ## 2. Contract Freeze
 
@@ -116,22 +116,22 @@ CREATE TABLE IF NOT EXISTS capture_meta ( key TEXT PRIMARY KEY, value TEXT NOT N
 
 | ID | Status | Scope | Task |
 |---|---|---|---|
-| C1-1 | `[pending]` | core | sync push notes create/update/upsert で lifecycleState/reviewAfter/tags を透過(additive)。lifecycleStateは raw/triaged のみ許可 |
-| C1-2 | `[pending]` | core | passthrough tests |
-| C2-1 | `[pending]` | daemon | capture config(env+loopback PUT、default OFF)。DBパスのsync root配下拒否 |
-| C2-2 | `[pending]` | daemon | capture.sqlite storage(§2.2) + 除外パターン適用 + retention削除 |
-| C2-3 | `[pending]` | daemon | Windows sampler script(常駐PS子プロセス、JSON lines) |
-| C2-4 | `[pending]` | daemon | collector supervisor(起動/停止/クラッシュ再起動/バックオフ)。sync本体と独立 |
-| C3-1 | `[pending]` | daemon | 日次summarizer(CC-D4のmarkdown、deterministic) |
-| C3-2 | `[pending]` | daemon | outbox投入interface(注入)経由の note create/update(CC-D5、raw+tag) |
-| C3-3 | `[pending]` | daemon | 自動生成tick(日付変化後の初回) + POST /capture/summarize |
-| C3-4 | `[pending]` | daemon | loopback API一式(§2.1) + /status拡張 + MCP workbench.capture.status |
-| C3-5 | `[pending]` | daemon | tests(config拒否パス、除外、retention、summarizer、供給互換) |
-| C4-1 | `[pending]` | ui | Settings > Sync Daemon 隣に Capture セクション(Tauri検出時のみ表示): enable/disable、interval、retention、除外、status表示 |
-| C4-2 | `[pending]` | ui | capture loopback API client + status polling |
-| C4-3 | `[pending]` | native | desktop-managed daemon起動時のcapture設定env注入(必要な場合のみ。原則loopback設定で完結) |
-| C5-1 | `[pending]` | root | レビュー・build/test検証・commit |
-| C5-2 | `[pending]` | root | 受入(§4)。Ownerの実機確認待ち |
+| C1-1 | `[implemented]` | core | sync push notes create/update/upsert で lifecycleState/reviewAfter/tags を透過(additive)。lifecycleStateは raw/triaged のみ許可 |
+| C1-2 | `[implemented]` | core | passthrough tests |
+| C2-1 | `[implemented]` | daemon | capture config(env+loopback PUT、default OFF)。DBパスのsync root配下拒否 |
+| C2-2 | `[implemented]` | daemon | capture.sqlite storage(§2.2) + 除外パターン適用 + retention削除 |
+| C2-3 | `[implemented]` | daemon | Windows sampler script(常駐PS子プロセス、JSON lines) |
+| C2-4 | `[implemented]` | daemon | collector supervisor(起動/停止/クラッシュ再起動/バックオフ)。sync本体と独立 |
+| C3-1 | `[implemented]` | daemon | 日次summarizer(CC-D4のmarkdown、deterministic) |
+| C3-2 | `[implemented]` | daemon | outbox投入interface(注入)経由の note create/update(CC-D5、raw+tag) |
+| C3-3 | `[implemented]` | daemon | 自動生成tick(日付変化後の初回) + POST /capture/summarize |
+| C3-4 | `[implemented]` | daemon | loopback API一式(§2.1) + /status拡張 + MCP workbench.capture.status |
+| C3-5 | `[implemented]` | daemon | tests(config拒否パス、除外、retention、summarizer、供給互換) |
+| C4-1 | `[implemented]` | ui | Settings > Sync Daemon 隣に Capture セクション(Tauri検出時のみ表示): enable/disable、interval、retention、除外、status表示 |
+| C4-2 | `[implemented]` | ui | capture loopback API client + status polling |
+| C4-3 | `[implemented]` | native | desktop-managed daemon起動時のcapture設定env注入(必要な場合のみ。原則loopback設定で完結) |
+| C5-1 | `[implemented]` | root | レビュー・build/test検証・commit |
+| C5-2 | `[in-progress]` | root | 受入(§4)。Ownerの実機確認待ち |
 
 ## 4. 受入シナリオ
 
