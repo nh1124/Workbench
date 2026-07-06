@@ -8,10 +8,12 @@ import {
   rebuildProjectWbsIndex,
   reconcileWbsMutationBestEffort,
   saveWbsExportArtifact,
+  WBS_TARGET_RESOURCE_TYPE,
   wbsProjectIdsBestEffort
 } from "../projectContext.js";
 import { recordProjectContextInvalidationsBestEffort } from "../projectContextSync.js";
 import { ensureWbsAccountProvisioned } from "../serviceProvisioning.js";
+import { recordResourceReadUsageBestEffort } from "../usageInstrumentation.js";
 import { asMcpText, runWithAuthContext } from "./helpers.js";
 
 type ToolContext = {
@@ -127,7 +129,17 @@ export function registerWbsTools(server: McpServer, ctx?: ToolContext): void {
       }
     },
     async ({ id }) => {
-      const result = await runWithWbsAccount(ctx, () => wbsClient.getPlan(ctx.accessToken, id));
+      const result = await runWithWbsAccount(ctx, async ({ userId }) => {
+        const plan = await wbsClient.getPlan(ctx.accessToken, id);
+        recordResourceReadUsageBestEffort({
+          accessToken: ctx.accessToken,
+          userId,
+          sourceService: "wbs",
+          resourceType: WBS_TARGET_RESOURCE_TYPE,
+          resourceId: id
+        });
+        return plan;
+      });
       return asMcpText(result);
     }
   );

@@ -10,6 +10,7 @@ export const MAINTENANCE_QUEUE_REASONS = [
   "conflict",
   "manual",
   "source_changed",
+  "unused",
   "brief_unmaintained"
 ] as const;
 export type MaintenanceQueueReason = (typeof MAINTENANCE_QUEUE_REASONS)[number];
@@ -81,7 +82,7 @@ const SOURCE_REASONS: Record<MaintenanceQueueKind, readonly MaintenanceQueueReas
   memory: ["raw", "expired", "unconfirmed", "conflict", "manual"],
   note: ["raw", "expired", "conflict", "manual"],
   brief: ["brief_unmaintained"],
-  index_drift: ["source_changed"]
+  index_drift: ["source_changed", "unused"]
 };
 
 export class MaintenanceQueueInputError extends Error {

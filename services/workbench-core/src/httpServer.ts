@@ -40,6 +40,11 @@ import { getOAuthDynamicClient, saveOAuthDynamicClient } from "./oauthDynamicCli
 import { commitSyncChangesCursor, pullSyncChanges } from "./syncChanges.js";
 import { SyncConsumerCursorInputError } from "./syncConsumerCursorsStore.js";
 import {
+  recordIndexSearchUsageBestEffort,
+  recordProjectContextUsageBestEffort
+} from "./usageInstrumentation.js";
+import { summarizeUsage } from "./usageEventsStore.js";
+import {
   createArtifactNoteWithIndex,
   cleanupDeletedMindmapBestEffort,
   cleanupDeletedWbsBestEffort,
@@ -4662,6 +4667,22 @@ app.post("/api/maintenance/flags", async (req, res) => {
   }
 });
 
+app.get("/api/maintenance/usage/summary", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  try {
+    const result = await summarizeUsage(
+      authContext.userId,
+      typeof req.query.since === "string" ? req.query.since : undefined,
+      typeof req.query.until === "string" ? req.query.until : undefined
+    );
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
 // External facade for projects
 app.get("/api/projects", async (req, res) => {
   const authContext = await requireAuthenticatedContext(req, res);
@@ -4746,13 +4767,22 @@ app.get("/api/projects/:projectId/context", async (req, res) => {
     return Number.isFinite(value) ? value : undefined;
   };
   try {
+    const query = typeof req.query.q === "string" ? req.query.q : undefined;
+    const projectId = String(req.params.projectId);
     const result = await getProjectContextWithResolvedLinks(authContext.accessToken, String(req.params.projectId), {
-      q: typeof req.query.q === "string" ? req.query.q : undefined,
+      q: query,
       include: typeof req.query.include === "string" ? req.query.include : undefined,
       memoryLimit: numberQuery("memoryLimit"),
       indexLimit: numberQuery("indexLimit"),
       relationLimit: numberQuery("relationLimit"),
       maxChars: numberQuery("maxChars")
+    });
+    recordProjectContextUsageBestEffort({
+      userId: authContext.userId,
+      projectId,
+      context: result,
+      query,
+      source: "core-api"
     });
     return res.json(result);
   } catch (error) {
@@ -4893,12 +4923,21 @@ app.get("/api/projects/:projectId/index", async (req, res) => {
   if (!authContext) return;
   const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
   try {
-    const result = await projectsClient.listIndexEntries(authContext.accessToken, String(req.params.projectId), {
-      q: typeof req.query.q === "string" ? req.query.q : undefined,
+    const query = typeof req.query.q === "string" ? req.query.q : undefined;
+    const projectId = String(req.params.projectId);
+    const result = await projectsClient.listIndexEntries(authContext.accessToken, projectId, {
+      q: query,
       sourceService: typeof req.query.sourceService === "string" ? req.query.sourceService : undefined,
       resourceType: typeof req.query.resourceType === "string" ? req.query.resourceType : undefined,
       limit: Number.isFinite(limit) ? limit : undefined,
       cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined
+    });
+    recordIndexSearchUsageBestEffort({
+      userId: authContext.userId,
+      projectId,
+      query,
+      result,
+      source: "core-api"
     });
     return res.json(result);
   } catch (error) {

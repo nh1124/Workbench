@@ -332,8 +332,29 @@ export async function ensureCoreSchema(): Promise<void> {
         `);
 
         await pool.query(`
+          CREATE TABLE IF NOT EXISTS usage_events (
+            id BIGSERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES workbench_users(id) ON DELETE CASCADE,
+            event_type TEXT NOT NULL CHECK (event_type IN ('context_truncation','index_search','resource_read')),
+            project_id TEXT,
+            source_service TEXT,
+            resource_type TEXT,
+            resource_id TEXT,
+            query_text TEXT,
+            hit_count INTEGER,
+            metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          );
+        `);
+
+        await pool.query(`
           CREATE INDEX IF NOT EXISTS idx_sync_events_user_id
             ON sync_events (user_id, id ASC);
+        `);
+
+        await pool.query(`
+          CREATE INDEX IF NOT EXISTS idx_usage_events_user_type_created
+            ON usage_events(user_id, event_type, created_at DESC);
         `);
       });
     })();

@@ -15,6 +15,7 @@ import {
   uploadArtifactFileWithIndex
 } from "../projectContext.js";
 import { recordProjectContextInvalidationsBestEffort } from "../projectContextSync.js";
+import { recordResourceReadUsageBestEffort } from "../usageInstrumentation.js";
 import { asMcpText, runWithAuth, runWithAuthContext } from "./helpers.js";
 
 type ToolContext = {
@@ -60,6 +61,12 @@ function compactArtifactItemResult(value: unknown, includeContent = false): unkn
     };
   }
   return rest;
+}
+
+function artifactItemResourceType(value: unknown): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "artifact_item";
+  const kind = (value as { kind?: unknown }).kind;
+  return typeof kind === "string" && kind.trim() ? kind.trim() : "artifact_item";
 }
 
 async function updateArtifactItemWithIndex(
@@ -246,7 +253,17 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
       }
     },
     async ({ id }) => {
-      const result = await runWithAuth(ctx.accessToken, () => artifactsClient.getItem(ctx.accessToken, id));
+      const result = await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
+        const item = await artifactsClient.getItem(ctx.accessToken, id);
+        recordResourceReadUsageBestEffort({
+          accessToken: ctx.accessToken,
+          userId,
+          sourceService: "artifacts",
+          resourceType: artifactItemResourceType(item),
+          resourceId: id
+        });
+        return item;
+      });
       return asMcpText(result);
     }
   );

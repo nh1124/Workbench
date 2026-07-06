@@ -1,7 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { notesClient } from "../internalClients.js";
-import { asMcpText, runWithAuth } from "./helpers.js";
+import { recordResourceReadUsageBestEffort } from "../usageInstrumentation.js";
+import { asMcpText, runWithAuth, runWithAuthContext } from "./helpers.js";
 
 type ToolContext = {
   accessToken: string;
@@ -41,7 +42,17 @@ export function registerNotesTools(server: McpServer, ctx?: ToolContext): void {
       }
     },
     async ({ id }) => {
-      const result = await runWithAuth(ctx.accessToken, () => notesClient.get(ctx.accessToken, id));
+      const result = await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
+        const note = await notesClient.get(ctx.accessToken, id);
+        recordResourceReadUsageBestEffort({
+          accessToken: ctx.accessToken,
+          userId,
+          sourceService: "notes",
+          resourceType: "note",
+          resourceId: id
+        });
+        return note;
+      });
       return asMcpText(result);
     }
   );

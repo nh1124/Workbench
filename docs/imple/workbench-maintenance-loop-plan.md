@@ -523,8 +523,20 @@ CREATE INDEX IF NOT EXISTS idx_usage_events_user_type_created
   - truncation発生率(section別)
   - zero-hit query上位(頻度順)
   - 参照回数上位/ゼロのリソース
-- queue統合(P1依存): index entryのうち`WORKBENCH_MAINTENANCE_UNUSED_DAYS`超
-  参照ゼロのものを reason=`unused` としてqueueへ載せる(suggestedAction: archive提案)。
+- queue統合(P1依存): index entryのうち`WORKBENCH_MAINTENANCE_UNUSED_DAYS`(default 90)超
+  参照ゼロのものを reason=`unused` としてqueueへ載せる。
+
+実装ノート(D-106補足、2026-07-06決定):
+
+- `unused` の導出はCore-projects間のcross-DB joinを避けるため、
+  `project_index_entries` へ `last_read_at TIMESTAMPTZ` を追加し、Coreがresource_read
+  記録時にprojectsの `POST /maintenance/index-read-marks` をbest-effortで叩いて更新する。
+  queueの `unused` は他reasonと同様projects側のderived reasonとして実装する
+  (`indexed_at` がN日より古く、かつ `last_read_at` がNULLまたはN日超)。
+- `last_read_at` はrebuildで消えるが、消えた場合は「N日間unused判定されない」方向に
+  倒れるだけで安全(D-101の懸念と異なりlifecycleの正本ではない)。
+- unused項目のqueue上のkindは `index_drift`(index entry由来ソースの再利用)。
+- 計測はMCP経由のread系toolのみを対象とする(UI閲覧は計測しない)。
 
 ### 8.4 Progress Board
 

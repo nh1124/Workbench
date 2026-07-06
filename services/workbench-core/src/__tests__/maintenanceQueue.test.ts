@@ -118,6 +118,7 @@ describe("Maintenance queue facade", () => {
       { method: "POST", path: "/api/notes/note-1/confirm" },
       { method: "POST", path: "/api/notes/note-1/snooze" },
       { method: "POST", path: "/api/maintenance/flags" },
+      { method: "GET", path: "/api/maintenance/usage/summary" },
       { method: "GET", path: "/api/sync/changes" },
       { method: "POST", path: "/api/sync/changes/commit" }
     ];
@@ -203,6 +204,22 @@ describe("Maintenance queue facade", () => {
     const result = await aggregateMaintenanceQueue("token", { reason: "source_changed" }, sources);
     assert.deepEqual(result.items.map((entry) => entry.resourceId), ["index-1"]);
     assert.deepEqual(calls.map((call) => call.kind), ["index_drift"]);
+  });
+
+  it("routes unused filters to the index drift source only", async () => {
+    const { calls, sources } = makeSources({
+      memory: { start: emptyPage() },
+      note: { start: emptyPage() },
+      brief: { start: emptyPage() },
+      index_drift: {
+        start: { items: [item("index_drift", "index-unused", "2026-07-05T00:00:00.000Z", ["unused"])], totals: { byReason: { unused: 1 } } }
+      }
+    });
+
+    const result = await aggregateMaintenanceQueue("token", { reason: "unused" }, sources);
+    assert.deepEqual(result.items.map((entry) => entry.resourceId), ["index-unused"]);
+    assert.deepEqual(calls.map((call) => call.kind), ["index_drift"]);
+    assert.equal(calls[0]?.options.reason, "unused");
   });
 });
 
@@ -347,7 +364,7 @@ describe("Maintenance MCP contract", () => {
     assert.equal(schema.safeParse({ kind: "memory", reason: "raw", projectId: "project-1", cursor: "cursor", limit: 20 }).success, true);
     assert.equal(schema.safeParse({ kind: "task" }).success, false);
     assert.equal(schema.safeParse({ reason: "source_changed" }).success, true);
-    assert.equal(schema.safeParse({ reason: "unused" }).success, false);
+    assert.equal(schema.safeParse({ reason: "unused" }).success, true);
   });
 
   it("registers maintenance.flag with the frozen write schema", () => {
@@ -392,6 +409,18 @@ describe("Maintenance MCP contract", () => {
     assert.equal(schema.safeParse({ domains: ["bogus"] }).success, false);
     assert.equal(schema.safeParse({ limit: 501 }).success, false);
     assert.equal(schema.safeParse({ consumer: " " }).success, false);
+  });
+
+  it("registers maintenance.usage.summary with the frozen read schema", () => {
+    const tools = captureTools(registerMaintenanceTools);
+    const definition = tools.get("maintenance.usage.summary");
+    assert.ok(definition);
+    const schema = z.object(definition.inputSchema ?? {});
+    assert.equal(schema.safeParse({
+      since: "2026-06-01T00:00:00.000Z",
+      until: "2026-07-01T00:00:00.000Z"
+    }).success, true);
+    assert.equal(schema.safeParse({ since: "not-a-date" }).success, false);
   });
 
   it("registers sync.changes.commit with the frozen cursor persistence schema", () => {
@@ -445,6 +474,7 @@ describe("Maintenance MCP contract", () => {
 
     assert.equal(names.has("maintenance.queue.list"), true);
     assert.equal(names.has("maintenance.flag"), true);
+    assert.equal(names.has("maintenance.usage.summary"), true);
     assert.equal(names.has("sync.changes.pull"), true);
     assert.equal(names.has("sync.changes.commit"), true);
     for (const name of names) {

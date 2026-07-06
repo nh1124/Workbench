@@ -1317,5 +1317,13 @@ export const projectsClient = {
   ) => {
     if (!projectsService) throw new Error("Projects service is not configured");
     return serviceRequest<unknown>(projectsService, `/maintenance/index-drift${buildQuery(options)}`, token);
+  },
+  markIndexEntriesRead: (token: string, payload: unknown) => {
+    if (!projectsService) throw new Error("Projects service is not configured");
+    return serviceRequest<unknown>(projectsService, "/maintenance/index-read-marks", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
   }
 };

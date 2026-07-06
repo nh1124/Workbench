@@ -15,6 +15,7 @@ import {
   pullSyncChanges,
   SYNC_CHANGES_DOMAINS
 } from "../syncChanges.js";
+import { summarizeUsage } from "../usageEventsStore.js";
 import { asMcpText, runWithAuth, runWithAuthContext } from "./helpers.js";
 
 type ToolContext = {
@@ -76,6 +77,24 @@ export function registerMaintenanceTools(server: McpServer, ctx?: ToolContext): 
             userId,
             source: "core-mcp"
           }, input)
+        )
+      )
+  );
+
+  server.registerTool(
+    "maintenance.usage.summary",
+    {
+      title: "Summarize Maintenance Usage",
+      description: "Read usage signals for maintenance planning: context truncations, zero-hit searches, and frequently read resources.",
+      inputSchema: {
+        since: z.string().datetime().optional(),
+        until: z.string().datetime().optional()
+      }
+    },
+    async (input) =>
+      asMcpText(
+        await runWithAuthContext(ctx.accessToken, ({ userId }) =>
+          summarizeUsage(userId, input.since, input.until)
         )
       )
   );

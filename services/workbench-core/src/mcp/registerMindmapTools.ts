@@ -5,6 +5,7 @@ import {
   cleanupDeletedMindmapBestEffort,
   listArtifactProjectIdsBestEffort,
   maintainMindmapIndexBestEffort,
+  MINDMAP_TARGET_RESOURCE_TYPE,
   mindmapProjectIdsBestEffort,
   reconcileMindmapMutationBestEffort,
   rebuildProjectMindmapIndex,
@@ -12,6 +13,7 @@ import {
 } from "../projectContext.js";
 import { recordProjectContextInvalidationsBestEffort } from "../projectContextSync.js";
 import { ensureMindmapsAccountProvisioned } from "../serviceProvisioning.js";
+import { recordResourceReadUsageBestEffort } from "../usageInstrumentation.js";
 import { asMcpText, runWithAuthContext } from "./helpers.js";
 
 type ToolContext = {
@@ -106,7 +108,17 @@ export function registerMindmapTools(server: McpServer, ctx?: ToolContext): void
       }
     },
     async ({ id }) => {
-      const result = await runWithMindmapsAccount(ctx, () => mindmapsClient.get(ctx.accessToken, id));
+      const result = await runWithMindmapsAccount(ctx, async ({ userId }) => {
+        const document = await mindmapsClient.get(ctx.accessToken, id);
+        recordResourceReadUsageBestEffort({
+          accessToken: ctx.accessToken,
+          userId,
+          sourceService: "mindmaps",
+          resourceType: MINDMAP_TARGET_RESOURCE_TYPE,
+          resourceId: id
+        });
+        return document;
+      });
       return asMcpText(result);
     }
   );
