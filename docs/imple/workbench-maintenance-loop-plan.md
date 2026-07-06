@@ -36,7 +36,7 @@ Last updated: 2026-07-06
 | P1 | Lifecycle metadata + maintenance queue | 小 | P0 | `[implemented]` | 10/10 |
 | P2 | 昇格フロー(レビューキューUI + confirm API) | 中 | P1 | `[implemented]` | 9/9 (Owner受入待ち) |
 | P3 | 変更フィードMCP露出 + maintenance skill + digest手順 | 小〜中 | P0 (skill最終化はP1、digest手順はP4) | `[in-progress]` | 4/9 (core完了。skillはP4後) |
-| P4 | usage_events計測 | 小 | P0 (queue統合はP1) | `[pending]` | 0/7 |
+| P4 | usage_events計測 | 小 | P0 (queue統合はP1) | `[implemented]` | 7/7 |
 | P6 | Capture client | 大 | P1+P2安定後 | `[deferred]` | 別contract文書で再開 |
 
 注: 当初のP5(週次ダイジェスト自動生成)はCore実装としては削除した。ダイジェストは
@@ -542,13 +542,13 @@ CREATE INDEX IF NOT EXISTS idx_usage_events_user_type_created
 
 | ID | Status | Scope | Task |
 |---|---|---|---|
-| P4-1 | `[pending]` | core | usage_events table + store(insertはfire-and-forget) |
-| P4-2 | `[pending]` | core | 記録点1: context truncation |
-| P4-3 | `[pending]` | core | 記録点2: index search + hit_count |
-| P4-4 | `[pending]` | core | 記録点3: resource_read(read系MCP tools) |
-| P4-5 | `[pending]` | core | usage summary read model(HTTP + MCP) |
-| P4-6 | `[pending]` | core | queueへの`unused` reason統合 + tests(記録失敗が元requestを壊さないこと含む) |
-| P4-7 | `[pending]` | root | レビュー・検証・commit・本文書更新 |
+| P4-1 | `[implemented]` | core | usage_events table + store(insertはfire-and-forget) |
+| P4-2 | `[implemented]` | core | 記録点1: context truncation(facade/MCP共通helper) |
+| P4-3 | `[implemented]` | core | 記録点2: index search + hit_count(context.getのq付きも記録) |
+| P4-4 | `[implemented]` | core | 記録点3: resource_read(artifacts/notes/mindmaps/wbsのread系MCP tools) + index read mark |
+| P4-5 | `[implemented]` | core | usage summary read model(HTTP + MCP、default直近30日) |
+| P4-6 | `[implemented]` | core+projects | queueへの`unused` reason統合(last_read_at方式、§8.3実装ノート) + tests |
+| P4-7 | `[implemented]` | root | レビュー・検証・commit・本文書更新(2026-07-06)。normalizeOwner不整合とread mark巻き戻りをレビューで修正 |
 
 ---
 
@@ -603,8 +603,8 @@ Verification log(root agentが各フェーズcommit時に更新):
 |---|---|---|---|
 | P1 | projects/notes/core build+test | `[implemented]` | 2026-07-06: projects 12 pass/2 skip、notes DB test skip、core 52 pass/13 skip(DB未起動分)。live DB smokeは§10.2で実施 |
 | P2 | projects/notes/core/ui build+test + full build | `[implemented]` | 2026-07-06: ui 16 files/98 tests pass、core 56 pass/13 skip、full workspace build成功。live DB smokeとOwner UI受入が残 |
-| P3 | - | `[pending]` | |
-| P4 | - | `[pending]` | |
+| P3 | core build+test | `[implemented]` | 2026-07-06: core 61 pass/14 skip。skill forward-testはlive環境で実施 |
+| P4 | projects/core build+test | `[implemented]` | 2026-07-06: projects/core全pass(DB-gated skip)。live計測smokeは§10.2で実施 |
 
 ### 10.2 Manual acceptance(全フェーズ完了時)
 
