@@ -1,6 +1,6 @@
 # Workbench Maintenance Loop Implementation Plan
 
-Status: P1+P2 実装完了(masterへマージ済み) — 次はP3。P2 UIのOwner受入とlive DB smokeが残
+Status: P1〜P4 実装完了(masterへマージ済み)。残: §10.2の受入(P2 UI実操作 / live DB smoke / skill forward-test)とP6(deferred)
 Last updated: 2026-07-06
 
 関連文書:
@@ -35,7 +35,7 @@ Last updated: 2026-07-06
 | P0 | Contract freeze(§4の決定事項の承認) | - | - | `[approved]` | 2026-07-06 承認 |
 | P1 | Lifecycle metadata + maintenance queue | 小 | P0 | `[implemented]` | 10/10 |
 | P2 | 昇格フロー(レビューキューUI + confirm API) | 中 | P1 | `[implemented]` | 9/9 (Owner受入待ち) |
-| P3 | 変更フィードMCP露出 + maintenance skill + digest手順 | 小〜中 | P0 (skill最終化はP1、digest手順はP4) | `[in-progress]` | 4/9 (core完了。skillはP4後) |
+| P3 | 変更フィードMCP露出 + maintenance skill + digest手順 | 小〜中 | P0 (skill最終化はP1、digest手順はP4) | `[in-progress]` | 8/9 (残: P3-8 forward-test、live環境待ち) |
 | P4 | usage_events計測 | 小 | P0 (queue統合はP1) | `[implemented]` | 7/7 |
 | P6 | Capture client | 大 | P1+P2安定後 | `[deferred]` | 別contract文書で再開 |
 
@@ -463,11 +463,11 @@ Core側にdigest builderは実装しない(D-107)。週次ダイジェストは�
 | P3-2 | `[implemented]` | core | `GET /api/sync/changes` + `POST /api/sync/changes/commit`(user bearer auth専用。未知domainは400) |
 | P3-3 | `[implemented]` | core | MCP `sync.changes.pull` / `sync.changes.commit` 登録 |
 | P3-4 | `[implemented]` | core | tests: cursor分離(daemon非干渉)、at-least-once、owner isolation |
-| P3-5 | `[pending]` | skill | skill scaffold + SKILL.md(500行未満、workflow §7.2) |
-| P3-6 | `[pending]` | skill | 週次ダイジェスト手順(§7.3)をSKILL.mdへ追記(tool名はP4完了後に照合) |
-| P3-7 | `[pending]` | skill | tool-contracts.md を実装済みMCP schemaと照合 |
-| P3-8 | `[pending]` | root | skill forward-test(§7.5) |
-| P3-9 | `[pending]` | root | レビュー・検証・commit・本文書更新 |
+| P3-5 | `[implemented]` | skill | skill scaffold + SKILL.md(500行未満、workflow §7.2)。Codex sandboxが`.agents/`書き込み不可のためroot agentが直接作成 |
+| P3-6 | `[implemented]` | skill | 週次ダイジェスト手順(§7.3)をSKILL.mdへ追記(digest用feed読みはmaintenance-agent cursorを汚さない規約を追加) |
+| P3-7 | `[implemented]` | skill | tool-contracts.md を実装済みMCP schemaと照合 |
+| P3-8 | `[pending]` | root | skill forward-test(§7.5)。live環境(サービス起動+MCP接続)が必要なため§10.2受入時に実施 |
+| P3-9 | `[implemented]` | root | レビュー・検証・commit・本文書更新(2026-07-06) |
 
 ### 7.5 Skill forward-test
 
