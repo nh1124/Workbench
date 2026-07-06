@@ -78,6 +78,11 @@ import {
   ProjectContextExportError,
   PROJECT_CONTEXT_EXPORT_CODES
 } from "./projectContextExport.js";
+import {
+  CaptureError,
+  CaptureManager,
+  type CaptureSummaryPublisher
+} from "./capture/index.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -141,6 +146,7 @@ export type DaemonConfig = {
 export type DaemonState = {
   config: DaemonConfig;
   manifestStore: ManifestStore;
+  capture?: CaptureManager;
   identity?: ClientIdentity;
   lastHeartbeatAt?: string;
   lastClaimAt?: string;
@@ -1425,6 +1431,78 @@ export async function deleteLocalNote(state: DaemonState, id: string): Promise<b
   await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
   await refreshManifestStats(state);
   return true;
+}
+
+function findCaptureSummaryNote(state: DaemonState, title: string): Record<string, unknown> | undefined {
+  return listLocalRemoteDomainItems(state, "notes", { includeDeleted: false, limit: 1000 }).find((note) => {
+    const tags = normalizeStringArray(note.tags);
+    return asString(note.title) === title && tags.includes("workbench-capture");
+  });
+}
+
+function captureDefaultProject(state: DaemonState): { projectId: string; projectName?: string } {
+  const selection = localDefaultProjectSelection(state);
+  const project = asRecord(selection?.project);
+  const projectId = asString(project?.id) ?? localProjectId(state);
+  const projectName = asString(project?.name) ?? localProjectName(state);
+  return { projectId, projectName };
+}
+
+function createCaptureSummaryPublisher(state: DaemonState): CaptureSummaryPublisher {
+  return {
+    async publishSummary(input) {
+      const now = new Date().toISOString();
+      const requestedExisting = input.noteResourceId
+        ? localRemoteDomainItem(state, "notes", input.noteResourceId)
+        : undefined;
+      const discoveredExisting = requestedExisting ? undefined : findCaptureSummaryNote(state, input.title);
+      const existing = requestedExisting ?? discoveredExisting;
+      const id = asString(existing?.id) ?? `local-note-capture-${input.summaryDate}`;
+      const { projectId, projectName } = captureDefaultProject(state);
+      const payload: Record<string, unknown> = {
+        ...(existing ?? {}),
+        id,
+        title: input.title,
+        content: input.contentMarkdown,
+        projectId,
+        ...(projectName ? { projectName } : {}),
+        tags: input.tags,
+        lifecycleState: input.lifecycleState,
+        updatedAt: now,
+        createdAt: asString(existing?.createdAt) ?? now
+      };
+      const action = existing ? (isLocalNoteId(id) ? "create" : "update") : "create";
+      const outboxPath = noteOutboxPath(id);
+      supersedeOpenOutboxForPath(
+        state,
+        outboxPath,
+        () => true,
+        "Capture summary was regenerated; stale summary operation was superseded.",
+        now
+      );
+      enqueueManifestOutbox(state.manifestStore, {
+        relativePath: outboxPath,
+        domain: "notes",
+        action,
+        resourceId: id,
+        payload
+      });
+      upsertRemoteResource(state.manifestStore, {
+        domain: "notes",
+        resourceId: id,
+        version: asNumber(existing?.version),
+        payload,
+        updatedAt: now,
+        lastSyncedAt: asString(existing?.lastSyncedAt)
+      });
+      await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
+      await refreshManifestStats(state);
+      return {
+        noteResourceId: id,
+        action: action === "update" ? "update" : "create"
+      };
+    }
+  };
 }
 
 const LOCAL_TASK_ID_PREFIX = "local-task-";
@@ -6026,6 +6104,11 @@ async function performTick(state: DaemonState): Promise<void> {
     }
     await pullRemoteArtifactSyncState(state);
     await scanSyncFolder(state);
+    await state.capture?.runDailyTasks().catch((error) => {
+      console.warn("[capture] daily tasks failed", {
+        message: error instanceof Error ? error.message : String(error)
+      });
+    });
     await pushOutbox(state);
     await heartbeat(state);
     state.lastError = undefined;
@@ -6299,6 +6382,11 @@ function daemonStatusPayload(state: DaemonState): Record<string, unknown> {
     tickQueued: state.tickQueued,
     localJobConfirmationPolicy: state.config.localJobConfirmationPolicy ?? "off",
     localJobConfirmationsPending: pendingJobConfirmations(state).size,
+    capture: state.capture?.status() ?? {
+      enabled: false,
+      collectorAlive: false,
+      sampleCount24h: 0
+    },
     localClientId: state.identity?.localClientId,
     lastHeartbeatAt: state.lastHeartbeatAt,
     lastClaimAt: state.lastClaimAt,
@@ -6326,6 +6414,17 @@ function writeJson(res: ServerResponse, value: unknown, statusCode = 200): void 
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "application/json");
   res.end(JSON.stringify(value, null, 2));
+}
+
+function writeCaptureError(res: ServerResponse, error: unknown): void {
+  if (error instanceof CaptureError) {
+    writeJson(res, { code: error.code, message: error.message }, error.status);
+    return;
+  }
+  writeJson(res, {
+    code: "CAPTURE_OPERATION_FAILED",
+    message: error instanceof Error ? error.message : String(error)
+  }, 400);
 }
 
 function writeLocalProjectContextError(res: ServerResponse, error: unknown): void {
@@ -6418,6 +6517,64 @@ function startStatusServer(state: DaemonState): void {
 
     if (url.pathname === "/status" || url.pathname === "/api/sync/status") {
       writeJson(res, daemonStatusPayload(state));
+      return;
+    }
+
+    if (url.pathname === "/capture/status" && req.method === "GET") {
+      writeJson(res, state.capture?.apiStatus() ?? {
+        config: { enabled: false, intervalSeconds: 15, retentionDays: 14, excludePatterns: [] },
+        status: { enabled: false, collectorAlive: false, sampleCount24h: 0 }
+      });
+      return;
+    }
+
+    if (url.pathname === "/capture/config" && req.method === "GET") {
+      writeJson(res, state.capture?.config() ?? {
+        enabled: false,
+        intervalSeconds: 15,
+        retentionDays: 14,
+        excludePatterns: []
+      });
+      return;
+    }
+
+    if (url.pathname === "/capture/config" && req.method === "PUT") {
+      try {
+        const body = await readRequestJson(req);
+        writeJson(res, await state.capture?.updateConfig(body));
+      } catch (error) {
+        writeCaptureError(res, error);
+      }
+      return;
+    }
+
+    if (url.pathname === "/capture/enable" && req.method === "POST") {
+      try {
+        writeJson(res, await state.capture?.enable());
+      } catch (error) {
+        writeCaptureError(res, error);
+      }
+      return;
+    }
+
+    if (url.pathname === "/capture/disable" && req.method === "POST") {
+      try {
+        writeJson(res, await state.capture?.disable());
+      } catch (error) {
+        writeCaptureError(res, error);
+      }
+      return;
+    }
+
+    if (url.pathname === "/capture/summarize" && req.method === "POST") {
+      try {
+        const body = await readRequestJson(req);
+        const result = await state.capture?.summarize(asString(body.date));
+        scheduleTick(state, 0);
+        writeJson(res, result);
+      } catch (error) {
+        writeCaptureError(res, error);
+      }
       return;
     }
 
@@ -7436,6 +7593,14 @@ async function main(): Promise<void> {
     tickRunning: false,
     tickQueued: false
   };
+  state.capture = new CaptureManager({
+    syncRoot: config.syncRoot,
+    dbPath: env("WORKBENCH_CAPTURE_DB_PATH"),
+    platform: platform(),
+    logger: console,
+    publisher: createCaptureSummaryPublisher(state)
+  });
+  await state.capture.startFromConfig();
   startStatusServer(state);
   startSyncWatcher(state);
   await tick(state);

@@ -186,5 +186,13 @@ describe("local mode route coverage", () => {
     assertIncludes(daemonMcpSource, "never imports from disk or uses the daemon's local cache", "Project context export MCP warning");
     assertIncludes(daemonMcpSource, "\"workbench.local.artifact.open\"", "Artifact open MCP tool");
     assertIncludes(daemonMcpSource, "ARTIFACT_ITEM_ID_PATTERN", "Artifact open MCP input validation");
+    assertIncludes(daemonSource, "url.pathname === \"/capture/status\" && req.method === \"GET\"", "Capture status loopback route");
+    assertIncludes(daemonSource, "url.pathname === \"/capture/enable\" && req.method === \"POST\"", "Capture enable loopback route");
+    assertIncludes(daemonSource, "url.pathname === \"/capture/disable\" && req.method === \"POST\"", "Capture disable loopback route");
+    assertIncludes(daemonSource, "url.pathname === \"/capture/config\" && req.method === \"GET\"", "Capture config loopback route");
+    assertIncludes(daemonSource, "url.pathname === \"/capture/config\" && req.method === \"PUT\"", "Capture config update loopback route");
+    assertIncludes(daemonSource, "url.pathname === \"/capture/summarize\" && req.method === \"POST\"", "Capture summarize loopback route");
+    assertIncludes(daemonSource, "capture: state.capture?.status()", "Daemon status capture summary");
+    assertIncludes(daemonMcpSource, "\"workbench.capture.status\"", "Capture status MCP tool");
   });
 });

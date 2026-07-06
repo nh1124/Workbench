@@ -22,6 +22,7 @@ import {
 import { normalizeCoreUrl } from "./coreUrl.js";
 import { exportProjectContext, ProjectContextExportError } from "./projectContextExport.js";
 import { ARTIFACT_ITEM_ID_PATTERN, openWorkbenchArtifactItem } from "./artifactOpen.js";
+import { readCaptureStatusSnapshot } from "./capture/index.js";
 
 function env(name: string): string | undefined {
   const value = process.env[name]?.trim();
@@ -109,6 +110,16 @@ server.registerTool(
       manifest: readManifestFromStore(manifestStore)
     });
   }
+);
+
+server.registerTool(
+  "workbench.capture.status",
+  {
+    title: "Workbench Capture Status",
+    description: "Read local capture configuration and sample status. This tool is read-only and cannot start or stop capture.",
+    inputSchema: {}
+  },
+  async () => asText(readCaptureStatusSnapshot({ syncRoot, env: process.env }))
 );
 
 server.registerTool(
