@@ -37,7 +37,7 @@ Last updated: 2026-07-06
 | P2 | 昇格フロー(レビューキューUI + confirm API) | 中 | P1 | `[implemented]` | 9/9 (Owner受入待ち) |
 | P3 | 変更フィードMCP露出 + maintenance skill + digest手順 | 小〜中 | P0 (skill最終化はP1、digest手順はP4) | `[in-progress]` | 8/9 (残: P3-8 forward-test、live環境待ち) |
 | P4 | usage_events計測 | 小 | P0 (queue統合はP1) | `[implemented]` | 7/7 |
-| P6 | Capture client | 大 | P1+P2安定後 | `[deferred]` | 別contract文書で再開 |
+| P6 | Capture client | 大 | P1+P2安定後 | `[in-progress]` | [workbench-capture-client-plan.md](workbench-capture-client-plan.md)で管理(2026-07-07着手) |
 
 注: 当初のP5(週次ダイジェスト自動生成)はCore実装としては削除した。ダイジェストは
 外部ルーチン(cowork / Codex)がmaintenance skillの手順(§7.3)で生成する(D-107)。
