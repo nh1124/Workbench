@@ -771,6 +771,154 @@ describe("local client HTTP APIs", () => {
     }
   });
 
+  it("validates and forwards note lifecycle metadata during sync push", async (t) => {
+    const harness = await requireHarness(t);
+    if (!harness) return;
+
+    const pool = harness.db.getCorePool();
+    const { userId, username } = await createTestUser(pool, "sync-note-lifecycle");
+    const { accessToken } = harness.auth.issueTokenBundle({ userId, username });
+    const server = await startTestServer(harness);
+    const originalFetch = globalThis.fetch;
+    const coreOrigin = new URL(server.baseUrl).origin;
+    const noteRequests: Array<{ method: string; pathname: string; body: Record<string, unknown> }> = [];
+
+    try {
+      const registerResponse = await requestJson(server.baseUrl, "POST", "/api/local-clients/register", {
+        headers: bearerHeaders(accessToken),
+        body: {
+          deviceId: "device-sync-note-lifecycle",
+          clientName: "Sync Daemon",
+          platform: "linux",
+          syncRootId: "notes",
+          syncRootLabel: "Notes Sync"
+        }
+      });
+      assert.equal(registerResponse.status, 201);
+      const registeredClient = registerResponse.body.client as Record<string, unknown>;
+      const daemonHeaders = localClientHeaders(
+        String(registeredClient.id),
+        String(registerResponse.body.clientToken)
+      );
+
+      globalThis.fetch = async (input, init) => {
+        const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+        if (url.origin === coreOrigin) return originalFetch(input, init);
+
+        const method = (init?.method ?? "GET").toUpperCase();
+        const body = typeof init?.body === "string"
+          ? JSON.parse(init.body) as Record<string, unknown>
+          : {};
+        if (url.pathname === "/notes" && method === "POST") {
+          noteRequests.push({ method, pathname: url.pathname, body });
+          return new Response(JSON.stringify({ ...body, id: "note-created-raw" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+          });
+        }
+        const noteMatch = url.pathname.match(/^\/notes\/([^/]+)$/);
+        if (noteMatch && method === "PATCH") {
+          const id = decodeURIComponent(noteMatch[1]);
+          noteRequests.push({ method, pathname: url.pathname, body });
+          return new Response(JSON.stringify({ ...body, id }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+          });
+        }
+        throw new Error(`Unexpected upstream request in sync note lifecycle test: ${method} ${url.href}`);
+      };
+
+      const rawCreateResponse = await requestJson(server.baseUrl, "POST", "/api/sync/push", {
+        headers: daemonHeaders,
+        body: {
+          ops: [{
+            clientOpId: "note-create-raw",
+            domain: "notes",
+            action: "create",
+            payload: {
+              title: "Capture Daily Summary 2026-07-07",
+              content: "Captured activity",
+              lifecycleState: "raw",
+              reviewAfter: "2026-07-08T00:00:00.000Z",
+              tags: ["workbench-capture"]
+            }
+          }]
+        }
+      });
+      assert.equal(rawCreateResponse.status, 202);
+      assert.deepEqual(rawCreateResponse.body.rejected, []);
+      const rawApplied = rawCreateResponse.body.applied as Array<Record<string, unknown>>;
+      assert.equal(rawApplied.length, 1);
+      assert.equal(rawApplied[0].resourceId, "note-created-raw");
+      assert.equal(noteRequests.length, 1);
+      assert.deepEqual(noteRequests[0], {
+        method: "POST",
+        pathname: "/notes",
+        body: {
+          title: "Capture Daily Summary 2026-07-07",
+          content: "Captured activity",
+          lifecycleState: "raw",
+          reviewAfter: "2026-07-08T00:00:00.000Z",
+          tags: ["workbench-capture"]
+        }
+      });
+
+      noteRequests.length = 0;
+      const mixedResponse = await requestJson(server.baseUrl, "POST", "/api/sync/push", {
+        headers: daemonHeaders,
+        body: {
+          ops: [
+            {
+              clientOpId: "note-verified-rejected",
+              domain: "notes",
+              action: "update",
+              resourceId: "note-verified",
+              payload: {
+                title: "Should not be promoted",
+                lifecycleState: "verified"
+              }
+            },
+            {
+              clientOpId: "note-triaged-continues",
+              domain: "notes",
+              action: "update",
+              resourceId: "note-triaged",
+              payload: {
+                title: "Still applies",
+                lifecycleState: "triaged",
+                reviewAfter: null,
+                tags: ["capture", "triaged"]
+              }
+            }
+          ]
+        }
+      });
+      assert.equal(mixedResponse.status, 202);
+      const mixedRejected = mixedResponse.body.rejected as Array<Record<string, unknown>>;
+      assert.equal(mixedRejected.length, 1);
+      assert.equal(mixedRejected[0].clientOpId, "note-verified-rejected");
+      assert.equal(mixedRejected[0].code, "SYNC_NOTE_PAYLOAD_INVALID");
+      const mixedApplied = mixedResponse.body.applied as Array<Record<string, unknown>>;
+      assert.equal(mixedApplied.length, 1);
+      assert.equal(mixedApplied[0].clientOpId, "note-triaged-continues");
+      assert.equal(mixedApplied[0].resourceId, "note-triaged");
+      assert.deepEqual(noteRequests, [{
+        method: "PATCH",
+        pathname: "/notes/note-triaged",
+        body: {
+          title: "Still applies",
+          lifecycleState: "triaged",
+          reviewAfter: null,
+          tags: ["capture", "triaged"]
+        }
+      }]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      await server.close();
+      await cleanupTestUser(pool, userId);
+    }
+  });
+
   it("serves bearer-only sync changes with consumer cursors and domain filters", async (t) => {
     const harness = await requireHarness(t);
     if (!harness) return;
