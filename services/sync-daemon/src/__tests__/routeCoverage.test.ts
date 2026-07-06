@@ -184,5 +184,7 @@ describe("local mode route coverage", () => {
     assertIncludes(daemonSource, "state.identity", "Project context export local identity");
     assertIncludes(daemonMcpSource, "\"workbench.local.project_context.export\"", "Project context export MCP tool");
     assertIncludes(daemonMcpSource, "never imports from disk or uses the daemon's local cache", "Project context export MCP warning");
+    assertIncludes(daemonMcpSource, "\"workbench.local.artifact.open\"", "Artifact open MCP tool");
+    assertIncludes(daemonMcpSource, "ARTIFACT_ITEM_ID_PATTERN", "Artifact open MCP input validation");
   });
 });

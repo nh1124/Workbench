@@ -21,6 +21,7 @@ import {
 } from "./identityStorage.js";
 import { normalizeCoreUrl } from "./coreUrl.js";
 import { exportProjectContext, ProjectContextExportError } from "./projectContextExport.js";
+import { ARTIFACT_ITEM_ID_PATTERN, openWorkbenchArtifactItem } from "./artifactOpen.js";
 
 function env(name: string): string | undefined {
   const value = process.env[name]?.trim();
@@ -175,6 +176,22 @@ server.registerTool(
     }
     return asText({ path: resolved });
   }
+);
+
+server.registerTool(
+  "workbench.local.artifact.open",
+  {
+    title: "Open Workbench Artifact",
+    description: "Open an Artifact item in the configured Workbench UI using the operating system default browser.",
+    inputSchema: {
+      artifactItemId: z
+        .string()
+        .min(1)
+        .max(200)
+        .regex(ARTIFACT_ITEM_ID_PATTERN, "artifactItemId may contain only A-Z, a-z, 0-9, dot, underscore, or hyphen")
+    }
+  },
+  async ({ artifactItemId }) => asText(await openWorkbenchArtifactItem({ artifactItemId }))
 );
 
 server.registerTool(

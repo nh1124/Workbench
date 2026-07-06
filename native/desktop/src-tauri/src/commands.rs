@@ -1149,6 +1149,15 @@ pub fn open_quick_note_window(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn open_app_window(
+  app: tauri::AppHandle,
+  current_window: tauri::WebviewWindow,
+  url: String,
+) -> Result<(), String> {
+  window::open_new_app_window(&app, &current_window, &url)
+}
+
+#[tauri::command]
 pub fn close_quick_note_window(window: tauri::WebviewWindow) -> Result<(), String> {
   window
     .close()

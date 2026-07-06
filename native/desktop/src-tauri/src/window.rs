@@ -21,6 +21,8 @@ use tauri::{WebviewUrl, WebviewWindowBuilder};
 static MAIN_WINDOW_COUNTER: AtomicU64 = AtomicU64::new(1);
 #[cfg(desktop)]
 static QUICK_NOTE_WINDOW_COUNTER: AtomicU64 = AtomicU64::new(1);
+#[cfg(desktop)]
+static APP_WINDOW_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(desktop)]
 fn is_main_window_label(label: &str) -> bool {
@@ -116,6 +118,33 @@ fn build_quick_note_window_label() -> String {
   format!("quick-note-{ts}-{seq}")
 }
 
+#[cfg(desktop)]
+fn build_app_window_label() -> String {
+  let ts = SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .map(|value| value.as_millis())
+    .unwrap_or(0);
+  let seq = APP_WINDOW_COUNTER.fetch_add(1, Ordering::Relaxed);
+  format!("artifact-{ts}-{seq}")
+}
+
+#[cfg(desktop)]
+fn validate_app_window_url(current_url: &tauri::Url, requested_url: &str) -> Result<tauri::Url, String> {
+  let trimmed = requested_url.trim();
+  if trimmed.is_empty() {
+    return Err("app window URL is required".to_string());
+  }
+
+  let target_url = current_url
+    .join(trimmed)
+    .map_err(|error| format!("invalid app window URL: {error}"))?;
+  if target_url.origin() != current_url.origin() {
+    return Err("app window URL must stay within the current Workbench UI origin".to_string());
+  }
+
+  Ok(target_url)
+}
+
 /// Opens a new quick-note window (small, always-on-top).
 ///
 /// On non-desktop platforms this is a no-op that returns an error.
@@ -145,6 +174,45 @@ pub fn open_new_quick_note_window(app: &tauri::AppHandle) -> Result<(), String> 
   }
   #[cfg(not(desktop))]
   Err("quick note window is not supported on this platform".to_string())
+}
+
+/// Opens a new app window at a URL within the current Workbench UI origin.
+///
+/// This accepts relative app paths from the frontend and rejects any URL that
+/// resolves outside the origin of the invoking window.
+pub fn open_new_app_window(
+  app: &tauri::AppHandle,
+  current_window: &tauri::WebviewWindow,
+  url: &str,
+) -> Result<(), String> {
+  #[cfg(desktop)]
+  {
+    let current_url = current_window
+      .url()
+      .map_err(|error| format!("failed to read current app window URL: {error}"))?;
+    let target_url = validate_app_window_url(&current_url, url)?;
+    let webview_url = match target_url.scheme() {
+      "http" | "https" => WebviewUrl::External(target_url),
+      _ => WebviewUrl::CustomProtocol(target_url),
+    };
+
+    WebviewWindowBuilder::new(app, build_app_window_label(), webview_url)
+      .title("Workbench")
+      .inner_size(1280.0, 860.0)
+      .resizable(true)
+      .focused(true)
+      .disable_drag_drop_handler()
+      .build()
+      .and_then(|window| {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+        Ok(())
+      })
+      .map_err(|error| format!("failed to open app window: {error}"))
+  }
+  #[cfg(not(desktop))]
+  Err("app window opening is not supported on this platform".to_string())
 }
 
 /// Returns `true` when the CLI arguments indicate that a new **main** window
