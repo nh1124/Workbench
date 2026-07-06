@@ -1,6 +1,6 @@
 # Workbench UX Refinements Plan (2026-07)
 
-Status: 実装中
+Status: 実装完了(2026-07-07、commits 992d337, 58b0fd7)。受入はOwner実機確認待ち
 Last updated: 2026-07-07
 
 Owner要望(2026-07-07)による小規模UX改善3件。maintenance-loop / capture-client とは独立。
@@ -46,13 +46,13 @@ Status legend は maintenance-loop-plan §1 と同一。状態更新は root age
 
 | ID | Status | Scope | Task |
 |---|---|---|---|
-| UX-1-1 | `[pending]` | ui | Maintenance: desc削除 + empty state刷新 + レイアウト/密度/バッジ統一 |
-| UX-2-1 | `[pending]` | ui | Artifacts閲覧のlocalStorage recents記録 + `?item=` 自動オープン |
-| UX-2-2 | `[pending]` | ui | Home Recent Artifactsセクション |
-| UX-3-1 | `[pending]` | ui | Artifactsコンテキストメニュー + Open in New Window(web/Tauri) |
-| UX-3-2 | `[pending]` | native | Tauri 新規ウィンドウcommand |
-| UX-3-3 | `[pending]` | daemon | MCP `workbench.local.artifact.open`(origin固定、encode徹底) |
-| UX-R | `[pending]` | root | レビュー・検証・commit |
+| UX-1-1 | `[implemented]` | ui | Maintenance: desc削除 + empty state刷新 + レイアウト/密度/バッジ統一 |
+| UX-2-1 | `[implemented]` | ui | Artifacts閲覧のlocalStorage recents記録 + `?item=` 自動オープン |
+| UX-2-2 | `[implemented]` | ui | Home Recent Artifactsセクション |
+| UX-3-1 | `[implemented]` | ui | Artifactsコンテキストメニュー + Open in New Window(web/Tauri) |
+| UX-3-2 | `[implemented]` | native | Tauri 新規ウィンドウcommand |
+| UX-3-3 | `[implemented]` | daemon | MCP `workbench.local.artifact.open`(origin固定、encode徹底) |
+| UX-R | `[implemented]` | root | レビュー・検証・commit |
 
 ## 受入
 
