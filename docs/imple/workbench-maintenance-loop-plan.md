@@ -239,11 +239,13 @@ reason enum と導出条件:
 | `manual` | review_reason = manual | stored |
 | `source_changed` | index entry: source_updated_at > indexed_at 等のdrift | derived (P1) |
 | `brief_unmaintained` | brief空 or 文字数閾値未満 or 全active memoryより古い | derived |
+| `brief_oversized` | brief文字数が上限閾値超(context-governance-plan CG-D1、2026-07-08追加) | derived |
 | `unused` | 参照実績が閾値期間ゼロ(P4接続後に有効化) | derived (P4) |
 
 閾値はenvで調整可能にする:
 `WORKBENCH_MAINTENANCE_UNCONFIRMED_DAYS`(default 30) /
 `WORKBENCH_MAINTENANCE_BRIEF_MIN_CHARS`(default 80) /
+`WORKBENCH_MAINTENANCE_BRIEF_MAX_CHARS`(default 2000) /
 `WORKBENCH_MAINTENANCE_UNUSED_DAYS`(default 90)。
 
 ---
@@ -437,12 +439,13 @@ Core workflow:
 Core側にdigest builderは実装しない(D-107)。週次ダイジェストは外部ルーチン
 (cowork / Codex)が本skillを起動して生成する。SKILL.mdへ次を明記する。
 
-構成(4セクション、この順):
+構成(5セクション、この順。5は2026-07-08のcontext-governance-planで追加):
 
 1. 変更サマリ — `sync.changes.pull` の期間集約(domain別件数 + 主要変更)
 2. 要レビュー項目 — `maintenance.queue.list` の現在値(reason別件数 + 上位項目)
 3. 昇格候補 — unconfirmedのagent_observed memory(古い順)
 4. 計測サマリ — `maintenance.usage.summary`(truncation率 / zero-hit query / unused上位)
+5. サイズ概況 — brief_oversized / brief_unmaintained の該当project一覧 + reason別totalsの前週比
 
 命名・冪等規約:
 

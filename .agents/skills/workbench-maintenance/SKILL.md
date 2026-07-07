@@ -24,6 +24,11 @@ For ordinary project operations (editing resources, tasks, memberships), switch 
 6. After the batch is fully processed, persist the cursor with `sync.changes.commit` using the `nextCursor` from the pull. The feed is at-least-once: if you crash before committing, you will see the same events again — make your actions idempotent (a re-applied flag or an already-superseded memory is harmless).
 7. If the queue is empty and the feed has no actionable changes, stop and say so. Do not invent work or fall back to full scans.
 
+## Keep knowledge small (slimness patterns)
+
+- **Oversized brief** (`brief_oversized` in the queue): draft the slimming, don't just report it. Move procedures into a Note, reference bodies into Artifacts, and durable facts into memory proposals, then draft a replacement brief that follows the thin structure (Purpose / Always-on rules / Pointers). Present the draft for the human to apply via brief update; do not overwrite the brief silently — brief updates require explicit user intent.
+- **Memory consolidation**: when several active memories cover the same topic (overlapping decisions, superseded-in-practice facts), append one merged entry with `projects.memory.append` (it stays `agent_observed`) and flag each old entry with `maintenance.flag` (`reason: "manual"`, `note: "consolidation proposal: superseded by <new id>"`). The human archives the old entries in the /maintenance UI. Do not archive memories yourself as part of consolidation.
+
 ## Guardrails
 
 - **Promotion is UI-only.** There is no confirm or snooze tool, by design. If asked to promote memory to `user_confirmed` or to clear a queue item, answer: 「/maintenance UIで承認してください」. Never simulate promotion by editing authority through other means.
@@ -37,11 +42,12 @@ For ordinary project operations (editing resources, tasks, memberships), switch 
 
 Produce the digest on request or on a scheduled routine run. It is one note per ISO week, written idempotently.
 
-1. Collect the four sections, in this order:
+1. Collect the five sections, in this order:
    1. **変更サマリ** — aggregate the period's events from `sync.changes.pull` (counts by domain plus notable changes). Use a throwaway consumer name such as `digest-<YYYY-Www>` or an explicit `cursor` so digest reads never disturb the `maintenance-agent` cursor, and do not commit it.
    2. **要レビュー項目** — current `maintenance.queue.list` totals by reason plus the top items.
    3. **昇格候補** — queue items with reason `unconfirmed` (long-lived `agent_observed` memory), oldest first.
    4. **計測サマリ** — `maintenance.usage.summary` for the period: truncation count/sections, zero-hit queries (missing-knowledge signals), top read resources. If usage data is absent, state 「未計測」 and continue.
+   5. **サイズ概況** — projects currently flagged `brief_oversized` or `brief_unmaintained` (from the queue, no extra API), plus a one-line comparison of reason totals against the previous week's digest when available. This keeps briefs and memory from growing silently.
 2. Resolve the default project (`projects.list`) and search for an existing digest with `notes.list`, matching the exact title `Workbench Weekly Digest <YYYY-Www>` (ISO week, e.g. `2026-W28`).
 3. If the note exists, rewrite it with `notes.update`; otherwise create it with `notes.create`. Always set the tag `workbench-maintenance`. Re-running for the same week must update the same note, never create a duplicate.
 4. Keep the digest factual and compact: counts, item titles with project names, and one-line findings. Link decisions the human must make to the /maintenance UI rather than restating full bodies.

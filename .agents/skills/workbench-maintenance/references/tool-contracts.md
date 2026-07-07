@@ -11,7 +11,7 @@ Input:
 ```jsonc
 {
   "kind": "memory | note | brief | index_drift",        // optional
-  "reason": "raw | expired | unconfirmed | conflict | manual | source_changed | unused | brief_unmaintained", // optional
+  "reason": "raw | expired | unconfirmed | conflict | manual | source_changed | unused | brief_unmaintained | brief_oversized", // optional
   "projectId": "string",                                 // optional
   "cursor": "string",                                    // optional, opaque compound cursor
   "limit": 1                                             // optional int 1..100, default 20
@@ -48,7 +48,8 @@ Output:
 Reason semantics: `raw` (untriaged), `expired` (`reviewAfter` passed), `unconfirmed`
 (old `agent_observed` memory never confirmed), `conflict`/`manual` (flagged),
 `source_changed` (index entry behind its source), `unused` (index entry unread past the
-threshold), `brief_unmaintained` (empty or too-short brief).
+threshold), `brief_unmaintained` (empty or too-short brief), `brief_oversized`
+(brief larger than the slimness threshold; propose moving detail out).
 
 ## maintenance.flag (write — queue-add only)
 

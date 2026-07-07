@@ -30,6 +30,16 @@ Read [references/tool-contracts.md](references/tool-contracts.md) before selecti
 - When moving the primary Project, remove a duplicate membership at the destination, retain other secondary memberships, and do not turn the former primary into a secondary unless explicitly requested.
 - Prefer Artifact-specific membership tools. Do not use generic Project links to bypass Artifact existence, owner, version, or primary-membership validation.
 
+## Keep the brief a thin entry point
+
+Structure every brief you create or update as a small index, not a knowledge dump. Target well under ~2000 characters (the maintenance queue flags larger briefs as `brief_oversized`).
+
+1. **Purpose** — one paragraph on what the Project is for.
+2. **Always-on rules** — a short bullet list of rules that must hold in every session.
+3. **Pointers** — lines of the form "When doing X, read <note/artifact title or index query>". This section is the navigation path into Notes and Artifacts; prefer adding a pointer over inlining content.
+
+Do not put into the brief: procedures (put them in Notes), reference bodies (Artifacts), durable facts (memory), or transient status. When asked to add such content to a brief, store it in the right resource and add a pointer instead, then say so.
+
 ## Write durable memory safely
 
 - Keep current authoritative rules in the brief. Update it only when the user explicitly asks to change Project instructions, and pass `expectedVersion`.
