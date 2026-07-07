@@ -1,6 +1,6 @@
 # Workbench Context Governance Plan (2026-07)
 
-Status: 実装中
+Status: 実装完了(2026-07-08、commits 8703752, 10823ac)。受入はOwner確認待ち(§受入)
 Last updated: 2026-07-08
 
 背景: 「CLAUDE.md / brief は薄い入り口に保ち、詳細は必要時に参照する」方針の徹底。
@@ -46,12 +46,12 @@ CG-D5 リポジトリ導線(G5 + 導線)
 
 | ID | Status | Scope | Task |
 |---|---|---|---|
-| CG-1 | `[pending]` | projects/core/ui | `brief_oversized` reason(env閾値、suggestedActions、core SOURCE_REASONS/enum、UI filter反映) + tests |
-| CG-2 | `[pending]` | skill | workbench-project へ brief 推奨構成(CG-D2)を追加 |
-| CG-3 | `[pending]` | skill | workbench-maintenance へ consolidation パターン(CG-D3)と brief_oversized 対応を追加 |
-| CG-4 | `[pending]` | skill/docs | digest 手順へ「サイズ概況」セクション追加(SKILL.md + maintenance-loop-plan §7.3) |
-| CG-5 | `[pending]` | docs | repo CLAUDE.md へエージェント導線節 + 運用規約1行 |
-| CG-R | `[pending]` | root | レビュー・検証・commit |
+| CG-1 | `[implemented]` | projects/core/ui | `brief_oversized` reason(env閾値、suggestedActions、core SOURCE_REASONS/enum、UI filter反映) + tests |
+| CG-2 | `[implemented]` | skill | workbench-project へ brief 推奨構成(CG-D2)を追加 |
+| CG-3 | `[implemented]` | skill | workbench-maintenance へ consolidation パターン(CG-D3)と brief_oversized 対応を追加 |
+| CG-4 | `[implemented]` | skill/docs | digest 手順へ「サイズ概況」セクション追加(SKILL.md + maintenance-loop-plan §7.3) |
+| CG-5 | `[implemented]` | docs | repo CLAUDE.md へエージェント導線節 + 運用規約1行 |
+| CG-R | `[implemented]` | root | レビュー・検証・commit |
 
 ## 受入
 
