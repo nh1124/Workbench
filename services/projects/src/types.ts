@@ -151,7 +151,8 @@ export const MAINTENANCE_QUEUE_REASONS = [
   "manual",
   "source_changed",
   "unused",
-  "brief_unmaintained"
+  "brief_unmaintained",
+  "brief_oversized"
 ] as const;
 export type MaintenanceQueueReason = (typeof MAINTENANCE_QUEUE_REASONS)[number];
 export type MaintenanceQueueKind = "memory" | "brief" | "index_drift";

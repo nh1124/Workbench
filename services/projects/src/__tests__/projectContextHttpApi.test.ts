@@ -16,6 +16,7 @@ test("Projects HTTP context routes return owner-scoped 404, 409 and 400 response
   process.env.INTERNAL_API_KEY ??= "test-internal-key";
   process.env.WORKBENCH_MAINTENANCE_UNCONFIRMED_DAYS = "30";
   process.env.WORKBENCH_MAINTENANCE_BRIEF_MIN_CHARS = "80";
+  process.env.WORKBENCH_MAINTENANCE_BRIEF_MAX_CHARS = "2000";
   const [{ app }, jwt, db] = await Promise.all([import("../httpServer.js"), import("jsonwebtoken"), import("../db.js")]);
   const owner = `http-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const otherOwner = `${owner}-other`;
@@ -235,17 +236,69 @@ test("Projects HTTP context routes return owner-scoped 404, 409 and 400 response
     const ownerScopedQueue = await ownerScopedQueueResponse.json() as { items: Array<{ resourceId: string }> };
     assert.ok(!ownerScopedQueue.items.some((item) => item.resourceId === otherOwnerMemory.id));
 
+    const healthyBriefProjectResponse = await fetch(`${base}/projects`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Healthy brief maintenance project" })
+    });
+    const healthyBriefProject = await healthyBriefProjectResponse.json() as { id: string };
+    const healthyBriefResponse = await fetch(`${base}/projects/${healthyBriefProject.id}/brief`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ contentMarkdown: "h".repeat(100), expectedVersion: 0, updatedByKind: "user" })
+    });
+    assert.equal(healthyBriefResponse.status, 200);
+
+    const oversizedBriefProjectResponse = await fetch(`${base}/projects`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Oversized brief maintenance project" })
+    });
+    const oversizedBriefProject = await oversizedBriefProjectResponse.json() as { id: string };
+    const oversizedBriefResponse = await fetch(`${base}/projects/${oversizedBriefProject.id}/brief`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ contentMarkdown: "x".repeat(2001), expectedVersion: 0, updatedByKind: "agent" })
+    });
+    assert.equal(oversizedBriefResponse.status, 200);
+
     const briefQueueResponse = await fetch(`${base}/maintenance/brief-queue?projectId=${queueProject.id}`, { headers });
     assert.equal(briefQueueResponse.status, 200);
     const briefQueue = await briefQueueResponse.json() as {
-      items: Array<{ kind: string; projectId: string; reasons: string[] }>;
+      items: Array<{ kind: string; projectId: string; reasons: string[]; suggestedActions: string[] }>;
       totals: { byReason: Record<string, number> };
     };
     assert.equal(briefQueue.items.length, 1);
     assert.equal(briefQueue.items[0]?.kind, "brief");
     assert.equal(briefQueue.items[0]?.projectId, queueProject.id);
     assert.deepEqual(briefQueue.items[0]?.reasons, ["brief_unmaintained"]);
+    assert.deepEqual(briefQueue.items[0]?.suggestedActions, ["update_brief"]);
     assert.equal(briefQueue.totals.byReason.brief_unmaintained, 1);
+
+    const oversizedBriefQueueResponse = await fetch(
+      `${base}/maintenance/brief-queue?projectId=${oversizedBriefProject.id}&reason=brief_oversized`,
+      { headers }
+    );
+    assert.equal(oversizedBriefQueueResponse.status, 200);
+    const oversizedBriefQueue = await oversizedBriefQueueResponse.json() as {
+      items: Array<{ projectId: string; reasons: string[]; suggestedActions: string[] }>;
+      totals: { byReason: Record<string, number> };
+    };
+    assert.equal(oversizedBriefQueue.items.length, 1);
+    assert.equal(oversizedBriefQueue.items[0]?.projectId, oversizedBriefProject.id);
+    assert.deepEqual(oversizedBriefQueue.items[0]?.reasons, ["brief_oversized"]);
+    assert.deepEqual(oversizedBriefQueue.items[0]?.suggestedActions, ["slim_brief"]);
+    assert.equal(oversizedBriefQueue.totals.byReason.brief_oversized, 1);
+
+    const healthyBriefQueueResponse = await fetch(`${base}/maintenance/brief-queue?projectId=${healthyBriefProject.id}`, { headers });
+    assert.equal(healthyBriefQueueResponse.status, 200);
+    const healthyBriefQueue = await healthyBriefQueueResponse.json() as {
+      items: Array<{ projectId: string; reasons: string[] }>;
+      totals: { byReason: Record<string, number> };
+    };
+    assert.deepEqual(healthyBriefQueue.items, []);
+    assert.equal(healthyBriefQueue.totals.byReason.brief_unmaintained, undefined);
+    assert.equal(healthyBriefQueue.totals.byReason.brief_oversized, undefined);
 
     const archivedProjectResponse = await fetch(`${base}/projects`, {
       method: "POST",

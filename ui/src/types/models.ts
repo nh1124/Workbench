@@ -469,7 +469,9 @@ export type MaintenanceQueueReason =
   | "conflict"
   | "manual"
   | "source_changed"
-  | "brief_unmaintained";
+  | "unused"
+  | "brief_unmaintained"
+  | "brief_oversized";
 
 export interface ProjectMemoryEntry {
   id: string;

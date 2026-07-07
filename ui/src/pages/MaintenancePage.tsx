@@ -19,7 +19,9 @@ const QUEUE_REASONS: MaintenanceQueueReason[] = [
   "conflict",
   "manual",
   "source_changed",
-  "brief_unmaintained"
+  "unused",
+  "brief_unmaintained",
+  "brief_oversized"
 ];
 const MEMORY_KINDS: ProjectMemoryKind[] = ["decision", "fact", "preference", "pitfall", "observation"];
 const PAGE_SIZE = 20;
@@ -57,7 +59,9 @@ function reasonLabel(reason: MaintenanceQueueReason): string {
     conflict: "Conflict",
     manual: "Manual",
     source_changed: "Source changed",
-    brief_unmaintained: "Brief"
+    unused: "Unused",
+    brief_unmaintained: "Brief",
+    brief_oversized: "Brief oversized"
   };
   return labels[reason];
 }

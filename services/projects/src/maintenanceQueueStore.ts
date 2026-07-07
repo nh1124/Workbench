@@ -78,6 +78,9 @@ function memoryItem(row: QueueRow): MaintenanceQueueItem {
 }
 
 function briefItem(row: QueueRow): MaintenanceQueueItem {
+  const suggestedActions = new Set<string>();
+  if (row.reasons.includes("brief_unmaintained")) suggestedActions.add("update_brief");
+  if (row.reasons.includes("brief_oversized")) suggestedActions.add("slim_brief");
   return {
     id: `brief:${row.resource_id}`,
     kind: "brief",
@@ -88,7 +91,7 @@ function briefItem(row: QueueRow): MaintenanceQueueItem {
     excerpt: truncateText(row.excerpt_text ?? "", EXCERPT_MAX_CHARS),
     reasons: row.reasons,
     updatedAt: iso(row.updated_at),
-    suggestedActions: ["update_brief"]
+    suggestedActions: [...suggestedActions]
   };
 }
 
@@ -225,7 +228,8 @@ export async function listBriefMaintenanceQueue(
   await ensureProjectsSchema();
   const owner = normalizeOwner(ownerAccountId);
   const minChars = positiveEnvInt("WORKBENCH_MAINTENANCE_BRIEF_MIN_CHARS", 80);
-  const values: Array<string | number> = [owner, minChars];
+  const maxChars = positiveEnvInt("WORKBENCH_MAINTENANCE_BRIEF_MAX_CHARS", 2000);
+  const values: Array<string | number> = [owner, minChars, maxChars];
   let projectFilter = "";
   if (options?.projectId) {
     values.push(options.projectId);
@@ -249,12 +253,14 @@ export async function listBriefMaintenanceQueue(
         NULL::timestamptz AS review_after,
         NULL::timestamptz AS last_confirmed_at,
         COALESCE(b.updated_at, p.updated_at) AS updated_at,
-        ARRAY['brief_unmaintained'::text] AS reasons
+        ARRAY_REMOVE(ARRAY[
+          CASE WHEN char_length(trim(COALESCE(b.content_markdown, ''))) < $2 THEN 'brief_unmaintained'::text END,
+          CASE WHEN char_length(trim(COALESCE(b.content_markdown, ''))) > $3 THEN 'brief_oversized'::text END
+        ], NULL)::text[] AS reasons
       FROM projects p
       LEFT JOIN project_briefs b ON b.project_id = p.id
       WHERE p.owner_account_id = $1
         AND p.status = 'active'
-        AND char_length(trim(COALESCE(b.content_markdown, ''))) < $2
         ${projectFilter}
     ),
     filtered AS (

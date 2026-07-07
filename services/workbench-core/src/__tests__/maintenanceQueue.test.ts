@@ -221,6 +221,22 @@ describe("Maintenance queue facade", () => {
     assert.deepEqual(calls.map((call) => call.kind), ["index_drift"]);
     assert.equal(calls[0]?.options.reason, "unused");
   });
+
+  it("routes brief_oversized filters to the brief source only", async () => {
+    const { calls, sources } = makeSources({
+      memory: { start: emptyPage() },
+      note: { start: emptyPage() },
+      brief: {
+        start: { items: [item("brief", "brief-large", "2026-07-05T00:00:00.000Z", ["brief_oversized"])], totals: { byReason: { brief_oversized: 1 } } }
+      },
+      index_drift: { start: emptyPage() }
+    });
+
+    const result = await aggregateMaintenanceQueue("token", { reason: "brief_oversized" }, sources);
+    assert.deepEqual(result.items.map((entry) => entry.resourceId), ["brief-large"]);
+    assert.deepEqual(calls.map((call) => call.kind), ["brief"]);
+    assert.equal(calls[0]?.options.reason, "brief_oversized");
+  });
 });
 
 describe("Maintenance actions", () => {
@@ -365,6 +381,7 @@ describe("Maintenance MCP contract", () => {
     assert.equal(schema.safeParse({ kind: "task" }).success, false);
     assert.equal(schema.safeParse({ reason: "source_changed" }).success, true);
     assert.equal(schema.safeParse({ reason: "unused" }).success, true);
+    assert.equal(schema.safeParse({ reason: "brief_oversized" }).success, true);
   });
 
   it("registers maintenance.flag with the frozen write schema", () => {

@@ -168,6 +168,26 @@ describe("MaintenancePage", () => {
     });
   });
 
+  it("offers every maintenance reason in the filter", async () => {
+    renderPage();
+
+    const reasonSelect = screen.getByLabelText("Reason");
+    const optionValues = Array.from(reasonSelect.querySelectorAll("option")).map((option) => option.value);
+
+    expect(optionValues).toEqual([
+      "",
+      "raw",
+      "expired",
+      "unconfirmed",
+      "conflict",
+      "manual",
+      "source_changed",
+      "unused",
+      "brief_unmaintained",
+      "brief_oversized"
+    ]);
+  });
+
   it("removes a confirmed item optimistically", async () => {
     renderPage();
 
