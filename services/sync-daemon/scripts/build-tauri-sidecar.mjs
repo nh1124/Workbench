@@ -171,6 +171,12 @@ function makeSidecarEntry() {
   );
   source = replaceOnce(
     source,
+    '} from "./capture/index.js";',
+    '} from "../../src/capture/index.ts";',
+    "capture module import"
+  );
+  source = replaceOnce(
+    source,
     'export { readIdentity } from "./identityStorage.js";',
     'export { readIdentity } from "../../src/identityStorage.ts";',
     "identityStorage value export"

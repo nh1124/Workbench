@@ -1,6 +1,6 @@
 # Workbench Capture Client Implementation Plan
 
-Status: 実装完了(2026-07-07、commits 71da5d8, c3d029e, 844a5cb)。残: §4受入(Owner実機確認)とsidecarパッケージ時のsampler同梱確認
+Status: 実装完了(2026-07-07、commits 71da5d8, c3d029e, 844a5cb)。残: §4受入(Owner実機確認)。sidecar同梱はrewrite追加+埋め込みfallbackで対応済み(2026-07-07 hotfix)
 Last updated: 2026-07-07
 
 関連: [workbench-maintenance-loop-plan.md](workbench-maintenance-loop-plan.md) D-108 / §9

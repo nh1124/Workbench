@@ -26,14 +26,25 @@ export class CaptureError extends Error {
   }
 }
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+function moduleDirname(): string | undefined {
+  // In the bundled CJS/SEA sidecar import.meta.url is unavailable; fall back
+  // to the embedded sampler script instead of crashing at module load.
+  try {
+    if (typeof import.meta.url === "string" && import.meta.url.length > 0) {
+      return dirname(fileURLToPath(import.meta.url));
+    }
+  } catch {
+    // ignore and use the embedded fallback
+  }
+  return undefined;
+}
 
 function resolveBundledSamplerPath(explicitPath?: string): string {
+  const ownDir = moduleDirname();
   const candidates = [
     explicitPath,
-    join(__dirname, "windowsSampler.ps1"),
-    resolve(__dirname, "../../src/capture/windowsSampler.ps1"),
+    ownDir ? join(ownDir, "windowsSampler.ps1") : undefined,
+    ownDir ? resolve(ownDir, "../../src/capture/windowsSampler.ps1") : undefined,
     resolve(process.cwd(), "src/capture/windowsSampler.ps1"),
     resolve(process.cwd(), "services/sync-daemon/src/capture/windowsSampler.ps1")
   ].filter((candidate): candidate is string => Boolean(candidate));
