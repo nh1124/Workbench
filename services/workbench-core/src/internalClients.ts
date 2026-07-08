@@ -213,6 +213,15 @@ export async function resolveArtifactTreeProjectNames<T>(token: string, payload:
   return payload;
 }
 
+export async function resolveArtifactItemProjectName<T>(token: string, payload: T): Promise<T> {
+  const record = asJsonRecord(payload);
+  if (!record) return payload;
+
+  const projectId = typeof record.projectId === "string" ? record.projectId.trim() : "";
+  record.projectName = projectId ? await resolveProjectDisplayNameBestEffort(token, projectId) : null;
+  return payload;
+}
+
 export const notesClient = {
   list: (token: string, projectId?: string, limit?: number) =>
     serviceRequest<unknown[]>(notesService, `/notes${buildQuery({ projectId, limit })}`, token),
@@ -332,37 +341,38 @@ export const artifactsClient = {
       token
     ).then((result) => resolveArtifactTreeProjectNames(token, result)),
   getItem: (token: string, id: string) =>
-    serviceRequest<unknown>(artifactsService, `/artifacts/items/${encodeURIComponent(id)}`, token),
+    serviceRequest<unknown>(artifactsService, `/artifacts/items/${encodeURIComponent(id)}`, token)
+      .then((result) => resolveArtifactItemProjectName(token, result)),
   createFolder: (token: string, payload: unknown) =>
     serviceRequest<unknown>(artifactsService, "/artifacts/folders", token, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
-    }),
+    }).then((result) => resolveArtifactItemProjectName(token, result)),
   createNote: (token: string, payload: unknown) =>
     serviceRequest<unknown>(artifactsService, "/artifacts/notes", token, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
-    }),
+    }).then((result) => resolveArtifactItemProjectName(token, result)),
   updateItem: (token: string, id: string, payload: unknown) =>
     serviceRequest<unknown>(artifactsService, `/artifacts/items/${encodeURIComponent(id)}`, token, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
-    }),
+    }).then((result) => resolveArtifactItemProjectName(token, result)),
   patchNoteContent: (token: string, id: string, payload: unknown) =>
     serviceRequest<unknown>(artifactsService, `/artifacts/items/${encodeURIComponent(id)}/content-patch`, token, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
-    }),
+    }).then((result) => resolveArtifactItemProjectName(token, result)),
   updateNoteSection: (token: string, id: string, payload: unknown) =>
     serviceRequest<unknown>(artifactsService, `/artifacts/items/${encodeURIComponent(id)}/section`, token, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
-    }),
+    }).then((result) => resolveArtifactItemProjectName(token, result)),
   removeItem: (token: string, id: string) =>
     serviceRequest<void>(artifactsService, `/artifacts/items/${encodeURIComponent(id)}`, token, { method: "DELETE" }),
   uploadFile: async (
@@ -404,7 +414,7 @@ export const artifactsClient = {
     if (!text.trim()) {
       return undefined as unknown;
     }
-    return JSON.parse(text) as unknown;
+    return resolveArtifactItemProjectName(token, JSON.parse(text) as unknown);
   },
   replaceFileContent: async (
     token: string,
@@ -443,7 +453,7 @@ export const artifactsClient = {
     if (!text.trim()) {
       return undefined as unknown;
     }
-    return JSON.parse(text) as unknown;
+    return resolveArtifactItemProjectName(token, JSON.parse(text) as unknown);
   },
   downloadFile: async (token: string, id: string, asAttachment = true) => {
     const suffix = asAttachment ? "?download=1" : "";

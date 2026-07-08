@@ -21,7 +21,7 @@ export interface ArtifactInput {
 
 export interface ArtifactProjectSummary {
   projectId: string;
-  projectName?: string;
+  projectName: string | null;
   artifactCount: number;
   latestUpdatedAt: string;
 }
@@ -33,7 +33,7 @@ export type ArtifactPreviewStatus = "pending" | "ready" | "error";
 export interface ArtifactItem {
   id: string;
   projectId: string;
-  projectName?: string;
+  projectName: string | null;
   kind: ArtifactItemKind;
   title: string;
   path: string;

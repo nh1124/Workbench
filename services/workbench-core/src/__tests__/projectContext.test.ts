@@ -201,6 +201,9 @@ describe("Project context Artifact orchestration", () => {
       if (url.origin === "http://projects.test" && url.pathname === "/projects/project-primary/links") {
         return jsonResponse({ items: links, nextCursor: "cursor-2" });
       }
+      if (url.origin === "http://projects.test" && url.pathname === "/projects/project-primary") {
+        return jsonResponse({ id: "project-primary", name: "Primary" });
+      }
       targetAuthorizations.push(authorization ?? "");
       if (url.origin === "http://notes.test" && url.pathname === "/notes/note-1") {
         return jsonResponse({
@@ -505,6 +508,7 @@ describe("Project context Artifact orchestration", () => {
       const url = String(input);
       calls.push(url);
       if (url === "http://artifacts.test/artifacts/items/artifact-1") return jsonResponse(artifactItem);
+      if (url === "http://projects.test/projects/project-primary") return jsonResponse({ id: "project-primary", name: "Primary" });
       throw new Error(`Unexpected request: ${url}`);
     };
 
@@ -515,7 +519,11 @@ describe("Project context Artifact orchestration", () => {
         error.status === 409 &&
         error.code === "PRIMARY_MEMBERSHIP_CANNOT_BE_REMOVED"
     );
-    assert.deepEqual(calls, ["http://artifacts.test/artifacts/items/artifact-1"]);
+    assert.deepEqual(calls, [
+      "http://artifacts.test/artifacts/items/artifact-1",
+      "http://projects.test/projects/project-primary"
+    ]);
+    assert.equal(calls.some((url) => url.includes("/project-links")), false);
   });
 
   it("preserves a successful membership link when derived index maintenance fails", async () => {

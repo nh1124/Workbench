@@ -24,6 +24,73 @@ after(() => {
 });
 
 describe("internal artifact clients", () => {
+  it("live-resolves single artifact item project names and always keeps the projectName key", async () => {
+    const projectLookups: string[] = [];
+
+    globalThis.fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.origin === "http://artifacts.test" && url.pathname === "/artifacts/items/item-live") {
+        return jsonResponse({ id: "item-live", projectId: "project-a", projectName: "stale name" });
+      }
+      if (url.origin === "http://artifacts.test" && url.pathname === "/artifacts/items/item-missing") {
+        return jsonResponse({ id: "item-missing", projectId: "project-missing", projectName: "stale missing" });
+      }
+      if (url.origin === "http://artifacts.test" && url.pathname === "/artifacts/items/item-no-project") {
+        return jsonResponse({ id: "item-no-project", title: "No project" });
+      }
+      if (url.origin === "http://projects.test" && url.pathname.startsWith("/projects/")) {
+        const projectId = decodeURIComponent(url.pathname.slice("/projects/".length));
+        projectLookups.push(projectId);
+        if (projectId === "project-a") return jsonResponse({ id: projectId, name: "Project A" });
+        return jsonResponse({ message: "missing" }, 404);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    };
+
+    const live = await artifactsClient.getItem("token", "item-live") as Record<string, unknown>;
+    const missing = await artifactsClient.getItem("token", "item-missing") as Record<string, unknown>;
+    const noProject = await artifactsClient.getItem("token", "item-no-project") as Record<string, unknown>;
+
+    assert.equal(live.projectName, "Project A");
+    assert.equal(missing.projectName, null);
+    assert.equal(noProject.projectName, null);
+    assert.equal(Object.hasOwn(live, "projectName"), true);
+    assert.equal(Object.hasOwn(missing, "projectName"), true);
+    assert.equal(Object.hasOwn(noProject, "projectName"), true);
+    assert.deepEqual(projectLookups, ["project-a", "project-missing"]);
+  });
+
+  it("applies single artifact item project name resolution to mutation responses", async () => {
+    const projectLookups: string[] = [];
+
+    globalThis.fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.origin === "http://artifacts.test" && url.pathname === "/artifacts/notes") {
+        return jsonResponse({ id: "created-note", projectId: "project-a", projectName: "stale name" }, 201);
+      }
+      if (url.origin === "http://artifacts.test" && url.pathname === "/artifacts/upload") {
+        return jsonResponse({ id: "uploaded-file", projectId: "project-missing", projectName: "stale missing" }, 201);
+      }
+      if (url.origin === "http://projects.test" && url.pathname.startsWith("/projects/")) {
+        const projectId = decodeURIComponent(url.pathname.slice("/projects/".length));
+        projectLookups.push(projectId);
+        if (projectId === "project-a") return jsonResponse({ id: projectId, name: "Project A" });
+        return jsonResponse({ message: "missing" }, 404);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    };
+
+    const created = await artifactsClient.createNote("token", { title: "Note" }) as Record<string, unknown>;
+    const uploaded = await artifactsClient.uploadFile("token", {
+      filename: "file.txt",
+      contentBase64: Buffer.from("file", "utf8").toString("base64")
+    }) as Record<string, unknown>;
+
+    assert.equal(created.projectName, "Project A");
+    assert.equal(uploaded.projectName, null);
+    assert.deepEqual(projectLookups, ["project-a", "project-missing"]);
+  });
+
   it("live-resolves tree project names with one Projects lookup per distinct projectId", async () => {
     const projectLookups = new Map<string, number>();
 

@@ -175,7 +175,7 @@ export async function listArtifactProjects(ownerUsername: string): Promise<Artif
 
   return result.rows.map((row) => ({
     projectId: row.project_id,
-    projectName: row.project_name ?? undefined,
+    projectName: row.project_name ?? null,
     artifactCount: Number(row.artifact_count),
     latestUpdatedAt: new Date(row.latest_updated_at).toISOString()
   }));

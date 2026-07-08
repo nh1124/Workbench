@@ -216,7 +216,7 @@ function toArtifactItem(row: ArtifactItemRow, includeContent = false): ArtifactI
   const item: ArtifactItem = {
     id: row.id,
     projectId: row.project_id,
-    projectName: row.project_name ?? undefined,
+    projectName: row.project_name ?? null,
     kind: row.kind,
     title: row.title,
     path: row.path,
@@ -806,7 +806,7 @@ export async function listArtifactItemProjects(ownerUsername: string): Promise<A
 
   return result.rows.map((row) => ({
     projectId: row.project_id,
-    projectName: row.project_name ?? undefined,
+    projectName: row.project_name ?? null,
     artifactCount: Number(row.artifact_count),
     latestUpdatedAt: new Date(row.latest_updated_at).toISOString()
   }));
