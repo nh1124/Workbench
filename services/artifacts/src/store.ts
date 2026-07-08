@@ -162,7 +162,7 @@ export async function listArtifactProjects(ownerUsername: string): Promise<Artif
     `
       SELECT
         project_id,
-        COALESCE(MAX(project_name), project_id) AS project_name,
+        NULLIF(MAX(project_name), '') AS project_name,
         COUNT(*)::text AS artifact_count,
         MAX(updated_at) AS latest_updated_at
       FROM artifacts

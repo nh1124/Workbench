@@ -155,6 +155,64 @@ function buildQuery(params: Record<string, string | number | boolean | undefined
   return query ? `?${query}` : "";
 }
 
+function asJsonRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function artifactTreeRecords(value: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is Record<string, unknown> => Boolean(asJsonRecord(item)));
+  }
+
+  const record = asJsonRecord(value);
+  if (Array.isArray(record?.items)) {
+    return record.items.filter((item): item is Record<string, unknown> => Boolean(asJsonRecord(item)));
+  }
+
+  return [];
+}
+
+function projectDisplayName(project: unknown): string | null {
+  const record = asJsonRecord(project);
+  const name = typeof record?.name === "string" ? record.name.trim() : "";
+  return name || null;
+}
+
+async function resolveProjectDisplayNameBestEffort(token: string, projectId: string): Promise<string | null> {
+  try {
+    return projectDisplayName(await projectsClient.get(token, projectId));
+  } catch {
+    return null;
+  }
+}
+
+export async function resolveArtifactTreeProjectNames<T>(token: string, payload: T): Promise<T> {
+  const records = artifactTreeRecords(payload);
+  const projectIds = [...new Set(
+    records
+      .map((record) => (typeof record.projectId === "string" ? record.projectId.trim() : ""))
+      .filter((projectId) => projectId.length > 0)
+  )];
+  const projectNames = new Map<string, string | null>();
+
+  await Promise.all(
+    projectIds.map(async (projectId) => {
+      projectNames.set(projectId, await resolveProjectDisplayNameBestEffort(token, projectId));
+    })
+  );
+
+  for (const record of records) {
+    const projectId = typeof record.projectId === "string" ? record.projectId.trim() : "";
+    if (projectId) {
+      record.projectName = projectNames.get(projectId) ?? null;
+    }
+  }
+
+  return payload;
+}
+
 export const notesClient = {
   list: (token: string, projectId?: string, limit?: number) =>
     serviceRequest<unknown[]>(notesService, `/notes${buildQuery({ projectId, limit })}`, token),
@@ -219,8 +277,11 @@ export const artifactsClient = {
   remove: (token: string, id: string) =>
     serviceRequest<void>(artifactsService, `/artifacts/${encodeURIComponent(id)}`, token, { method: "DELETE" }),
   projects: (token: string) => serviceRequest<unknown[]>(artifactsService, "/projects", token),
-  tree: (token: string, projectId?: string) =>
-    serviceRequest<unknown[]>(artifactsService, `/artifacts/tree${buildQuery({ projectId })}`, token),
+  tree: async (token: string, projectId?: string) =>
+    resolveArtifactTreeProjectNames(
+      token,
+      await serviceRequest<unknown[]>(artifactsService, `/artifacts/tree${buildQuery({ projectId })}`, token)
+    ),
   treeList: (
     token: string,
     options: {
@@ -243,7 +304,7 @@ export const artifactsClient = {
         limit: options.limit
       })}`,
       token
-    ),
+    ).then((result) => resolveArtifactTreeProjectNames(token, result)),
   treeListPage: (
     token: string,
     options: {
@@ -269,7 +330,7 @@ export const artifactsClient = {
         page: true
       })}`,
       token
-    ),
+    ).then((result) => resolveArtifactTreeProjectNames(token, result)),
   getItem: (token: string, id: string) =>
     serviceRequest<unknown>(artifactsService, `/artifacts/items/${encodeURIComponent(id)}`, token),
   createFolder: (token: string, payload: unknown) =>

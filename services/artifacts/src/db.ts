@@ -56,6 +56,14 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+export async function cleanupArtifactItemProjectNameFallbacks(): Promise<void> {
+  await pool.query(`
+    UPDATE artifact_items
+    SET project_name = NULL
+    WHERE project_name = project_id;
+  `);
+}
+
 async function runWithDbStartupRetry(operation: () => Promise<void>): Promise<void> {
   for (let attempt = 1; attempt <= DB_STARTUP_RETRY_ATTEMPTS; attempt += 1) {
     try {
@@ -154,6 +162,8 @@ export async function ensureArtifactsSchema(): Promise<void> {
           CREATE INDEX IF NOT EXISTS idx_artifact_items_owner_project_updated
           ON artifact_items(owner_username, project_id, updated_at DESC);
         `);
+
+        await cleanupArtifactItemProjectNameFallbacks();
       });
     })();
   }

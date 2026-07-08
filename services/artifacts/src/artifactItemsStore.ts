@@ -297,7 +297,7 @@ function isFallbackDefaultProjectId(value: string | undefined): boolean {
 
 function resolveProjectContext(projectId: string | undefined, projectName: string | undefined): {
   projectId: string;
-  projectName: string;
+  projectName: string | undefined;
 } {
   const normalizedProjectId = projectId?.trim();
   if (!normalizedProjectId) {
@@ -309,7 +309,7 @@ function resolveProjectContext(projectId: string | undefined, projectName: strin
 
   return {
     projectId: normalizedProjectId,
-    projectName: projectName?.trim() || normalizedProjectId
+    projectName: projectName?.trim() || undefined
   };
 }
 
@@ -792,7 +792,7 @@ export async function listArtifactItemProjects(ownerUsername: string): Promise<A
         project_id,
         CASE
           WHEN project_id = $2 THEN $3
-          ELSE COALESCE(NULLIF(MAX(project_name), ''), project_id)
+          ELSE NULLIF(MAX(project_name), '')
         END AS project_name,
         COUNT(*)::text AS artifact_count,
         MAX(updated_at) AS latest_updated_at
@@ -891,8 +891,17 @@ function applyNotePatchOperations(content: string, operations: ArtifactNotePatch
   return operations.reduce((nextContent, operation) => applyNotePatchOperation(nextContent, operation), content);
 }
 
-function ensureTrailingNewline(value: string): string {
-  return value.endsWith("\n") ? value : `${value}\n`;
+function normalizeSectionBodyMarkdown(value: string): string {
+  return value
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .trim()
+    .replace(/\n[ \t]*(?:\n[ \t]*){2,}/g, "\n\n");
+}
+
+function formatSectionBodyMarkdown(value: string): string {
+  const normalized = normalizeSectionBodyMarkdown(value);
+  return normalized ? `\n${normalized}\n\n` : "\n";
 }
 
 function findMarkdownSection(
@@ -948,7 +957,7 @@ function findMarkdownSection(
 function applyNoteSectionUpdate(content: string, input: ArtifactNoteSectionUpdateInput): string {
   const section = findMarkdownSection(content, input.heading, input.level);
   const mode = input.mode ?? "replaceBody";
-  const nextBody = ensureTrailingNewline(input.contentMarkdown);
+  const nextBody = normalizeSectionBodyMarkdown(input.contentMarkdown);
 
   if (!section) {
     if (!input.createIfMissing) {
@@ -956,21 +965,24 @@ function applyNoteSectionUpdate(content: string, input: ArtifactNoteSectionUpdat
     }
     const level = input.level && input.level >= 1 && input.level <= 6 ? input.level : 2;
     const separator = content.trim().length === 0 ? "" : "\n\n";
-    return `${content}${separator}${"#".repeat(level)} ${input.heading.trim()}\n${nextBody}`;
+    return `${content}${separator}${"#".repeat(level)} ${input.heading.trim()}\n${formatSectionBodyMarkdown(nextBody)}`;
   }
 
-  const currentBody = content.slice(section.bodyStart, section.sectionEnd);
+  const currentBody = normalizeSectionBodyMarkdown(content.slice(section.bodyStart, section.sectionEnd));
   let replacementBody = nextBody;
   if (mode === "appendBody") {
-    const separator = currentBody.endsWith("\n") || currentBody.length === 0 ? "" : "\n";
-    replacementBody = `${currentBody}${separator}${nextBody}`;
+    replacementBody = [currentBody, nextBody].filter((part) => part.length > 0).join("\n\n");
   } else if (mode === "prependBody") {
-    const separator = nextBody.endsWith("\n") || currentBody.length === 0 ? "" : "\n";
-    replacementBody = `${nextBody}${separator}${currentBody}`;
+    replacementBody = [nextBody, currentBody].filter((part) => part.length > 0).join("\n\n");
   }
 
-  return `${content.slice(0, section.bodyStart)}${replacementBody}${content.slice(section.sectionEnd)}`;
+  return `${content.slice(0, section.bodyStart)}${formatSectionBodyMarkdown(replacementBody)}${content.slice(section.sectionEnd)}`;
 }
+
+export const artifactItemsStoreTestHooks = {
+  applyNoteSectionUpdate,
+  resolveProjectContext
+};
 
 async function updateArtifactNoteContent(
   id: string,
