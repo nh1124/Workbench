@@ -74,3 +74,67 @@ FB-D6 brief鮮度(#4) — skillパターンで対応
 3. artifacts.tree.list の projectName が表示名または null になり、UUIDが現れない。
 4. section.update後の本文で、置換部と次見出しの間に空行がある。
 5. skillの再試行指針・brief鮮度点検が反映されている。
+
+---
+
+# Phase 2 (2026-07-08 再レビューの残課題)
+
+Status: `[review]` — Owner承認待ち。再レビューで「検索が本文完全一致を取り逃す」
+「item.get の projectName が省略される」の2点が優先残課題と判定された。
+
+## 決定事項(案)
+
+```text
+FB2-D1 本文検索(#再レビュー1、本命)
+- project_index_entries へ content_text TEXT(検索専用、先頭20,000字でbound)を追加し、
+  index維持経路(artifacts note/file title等、mindmap node text、wbs項目名)で投入する。
+- 検索fieldsへ "content" を追加(ILIKE。any/all両mode対象)。
+- content_text は検索専用であり、search/list/context のresponseへは一切含めない
+  (context budgetと「本文はdomain toolで読む」原則を維持)。
+- 既存entryへの反映は projects.index.rebuild(受入手順に含める)。
+- 補足: 「index はArtifact本文を複製しない」という当初方針の変更にあたるが、
+  content_text は正本ではなく再構築可能な派生キャッシュ(rebuildで修復)であり、
+  単一ユーザー・数百entry規模では容量影響は無視できる。フォールバック方式
+  (検索弱時にartifacts/notesサービスへfan-out)は複雑さの割に網羅性が劣るため不採用。
+
+FB2-D2 一致度順ソート(#再レビュー1の順位付け)
+- q指定時の並びを score(matchedTokens) DESC → indexed_at DESC → id DESC へ変更。
+- cursorへscoreを含めた複合タプル比較((score, indexed_at, id) < ($1,$2,$3))で
+  ページングとの整合を取る(全キーDESCなのでタプル比較で成立)。
+- 一般語への重み付け(IT/Lab等)は行わない(scoring導入後の効果を見て再検討)。
+
+FB2-D3 item.get の projectName 統一(#再レビュー2)
+- Core の artifactsClient.getItem に tree と同じ live resolve を適用し、
+  projectName を常にキーとして含める(解決不能時は null。省略はしない)。
+- artifacts service 側の応答も project_name が NULL のとき undefined(キー省略)
+  ではなく null を返すよう統一(:219, :809)。
+- note create/update等の単一item応答も同じresolverを通す。
+
+FB2-D4 過去データのMarkdown境界 — 対応しない(Owner判断)
+- 旧不良は該当セクションを次に section.update した時点で正規化される(自然治癒)。
+- 一括migration・保存時全体正規化は、agentが意図しない箇所の書き換えリスクが
+  上回るため不採用。必要になった項目のみ手動/agent操作で修復する。
+
+FB2-D5 brief陳腐化検出のテスト方法(#再レビュー5への回答)
+- 現行は「maintenance skill による点検パターン」であり自動比較ではない(仕様どおり)。
+- 検証は skill forward-test シナリオへ追加: テストprojectに古い版参照のbriefと
+  新しいPlan artifactを作り、skillが flag + 更新草案を出すことを確認する。
+- 自動整合性チェック(queue化)は skill 運用で不足が実証されたら再検討(deferred)。
+```
+
+## Phase 2 Progress Board
+
+| ID | Status | Scope | Task |
+|---|---|---|---|
+| FB2-1 | `[review]` | projects/core | content_text 追加 + index維持経路での投入 + 検索fields拡張 + rebuild反映 + tests |
+| FB2-2 | `[review]` | projects | score順ソート + score入り複合cursor + tests |
+| FB2-3 | `[review]` | artifacts/core | item.get live resolve + projectName null統一 + tests |
+| FB2-4 | - | - | 対応しない(FB2-D4) |
+| FB2-5 | `[review]` | skill/docs | forward-testシナリオへbrief陳腐化ケース追記 |
+| FB2-R | `[pending]` | root | 承認後: レビュー・検証・commit・本番反映・再受入 |
+
+## Phase 2 受入(本番反映 + rebuild後)
+
+1. `Jeremy's IT Lab 全63日完走` が該当進捗ノートを返し、本文一致がヒットする。
+2. q指定時、matchedTokensの多い結果が先頭に並ぶ。
+3. artifacts.item.get が常に projectName キーを持つ(表示名 or null)。UUIDは現れない。
