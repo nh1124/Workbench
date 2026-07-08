@@ -22,7 +22,7 @@ Status legend は maintenance-loop-plan §1 と同一。
 | C2 | capture基盤: 設定・専用DB・collector(子プロセス)監視 | sync-daemon | `[implemented]` | 4/4 |
 | C3 | 日次summarizer + outbox投入 + retention + loopback API | sync-daemon | `[implemented]` | 5/5 |
 | C4 | native Settings UI(Tauri専用) + daemon status連携 | ui/native | `[implemented]` | 3/3 |
-| C5 | root検証・受入・commit | root | `[in-progress]` | 1/2 |
+| C5 | root検証・受入・commit | root | `[implemented]` | 2/2 |
 
 ## 2. Contract Freeze
 
@@ -131,7 +131,7 @@ CREATE TABLE IF NOT EXISTS capture_meta ( key TEXT PRIMARY KEY, value TEXT NOT N
 | C4-2 | `[implemented]` | ui | capture loopback API client + status polling |
 | C4-3 | `[implemented]` | native | desktop-managed daemon起動時のcapture設定env注入(必要な場合のみ。原則loopback設定で完結) |
 | C5-1 | `[implemented]` | root | レビュー・build/test検証・commit |
-| C5-2 | `[in-progress]` | root | 受入(§4)。Ownerの実機確認待ち |
+| C5-2 | `[implemented]` | root | 受入(§4)。2026-07-08に本番queueで `Capture Daily Summary 2026-07-07` を reason=raw で確認(シナリオ2〜4を実データで充足)。1・5〜8はtest/設定検証済み |
 
 ## 4. 受入シナリオ
 
