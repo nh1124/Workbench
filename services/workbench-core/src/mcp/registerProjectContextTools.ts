@@ -241,6 +241,7 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
         q: z.string().optional(),
         sourceService: z.string().optional(),
         resourceType: z.string().optional(),
+        mode: z.enum(["any", "all"]).optional(),
         limit: z.number().int().positive().max(500).optional(),
         cursor: z.string().optional()
       }

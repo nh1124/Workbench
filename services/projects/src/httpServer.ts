@@ -67,6 +67,7 @@ import {
 import {
   CREATED_BY_KINDS,
   PROJECT_INDEX_ASSOCIATION_KINDS,
+  PROJECT_INDEX_SEARCH_MODES,
   MAINTENANCE_QUEUE_REASONS,
   PROJECT_MEMORY_AUTHORITIES,
   PROJECT_MEMORY_KINDS,
@@ -256,6 +257,8 @@ const indexEntryInputSchema = z.object({
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["associationId"], message: "Secondary entries require associationId" });
   }
 });
+
+const indexSearchModeQuerySchema = z.enum(PROJECT_INDEX_SEARCH_MODES).optional();
 
 const indexTombstoneSchema = z.object({
   sourceService: z.string().min(1),
@@ -786,6 +789,8 @@ app.get("/projects/:projectId/index-entries", requireUserAuth, async (req, res) 
   if (associationKind && !PROJECT_INDEX_ASSOCIATION_KINDS.includes(associationKind as never)) {
     return res.status(400).json({ message: "Invalid associationKind" });
   }
+  const parsedMode = indexSearchModeQuerySchema.safeParse(req.query.mode);
+  if (!parsedMode.success) return res.status(400).json({ message: parsedMode.error.flatten() });
   try {
     const cursor = validatedCursorQuery(req.query.cursor);
     const result = await searchProjectIndex(String(req.params.projectId), owner, {
@@ -793,6 +798,7 @@ app.get("/projects/:projectId/index-entries", requireUserAuth, async (req, res) 
       sourceService: typeof req.query.sourceService === "string" ? req.query.sourceService : undefined,
       resourceType: typeof req.query.resourceType === "string" ? req.query.resourceType : undefined,
       associationKind: associationKind as (typeof PROJECT_INDEX_ASSOCIATION_KINDS)[number] | undefined,
+      mode: parsedMode.data,
       cursor,
       limit: sanitizeLimit(typeof req.query.limit === "string" ? req.query.limit : undefined)
     });

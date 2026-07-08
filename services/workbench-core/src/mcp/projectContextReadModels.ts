@@ -56,7 +56,8 @@ const memoryFields = [
 ] as const;
 const indexFields = [
   "id", "projectId", "sourceService", "resourceType", "resourceId", "associationKind", "associationId",
-  "path", "title", "summaryText", "summarySource", "sourceVersion", "sourceUpdatedAt", "indexedAt", "metadataJson"
+  "path", "title", "summaryText", "summarySource", "sourceVersion", "sourceUpdatedAt", "indexedAt", "metadataJson",
+  "matchedTokens"
 ] as const;
 const relationFields = [
   "id", "sourceProjectId", "targetProjectId", "relationType", "directionality", "note", "origin", "strength",
@@ -103,7 +104,22 @@ export function memoryListMcpReadProjection(value: unknown): JsonRecord {
 }
 
 export function indexListMcpReadProjection(value: unknown): JsonRecord {
-  return compactPage(value, indexMcpReadProjection);
+  const result = compactPage(value, indexMcpReadProjection);
+  const source = requireRecord(value, "Project index list page");
+  if (source.appliedQuery !== undefined) {
+    const appliedQuery = requireRecord(source.appliedQuery, "Project index applied query");
+    if (
+      !Array.isArray(appliedQuery.tokens) ||
+      !appliedQuery.tokens.every((token) => typeof token === "string") ||
+      (appliedQuery.mode !== "any" && appliedQuery.mode !== "all") ||
+      !Array.isArray(appliedQuery.fields) ||
+      !appliedQuery.fields.every((field) => typeof field === "string")
+    ) {
+      throw new ProjectContextReadModelError("Projects service returned an invalid Project index applied query");
+    }
+    result.appliedQuery = select(appliedQuery, ["tokens", "mode", "fields"]);
+  }
+  return result;
 }
 
 export function relationListMcpReadProjection(value: unknown): JsonRecord {

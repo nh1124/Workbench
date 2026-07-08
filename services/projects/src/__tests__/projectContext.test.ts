@@ -152,3 +152,21 @@ test("cursor parser preserves emitted cursors and rejects malformed ordering dat
   }
   assert.equal(parseCursor(undefined), undefined);
 });
+
+test("project index search query options normalize NFKC tokens and default to any mode", async () => {
+  process.env.PROJECTS_DB_HOST ??= "127.0.0.1";
+  process.env.PROJECTS_DB_PORT ??= "5546";
+  process.env.PROJECTS_DB_NAME ??= "projects_db";
+  process.env.PROJECTS_DB_USER ??= "projects_user";
+  process.env.PROJECTS_DB_PASSWORD ??= "projects_pass";
+
+  const { projectIndexStoreTestHooks } = await import("../projectIndexStore.js");
+
+  assert.deepEqual(
+    projectIndexStoreTestHooks.normalizeProjectIndexQuery("  Ｊｅｒｅｍｙ　６月末  "),
+    ["Jeremy", "6月末"]
+  );
+  assert.deepEqual(projectIndexStoreTestHooks.normalizeProjectIndexQuery("　　"), []);
+  assert.equal(projectIndexStoreTestHooks.normalizeProjectIndexSearchMode(undefined), "any");
+  assert.equal(projectIndexStoreTestHooks.normalizeProjectIndexSearchMode("all"), "all");
+});

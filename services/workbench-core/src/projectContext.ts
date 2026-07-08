@@ -16,6 +16,8 @@ export const MINDMAP_TARGET_SERVICE = "mindmaps";
 export const MINDMAP_TARGET_RESOURCE_TYPE = "mindmap_document";
 export const WBS_TARGET_SERVICE = "wbs";
 export const WBS_TARGET_RESOURCE_TYPE = "wbs_plan";
+const PROJECT_INDEX_SEARCH_FIELDS = ["path", "title", "summary", "metadata"] as const;
+const PROJECT_INDEX_SUMMARY_POLICY = "v2-headings";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -412,12 +414,46 @@ function artifactSummary(item: ArtifactItemRecord): string {
   }
 
   const markdown = item.contentMarkdown ?? "";
-  const paragraph = markdown
-    .split(/\r?\n/)
-    .map((line) => line.replace(/^#{1,6}\s+/, "").trim())
-    .find((line) => line.length > 0);
-  return (paragraph ?? `Note: ${item.title}`).slice(0, 280);
+  const paragraph = leadingMarkdownParagraph(markdown) ?? `Note: ${item.title}`;
+  const headings = markdownHeadings(markdown);
+  if (headings.length === 0) {
+    return boundedText(paragraph, 280) ?? `Note: ${item.title}`;
+  }
+  return boundedText(`${boundedText(paragraph, 280) ?? paragraph} | Sections: ${headings.join(" / ")}`, 500)
+    ?? `Note: ${item.title}`;
 }
+
+function leadingMarkdownParagraph(markdown: string): string | undefined {
+  const normalized = markdown.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const headingLinePattern = /^#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$/;
+  for (const block of normalized.split(/\n[ \t]*\n/)) {
+    const paragraph = block
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => !headingLinePattern.test(line))
+      .filter((line) => line.length > 0)
+      .join(" ");
+    const bounded = boundedText(paragraph, 280);
+    if (bounded) return bounded;
+  }
+  return undefined;
+}
+
+function markdownHeadings(markdown: string): string[] {
+  const headings: string[] = [];
+  const normalized = markdown.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const headingPattern = /^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$/gm;
+  let match: RegExpExecArray | null;
+  while ((match = headingPattern.exec(normalized)) !== null) {
+    const heading = boundedText(match[2], 120);
+    if (heading) headings.push(heading);
+  }
+  return headings;
+}
+
+export const projectContextTestHooks = {
+  artifactSummary
+};
 
 export function buildArtifactIndexEntry(
   item: ArtifactItemRecord,
@@ -1566,5 +1602,13 @@ export async function rebuildProjectIndex(token: string, projectId: string): Pro
       wbs
     });
   }
-  return { projectId, artifacts, mindmaps, wbs };
+  return {
+    projectId,
+    artifacts,
+    mindmaps,
+    wbs,
+    searchFields: [...PROJECT_INDEX_SEARCH_FIELDS],
+    summaryPolicy: PROJECT_INDEX_SUMMARY_POLICY,
+    completedAt: new Date().toISOString()
+  };
 }

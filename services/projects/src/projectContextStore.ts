@@ -33,7 +33,7 @@ export async function getProjectContext(
       query: options?.query, limit: options?.memoryLimit ?? 10
     }) : undefined,
     include.has("index") ? searchProjectIndex(projectId, ownerAccountId, {
-      query: options?.query, limit: options?.indexLimit ?? 20
+      query: options?.query, mode: "any", limit: options?.indexLimit ?? 20
     }) : undefined,
     include.has("relations") ? listProjectRelations(projectId, ownerAccountId, {
       limit: options?.relationLimit ?? 10

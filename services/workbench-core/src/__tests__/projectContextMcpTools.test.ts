@@ -160,6 +160,38 @@ describe("Project context MCP contract", () => {
     assert.equal("targetBody" in (projectedLink ?? {}), false);
   });
 
+  it("projects index search diagnostics and matched token counts", () => {
+    const page = readModels.indexListMcpReadProjection({
+      items: [{
+        id: "index-1",
+        projectId: "project-1",
+        sourceService: "artifacts",
+        resourceType: "note",
+        resourceId: "artifact-1",
+        associationKind: "primary",
+        title: "Artifact",
+        summaryText: "Jeremy completion",
+        summarySource: "deterministic",
+        sourceUpdatedAt: "2026-06-23T00:00:00.000Z",
+        indexedAt: "2026-06-23T00:00:00.000Z",
+        metadataJson: {},
+        matchedTokens: 2
+      }],
+      appliedQuery: {
+        tokens: ["Jeremy", "completion"],
+        mode: "any",
+        fields: ["path", "title", "summary", "metadata"]
+      }
+    });
+
+    assert.equal((page.items as Array<Record<string, unknown>>)[0]?.matchedTokens, 2);
+    assert.deepEqual(page.appliedQuery, {
+      tokens: ["Jeremy", "completion"],
+      mode: "any",
+      fields: ["path", "title", "summary", "metadata"]
+    });
+  });
+
   it("fails closed instead of turning malformed upstream read pages into authoritative empties", () => {
     for (const projection of [
       readModels.memoryListMcpReadProjection,

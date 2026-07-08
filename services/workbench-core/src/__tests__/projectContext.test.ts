@@ -426,6 +426,27 @@ describe("Project context Artifact orchestration", () => {
     assert.match(String(entry.contentHash), /^[a-f0-9]{64}$/);
   });
 
+  it("builds heading-aware Artifact note summaries within the index bound", () => {
+    const summary = contextModule.projectContextTestHooks.artifactSummary({
+      ...artifactItem,
+      contentMarkdown: [
+        "# Launch Notes",
+        "",
+        `Jeremy completion notes ${"x".repeat(420)}`,
+        "",
+        "## Risks",
+        "Capacity",
+        "",
+        "### Follow Up",
+        "Owners"
+      ].join("\n")
+    });
+
+    assert.match(summary, /Jeremy completion notes/);
+    assert.match(summary, /Sections: Launch Notes \/ Risks \/ Follow Up/);
+    assert.ok(summary.length <= 500);
+  });
+
   it("rejects removal of the primary membership without touching Projects links", async () => {
     const calls: string[] = [];
     globalThis.fetch = async (input) => {
@@ -987,6 +1008,9 @@ describe("Project context Artifact orchestration", () => {
     const artifacts = result.artifacts as Record<string, unknown>;
     const mindmaps = result.mindmaps as Record<string, unknown>;
 
+    assert.deepEqual(result.searchFields, ["path", "title", "summary", "metadata"]);
+    assert.equal(result.summaryPolicy, "v2-headings");
+    assert.equal(Number.isFinite(Date.parse(String(result.completedAt))), true);
     assert.equal(artifactIndexListed, true);
     assert.equal(artifacts.indexed, 0);
     assert.equal(mindmaps.status, "error");

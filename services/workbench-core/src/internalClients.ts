@@ -1220,7 +1220,7 @@ export const projectsClient = {
   listIndexEntries: (
     token: string,
     projectId: string,
-    options: { q?: string; sourceService?: string; resourceType?: string; limit?: number; cursor?: string } = {}
+    options: { q?: string; sourceService?: string; resourceType?: string; mode?: "any" | "all"; limit?: number; cursor?: string } = {}
   ) => {
     if (!projectsService) throw new Error("Projects service is not configured");
     return serviceRequest<unknown>(

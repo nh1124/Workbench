@@ -68,6 +68,8 @@ test("Projects HTTP context routes return owner-scoped 404, 409 and 400 response
       assert.equal(invalidCursor.status, 400, path);
       assert.equal((await invalidCursor.json() as { code?: string }).code, "INVALID_CURSOR", path);
     }
+    const invalidIndexMode = await fetch(`${base}/projects/${project.id}/index-entries?mode=some`, { headers });
+    assert.equal(invalidIndexMode.status, 400);
     const missing = await fetch(`${base}/projects/missing/brief`, { headers });
     assert.equal(missing.status, 404);
 

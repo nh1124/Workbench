@@ -4,10 +4,12 @@ import { ensureProjectsSchema, getProjectsPool } from "./db.js";
 import { clampLimit, iso, normalizeOwner, parseCursor, projectExistsForOwner, toCursor } from "./projectStoreUtils.js";
 import type {
   ProjectIndexAssociationKind,
+  ProjectIndexSearchMode,
   ProjectIndexEntry,
   ProjectIndexEntryInput,
   ProjectIndexListResult
 } from "./types.js";
+import { PROJECT_INDEX_SEARCH_FIELDS } from "./types.js";
 
 type IndexRow = {
   id: string;
@@ -27,6 +29,7 @@ type IndexRow = {
   indexed_at: string;
   last_read_at: string | null;
   metadata_json: unknown;
+  matched_tokens?: string | number | null;
 };
 
 export type SearchProjectIndexOptions = {
@@ -34,6 +37,7 @@ export type SearchProjectIndexOptions = {
   sourceService?: string;
   resourceType?: string;
   associationKind?: ProjectIndexAssociationKind;
+  mode?: ProjectIndexSearchMode;
   limit?: number;
   cursor?: string;
 };
@@ -50,6 +54,9 @@ export type ProjectIndexReadMark = {
 };
 
 function toIndexEntry(row: IndexRow): ProjectIndexEntry {
+  const matchedTokens = row.matched_tokens === undefined || row.matched_tokens === null
+    ? undefined
+    : Number(row.matched_tokens);
   return {
     id: row.id,
     projectId: row.project_id,
@@ -67,13 +74,23 @@ function toIndexEntry(row: IndexRow): ProjectIndexEntry {
     sourceUpdatedAt: iso(row.source_updated_at),
     indexedAt: iso(row.indexed_at),
     lastReadAt: row.last_read_at ? iso(row.last_read_at) : undefined,
-    metadataJson: row.metadata_json && typeof row.metadata_json === "object" ? row.metadata_json as Record<string, unknown> : {}
+    metadataJson: row.metadata_json && typeof row.metadata_json === "object" ? row.metadata_json as Record<string, unknown> : {},
+    ...(Number.isFinite(matchedTokens) ? { matchedTokens } : {})
   };
 }
 
 const INDEX_COLUMNS = `id, project_id, source_service, resource_type, resource_id, association_kind,
   association_id, path, title, summary_text, summary_source, source_version, content_hash,
   source_updated_at, indexed_at, last_read_at, metadata_json`;
+
+function normalizeProjectIndexQuery(query: string | undefined): string[] {
+  const normalized = query?.normalize("NFKC").trim();
+  return normalized ? normalized.split(/\s+/).filter((token) => token.length > 0) : [];
+}
+
+function normalizeProjectIndexSearchMode(mode: ProjectIndexSearchMode | undefined): ProjectIndexSearchMode {
+  return mode === "all" ? "all" : "any";
+}
 
 export async function searchProjectIndex(
   projectId: string,
@@ -83,45 +100,65 @@ export async function searchProjectIndex(
   if (!(await projectExistsForOwner(projectId, ownerAccountId))) return undefined;
   const pageSize = clampLimit(options?.limit, 20, 100);
   const cursor = parseCursor(options?.cursor);
+  const mode = normalizeProjectIndexSearchMode(options?.mode);
+  const tokens = normalizeProjectIndexQuery(options?.query);
   const values: Array<string | number> = [projectId];
-  let sql = `SELECT ${INDEX_COLUMNS} FROM project_index_entries WHERE project_id = $1 AND is_deleted = FALSE`;
+  const where = ["project_id = $1", "is_deleted = FALSE"];
+  const matchedTokenExpressions: string[] = [];
   if (options?.sourceService) {
     values.push(options.sourceService);
-    sql += ` AND source_service = $${values.length}`;
+    where.push(`source_service = $${values.length}`);
   }
   if (options?.resourceType) {
     values.push(options.resourceType);
-    sql += ` AND resource_type = $${values.length}`;
+    where.push(`resource_type = $${values.length}`);
   }
   if (options?.associationKind) {
     values.push(options.associationKind);
-    sql += ` AND association_kind = $${values.length}`;
+    where.push(`association_kind = $${values.length}`);
   }
-  const query = options?.query?.trim();
-  if (query) {
-    // Split on whitespace and require every term to match at least one field
-    // (AND across terms, OR across fields). A single ILIKE on the whole query
+  if (tokens.length > 0) {
+    const predicates: string[] = [];
+    // Match tokens across path/title/summary/metadata. "all" keeps AND
+    // behavior; "any" returns rows matching at least one token.
+    // A single ILIKE on the whole query
     // string would return nothing for multi-word queries such as "豚こま 生姜焼き".
     // metadata_json is included so tags (e.g. "recipe") are searchable too.
-    for (const term of query.split(/\s+/)) {
+    for (const term of tokens) {
       values.push(`%${term}%`);
-      sql += ` AND (path ILIKE $${values.length} OR title ILIKE $${values.length} OR summary_text ILIKE $${values.length} OR metadata_json::text ILIKE $${values.length})`;
+      const placeholder = `$${values.length}`;
+      const predicate = `(path ILIKE ${placeholder} OR title ILIKE ${placeholder} OR summary_text ILIKE ${placeholder} OR metadata_json::text ILIKE ${placeholder})`;
+      predicates.push(predicate);
+      matchedTokenExpressions.push(`CASE WHEN ${predicate} THEN 1 ELSE 0 END`);
     }
+    where.push(mode === "all" ? predicates.join(" AND ") : `(${predicates.join(" OR ")})`);
   }
   if (cursor) {
     values.push(cursor.t, cursor.id);
-    sql += ` AND (indexed_at, id) < ($${values.length - 1}::timestamptz, $${values.length})`;
+    where.push(`(indexed_at, id) < ($${values.length - 1}::timestamptz, $${values.length})`);
   }
+  const selectColumns = mode === "any" && matchedTokenExpressions.length > 0
+    ? `${INDEX_COLUMNS}, (${matchedTokenExpressions.join(" + ")})::int AS matched_tokens`
+    : INDEX_COLUMNS;
   values.push(pageSize + 1);
+  let sql = `SELECT ${selectColumns} FROM project_index_entries WHERE ${where.join(" AND ")}`;
   sql += ` ORDER BY indexed_at DESC, id DESC LIMIT $${values.length}`;
   const result = await getProjectsPool().query<IndexRow>(sql, values);
   const rows = result.rows.slice(0, pageSize);
   const last = rows.at(-1);
   return {
     items: rows.map(toIndexEntry),
-    nextCursor: result.rows.length > pageSize && last ? toCursor(last.indexed_at, last.id) : undefined
+    nextCursor: result.rows.length > pageSize && last ? toCursor(last.indexed_at, last.id) : undefined,
+    ...(tokens.length > 0
+      ? { appliedQuery: { tokens, mode, fields: [...PROJECT_INDEX_SEARCH_FIELDS] } }
+      : {})
   };
 }
+
+export const projectIndexStoreTestHooks = {
+  normalizeProjectIndexQuery,
+  normalizeProjectIndexSearchMode
+};
 
 async function upsertWithClient(client: PoolClient, projectId: string, input: ProjectIndexEntryInput): Promise<ProjectIndexEntry> {
   const result = await client.query<IndexRow>(

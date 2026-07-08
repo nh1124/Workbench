@@ -95,6 +95,23 @@ test("project context stores preserve owner isolation, idempotence and relation 
     assert.equal(await indexStore.bulkUpsertProjectIndexEntries(projectA.id, [indexInput], ownerB), undefined);
     assert.equal((await indexStore.searchProjectIndex(projectA.id, ownerA))?.items.length, 2);
     assert.equal(await indexStore.searchProjectIndex(projectA.id, ownerB), undefined);
+    const anySearch = await indexStore.searchProjectIndex(projectA.id, ownerA, { query: "Ｂｕｌｋ　file" });
+    assert.deepEqual(anySearch?.appliedQuery, {
+      tokens: ["Bulk", "file"],
+      mode: "any",
+      fields: ["path", "title", "summary", "metadata"]
+    });
+    assert.equal(anySearch?.items.length, 2);
+    const matchedByResourceId = new Map(anySearch?.items.map((item) => [item.resourceId, item.matchedTokens]));
+    assert.equal(matchedByResourceId.get(indexInput.resourceId), 1);
+    assert.equal(matchedByResourceId.get(`file-${suffix}`), 2);
+    const allSearch = await indexStore.searchProjectIndex(projectA.id, ownerA, { query: "Ｂｕｌｋ　file", mode: "all" });
+    assert.deepEqual(allSearch?.appliedQuery, {
+      tokens: ["Bulk", "file"],
+      mode: "all",
+      fields: ["path", "title", "summary", "metadata"]
+    });
+    assert.deepEqual(allSearch?.items.map((item) => item.resourceId), [`file-${suffix}`]);
 
     const membershipInput = {
       targetService: "artifacts", targetResourceType: "artifact_item", targetResourceId: indexInput.resourceId,

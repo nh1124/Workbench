@@ -184,6 +184,10 @@ export interface MaintenanceQueueListResult {
 
 export const PROJECT_INDEX_ASSOCIATION_KINDS = ["primary", "secondary"] as const;
 export type ProjectIndexAssociationKind = (typeof PROJECT_INDEX_ASSOCIATION_KINDS)[number];
+export const PROJECT_INDEX_SEARCH_MODES = ["any", "all"] as const;
+export type ProjectIndexSearchMode = (typeof PROJECT_INDEX_SEARCH_MODES)[number];
+export const PROJECT_INDEX_SEARCH_FIELDS = ["path", "title", "summary", "metadata"] as const;
+export type ProjectIndexSearchField = (typeof PROJECT_INDEX_SEARCH_FIELDS)[number];
 
 export interface ProjectIndexEntry {
   id: string;
@@ -203,6 +207,7 @@ export interface ProjectIndexEntry {
   indexedAt: string;
   lastReadAt?: string;
   metadataJson: Record<string, unknown>;
+  matchedTokens?: number;
 }
 
 export interface ProjectIndexEntryInput {
@@ -224,6 +229,11 @@ export interface ProjectIndexEntryInput {
 export interface ProjectIndexListResult {
   items: ProjectIndexEntry[];
   nextCursor?: string;
+  appliedQuery?: {
+    tokens: string[];
+    mode: ProjectIndexSearchMode;
+    fields: ProjectIndexSearchField[];
+  };
 }
 
 export const PROJECT_RELATION_TYPES = ["related", "depends_on", "supports", "informs", "overlaps"] as const;
