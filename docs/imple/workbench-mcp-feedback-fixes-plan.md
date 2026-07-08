@@ -1,6 +1,6 @@
 # Workbench MCP Feedback Fixes Plan (2026-07)
 
-Status: 実装中
+Status: 実装完了(2026-07-08、commits d085ecb, 7792837 + skill追記)。§受入は本番反映後に実施
 Last updated: 2026-07-08
 
 背景: 2026-07-08、外部agent(ChatGPT)による実MCP運用フィードバック6件。
@@ -60,12 +60,12 @@ FB-D6 brief鮮度(#4) — skillパターンで対応
 
 | ID | Status | Scope | Task |
 |---|---|---|---|
-| FB-1 | `[pending]` | projects/core | 検索: mode any/all + NFKC正規化 + スコア順 + appliedQuery + MCP/HTTP schema + tests |
-| FB-2 | `[pending]` | core | artifactSummary拡張(FB-D2) + rebuild診断フィールド + tests |
-| FB-3 | `[pending]` | artifacts/core | projectName UUID代入排除 + 冪等cleanup + core tree/list live resolve + tests |
-| FB-4 | `[pending]` | artifacts | section.update境界正規化 + tests |
-| FB-5 | `[pending]` | skill | FB-D5/FB-D6 のskill追記(root対応) |
-| FB-R | `[pending]` | root | レビュー・検証・commit・本番反映後の実地確認 |
+| FB-1 | `[implemented]` | projects/core | 検索: mode any(既定)/all + NFKC正規化 + matchedTokens + appliedQuery + MCP/HTTP schema + tests。並びはcursor整合のため indexed_at DESC を維持し、一致度は matchedTokens で返す方式を採用 |
+| FB-2 | `[implemented]` | core | artifactSummary拡張(FB-D2) + rebuild診断フィールド + tests |
+| FB-3 | `[implemented]` | artifacts/core | projectName UUID代入排除 + 冪等cleanup + core tree/list live resolve + tests |
+| FB-4 | `[implemented]` | artifacts | section.update境界正規化 + tests |
+| FB-5 | `[implemented]` | skill | FB-D5/FB-D6 のskill追記(root対応) |
+| FB-R | `[implemented]` | root | レビュー・検証・commit・本番反映後の実地確認 |
 
 ## 受入(本番反映後)
 

@@ -67,3 +67,4 @@ Do not put into the brief: procedures (put them in Notes), reference bodies (Art
 3. Use authenticated Core HTTP as a fallback for reads. Do not substitute HTTP writes for missing brief, memory, or relation MCP tools: those routes record a user/UI caller and would mislabel agent provenance. Stop and report the capability mismatch.
 4. For Artifact membership, fall back to the Artifact-specific HTTP route, not a generic link mutation.
 5. If neither frozen surface is available, stop that mutation and report the missing capability or server-version mismatch. Continue only with safe reads; do not bypass Core or write Projects storage directly.
+6. If a call is blocked by the client-side safety layer (e.g. "blocked by OpenAI's safety checks"), the request never reached Workbench. Retry the identical call once; if it is blocked again, report the client-side block explicitly instead of treating Workbench as unstable or changing the arguments to evade the check.

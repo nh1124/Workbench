@@ -206,6 +206,7 @@ Memory lists default to 10 active rows and cap at 100. `projects.memory.append` 
 projects.index.search {
   projectId: required,
   q?: string,
+  mode?: "any" (default) | "all",
   sourceService?: string,
   resourceType?: string,
   limit?: integer 1..500,
@@ -214,7 +215,7 @@ projects.index.search {
 projects.index.rebuild { projectId: required }
 ```
 
-Search defaults to 20 rows; Projects currently caps a page at 100. `q` is split on whitespace: every term must match (AND), each against path, title, summary text, or metadata (tags) as a case-insensitive substring. There is no kana/romaji or synonym normalization, so search the literal strings stored in the index. Results are derived summaries, not authoritative bodies. The rebuild covers Artifact folders, notes, files, and Mindmap documents. Artifact repair is required; Mindmap repair is reported under the `mindmaps` result and may return `{ status: "error", service: "mindmaps", ... }` without discarding the Artifact rebuild result. Rebuild only to repair observed drift.
+Search defaults to 20 rows; Projects currently caps a page at 100. `q` is NFKC-normalized and split on whitespace. With the default `mode: "any"`, a row matches when ANY token matches path, title, summary text, or metadata (tags) as a case-insensitive substring; each item reports `matchedTokens` so you can prefer rows matching more tokens. `mode: "all"` requires every token to match (old AND behavior — use it to narrow, not as the first attempt). The response echoes `appliedQuery { tokens, mode, fields }`; when a search returns zero hits, check it before concluding the knowledge is missing, and retry with fewer or more literal tokens. There is no kana/romaji or synonym normalization. Note summaries index the first paragraph plus the heading list (not the full body), so prefer heading and title words as tokens. Results are derived summaries, not authoritative bodies. The rebuild covers Artifact folders, notes, files, and Mindmap documents. Artifact repair is required; Mindmap repair is reported under the `mindmaps` result and may return `{ status: "error", service: "mindmaps", ... }` without discarding the Artifact rebuild result. Rebuild only to repair observed drift.
 
 Route an index hit with its `sourceService`, `resourceType`, and `resourceId`; the index entry's own `id` is not the domain resource ID:
 

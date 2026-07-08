@@ -27,6 +27,7 @@ For ordinary project operations (editing resources, tasks, memberships), switch 
 ## Keep knowledge small (slimness patterns)
 
 - **Oversized brief** (`brief_oversized` in the queue): draft the slimming, don't just report it. Move procedures into a Note, reference bodies into Artifacts, and durable facts into memory proposals, then draft a replacement brief that follows the thin structure (Purpose / Always-on rules / Pointers). Present the draft for the human to apply via brief update; do not overwrite the brief silently — brief updates require explicit user intent.
+- **Stale brief references**: briefs are free text and do not track the resources they cite. When inspecting a project, compare version numbers and dates written in the brief (e.g. 「最新: 第4次改訂 2026-05-16」) against the matching index entries' `sourceUpdatedAt`. If a newer plan or document exists, flag the brief with `maintenance.flag` (`reason: "manual"`, note naming the newer resource) and draft the corrected brief text for the human to apply.
 - **Memory consolidation**: when several active memories cover the same topic (overlapping decisions, superseded-in-practice facts), append one merged entry with `projects.memory.append` (it stays `agent_observed`) and flag each old entry with `maintenance.flag` (`reason: "manual"`, `note: "consolidation proposal: superseded by <new id>"`). The human archives the old entries in the /maintenance UI. Do not archive memories yourself as part of consolidation.
 
 ## Guardrails
@@ -60,3 +61,4 @@ A missing digest note for the current week is itself a signal that the scheduled
 2. If `sync.changes.pull` is missing, fall back to `maintenance.queue.list` alone (state-based sweep) and report the reduced coverage. Do not use the daemon-facing `/api/sync/pull` cursor.
 3. If `maintenance.queue.list` is missing, this server predates the maintenance loop: stop maintenance actions, report the capability gap, and continue only with safe reads.
 4. Do not substitute HTTP writes for missing MCP tools; confirm/snooze HTTP routes exist but record a user/UI caller and must not be invoked by agents.
+5. If a call is blocked by the client-side safety layer (e.g. "blocked by OpenAI's safety checks"), the request never reached Workbench. Retry the identical call once; if blocked again, report the client-side block explicitly instead of treating Workbench as unstable.
