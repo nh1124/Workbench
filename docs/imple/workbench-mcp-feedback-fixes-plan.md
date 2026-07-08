@@ -79,7 +79,7 @@ FB-D6 brief鮮度(#4) — skillパターンで対応
 
 # Phase 2 (2026-07-08 再レビューの残課題)
 
-Status: `[in-progress]` — 2026-07-09 Owner承認済み。再レビューで「検索が本文完全一致を取り逃す」
+Status: 実装完了(2026-07-09、commits 95191ce, c47c69a)。本番反映+rebuild後に再受入。再レビューで「検索が本文完全一致を取り逃す」
 「item.get の projectName が省略される」の2点が優先残課題と判定された。
 
 ## 決定事項(案)
@@ -126,12 +126,12 @@ FB2-D5 brief陳腐化検出のテスト方法(#再レビュー5への回答)
 
 | ID | Status | Scope | Task |
 |---|---|---|---|
-| FB2-1 | `[in-progress]` | projects/core | content_text 追加 + index維持経路での投入 + 検索fields拡張 + rebuild反映 + tests |
-| FB2-2 | `[in-progress]` | projects | score順ソート + score入り複合cursor + tests |
-| FB2-3 | `[in-progress]` | artifacts/core | item.get live resolve + projectName null統一 + tests |
+| FB2-1 | `[implemented]` | projects/core | content_text 追加 + index維持経路での投入 + 検索fields拡張 + rebuild反映 + tests |
+| FB2-2 | `[implemented]` | projects | score順ソート + score入り複合cursor + tests |
+| FB2-3 | `[implemented]` | artifacts/core | item.get live resolve + projectName null統一 + tests |
 | FB2-4 | - | - | 対応しない(FB2-D4) |
-| FB2-5 | `[in-progress]` | skill/docs | forward-testシナリオへbrief陳腐化ケース追記 |
-| FB2-R | `[pending]` | root | 承認後: レビュー・検証・commit・本番反映・再受入 |
+| FB2-5 | `[implemented]` | skill/docs | forward-testシナリオへbrief陳腐化ケース追記 |
+| FB2-R | `[in-progress]` | root | レビュー・検証・commit済み(95191ce, c47c69a)。本番反映(push)と再受入・rebuildが残 |
 
 ## Phase 2 受入(本番反映 + rebuild後)
 

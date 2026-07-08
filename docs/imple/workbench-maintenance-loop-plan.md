@@ -483,6 +483,10 @@ Core側にdigest builderは実装しない(D-107)。週次ダイジェストは�
    検出して報告する。
 5. 「週次ダイジェストを作って」→ §7.3の構成・命名で生成し、
    再実行時は同titleのnoteを更新する(新規noteを増やさない)。
+6. brief陳腐化(mcp-feedback-plan FB2-D5): テストprojectに「最新: 第N次改訂 <古い日付>」を
+   記載したbriefと、それより新しいPlan artifactを用意 → skillがbrief記載と
+   indexの sourceUpdatedAt の乖離を検出し、flag(manual) + 更新草案を出す
+   (briefを勝手に上書きしない)。
 
 ---
 
