@@ -161,6 +161,12 @@ function validatedCursorQuery(value: unknown): string | undefined {
   return value;
 }
 
+function opaqueCursorQuery(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") throw new InvalidCursorError();
+  return value;
+}
+
 function respondInvalidCursor(res: express.Response, error: unknown): boolean {
   if (!(error instanceof InvalidCursorError)) return false;
   res.status(400).json({ code: "INVALID_CURSOR", message: error.message });
@@ -244,6 +250,7 @@ const indexEntryInputSchema = z.object({
   path: z.string().optional(),
   title: z.string().min(1),
   summaryText: z.string(),
+  contentText: z.string().optional(),
   summarySource: z.string().min(1).optional(),
   sourceVersion: z.string().optional(),
   contentHash: z.string().optional(),
@@ -792,7 +799,7 @@ app.get("/projects/:projectId/index-entries", requireUserAuth, async (req, res) 
   const parsedMode = indexSearchModeQuerySchema.safeParse(req.query.mode);
   if (!parsedMode.success) return res.status(400).json({ message: parsedMode.error.flatten() });
   try {
-    const cursor = validatedCursorQuery(req.query.cursor);
+    const cursor = opaqueCursorQuery(req.query.cursor);
     const result = await searchProjectIndex(String(req.params.projectId), owner, {
       query: typeof req.query.q === "string" ? req.query.q : undefined,
       sourceService: typeof req.query.sourceService === "string" ? req.query.sourceService : undefined,

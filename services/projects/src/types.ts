@@ -186,7 +186,7 @@ export const PROJECT_INDEX_ASSOCIATION_KINDS = ["primary", "secondary"] as const
 export type ProjectIndexAssociationKind = (typeof PROJECT_INDEX_ASSOCIATION_KINDS)[number];
 export const PROJECT_INDEX_SEARCH_MODES = ["any", "all"] as const;
 export type ProjectIndexSearchMode = (typeof PROJECT_INDEX_SEARCH_MODES)[number];
-export const PROJECT_INDEX_SEARCH_FIELDS = ["path", "title", "summary", "metadata"] as const;
+export const PROJECT_INDEX_SEARCH_FIELDS = ["path", "title", "summary", "metadata", "content"] as const;
 export type ProjectIndexSearchField = (typeof PROJECT_INDEX_SEARCH_FIELDS)[number];
 
 export interface ProjectIndexEntry {
@@ -219,6 +219,7 @@ export interface ProjectIndexEntryInput {
   path?: string;
   title: string;
   summaryText: string;
+  contentText?: string;
   summarySource?: string;
   sourceVersion?: string;
   contentHash?: string;

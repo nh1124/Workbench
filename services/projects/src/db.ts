@@ -226,6 +226,7 @@ export async function ensureProjectsSchema(): Promise<void> {
             path TEXT,
             title TEXT NOT NULL,
             summary_text TEXT NOT NULL,
+            content_text TEXT,
             summary_source TEXT NOT NULL DEFAULT 'deterministic',
             source_version TEXT,
             content_hash TEXT,
@@ -243,7 +244,8 @@ export async function ensureProjectsSchema(): Promise<void> {
 
         await pool.query(`
           ALTER TABLE project_index_entries
-            ADD COLUMN IF NOT EXISTS last_read_at TIMESTAMPTZ;
+            ADD COLUMN IF NOT EXISTS last_read_at TIMESTAMPTZ,
+            ADD COLUMN IF NOT EXISTS content_text TEXT;
         `);
 
         await pool.query(`

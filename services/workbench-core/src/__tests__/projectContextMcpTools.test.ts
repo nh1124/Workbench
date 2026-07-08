@@ -171,6 +171,7 @@ describe("Project context MCP contract", () => {
         associationKind: "primary",
         title: "Artifact",
         summaryText: "Jeremy completion",
+        contentText: "private searchable body",
         summarySource: "deterministic",
         sourceUpdatedAt: "2026-06-23T00:00:00.000Z",
         indexedAt: "2026-06-23T00:00:00.000Z",
@@ -180,15 +181,16 @@ describe("Project context MCP contract", () => {
       appliedQuery: {
         tokens: ["Jeremy", "completion"],
         mode: "any",
-        fields: ["path", "title", "summary", "metadata"]
+        fields: ["path", "title", "summary", "metadata", "content"]
       }
     });
 
     assert.equal((page.items as Array<Record<string, unknown>>)[0]?.matchedTokens, 2);
+    assert.equal("contentText" in ((page.items as Array<Record<string, unknown>>)[0] ?? {}), false);
     assert.deepEqual(page.appliedQuery, {
       tokens: ["Jeremy", "completion"],
       mode: "any",
-      fields: ["path", "title", "summary", "metadata"]
+      fields: ["path", "title", "summary", "metadata", "content"]
     });
   });
 

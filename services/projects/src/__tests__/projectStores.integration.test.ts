@@ -18,10 +18,10 @@ test("project context stores preserve owner isolation, idempotence and relation 
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const ownerA = `integration-a-${suffix}`;
   const ownerB = `integration-b-${suffix}`;
-  const [{ getProjectsPool, ensureProjectsSchema }, projectStore, briefStore, memoryStore, indexStore, linksStore, relationStore, snapshotStore, errors] = await Promise.all([
+  const [{ getProjectsPool, ensureProjectsSchema }, projectStore, briefStore, memoryStore, indexStore, linksStore, relationStore, snapshotStore, contextStore, errors] = await Promise.all([
     import("../db.js"), import("../store.js"), import("../projectBriefStore.js"), import("../projectMemoryStore.js"),
     import("../projectIndexStore.js"), import("../projectLinksStore.js"), import("../projectRelationsStore.js"),
-    import("../projectContextSnapshotsStore.js"), import("../projectStoreUtils.js")
+    import("../projectContextSnapshotsStore.js"), import("../projectContextStore.js"), import("../projectStoreUtils.js")
   ]);
   await Promise.all([ensureProjectsSchema(), ensureProjectsSchema()]);
   await ensureProjectsSchema();
@@ -71,45 +71,117 @@ test("project context stores preserve owner isolation, idempotence and relation 
       [secondMemory.id]
     );
 
+    const overlongContent = `${"a".repeat(20_000)}tail-after-bound`;
     const indexInput = {
       sourceService: "artifacts", resourceType: "note", resourceId: `artifact-${suffix}`,
       associationKind: "primary" as const, title: "Artifact", summaryText: "summary",
+      contentText: overlongContent,
       sourceUpdatedAt: "2026-06-20T00:00:00.000Z"
     };
     const index1 = await indexStore.upsertProjectIndexEntry(projectA.id, indexInput, ownerA);
     const index2 = await indexStore.upsertProjectIndexEntry(projectA.id, { ...indexInput, title: "Updated" }, ownerA);
     assert.equal(index1?.id, index2?.id);
+    assert.ok(index2);
+    assert.equal(Object.hasOwn(index2, "contentText"), false);
+    const storedContent = await getProjectsPool().query<{ content_text: string | null }>(
+      `SELECT content_text FROM project_index_entries WHERE id = $1`,
+      [index2.id]
+    );
+    assert.equal(storedContent.rows[0]?.content_text?.length, 20_000);
+    assert.equal(storedContent.rows[0]?.content_text?.includes("tail-after-bound"), false);
     assert.equal((await indexStore.searchProjectIndex(projectA.id, ownerA))?.items.length, 1);
     await indexStore.tombstoneProjectIndexEntry(projectA.id, indexInput, ownerA);
     assert.equal((await indexStore.searchProjectIndex(projectA.id, ownerA))?.items.length, 0);
+    const contentOnlyToken = `deepcontent${suffix.replace(/[^a-z0-9]/gi, "")}`;
     const bulkEntries = await indexStore.bulkUpsertProjectIndexEntries(projectA.id, [
-      { ...indexInput, title: "Bulk rebuilt Artifact" },
+      { ...indexInput, title: "Bulk rebuilt Artifact", contentText: contentOnlyToken },
       {
         ...indexInput,
         resourceType: "file",
         resourceId: `file-${suffix}`,
-        title: "Bulk file"
+        title: "Bulk file",
+        contentText: contentOnlyToken
+      },
+      {
+        ...indexInput,
+        resourceType: "note",
+        resourceId: `low-${suffix}`,
+        title: "Bulk low",
+        contentText: contentOnlyToken
       }
     ], ownerA);
-    assert.equal(bulkEntries?.length, 2);
+    assert.equal(bulkEntries?.length, 3);
+    assert.equal(JSON.stringify(bulkEntries).includes("contentText"), false);
     assert.equal(await indexStore.bulkUpsertProjectIndexEntries(projectA.id, [indexInput], ownerB), undefined);
-    assert.equal((await indexStore.searchProjectIndex(projectA.id, ownerA))?.items.length, 2);
+    assert.equal((await indexStore.searchProjectIndex(projectA.id, ownerA))?.items.length, 3);
     assert.equal(await indexStore.searchProjectIndex(projectA.id, ownerB), undefined);
+    const contentSearch = await indexStore.searchProjectIndex(projectA.id, ownerA, { query: contentOnlyToken });
+    assert.equal(contentSearch?.items.length, 3);
+    assert.equal(JSON.stringify(contentSearch).includes("contentText"), false);
+    assert.deepEqual(contentSearch?.appliedQuery?.fields, ["path", "title", "summary", "metadata", "content"]);
+    const contextSearch = await contextStore.getProjectContext(projectA.id, ownerA, {
+      query: contentOnlyToken,
+      include: ["index"],
+      indexLimit: 10
+    });
+    assert.equal(contextSearch?.indexEntries?.length, 3);
+    assert.equal(JSON.stringify(contextSearch).includes("contentText"), false);
     const anySearch = await indexStore.searchProjectIndex(projectA.id, ownerA, { query: "Ｂｕｌｋ　file" });
     assert.deepEqual(anySearch?.appliedQuery, {
       tokens: ["Bulk", "file"],
       mode: "any",
-      fields: ["path", "title", "summary", "metadata"]
+      fields: ["path", "title", "summary", "metadata", "content"]
     });
-    assert.equal(anySearch?.items.length, 2);
+    assert.equal(anySearch?.items.length, 3);
+    assert.equal(anySearch?.items[0]?.resourceId, `file-${suffix}`);
+    assert.deepEqual(new Set(anySearch?.items.map((item) => item.resourceId)), new Set([indexInput.resourceId, `file-${suffix}`, `low-${suffix}`]));
     const matchedByResourceId = new Map(anySearch?.items.map((item) => [item.resourceId, item.matchedTokens]));
     assert.equal(matchedByResourceId.get(indexInput.resourceId), 1);
     assert.equal(matchedByResourceId.get(`file-${suffix}`), 2);
+    assert.equal(matchedByResourceId.get(`low-${suffix}`), 1);
+    const scoredPage1 = await indexStore.searchProjectIndex(projectA.id, ownerA, { query: "Bulk file", limit: 1 });
+    assert.equal(scoredPage1?.items[0]?.resourceId, `file-${suffix}`);
+    const scoredCursor1 = scoredPage1?.nextCursor;
+    assert.ok(scoredCursor1);
+    assert.throws(() => errors.parseCursor(scoredCursor1), errors.InvalidCursorError);
+    const scoredPage2 = await indexStore.searchProjectIndex(projectA.id, ownerA, {
+      query: "Bulk file",
+      limit: 1,
+      cursor: scoredCursor1
+    });
+    const scoredCursor2 = scoredPage2?.nextCursor;
+    assert.ok(scoredCursor2);
+    const scoredPage3 = await indexStore.searchProjectIndex(projectA.id, ownerA, {
+      query: "Bulk file",
+      limit: 1,
+      cursor: scoredCursor2
+    });
+    const scoredPagedIds = [scoredPage1, scoredPage2, scoredPage3].flatMap((page) =>
+      page?.items.map((item) => item.resourceId) ?? []
+    );
+    assert.equal(new Set(scoredPagedIds).size, 3);
+    assert.deepEqual(scoredPagedIds.sort(), [indexInput.resourceId, `file-${suffix}`, `low-${suffix}`].sort());
+    await assert.rejects(
+      () => indexStore.searchProjectIndex(projectA.id, ownerA, {
+        query: "Bulk",
+        cursor: errors.toCursor("2026-06-20T00:00:00.000Z", "legacy-id")
+      }),
+      errors.InvalidCursorError
+    );
+    const unfilteredPage1 = await indexStore.searchProjectIndex(projectA.id, ownerA, { limit: 1 });
+    const unfilteredCursor1 = unfilteredPage1?.nextCursor;
+    assert.ok(unfilteredCursor1);
+    assert.doesNotThrow(() => errors.parseCursor(unfilteredCursor1));
+    const unfilteredPage2 = await indexStore.searchProjectIndex(projectA.id, ownerA, {
+      limit: 1,
+      cursor: unfilteredCursor1
+    });
+    assert.notEqual(unfilteredPage1?.items[0]?.id, unfilteredPage2?.items[0]?.id);
     const allSearch = await indexStore.searchProjectIndex(projectA.id, ownerA, { query: "Ｂｕｌｋ　file", mode: "all" });
     assert.deepEqual(allSearch?.appliedQuery, {
       tokens: ["Bulk", "file"],
       mode: "all",
-      fields: ["path", "title", "summary", "metadata"]
+      fields: ["path", "title", "summary", "metadata", "content"]
     });
     assert.deepEqual(allSearch?.items.map((item) => item.resourceId), [`file-${suffix}`]);
 

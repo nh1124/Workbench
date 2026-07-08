@@ -96,6 +96,8 @@ describe("Project context Artifact orchestration", () => {
     assert.match(String(entry.summaryText), /Logical Tree/);
     assert.match(String(entry.summaryText), /Launch/);
     assert.match(String(entry.summaryText), /Capacity/);
+    assert.match(String(entry.contentText), /Launch/);
+    assert.match(String(entry.contentText), /Capacity/);
     assert.match(String(entry.contentHash), /^[a-f0-9]{64}$/);
     assert.deepEqual(entry.metadataJson, {
       mode: "logical_tree",
@@ -107,7 +109,10 @@ describe("Project context Artifact orchestration", () => {
 
   it("builds a deterministic WBS index entry for Project context discovery", () => {
     const parsed = contextModule.parseWbsPlan(wbsPlan);
-    const entry = contextModule.buildWbsIndexEntry(parsed) as Record<string, unknown>;
+    const entry = contextModule.buildWbsIndexEntry(parsed, [
+      { title: "Scope definition" },
+      { title: "API implementation" }
+    ]) as Record<string, unknown>;
 
     assert.equal(entry.sourceService, "wbs");
     assert.equal(entry.resourceType, "wbs_plan");
@@ -121,11 +126,36 @@ describe("Project context Artifact orchestration", () => {
     assert.match(String(entry.summaryText), /WBS/);
     assert.match(String(entry.summaryText), /42h/);
     assert.match(String(entry.summaryText), /50%/);
+    assert.match(String(entry.contentText), /Scope definition/);
+    assert.match(String(entry.contentText), /API implementation/);
     assert.match(String(entry.contentHash), /^[a-f0-9]{64}$/);
     assert.deepEqual(entry.metadataJson, {
       projectName: "Primary",
       rollup: wbsPlan.rollup
     });
+  });
+
+  it("maintains WBS index entries with live item titles as searchable content", async () => {
+    let indexEntry: Record<string, unknown> | undefined;
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(String(input));
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.origin === "http://wbs.test" && url.pathname === "/wbs/plans/wbs-1/items") {
+        return jsonResponse({ items: [{ title: "Scope definition" }, { title: "Cutover checklist" }] });
+      }
+      if (url.origin === "http://projects.test" && url.pathname.endsWith("/index-entries/upsert") && method === "POST") {
+        const payload = JSON.parse(String(init?.body)) as { entry: Record<string, unknown> };
+        indexEntry = payload.entry;
+        return jsonResponse({ id: "index-wbs" });
+      }
+      throw new Error(`Unexpected request: ${method} ${url}`);
+    };
+
+    await contextModule.maintainWbsIndex("token", wbsPlan);
+
+    assert.equal(indexEntry?.sourceService, "wbs");
+    assert.match(String(indexEntry?.contentText), /Scope definition/);
+    assert.match(String(indexEntry?.contentText), /Cutover checklist/);
   });
 
   it("live-resolves supported Project link metadata with the caller bearer and never returns target bodies", async () => {
@@ -423,7 +453,29 @@ describe("Project context Artifact orchestration", () => {
     assert.equal(entry.associationKind, "primary");
     assert.equal(entry.summarySource, "deterministic");
     assert.match(String(entry.summaryText), /Architecture/);
+    assert.equal(entry.contentText, artifactItem.contentMarkdown);
     assert.match(String(entry.contentHash), /^[a-f0-9]{64}$/);
+  });
+
+  it("bounds Artifact note index content and skips file and folder bodies", () => {
+    const noteEntry = contextModule.buildArtifactIndexEntry({
+      ...artifactItem,
+      contentMarkdown: "n".repeat(20_050)
+    }, "primary") as Record<string, unknown>;
+    assert.equal(String(noteEntry.contentText).length, 20_000);
+
+    const folderEntry = contextModule.buildArtifactIndexEntry({
+      ...artifactItem,
+      kind: "folder",
+      contentMarkdown: "folder body"
+    }, "primary") as Record<string, unknown>;
+    const fileEntry = contextModule.buildArtifactIndexEntry({
+      ...artifactItem,
+      kind: "file",
+      contentMarkdown: "file body"
+    }, "primary") as Record<string, unknown>;
+    assert.equal("contentText" in folderEntry, false);
+    assert.equal("contentText" in fileEntry, false);
   });
 
   it("builds heading-aware Artifact note summaries within the index bound", () => {
@@ -857,6 +909,8 @@ describe("Project context Artifact orchestration", () => {
     const result = await contextModule.rebuildProjectArtifactIndex("token", "project-primary");
     assert.equal(treePages, 2);
     assert.equal(bulkEntries.length, 2);
+    assert.equal((bulkEntries[0] as Record<string, unknown>).contentText, artifactItem.contentMarkdown);
+    assert.equal((bulkEntries[1] as Record<string, unknown>).contentText, secondaryItem.contentMarkdown);
     assert.equal(result.primary, 1);
     assert.equal(result.secondary, 1);
     assert.equal(result.tombstoned, 1);
@@ -1008,8 +1062,9 @@ describe("Project context Artifact orchestration", () => {
     const artifacts = result.artifacts as Record<string, unknown>;
     const mindmaps = result.mindmaps as Record<string, unknown>;
 
-    assert.deepEqual(result.searchFields, ["path", "title", "summary", "metadata"]);
+    assert.deepEqual(result.searchFields, ["path", "title", "summary", "metadata", "content"]);
     assert.equal(result.summaryPolicy, "v2-headings");
+    assert.equal(result.indexPolicy, "v3-content");
     assert.equal(Number.isFinite(Date.parse(String(result.completedAt))), true);
     assert.equal(artifactIndexListed, true);
     assert.equal(artifacts.indexed, 0);

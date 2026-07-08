@@ -16,7 +16,8 @@ export const MINDMAP_TARGET_SERVICE = "mindmaps";
 export const MINDMAP_TARGET_RESOURCE_TYPE = "mindmap_document";
 export const WBS_TARGET_SERVICE = "wbs";
 export const WBS_TARGET_RESOURCE_TYPE = "wbs_plan";
-const PROJECT_INDEX_SEARCH_FIELDS = ["path", "title", "summary", "metadata"] as const;
+const PROJECT_INDEX_SEARCH_FIELDS = ["path", "title", "summary", "metadata", "content"] as const;
+const PROJECT_INDEX_CONTENT_TEXT_MAX_CHARS = 20_000;
 const PROJECT_INDEX_SUMMARY_POLICY = "v2-headings";
 
 type JsonRecord = Record<string, unknown>;
@@ -85,6 +86,10 @@ export type WbsPlanRecord = JsonRecord & {
   updatedAt?: string;
 };
 
+type WbsItemRecord = JsonRecord & {
+  title: string;
+};
+
 export function projectIdsFromArtifactDeletionSnapshot(snapshot: ArtifactDeletionSnapshot): string[] {
   const projectIds = new Set<string>();
   for (const entry of snapshot.items) {
@@ -113,6 +118,10 @@ function boundedText(value: unknown, maxChars: number): string | undefined {
   const normalized = value.replace(/\s+/g, " ").trim();
   if (!normalized) return undefined;
   return normalized.length <= maxChars ? normalized : `${normalized.slice(0, Math.max(0, maxChars - 1))}…`;
+}
+
+function indexContentText(value: unknown): string | undefined {
+  return typeof value === "string" ? value.slice(0, PROJECT_INDEX_CONTENT_TEXT_MAX_CHARS) : undefined;
 }
 
 export function pageItems(value: unknown): unknown[] {
@@ -461,6 +470,7 @@ export function buildArtifactIndexEntry(
   associationId?: string
 ): JsonRecord {
   const contentForHash = [item.title, item.path, item.contentMarkdown ?? "", JSON.stringify(item.tags ?? [])].join("\n");
+  const contentText = item.kind === "note" ? indexContentText(item.contentMarkdown ?? "") : undefined;
   return {
     sourceService: ARTIFACT_TARGET_SERVICE,
     resourceType: item.kind,
@@ -470,6 +480,7 @@ export function buildArtifactIndexEntry(
     path: item.path,
     title: item.title,
     summaryText: artifactSummary(item),
+    ...(contentText !== undefined ? { contentText } : {}),
     summarySource: "deterministic",
     sourceVersion: String(item.version),
     contentHash: createHash("sha256").update(contentForHash).digest("hex"),
@@ -508,9 +519,29 @@ function mindmapSummary(document: MindmapDocumentRecord): { summaryText: string;
   };
 }
 
+function collectMindmapContentText(value: unknown, parts: string[], count: { value: number }, maxNodes = 1_000): void {
+  if (count.value >= maxNodes) return;
+  const node = asRecord(value);
+  const title = boundedText(node.title, 2_000);
+  const note = boundedText(node.note, 4_000);
+  if (title) parts.push(title);
+  if (note) parts.push(note);
+  count.value += 1;
+  const children = node.children;
+  if (!Array.isArray(children)) return;
+  for (const child of children) collectMindmapContentText(child, parts, count, maxNodes);
+}
+
+function mindmapContentText(document: MindmapDocumentRecord): string | undefined {
+  const parts: string[] = [];
+  collectMindmapContentText(document.body.root, parts, { value: 0 });
+  return indexContentText(parts.join("\n"));
+}
+
 export function buildMindmapIndexEntry(document: MindmapDocumentRecord): JsonRecord {
   const { summaryText, nodeCount } = mindmapSummary(document);
   const tags = document.tags ?? [];
+  const contentText = mindmapContentText(document);
   const contentForHash = [
     document.title,
     document.description ?? "",
@@ -527,6 +558,7 @@ export function buildMindmapIndexEntry(document: MindmapDocumentRecord): JsonRec
     path: `mindmaps/${document.id}`,
     title: document.title,
     summaryText,
+    ...(contentText !== undefined ? { contentText } : {}),
     summarySource: "deterministic",
     sourceVersion: String(document.version),
     contentHash: createHash("sha256").update(contentForHash).digest("hex"),
@@ -556,11 +588,20 @@ function wbsSummary(plan: WbsPlanRecord): string {
   return boundedText(parts.join(": "), 500) ?? "WBS";
 }
 
-export function buildWbsIndexEntry(plan: WbsPlanRecord): JsonRecord {
+function wbsContentText(items: WbsItemRecord[]): string | undefined {
+  const names = items
+    .map((item) => boundedText(item.title, 2_000))
+    .filter((title): title is string => Boolean(title));
+  return names.length > 0 ? indexContentText(names.join("\n")) : undefined;
+}
+
+export function buildWbsIndexEntry(plan: WbsPlanRecord, items: WbsItemRecord[] = []): JsonRecord {
+  const contentText = wbsContentText(items);
   const contentForHash = [
     plan.title,
     plan.description ?? "",
     plan.projectName ?? "",
+    ...items.map((item) => item.title),
     JSON.stringify(plan.settings ?? {}),
     JSON.stringify(plan.rollup ?? {})
   ].join("\n");
@@ -573,6 +614,7 @@ export function buildWbsIndexEntry(plan: WbsPlanRecord): JsonRecord {
     path: `wbs/${plan.id}`,
     title: plan.title,
     summaryText: wbsSummary(plan),
+    ...(contentText !== undefined ? { contentText } : {}),
     summarySource: "deterministic",
     sourceVersion: String(plan.version),
     contentHash: createHash("sha256").update(contentForHash).digest("hex"),
@@ -845,10 +887,27 @@ function logWbsDerivedFailure(operation: string, planId: string, error: unknown)
   });
 }
 
+function parseWbsItem(value: unknown): WbsItemRecord {
+  const record = asRecord(value);
+  if (typeof record.title !== "string") {
+    throw new ProjectContextError(502, "INVALID_WBS_RESPONSE", "WBS service returned an invalid item");
+  }
+  return record as WbsItemRecord;
+}
+
+async function listWbsItemsForIndex(token: string, planId: string): Promise<WbsItemRecord[]> {
+  const page = await wbsClient.listItems(token, planId);
+  return pageItems(page).map(parseWbsItem);
+}
+
+async function buildWbsIndexEntryWithItems(token: string, plan: WbsPlanRecord): Promise<JsonRecord> {
+  return buildWbsIndexEntry(plan, await listWbsItemsForIndex(token, plan.id));
+}
+
 async function upsertWbsEntry(token: string, plan: WbsPlanRecord): Promise<void> {
   if (!plan.projectId) return;
   await projectsClient.upsertIndexEntry(token, plan.projectId, {
-    entry: buildWbsIndexEntry(plan)
+    entry: await buildWbsIndexEntryWithItems(token, plan)
   });
 }
 
@@ -934,7 +993,7 @@ async function listAllWbsPlansForProject(token: string, projectId: string): Prom
 export async function rebuildProjectWbsIndex(token: string, projectId: string): Promise<JsonRecord> {
   await projectsClient.get(token, projectId);
   const plans = await listAllWbsPlansForProject(token, projectId);
-  const entries = plans.map(buildWbsIndexEntry);
+  const entries = await Promise.all(plans.map((plan) => buildWbsIndexEntryWithItems(token, plan)));
   const activeResourceIds = new Set(plans.map((plan) => plan.id));
 
   const batchSize = 100;
@@ -1609,6 +1668,7 @@ export async function rebuildProjectIndex(token: string, projectId: string): Pro
     wbs,
     searchFields: [...PROJECT_INDEX_SEARCH_FIELDS],
     summaryPolicy: PROJECT_INDEX_SUMMARY_POLICY,
+    indexPolicy: "v3-content",
     completedAt: new Date().toISOString()
   };
 }

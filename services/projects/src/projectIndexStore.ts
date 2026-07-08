@@ -1,7 +1,15 @@
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { ensureProjectsSchema, getProjectsPool } from "./db.js";
-import { clampLimit, iso, normalizeOwner, parseCursor, projectExistsForOwner, toCursor } from "./projectStoreUtils.js";
+import {
+  clampLimit,
+  InvalidCursorError,
+  iso,
+  normalizeOwner,
+  parseCursor,
+  projectExistsForOwner,
+  toCursor
+} from "./projectStoreUtils.js";
 import type {
   ProjectIndexAssociationKind,
   ProjectIndexSearchMode,
@@ -10,6 +18,8 @@ import type {
   ProjectIndexListResult
 } from "./types.js";
 import { PROJECT_INDEX_SEARCH_FIELDS } from "./types.js";
+
+const PROJECT_INDEX_CONTENT_TEXT_MAX_CHARS = 20_000;
 
 type IndexRow = {
   id: string;
@@ -30,6 +40,12 @@ type IndexRow = {
   last_read_at: string | null;
   metadata_json: unknown;
   matched_tokens?: string | number | null;
+};
+
+type SearchCursorPayload = {
+  s: number;
+  t: string;
+  id: string;
 };
 
 export type SearchProjectIndexOptions = {
@@ -83,6 +99,58 @@ const INDEX_COLUMNS = `id, project_id, source_service, resource_type, resource_i
   association_id, path, title, summary_text, summary_source, source_version, content_hash,
   source_updated_at, indexed_at, last_read_at, metadata_json`;
 
+function truncateProjectIndexContentText(value: string | undefined): string | null {
+  return typeof value === "string" ? value.slice(0, PROJECT_INDEX_CONTENT_TEXT_MAX_CHARS) : null;
+}
+
+function decodeCursorRecord(cursor: string | undefined): Record<string, unknown> | undefined {
+  if (!cursor) return undefined;
+  try {
+    if (!/^[A-Za-z0-9_-]+$/.test(cursor)) throw new InvalidCursorError();
+    const decoded = Buffer.from(cursor, "base64url");
+    if (decoded.toString("base64url") !== cursor) throw new InvalidCursorError();
+    const parsed = JSON.parse(decoded.toString("utf8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new InvalidCursorError();
+    return parsed as Record<string, unknown>;
+  } catch (error) {
+    if (error instanceof InvalidCursorError) throw error;
+    throw new InvalidCursorError();
+  }
+}
+
+function parseSearchCursor(cursor: string | undefined): SearchCursorPayload | undefined {
+  const parsed = decodeCursorRecord(cursor);
+  if (!parsed) return undefined;
+  const keys = Object.keys(parsed);
+  if (
+    keys.length !== 3 ||
+    !Object.hasOwn(parsed, "s") ||
+    !Object.hasOwn(parsed, "t") ||
+    !Object.hasOwn(parsed, "id")
+  ) {
+    throw new InvalidCursorError();
+  }
+  if (
+    typeof parsed.s !== "number" ||
+    !Number.isInteger(parsed.s) ||
+    parsed.s < 0 ||
+    typeof parsed.t !== "string" ||
+    typeof parsed.id !== "string" ||
+    !parsed.t ||
+    !parsed.id
+  ) {
+    throw new InvalidCursorError();
+  }
+  if (!Number.isFinite(Date.parse(parsed.t))) throw new InvalidCursorError();
+  if (new Date(parsed.t).toISOString() !== parsed.t) throw new InvalidCursorError();
+  return { s: parsed.s, t: parsed.t, id: parsed.id };
+}
+
+function toSearchCursor(score: number, timestamp: string | Date, id: string): string {
+  const t = timestamp instanceof Date ? timestamp.toISOString() : new Date(timestamp).toISOString();
+  return Buffer.from(JSON.stringify({ s: score, t, id }), "utf8").toString("base64url");
+}
+
 function normalizeProjectIndexQuery(query: string | undefined): string[] {
   const normalized = query?.normalize("NFKC").trim();
   return normalized ? normalized.split(/\s+/).filter((token) => token.length > 0) : [];
@@ -99,12 +167,14 @@ export async function searchProjectIndex(
 ): Promise<ProjectIndexListResult | undefined> {
   if (!(await projectExistsForOwner(projectId, ownerAccountId))) return undefined;
   const pageSize = clampLimit(options?.limit, 20, 100);
-  const cursor = parseCursor(options?.cursor);
   const mode = normalizeProjectIndexSearchMode(options?.mode);
   const tokens = normalizeProjectIndexQuery(options?.query);
+  const searchCursor = tokens.length > 0 ? parseSearchCursor(options?.cursor) : undefined;
+  const cursor = tokens.length > 0 ? undefined : parseCursor(options?.cursor);
   const values: Array<string | number> = [projectId];
   const where = ["project_id = $1", "is_deleted = FALSE"];
   const matchedTokenExpressions: string[] = [];
+  let scoreSql: string | undefined;
   if (options?.sourceService) {
     values.push(options.sourceService);
     where.push(`source_service = $${values.length}`);
@@ -127,28 +197,38 @@ export async function searchProjectIndex(
     for (const term of tokens) {
       values.push(`%${term}%`);
       const placeholder = `$${values.length}`;
-      const predicate = `(path ILIKE ${placeholder} OR title ILIKE ${placeholder} OR summary_text ILIKE ${placeholder} OR metadata_json::text ILIKE ${placeholder})`;
+      const predicate = `(path ILIKE ${placeholder} OR title ILIKE ${placeholder} OR summary_text ILIKE ${placeholder} OR metadata_json::text ILIKE ${placeholder} OR content_text ILIKE ${placeholder})`;
       predicates.push(predicate);
       matchedTokenExpressions.push(`CASE WHEN ${predicate} THEN 1 ELSE 0 END`);
     }
+    scoreSql = `(${matchedTokenExpressions.join(" + ")})::int`;
     where.push(mode === "all" ? predicates.join(" AND ") : `(${predicates.join(" OR ")})`);
   }
-  if (cursor) {
+  if (searchCursor && scoreSql) {
+    values.push(searchCursor.s, searchCursor.t, searchCursor.id);
+    where.push(`(${scoreSql}, indexed_at, id) < ($${values.length - 2}::int, $${values.length - 1}::timestamptz, $${values.length})`);
+  } else if (cursor) {
     values.push(cursor.t, cursor.id);
     where.push(`(indexed_at, id) < ($${values.length - 1}::timestamptz, $${values.length})`);
   }
-  const selectColumns = mode === "any" && matchedTokenExpressions.length > 0
-    ? `${INDEX_COLUMNS}, (${matchedTokenExpressions.join(" + ")})::int AS matched_tokens`
+  const selectColumns = scoreSql
+    ? `${INDEX_COLUMNS}, ${scoreSql} AS matched_tokens`
     : INDEX_COLUMNS;
   values.push(pageSize + 1);
   let sql = `SELECT ${selectColumns} FROM project_index_entries WHERE ${where.join(" AND ")}`;
-  sql += ` ORDER BY indexed_at DESC, id DESC LIMIT $${values.length}`;
+  sql += scoreSql
+    ? ` ORDER BY ${scoreSql} DESC, indexed_at DESC, id DESC LIMIT $${values.length}`
+    : ` ORDER BY indexed_at DESC, id DESC LIMIT $${values.length}`;
   const result = await getProjectsPool().query<IndexRow>(sql, values);
   const rows = result.rows.slice(0, pageSize);
   const last = rows.at(-1);
   return {
     items: rows.map(toIndexEntry),
-    nextCursor: result.rows.length > pageSize && last ? toCursor(last.indexed_at, last.id) : undefined,
+    nextCursor: result.rows.length > pageSize && last
+      ? scoreSql
+        ? toSearchCursor(Number(last.matched_tokens ?? 0), last.indexed_at, last.id)
+        : toCursor(last.indexed_at, last.id)
+      : undefined,
     ...(tokens.length > 0
       ? { appliedQuery: { tokens, mode, fields: [...PROJECT_INDEX_SEARCH_FIELDS] } }
       : {})
@@ -166,8 +246,8 @@ async function upsertWithClient(client: PoolClient, projectId: string, input: Pr
       INSERT INTO project_index_entries (
         id, project_id, source_service, resource_type, resource_id, association_kind,
         association_id, path, title, summary_text, summary_source, source_version,
-        content_hash, source_updated_at, metadata_json
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb)
+        content_hash, content_text, source_updated_at, metadata_json
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb)
       ON CONFLICT (project_id, source_service, resource_type, resource_id)
       WHERE is_deleted = FALSE
       DO UPDATE SET
@@ -179,6 +259,7 @@ async function upsertWithClient(client: PoolClient, projectId: string, input: Pr
         summary_source = EXCLUDED.summary_source,
         source_version = EXCLUDED.source_version,
         content_hash = EXCLUDED.content_hash,
+        content_text = EXCLUDED.content_text,
         source_updated_at = EXCLUDED.source_updated_at,
         indexed_at = NOW(),
         metadata_json = EXCLUDED.metadata_json,
@@ -190,7 +271,7 @@ async function upsertWithClient(client: PoolClient, projectId: string, input: Pr
       input.associationKind, input.associationId?.trim() || null, input.path?.trim() || null,
       input.title.trim(), input.summaryText.trim(), input.summarySource?.trim() || "deterministic",
       input.sourceVersion?.trim() || null, input.contentHash?.trim() || null,
-      input.sourceUpdatedAt, JSON.stringify(input.metadataJson ?? {})
+      truncateProjectIndexContentText(input.contentText), input.sourceUpdatedAt, JSON.stringify(input.metadataJson ?? {})
     ]
   );
   return toIndexEntry(result.rows[0]);
