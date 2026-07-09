@@ -106,7 +106,7 @@ AC-D6 サービス構成(Owner相談への回答、2026-07-10決定)
 |---|---|---|---|
 | AN-1 | `[in-progress]` | ui | nav移動(TOOL) + 「Analyser」改称 + Review/Activityタブ構成 + /maintenanceリダイレクト |
 | AN-2 | `[in-progress]` | ui | ServicesへLocal Syncカード統合 + グリッドレイアウト修正(大画面) |
-| CV2-1 | `[in-progress]` | daemon/ui | summary_markdown保存 + autoPublish設定(default OFF) + summaries API + Activityタブ閲覧/Save to Notes |
+| CV2-1 | `[in-progress]` | daemon/ui | daemon側完了(commit aace73c: summary_markdown保存 + autoPublish default OFF + summaries list/get/publish API)。**Codex worker停止のためroot直接実装**。残: UI(Activityタブ閲覧/Save to Notes) |
 | CV2-2 | `[in-progress]` | daemon | セッション化/集中ブロック/context switch/idle検知/カテゴリ分類のsummary v2 |
 | CV2-3 | `[in-progress]` | daemon/ui | スクリーンショット(AC-D5、承認時のみ) |
 | ACV-R | `[pending]` | root | 承認後: 実装指揮・レビュー・検証・commit・受入 |
