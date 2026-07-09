@@ -131,28 +131,79 @@ export class CaptureManager {
     return this.apiStatus();
   }
 
+  // Generates and stores the summary markdown locally; the note is only
+  // published when captureAutoPublish is enabled (AC-D3) or via publishSummary.
   async summarize(summaryDate?: string, now = new Date()): Promise<Record<string, unknown>> {
     const date = validateSummaryDate(summaryDate ?? previousDateString(now));
     const config = this.storage.getConfig();
     const samples = this.storage.listSamplesForDate(date);
-    const existing = this.storage.getSummary(date);
-    const title = `Capture Daily Summary ${date}`;
     const contentMarkdown = buildCaptureSummaryMarkdown(date, samples, config.intervalSeconds);
+    let summary = this.storage.saveSummary(date, contentMarkdown, samples.length, now.toISOString());
+    let action: string = "saved";
+    if (config.autoPublish) {
+      const published = await this.publishStoredSummary(date);
+      summary = published.summary;
+      action = published.action;
+    }
+    const { summaryMarkdown: _omitted, ...meta } = summary;
+    return {
+      ...meta,
+      action,
+      title: `Capture Daily Summary ${date}`
+    };
+  }
+
+  listSummaries(options: { limit?: number; cursor?: string } = {}): Record<string, unknown> {
+    const result = this.storage.listSummaries(options);
+    return {
+      items: result.items.map(({ summaryMarkdown: _omitted, ...meta }) => meta),
+      ...(result.nextCursor ? { nextCursor: result.nextCursor } : {})
+    };
+  }
+
+  summaryDetail(summaryDate: string): Record<string, unknown> {
+    const date = validateSummaryDate(summaryDate);
+    const summary = this.storage.getSummary(date);
+    if (!summary) {
+      throw new CaptureError(`No capture summary exists for ${date}.`, 404, "CAPTURE_SUMMARY_NOT_FOUND");
+    }
+    return { ...summary };
+  }
+
+  async publishSummary(summaryDate: string): Promise<Record<string, unknown>> {
+    const date = validateSummaryDate(summaryDate);
+    const published = await this.publishStoredSummary(date);
+    const { summaryMarkdown: _omitted, ...meta } = published.summary;
+    return { ...meta, action: published.action, title: `Capture Daily Summary ${date}` };
+  }
+
+  private async publishStoredSummary(date: string): Promise<{ summary: NonNullable<ReturnType<CaptureStorage["getSummary"]>>; action: string }> {
+    const existing = this.storage.getSummary(date);
+    if (!existing) {
+      throw new CaptureError(`No capture summary exists for ${date}.`, 404, "CAPTURE_SUMMARY_NOT_FOUND");
+    }
+    let contentMarkdown = existing.summaryMarkdown;
+    if (!contentMarkdown) {
+      // Summaries stored before the summary_markdown migration: rebuild from samples.
+      const config = this.storage.getConfig();
+      contentMarkdown = buildCaptureSummaryMarkdown(date, this.storage.listSamplesForDate(date), config.intervalSeconds);
+      this.storage.saveSummary(date, contentMarkdown, existing.sampleCount, existing.generatedAt);
+      if (existing.noteResourceId) this.storage.setSummaryNoteResourceId(date, existing.noteResourceId);
+    }
     const published = await this.publisher.publishSummary({
       summaryDate: date,
-      noteResourceId: existing?.noteResourceId,
-      title,
+      noteResourceId: existing.noteResourceId,
+      title: `Capture Daily Summary ${date}`,
       contentMarkdown,
       tags: ["workbench-capture"],
       lifecycleState: "raw",
-      sampleCount: samples.length
+      sampleCount: existing.sampleCount
     });
-    const summary = this.storage.recordSummary(date, published.noteResourceId, samples.length, now.toISOString());
-    return {
-      ...summary,
-      action: published.action,
-      title
-    };
+    const summary = this.storage.setSummaryNoteResourceId(date, published.noteResourceId);
+    if (!summary) {
+      throw new CaptureError(`Capture summary for ${date} disappeared during publish.`, 500, "CAPTURE_SUMMARY_MISSING");
+    }
+    return { summary, action: published.action };
   }
 
   async runDailyTasks(now = new Date()): Promise<void> {

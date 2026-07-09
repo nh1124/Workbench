@@ -6558,7 +6558,7 @@ function startStatusServer(state: DaemonState): void {
 
     if (url.pathname === "/capture/status" && req.method === "GET") {
       writeJson(res, state.capture?.apiStatus() ?? {
-        config: { enabled: false, intervalSeconds: 15, retentionDays: 14, excludePatterns: [] },
+        config: { enabled: false, intervalSeconds: 15, retentionDays: 14, excludePatterns: [], autoPublish: false },
         status: { enabled: false, collectorAlive: false, sampleCount24h: 0 }
       });
       return;
@@ -6569,7 +6569,8 @@ function startStatusServer(state: DaemonState): void {
         enabled: false,
         intervalSeconds: 15,
         retentionDays: 14,
-        excludePatterns: []
+        excludePatterns: [],
+        autoPublish: false
       });
       return;
     }
@@ -6603,6 +6604,8 @@ function startStatusServer(state: DaemonState): void {
     }
 
     if (url.pathname === "/capture/summarize" && req.method === "POST") {
+      // Generates and stores the summary; publishes a note only when
+      // captureAutoPublish is enabled (AC-D3).
       try {
         const body = await readRequestJson(req);
         const result = await state.capture?.summarize(asString(body.date));
@@ -6612,6 +6615,44 @@ function startStatusServer(state: DaemonState): void {
         writeCaptureError(res, error);
       }
       return;
+    }
+
+    if (url.pathname === "/capture/summaries" && req.method === "GET") {
+      try {
+        const limitRaw = url.searchParams.get("limit");
+        const limit = limitRaw ? Number(limitRaw) : undefined;
+        writeJson(res, state.capture?.listSummaries({
+          limit: Number.isFinite(limit) ? limit : undefined,
+          cursor: url.searchParams.get("cursor") ?? undefined
+        }) ?? { items: [] });
+      } catch (error) {
+        writeCaptureError(res, error);
+      }
+      return;
+    }
+
+    if (url.pathname.startsWith("/capture/summaries/")) {
+      const rest = url.pathname.slice("/capture/summaries/".length);
+      const publishSuffix = "/publish";
+      if (req.method === "POST" && rest.endsWith(publishSuffix)) {
+        const date = decodeURIComponent(rest.slice(0, -publishSuffix.length));
+        try {
+          const result = await state.capture?.publishSummary(date);
+          scheduleTick(state, 0);
+          writeJson(res, result);
+        } catch (error) {
+          writeCaptureError(res, error);
+        }
+        return;
+      }
+      if (req.method === "GET" && !rest.includes("/")) {
+        try {
+          writeJson(res, state.capture?.summaryDetail(decodeURIComponent(rest)));
+        } catch (error) {
+          writeCaptureError(res, error);
+        }
+        return;
+      }
     }
 
     if (url.pathname === "/api/sync/rescan" && req.method === "POST") {

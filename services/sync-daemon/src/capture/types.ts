@@ -3,12 +3,14 @@ export type CaptureConfig = {
   intervalSeconds: number;
   retentionDays: number;
   excludePatterns: string[];
+  autoPublish: boolean;
 };
 
 export type CaptureConfigPatch = {
   intervalSeconds?: number;
   retentionDays?: number;
   excludePatterns?: string[];
+  autoPublish?: boolean;
 };
 
 export type CaptureSample = {
@@ -22,6 +24,13 @@ export type CaptureSummaryRecord = {
   noteResourceId?: string;
   generatedAt: string;
   sampleCount: number;
+  published: boolean;
+  summaryMarkdown?: string;
+};
+
+export type CaptureSummaryListResult = {
+  items: CaptureSummaryRecord[];
+  nextCursor?: string;
 };
 
 export type CaptureStatus = {

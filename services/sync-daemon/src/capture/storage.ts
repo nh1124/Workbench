@@ -18,7 +18,8 @@ export const DEFAULT_CAPTURE_CONFIG: CaptureConfig = {
   enabled: false,
   intervalSeconds: DEFAULT_CAPTURE_INTERVAL_SECONDS,
   retentionDays: DEFAULT_CAPTURE_RETENTION_DAYS,
-  excludePatterns: []
+  excludePatterns: [],
+  autoPublish: false
 };
 
 const CONFIG_META_KEY = "capture.config";
@@ -36,6 +37,7 @@ type SummaryRow = {
   note_resource_id: string | null;
   generated_at: string;
   sample_count: number;
+  summary_markdown?: string | null;
 };
 
 export function defaultCaptureDbPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -84,7 +86,8 @@ function normalizeConfig(value: unknown): CaptureConfig {
       : DEFAULT_CAPTURE_CONFIG.retentionDays,
     excludePatterns: Array.isArray(record.excludePatterns)
       ? record.excludePatterns.filter((pattern): pattern is string => typeof pattern === "string")
-      : []
+      : [],
+    autoPublish: typeof record.autoPublish === "boolean" ? record.autoPublish : DEFAULT_CAPTURE_CONFIG.autoPublish
   };
 }
 
@@ -108,6 +111,12 @@ export function validateCaptureConfigPatch(patch: Record<string, unknown>): Capt
     }
     next.excludePatterns = patch.excludePatterns;
   }
+  if (patch.autoPublish !== undefined) {
+    if (typeof patch.autoPublish !== "boolean") {
+      throw new Error("autoPublish must be a boolean.");
+    }
+    next.autoPublish = patch.autoPublish;
+  }
   return next;
 }
 
@@ -119,12 +128,14 @@ function toSample(row: SampleRow): CaptureSample {
   };
 }
 
-function toSummary(row: SummaryRow): CaptureSummaryRecord {
+function toSummary(row: SummaryRow, includeMarkdown = false): CaptureSummaryRecord {
   return {
     summaryDate: row.summary_date,
     noteResourceId: row.note_resource_id ?? undefined,
     generatedAt: row.generated_at,
-    sampleCount: Number(row.sample_count ?? 0)
+    sampleCount: Number(row.sample_count ?? 0),
+    published: Boolean(row.note_resource_id),
+    ...(includeMarkdown ? { summaryMarkdown: row.summary_markdown ?? undefined } : {})
   };
 }
 
@@ -199,6 +210,14 @@ export class CaptureStorage {
         value TEXT NOT NULL
       );
     `);
+    this.ensureSummaryMarkdownColumn();
+  }
+
+  private ensureSummaryMarkdownColumn(): void {
+    const columns = this.db.prepare("PRAGMA table_info(capture_summaries)").all() as Array<{ name?: string }>;
+    if (!columns.some((column) => column.name === "summary_markdown")) {
+      this.db.exec("ALTER TABLE capture_summaries ADD COLUMN summary_markdown TEXT");
+    }
   }
 
   getMeta(key: string): string | undefined {
@@ -290,28 +309,57 @@ export class CaptureStorage {
 
   getSummary(summaryDate: string): CaptureSummaryRecord | undefined {
     const row = this.db.prepare(`
-      SELECT summary_date, note_resource_id, generated_at, sample_count
+      SELECT summary_date, note_resource_id, generated_at, sample_count, summary_markdown
       FROM capture_summaries
       WHERE summary_date = ?
     `).get(summaryDate) as SummaryRow | undefined;
-    return row ? toSummary(row) : undefined;
+    return row ? toSummary(row, true) : undefined;
   }
 
-  recordSummary(summaryDate: string, noteResourceId: string, sampleCount: number, generatedAt = new Date().toISOString()): CaptureSummaryRecord {
-    this.db.prepare(`
-      INSERT INTO capture_summaries (summary_date, note_resource_id, generated_at, sample_count)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(summary_date) DO UPDATE SET
-        note_resource_id = excluded.note_resource_id,
-        generated_at = excluded.generated_at,
-        sample_count = excluded.sample_count
-    `).run(summaryDate, noteResourceId, generatedAt, sampleCount);
+  listSummaries(options: { limit?: number; cursor?: string } = {}): { items: CaptureSummaryRecord[]; nextCursor?: string } {
+    const limit = Math.max(1, Math.min(100, Math.floor(options.limit ?? 30)));
+    const cursor = options.cursor?.trim();
+    const rows = (cursor
+      ? this.db.prepare(`
+          SELECT summary_date, note_resource_id, generated_at, sample_count
+          FROM capture_summaries
+          WHERE summary_date < ?
+          ORDER BY summary_date DESC
+          LIMIT ?
+        `).all(cursor, limit + 1)
+      : this.db.prepare(`
+          SELECT summary_date, note_resource_id, generated_at, sample_count
+          FROM capture_summaries
+          ORDER BY summary_date DESC
+          LIMIT ?
+        `).all(limit + 1)) as SummaryRow[];
+    const page = rows.slice(0, limit);
     return {
-      summaryDate,
-      noteResourceId,
-      generatedAt,
-      sampleCount
+      items: page.map((row) => toSummary(row)),
+      ...(rows.length > limit && page.length > 0 ? { nextCursor: page[page.length - 1].summary_date } : {})
     };
+  }
+
+  saveSummary(summaryDate: string, summaryMarkdown: string, sampleCount: number, generatedAt = new Date().toISOString()): CaptureSummaryRecord {
+    // Preserves note_resource_id so regeneration keeps the published-note linkage.
+    this.db.prepare(`
+      INSERT INTO capture_summaries (summary_date, note_resource_id, generated_at, sample_count, summary_markdown)
+      VALUES (?, NULL, ?, ?, ?)
+      ON CONFLICT(summary_date) DO UPDATE SET
+        generated_at = excluded.generated_at,
+        sample_count = excluded.sample_count,
+        summary_markdown = excluded.summary_markdown
+    `).run(summaryDate, generatedAt, sampleCount, summaryMarkdown);
+    const stored = this.getSummary(summaryDate);
+    if (!stored) throw new Error(`Capture summary for ${summaryDate} was not persisted.`);
+    return stored;
+  }
+
+  setSummaryNoteResourceId(summaryDate: string, noteResourceId: string): CaptureSummaryRecord | undefined {
+    this.db.prepare(`
+      UPDATE capture_summaries SET note_resource_id = ? WHERE summary_date = ?
+    `).run(noteResourceId, summaryDate);
+    return this.getSummary(summaryDate);
   }
 
   status(collectorAlive: boolean, now = new Date()): CaptureStatus {

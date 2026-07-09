@@ -60,7 +60,8 @@ describe("capture storage and summarization", () => {
           enabled: true,
           intervalSeconds: 15,
           retentionDays: 14,
-          excludePatterns: ["SecretApp", "["]
+          excludePatterns: ["SecretApp", "["],
+          autoPublish: false
         });
         const skipped = storage.insertSample({
           sampledAt: "2026-07-07T09:00:00.000Z",
@@ -167,6 +168,7 @@ describe("capture storage and summarization", () => {
         publisher
       });
       try {
+        manager.storage.updateConfig({ autoPublish: true });
         manager.storage.insertSample({
           sampledAt: "2026-07-07T09:00:00.000Z",
           processName: "Code",
@@ -182,6 +184,63 @@ describe("capture storage and summarization", () => {
           { noteResourceId: undefined, title: "Capture Daily Summary 2026-07-07" },
           { noteResourceId: "note-capture-2026-07-07", title: "Capture Daily Summary 2026-07-07" }
         ]);
+      } finally {
+        manager.close();
+      }
+    });
+  });
+
+  it("stores summaries without publishing by default and publishes on demand", async () => {
+    await withTempDir(async (dir) => {
+      const calls: Array<{ noteResourceId?: string; contentMarkdown: string }> = [];
+      const publisher: CaptureSummaryPublisher = {
+        async publishSummary(input) {
+          calls.push({ noteResourceId: input.noteResourceId, contentMarkdown: input.contentMarkdown });
+          return {
+            noteResourceId: input.noteResourceId ?? "note-capture-2026-07-08",
+            action: input.noteResourceId ? "update" : "create"
+          };
+        }
+      };
+      const manager = new CaptureManager({
+        syncRoot: join(dir, "sync-root"),
+        dbPath: join(dir, "capture.sqlite"),
+        platform: "win32",
+        logger: silentLogger(),
+        publisher
+      });
+      try {
+        manager.storage.insertSample({
+          sampledAt: "2026-07-08T09:00:00.000Z",
+          processName: "Code",
+          windowTitle: "Workbench"
+        });
+
+        const saved = await manager.summarize("2026-07-08", new Date("2026-07-08T12:00:00.000Z"));
+        assert.equal(saved.action, "saved");
+        assert.equal(saved.published, false);
+        assert.equal(calls.length, 0);
+
+        const detail = manager.summaryDetail("2026-07-08");
+        assert.match(String(detail.summaryMarkdown), /Capture Daily Summary 2026-07-08/);
+
+        const listed = manager.listSummaries();
+        const items = listed.items as Array<Record<string, unknown>>;
+        assert.equal(items.length, 1);
+        assert.equal(items[0].summaryDate, "2026-07-08");
+        assert.equal(items[0].published, false);
+        assert.equal("summaryMarkdown" in items[0], false);
+
+        const first = await manager.publishSummary("2026-07-08");
+        assert.equal(first.action, "create");
+        assert.equal(first.published, true);
+        const second = await manager.publishSummary("2026-07-08");
+        assert.equal(second.action, "update");
+        assert.equal(calls.length, 2);
+        assert.equal(calls[1].noteResourceId, "note-capture-2026-07-08");
+        assert.equal(calls[0].contentMarkdown, calls[1].contentMarkdown);
+
+        await assert.rejects(() => manager.publishSummary("2026-01-01"), /No capture summary exists/);
       } finally {
         manager.close();
       }
