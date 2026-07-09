@@ -1,6 +1,6 @@
 # Workbench Analyser / Capture v2 Plan (2026-07)
 
-Status: `[review]` — Owner承認待ち(§決定が必要な事項 に3点)
+Status: `[in-progress]` — 2026-07-10 Owner承認済み(名称=Analyser / autoPublish既定OFF / スクリーンショット採用)
 Last updated: 2026-07-10
 
 背景: 2026-07-10 のOwner所感5件。capture導入によりMaintenanceページの性格が
@@ -80,25 +80,35 @@ AC-D5 スクリーンショット(#4後半) — 別契約・Owner承認必須
 - 採否を §決定が必要な事項(3) でOwnerが決定する。未承認なら [deferred]。
 ```
 
-## 決定が必要な事項(Owner)
+## Owner決定(2026-07-10)
 
-1. **名称**: A案「Analyser」(推奨・短い) / B案「Work Analyser」 / C案その他。
-   タブ名は Review / Activity を予定(これも変更可)。
-2. **captureAutoPublish の既定OFF化**(AC-D3)の確認。
-   ※現在すでに自動投入されたnote(文字化けした2026-07-07分を含む)は残る。
-   文字化け分は生サンプル自体が化けて保存されているため再生成でも直らない。
-   該当noteとサンプルは削除を推奨(受入時に対応)。
-3. **スクリーンショット(AC-D5)の採否**。
+1. **名称**: A案「Analyser」を採用。タブ名は Review / Activity。
+2. **captureAutoPublish 既定OFF**: 承認。文字化けした既存note/サンプルの削除は受入時に実施。
+3. **スクリーンショット(AC-D5)**: 採用。CC-D8拡張の境界(ローカルのみ・opt-in・
+   rolling削除・除外パターン尊重・OCRなし)を厳守する。
+
+```text
+AC-D6 サービス構成(Owner相談への回答、2026-07-10決定)
+- maintenance/analyserは独立microserviceに**しない**(現時点)。
+  理由: queue reasonの導出とconfirm/snooze mutationはdomain行の属性であり
+  projects/notesから移せない。分離しても「Coreと同役の集約層がもう1 hop増える」
+  だけで管理は楽にならない。Core内実装は maintenanceQueue / maintenanceActions /
+  usageEventsStore / syncChanges のmodule群に分離済みで、継ぎ目は確保されている。
+- 抽出条件(いずれか実証された時点で "insights service" として切り出す):
+  (a) 複数マシンからのcapture/計測ingestが必要になる
+  (b) 分析が独自の永続状態・スケジューラを要するほど重くなる
+  (c) Core肥大が実測で問題化する
+```
 
 ## Progress Board
 
 | ID | Status | Scope | Task |
 |---|---|---|---|
-| AN-1 | `[review]` | ui | nav移動(TOOL) + 「Analyser」改称 + Review/Activityタブ構成 + /maintenanceリダイレクト |
-| AN-2 | `[review]` | ui | ServicesへLocal Syncカード統合 + グリッドレイアウト修正(大画面) |
-| CV2-1 | `[review]` | daemon/ui | summary_markdown保存 + autoPublish設定(default OFF) + summaries API + Activityタブ閲覧/Save to Notes |
-| CV2-2 | `[review]` | daemon | セッション化/集中ブロック/context switch/idle検知/カテゴリ分類のsummary v2 |
-| CV2-3 | `[review]` | daemon/ui | スクリーンショット(AC-D5、承認時のみ) |
+| AN-1 | `[in-progress]` | ui | nav移動(TOOL) + 「Analyser」改称 + Review/Activityタブ構成 + /maintenanceリダイレクト |
+| AN-2 | `[in-progress]` | ui | ServicesへLocal Syncカード統合 + グリッドレイアウト修正(大画面) |
+| CV2-1 | `[in-progress]` | daemon/ui | summary_markdown保存 + autoPublish設定(default OFF) + summaries API + Activityタブ閲覧/Save to Notes |
+| CV2-2 | `[in-progress]` | daemon | セッション化/集中ブロック/context switch/idle検知/カテゴリ分類のsummary v2 |
+| CV2-3 | `[in-progress]` | daemon/ui | スクリーンショット(AC-D5、承認時のみ) |
 | ACV-R | `[pending]` | root | 承認後: 実装指揮・レビュー・検証・commit・受入 |
 
 ## 受入(実装後)
