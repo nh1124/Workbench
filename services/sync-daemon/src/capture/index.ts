@@ -22,5 +22,5 @@ export {
 } from "./storage.js";
 export { buildCaptureSummaryMarkdown } from "./summarizer.js";
 export { CaptureError, CaptureManager } from "./manager.js";
-export { CaptureSupervisor, ingestSamplerLine } from "./supervisor.js";
+export { CaptureSupervisor, decodeSamplerStdoutChunk, ingestSamplerLine } from "./supervisor.js";
 

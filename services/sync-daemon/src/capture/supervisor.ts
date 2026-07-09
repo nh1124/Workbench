@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import type { CaptureConfig, CaptureLogger, CaptureSample } from "./types.js";
 import { WINDOWS_SAMPLER_SCRIPT } from "./windowsSamplerScript.js";
@@ -94,6 +95,10 @@ export async function ingestSamplerLine(
   }
 }
 
+export function decodeSamplerStdoutChunk(decoder: StringDecoder, chunk: Buffer | string): string {
+  return typeof chunk === "string" ? chunk : decoder.write(chunk);
+}
+
 export class CaptureSupervisor {
   private readonly platform: NodeJS.Platform;
   private readonly logger?: CaptureLogger;
@@ -102,6 +107,7 @@ export class CaptureSupervisor {
   private readonly onSample: (sample: CaptureSample) => void | Promise<void>;
   private child?: ChildProcess;
   private stdoutBuffer = "";
+  private stdoutDecoder = new StringDecoder("utf8");
   private stopping = false;
   private restartTimer?: ReturnType<typeof setTimeout>;
   private restartDelayMs = 5000;
@@ -138,6 +144,7 @@ export class CaptureSupervisor {
     const child = this.child;
     this.child = undefined;
     this.stdoutBuffer = "";
+    this.stdoutDecoder = new StringDecoder("utf8");
     if (!child) return;
     try {
       child.kill();
@@ -157,6 +164,8 @@ export class CaptureSupervisor {
     const config = this.config;
     if (!config) return;
     const scriptPath = resolveBundledSamplerPath(this.samplerScriptPath);
+    this.stdoutBuffer = "";
+    this.stdoutDecoder = new StringDecoder("utf8");
     const child = this.spawnImpl(
       "powershell.exe",
       [
@@ -173,7 +182,7 @@ export class CaptureSupervisor {
     this.restartDelayMs = 5000;
 
     child.stdout?.on("data", (chunk: Buffer | string) => {
-      this.handleStdoutChunk(typeof chunk === "string" ? chunk : chunk.toString("utf8"));
+      this.handleStdoutChunk(decodeSamplerStdoutChunk(this.stdoutDecoder, chunk));
     });
     child.stderr?.on("data", (chunk: Buffer | string) => {
       const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
@@ -185,6 +194,10 @@ export class CaptureSupervisor {
       });
     });
     child.on("close", () => {
+      const remainingStdout = this.stdoutDecoder.end();
+      if (remainingStdout) this.handleStdoutChunk(remainingStdout);
+      this.stdoutBuffer = "";
+      this.stdoutDecoder = new StringDecoder("utf8");
       this.child = undefined;
       if (!this.stopping && this.config?.enabled) {
         this.scheduleRestart();

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { classifySyncError } from "../index.js";
+import { classifySyncError, logSyncDaemonErrorOnce } from "../index.js";
 import {
   closeManifestStore,
   enqueueOutbox,
@@ -113,5 +113,20 @@ describe("sync error classification", () => {
     } finally {
       closeManifestStore(store);
     }
+  });
+
+  it("suppresses consecutive duplicate sync daemon error logs", () => {
+    const state: { lastLoggedError?: string } = {};
+    const messages: string[] = [];
+    const warn = (message: string) => messages.push(message);
+
+    assert.equal(logSyncDaemonErrorOnce(state, "fetch failed", warn), true);
+    assert.equal(logSyncDaemonErrorOnce(state, "fetch failed", warn), false);
+    assert.equal(logSyncDaemonErrorOnce(state, "other failure", warn), true);
+
+    assert.deepEqual(messages, [
+      "[sync-daemon] fetch failed",
+      "[sync-daemon] other failure"
+    ]);
   });
 });

@@ -158,6 +158,7 @@ export type DaemonState = {
   lastErrorCode?: string;
   lastErrorCategory?: SyncErrorCategory;
   lastErrorRetryable?: boolean;
+  lastLoggedError?: string;
   processedJobs: number;
   outboxPending: number;
   outboxFailed: number;
@@ -5721,6 +5722,34 @@ export function classifySyncError(input: unknown): SyncErrorDetails {
   return { errorMessage, errorCode, errorCategory: "unknown", retryable: false };
 }
 
+function setSyncErrorState(state: DaemonState, details: SyncErrorDetails): void {
+  state.lastError = details.errorMessage;
+  state.lastErrorCode = details.errorCode;
+  state.lastErrorCategory = details.errorCategory;
+  state.lastErrorRetryable = details.retryable;
+}
+
+function clearSyncErrorState(state: DaemonState): void {
+  state.lastError = undefined;
+  state.lastErrorCode = undefined;
+  state.lastErrorCategory = undefined;
+  state.lastErrorRetryable = undefined;
+  state.lastLoggedError = undefined;
+}
+
+export function logSyncDaemonErrorOnce(
+  state: Pick<DaemonState, "lastLoggedError">,
+  message: string,
+  warn: (message: string) => void = (value) => console.warn(value)
+): boolean {
+  if (state.lastLoggedError === message) {
+    return false;
+  }
+  state.lastLoggedError = message;
+  warn(`[sync-daemon] ${message}`);
+  return true;
+}
+
 async function postSyncPush(state: DaemonState, ops: OutboxItem[]): Promise<SyncPushResponse> {
   if (!state.identity) throw new Error("Missing local client identity");
   const response = await fetch(`${state.config.coreUrl}/api/sync/push`, {
@@ -6096,13 +6125,24 @@ export async function rejectPendingLocalJobConfirmation(
 }
 
 async function performTick(state: DaemonState): Promise<void> {
+  let recoverablePullError = false;
   try {
     await ensureIdentity(state);
     const jobs = await claimJobs(state);
     for (const job of jobs) {
       await processJob(state, job);
     }
-    await pullRemoteArtifactSyncState(state);
+    try {
+      await pullRemoteArtifactSyncState(state);
+    } catch (error) {
+      const details = classifySyncError(error);
+      if (details.errorCategory !== "network" || !details.retryable) {
+        throw error;
+      }
+      recoverablePullError = true;
+      setSyncErrorState(state, details);
+      logSyncDaemonErrorOnce(state, details.errorMessage);
+    }
     await scanSyncFolder(state);
     await state.capture?.runDailyTasks().catch((error) => {
       console.warn("[capture] daily tasks failed", {
@@ -6111,17 +6151,13 @@ async function performTick(state: DaemonState): Promise<void> {
     });
     await pushOutbox(state);
     await heartbeat(state);
-    state.lastError = undefined;
-    state.lastErrorCode = undefined;
-    state.lastErrorCategory = undefined;
-    state.lastErrorRetryable = undefined;
+    if (!recoverablePullError) {
+      clearSyncErrorState(state);
+    }
   } catch (error) {
     const details = classifySyncError(error);
-    state.lastError = details.errorMessage;
-    state.lastErrorCode = details.errorCode;
-    state.lastErrorCategory = details.errorCategory;
-    state.lastErrorRetryable = details.retryable;
-    console.warn(`[sync-daemon] ${state.lastError}`);
+    setSyncErrorState(state, details);
+    logSyncDaemonErrorOnce(state, details.errorMessage);
   }
 }
 

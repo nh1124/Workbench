@@ -2,6 +2,9 @@ export const WINDOWS_SAMPLER_SCRIPT = String.raw`param(
   [int]$IntervalSeconds = 15
 )
 
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+
 $ErrorActionPreference = "SilentlyContinue"
 
 Add-Type @"

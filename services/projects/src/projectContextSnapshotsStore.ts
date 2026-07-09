@@ -447,9 +447,8 @@ export async function getProjectSyncContextSnapshotWithPool(
   return withReadSnapshot(pool, async (client) => {
     const project = await readProject(client, projectId, owner);
     if (!project) return undefined;
-    const [memoryCount, relationCount] = await Promise.all([
-      readCount(client, "memories", "SELECT COUNT(*) AS count FROM project_memory_entries WHERE project_id = $1 AND status = 'active'", [projectId]),
-      readCount(client, "relations", `
+    const memoryCount = await readCount(client, "memories", "SELECT COUNT(*) AS count FROM project_memory_entries WHERE project_id = $1 AND status = 'active'", [projectId]);
+    const relationCount = await readCount(client, "relations", `
         SELECT COUNT(*) AS count
         FROM project_relations r
         JOIN projects source_project ON source_project.id = r.source_project_id
@@ -458,14 +457,11 @@ export async function getProjectSyncContextSnapshotWithPool(
           AND source_project.owner_account_id = $2
           AND target_project.owner_account_id = $2
           AND r.is_deleted = FALSE
-      `, [projectId, owner])
-    ]);
+      `, [projectId, owner]);
     assertCounts({ memories: memoryCount, relations: relationCount }, limits, "PROJECT_CONTEXT_SYNC_LIMIT_EXCEEDED");
-    const [brief, memories, relations] = await Promise.all([
-      readBrief(client, project),
-      readMemories(client, projectId, true),
-      readRelations(client, projectId, owner)
-    ]);
+    const brief = await readBrief(client, project);
+    const memories = await readMemories(client, projectId, true);
+    const relations = await readRelations(client, projectId, owner);
     if (memories.length !== memoryCount || relations.length !== relationCount) {
       throw new Error("Project context sync snapshot count mismatch.");
     }
@@ -537,9 +533,8 @@ export async function getProjectContextExportSnapshotWithPool(
   return withReadSnapshot(pool, async (client) => {
     const project = await readProject(client, projectId, owner);
     if (!project) return undefined;
-    const [memoryCount, relationCount, linkCount, indexCount] = await Promise.all([
-      readCount(client, "memories_export", "SELECT COUNT(*) AS count FROM project_memory_entries WHERE project_id = $1", [projectId]),
-      readCount(client, "relations_export", `
+    const memoryCount = await readCount(client, "memories_export", "SELECT COUNT(*) AS count FROM project_memory_entries WHERE project_id = $1", [projectId]);
+    const relationCount = await readCount(client, "relations_export", `
         SELECT COUNT(*) AS count
         FROM project_relations r
         JOIN projects source_project ON source_project.id = r.source_project_id
@@ -548,20 +543,17 @@ export async function getProjectContextExportSnapshotWithPool(
           AND source_project.owner_account_id = $2
           AND target_project.owner_account_id = $2
           AND r.is_deleted = FALSE
-      `, [projectId, owner]),
-      readCount(client, "links_export", "SELECT COUNT(*) AS count FROM project_links WHERE project_id = $1 AND is_deleted = FALSE", [projectId]),
-      readCount(client, "index_export", "SELECT COUNT(*) AS count FROM project_index_entries WHERE project_id = $1 AND is_deleted = FALSE", [projectId])
-    ]);
+      `, [projectId, owner]);
+    const linkCount = await readCount(client, "links_export", "SELECT COUNT(*) AS count FROM project_links WHERE project_id = $1 AND is_deleted = FALSE", [projectId]);
+    const indexCount = await readCount(client, "index_export", "SELECT COUNT(*) AS count FROM project_index_entries WHERE project_id = $1 AND is_deleted = FALSE", [projectId]);
     const counts = { memories: memoryCount, relations: relationCount, links: linkCount, indexEntries: indexCount };
     assertCounts(counts, limits, "PROJECT_CONTEXT_EXPORT_LIMIT_EXCEEDED");
-    const [brief, memories, relations, links, indexEntries, generatedSummary] = await Promise.all([
-      readBrief(client, project),
-      readMemories(client, projectId, false),
-      readRelations(client, projectId, owner),
-      readLinks(client, projectId),
-      readIndex(client, projectId),
-      readSummary(client, projectId)
-    ]);
+    const brief = await readBrief(client, project);
+    const memories = await readMemories(client, projectId, false);
+    const relations = await readRelations(client, projectId, owner);
+    const links = await readLinks(client, projectId);
+    const indexEntries = await readIndex(client, projectId);
+    const generatedSummary = await readSummary(client, projectId);
     if (memories.length !== memoryCount || relations.length !== relationCount
       || links.length !== linkCount || indexEntries.length !== indexCount) {
       throw new Error("Project context export snapshot count mismatch.");

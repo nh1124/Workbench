@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { describe, it } from "node:test";
 import {
   CaptureManager,
   CaptureStorage,
   assertCaptureDbPathAllowed,
   buildCaptureSummaryMarkdown,
+  decodeSamplerStdoutChunk,
   ingestSamplerLine,
   type CaptureLogger,
   type CaptureSummaryPublisher
@@ -226,5 +228,21 @@ describe("capture storage and summarization", () => {
     assert.equal(accepted, true);
     assert.equal(samples.length, 1);
     assert.ok(warnings.length >= 1);
+  });
+
+  it("decodes sampler stdout when UTF-8 characters span chunks", () => {
+    const decoder = new StringDecoder("utf8");
+    const line = `${JSON.stringify({
+      sampledAt: "2026-07-07T09:00:00.000Z",
+      processName: "Code",
+      windowTitle: "日本語タイトル"
+    })}\n`;
+    const bytes = Buffer.from(line, "utf8");
+    const splitAt = bytes.indexOf(Buffer.from("本", "utf8")) + 1;
+
+    const first = decodeSamplerStdoutChunk(decoder, bytes.subarray(0, splitAt));
+    const second = decodeSamplerStdoutChunk(decoder, bytes.subarray(splitAt));
+
+    assert.equal(first + second, line);
   });
 });
