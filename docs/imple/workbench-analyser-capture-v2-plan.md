@@ -113,8 +113,8 @@ AC-D6 サービス構成(Owner相談への回答、2026-07-10決定)
 | AN-2 | `[implemented]` | ui | ServicesへLocal Syncカード統合 + グリッドレイアウト修正(大画面) (commit 739536f) |
 | CV2-1 | `[implemented]` | daemon/ui | daemon側 aace73c(summary_markdown保存 + autoPublish default OFF + summaries list/get/publish API)、UI側 739536f(Activityタブ閲覧/Save to Notes)。build + 22 files/114 tests pass |
 | CV2-2 | `[implemented]` | daemon | セッション化/集中ブロック/context switch/idle検知/カテゴリ分類のsummary v2 + metrics_json保存 (commit 791a5bc, 112 tests pass) |
-| CV2-3 | `[in-progress]` | daemon/ui | スクリーンショット(AC-D5、承認時のみ) |
-| ACV-R | `[pending]` | root | 承認後: 実装指揮・レビュー・検証・commit・受入 |
+| CV2-3 | `[implemented]` | daemon/ui | スクリーンショット(AC-D5): daemon 456402a(撮影/除外スキップ/rolling削除/loopback API、116 tests) + UI 5f6a29e(Activityタブviewer + 設定、build/116 tests pass) |
+| ACV-R | `[in-progress]` | root | 実装指揮・レビュー・検証・commit完了。残: Owner受入(§受入 1〜5) |
 
 ## 受入(実装後)
 
