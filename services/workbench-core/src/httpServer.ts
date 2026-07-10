@@ -25,7 +25,7 @@ import { registerProjectContextTools } from "./mcp/registerProjectContextTools.j
 import { registerTasksTools } from "./mcp/registerTasksTools.js";
 import { registerWbsTools } from "./mcp/registerWbsTools.js";
 import { ensureIntegrationLinked } from "./integrationLinking.js";
-import { artifactsClient, imagesClient, InternalServiceError, mindmapsClient, notesClient, projectsClient, serviceBaseUrls, tasksClient, wbsClient } from "./internalClients.js";
+import { artifactsClient, imagesClient, insightsClient, InternalServiceError, mindmapsClient, notesClient, projectsClient, serviceBaseUrls, tasksClient, wbsClient } from "./internalClients.js";
 import {
   confirmMaintenanceMemory,
   confirmMaintenanceNote,
@@ -121,6 +121,7 @@ import { buildProjectContextExportResponse } from "./projectContextExport.js";
 import {
   configuredServiceIds,
   ensureImagesAccountProvisioned,
+  ensureInsightsAccountProvisioned,
   ensureMindmapsAccountProvisioned,
   ensureWbsAccountProvisioned,
   provisionAccountToServices
@@ -3381,6 +3382,131 @@ app.post("/api/mindmaps/:documentId/artifact", async (req, res) => {
       await invalidateArtifactIndexFromApi(authContext.userId, projectIds, artifactItemId);
     }
     return res.status(201).json({ status: "ok", ...result });
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+function requireInsightsConfigured(res: express.Response): boolean {
+  if (serviceBaseUrls.insights) return true;
+  res.status(503).json({ message: "Insights service is not configured", code: "INSIGHTS_NOT_CONFIGURED" });
+  return false;
+}
+
+app.post("/api/insights/machines/register", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext || !requireInsightsConfigured(res)) return;
+  try {
+    await ensureInsightsAccountProvisioned(authContext);
+    return res.json(await insightsClient.registerMachine(authContext.accessToken, req.body ?? {}));
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.get("/api/insights/machines", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext || !requireInsightsConfigured(res)) return;
+  try {
+    await ensureInsightsAccountProvisioned(authContext);
+    return res.json(await insightsClient.listMachines(authContext.accessToken));
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/insights/ingest/samples", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext || !requireInsightsConfigured(res)) return;
+  try {
+    await ensureInsightsAccountProvisioned(authContext);
+    return res.json(await insightsClient.ingestSamples(authContext.accessToken, req.body ?? {}));
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/insights/ingest/summaries", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext || !requireInsightsConfigured(res)) return;
+  try {
+    await ensureInsightsAccountProvisioned(authContext);
+    return res.json(await insightsClient.ingestSummaries(authContext.accessToken, req.body ?? {}));
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.get("/api/insights/summaries", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext || !requireInsightsConfigured(res)) return;
+  try {
+    await ensureInsightsAccountProvisioned(authContext);
+    return res.json(await insightsClient.listSummaries(authContext.accessToken, {
+      machineId: typeof req.query.machineId === "string" ? req.query.machineId : undefined,
+      from: typeof req.query.from === "string" ? req.query.from : undefined,
+      to: typeof req.query.to === "string" ? req.query.to : undefined,
+      limit: typeof req.query.limit === "string" ? req.query.limit : undefined,
+      cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined
+    }));
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.get("/api/insights/summaries/:machineId/:date", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext || !requireInsightsConfigured(res)) return;
+  try {
+    await ensureInsightsAccountProvisioned(authContext);
+    return res.json(await insightsClient.getSummary(
+      authContext.accessToken,
+      String(req.params.machineId),
+      String(req.params.date)
+    ));
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.get("/api/insights/activity", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext || !requireInsightsConfigured(res)) return;
+  try {
+    await ensureInsightsAccountProvisioned(authContext);
+    return res.json(await insightsClient.queryActivity(authContext.accessToken, {
+      from: typeof req.query.from === "string" ? req.query.from : undefined,
+      to: typeof req.query.to === "string" ? req.query.to : undefined,
+      machineId: typeof req.query.machineId === "string" ? req.query.machineId : undefined
+    }));
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/insights/derived", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext || !requireInsightsConfigured(res)) return;
+  try {
+    await ensureInsightsAccountProvisioned(authContext);
+    return res.status(201).json(await insightsClient.createDerived(authContext.accessToken, req.body ?? {}));
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.get("/api/insights/derived", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext || !requireInsightsConfigured(res)) return;
+  try {
+    await ensureInsightsAccountProvisioned(authContext);
+    return res.json(await insightsClient.listDerived(authContext.accessToken, {
+      from: typeof req.query.from === "string" ? req.query.from : undefined,
+      to: typeof req.query.to === "string" ? req.query.to : undefined,
+      kind: typeof req.query.kind === "string" ? req.query.kind : undefined,
+      limit: typeof req.query.limit === "string" ? req.query.limit : undefined,
+      cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined
+    }));
   } catch (error) {
     return respondInternalError(res, error);
   }

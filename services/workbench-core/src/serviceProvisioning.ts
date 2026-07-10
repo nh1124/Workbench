@@ -20,7 +20,7 @@ function optionalEnv(name: string): string | undefined {
   return value && value.length > 0 ? value : undefined;
 }
 
-type ServiceId = "notes" | "artifacts" | "tasks" | "projects" | "images" | "mindmaps" | "wbs";
+type ServiceId = "notes" | "artifacts" | "tasks" | "projects" | "images" | "mindmaps" | "wbs" | "insights";
 
 type ServiceTarget = {
   id: ServiceId;
@@ -73,6 +73,16 @@ if (projectsServiceUrl && projectsInternalApiKey) {
     id: "projects",
     baseUrl: projectsServiceUrl,
     apiKey: projectsInternalApiKey
+  });
+}
+
+const insightsServiceUrl = optionalEnv("INSIGHTS_SERVICE_URL");
+const insightsInternalApiKey = optionalEnv("INTERNAL_API_KEY_INSIGHTS");
+if (insightsServiceUrl && insightsInternalApiKey) {
+  serviceTargets.push({
+    id: "insights",
+    baseUrl: insightsServiceUrl,
+    apiKey: insightsInternalApiKey
   });
 }
 
@@ -154,4 +164,8 @@ export async function ensureMindmapsAccountProvisioned(authContext: Authenticate
 
 export async function ensureWbsAccountProvisioned(authContext: AuthenticatedProvisioningContext): Promise<void> {
   await ensureServiceAccountProvisioned(authContext, "wbs");
+}
+
+export async function ensureInsightsAccountProvisioned(authContext: AuthenticatedProvisioningContext): Promise<void> {
+  await ensureServiceAccountProvisioned(authContext, "insights");
 }

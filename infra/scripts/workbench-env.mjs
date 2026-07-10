@@ -78,6 +78,7 @@ function canonicalEnv() {
     "IMAGES_PORT",
     "MINDMAPS_PORT",
     "WBS_PORT",
+    "INSIGHTS_PORT",
     "LBS_PORT",
     "LBS_API_PREFIX",
     "LBS_BIND_HOST",
@@ -112,6 +113,7 @@ function desiredRuntimeUpdates(env) {
   const imagesUrl = serviceUrl(env, "IMAGES_PORT");
   const mindmapsUrl = serviceUrl(env, "MINDMAPS_PORT");
   const wbsUrl = serviceUrl(env, "WBS_PORT");
+  const insightsUrl = serviceUrl(env, "INSIGHTS_PORT");
   const lbsBaseUrl = lbsUrl(env);
   const uiDevUrl = `http://${env.UI_DEV_HOST}:${env.UI_DEV_PORT}`;
   const requireCoreMutationOrigin = env.WORKBENCH_REQUIRE_CORE_MUTATION_ORIGIN || "false";
@@ -186,6 +188,14 @@ function desiredRuntimeUpdates(env) {
       },
     },
     {
+      file: "services/insights/.env",
+      sample: "services/insights/.env.example",
+      updates: {
+        INSIGHTS_SERVICE_HOST: env.WORKBENCH_HOST,
+        INSIGHTS_SERVICE_PORT: env.INSIGHTS_PORT,
+      },
+    },
+    {
       file: "services/lbs/.env",
       sample: "services/lbs/.env.example",
       updates: {
@@ -209,10 +219,12 @@ function desiredRuntimeUpdates(env) {
         IMAGES_SERVICE_URL: imagesUrl,
         MINDMAPS_SERVICE_URL: mindmapsUrl,
         WBS_SERVICE_URL: wbsUrl,
+        INSIGHTS_SERVICE_URL: insightsUrl,
         LBS_SERVICE_URL: lbsBaseUrl,
         INTERNAL_API_KEY_IMAGES: "workbench-internal-images",
         INTERNAL_API_KEY_MINDMAPS: "workbench-internal-mindmaps",
         INTERNAL_API_KEY_WBS: "workbench-internal-wbs",
+        INTERNAL_API_KEY_INSIGHTS: "workbench-internal-insights",
         WORKBENCH_CORE_MUTATION_TOKEN: coreMutationToken,
       },
     },
@@ -272,6 +284,10 @@ function desiredExampleUpdates(env) {
     {
       file: "infra/env_samples/wbs.env.example",
       updates: desiredRuntimeUpdates(env).find((target) => target.file === "services/wbs/.env").updates,
+    },
+    {
+      file: "infra/env_samples/insights.env.example",
+      updates: desiredRuntimeUpdates(env).find((target) => target.file === "services/insights/.env").updates,
     },
     {
       file: "infra/env_samples/lbs.env.example",
@@ -383,6 +399,7 @@ function printPorts(env) {
     env.IMAGES_PORT,
     env.MINDMAPS_PORT,
     env.WBS_PORT,
+    env.INSIGHTS_PORT,
     env.LBS_PORT,
   ];
   if (args.has("--ui")) {

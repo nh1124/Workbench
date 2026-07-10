@@ -19,7 +19,7 @@ function optionalEnv(name: string): string | undefined {
   return value && value.length > 0 ? value : undefined;
 }
 
-type ServiceId = "notes" | "artifacts" | "tasks" | "projects" | "lbs" | "images" | "mindmaps" | "wbs";
+type ServiceId = "notes" | "artifacts" | "tasks" | "projects" | "lbs" | "images" | "mindmaps" | "wbs" | "insights";
 
 type ServiceConfig = {
   id: ServiceId;
@@ -38,6 +38,9 @@ const projectsService: ServiceConfig | undefined = projectsBaseUrl ? { id: "proj
 const lbsBaseUrl = optionalEnv("LBS_SERVICE_URL");
 const lbsService: ServiceConfig | undefined = lbsBaseUrl ? { id: "lbs", baseUrl: lbsBaseUrl } : undefined;
 
+const insightsBaseUrl = optionalEnv("INSIGHTS_SERVICE_URL");
+const insightsService: ServiceConfig | undefined = insightsBaseUrl ? { id: "insights", baseUrl: insightsBaseUrl } : undefined;
+
 const CORE_MUTATION_ORIGIN_HEADER = "x-workbench-core-mutation";
 const CORE_MUTATION_TOKEN_HEADER = "x-workbench-core-mutation-token";
 const coreMutationToken = optionalEnv("WORKBENCH_CORE_MUTATION_TOKEN");
@@ -50,7 +53,8 @@ export const serviceBaseUrls = {
   mindmaps: mindmapsService.baseUrl,
   wbs: wbsService.baseUrl,
   projects: projectsService?.baseUrl,
-  lbs: lbsService?.baseUrl
+  lbs: lbsService?.baseUrl,
+  insights: insightsService?.baseUrl
 } as const;
 
 export class InternalServiceError extends Error {
@@ -698,6 +702,73 @@ export const wbsClient = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     })
+};
+
+function requireInsights(): ServiceConfig {
+  if (!insightsService) throw new Error("Insights service is not configured (INSIGHTS_SERVICE_URL missing)");
+  return insightsService;
+}
+
+type InsightsSummaryQuery = {
+  machineId?: string;
+  from?: string;
+  to?: string;
+  limit?: string | number;
+  cursor?: string;
+};
+
+type InsightsActivityQuery = {
+  from?: string;
+  to?: string;
+  machineId?: string;
+};
+
+type InsightsDerivedQuery = {
+  from?: string;
+  to?: string;
+  kind?: string;
+  limit?: string | number;
+  cursor?: string;
+};
+
+export const insightsClient = {
+  registerMachine: (token: string, payload: unknown) =>
+    serviceRequest<unknown>(requireInsights(), "/machines/register", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  listMachines: (token: string) => serviceRequest<unknown>(requireInsights(), "/machines", token),
+  ingestSamples: (token: string, payload: unknown) =>
+    serviceRequest<unknown>(requireInsights(), "/ingest/samples", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  ingestSummaries: (token: string, payload: unknown) =>
+    serviceRequest<unknown>(requireInsights(), "/ingest/summaries", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  listSummaries: (token: string, query: InsightsSummaryQuery = {}) =>
+    serviceRequest<unknown>(requireInsights(), `/summaries${buildQuery(query)}`, token),
+  getSummary: (token: string, machineId: string, date: string) =>
+    serviceRequest<unknown>(
+      requireInsights(),
+      `/summaries/${encodeURIComponent(machineId)}/${encodeURIComponent(date)}`,
+      token
+    ),
+  queryActivity: (token: string, query: InsightsActivityQuery) =>
+    serviceRequest<unknown>(requireInsights(), `/activity${buildQuery(query)}`, token),
+  createDerived: (token: string, payload: unknown) =>
+    serviceRequest<unknown>(requireInsights(), "/derived", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  listDerived: (token: string, query: InsightsDerivedQuery = {}) =>
+    serviceRequest<unknown>(requireInsights(), `/derived${buildQuery(query)}`, token)
 };
 
 export const tasksClient = {

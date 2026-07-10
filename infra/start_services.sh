@@ -11,7 +11,7 @@ echo "Starting Workbench service stack (Core HTTP + internal services + DB)..."
 cd "${PROJECT_ROOT}"
 # Artifacts is docker-only in this mode.
 # Rebuild artifacts image after pull to ensure latest code is reflected.
-docker compose up -d --build artifacts-db artifacts workbench-core-db notes-db tasks-db projects-db images-db mindmaps-db wbs-db
+docker compose up -d --build artifacts-db artifacts workbench-core-db notes-db tasks-db projects-db images-db mindmaps-db wbs-db insights-db
 
 # Run local services except artifacts (which is handled by docker above).
 npm run dev:services:no-artifacts
