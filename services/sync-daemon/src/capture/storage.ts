@@ -7,20 +7,35 @@ import type {
   CaptureConfigPatch,
   CaptureLogger,
   CaptureSample,
+  CaptureSampleInput,
   CaptureStatus,
+  CaptureSummaryMetrics,
   CaptureSummaryRecord
 } from "./types.js";
 
 export const DEFAULT_CAPTURE_INTERVAL_SECONDS = 15;
 export const DEFAULT_CAPTURE_RETENTION_DAYS = 14;
+export const DEFAULT_CAPTURE_IDLE_THRESHOLD_SECONDS = 300;
+export const DEFAULT_CAPTURE_CATEGORY_MAP: Record<string, string> = {
+  msedge: "Browser",
+  chrome: "Browser",
+  Code: "Editor",
+  explorer: "System"
+};
 
 export const DEFAULT_CAPTURE_CONFIG: CaptureConfig = {
   enabled: false,
   intervalSeconds: DEFAULT_CAPTURE_INTERVAL_SECONDS,
   retentionDays: DEFAULT_CAPTURE_RETENTION_DAYS,
   excludePatterns: [],
-  autoPublish: false
+  autoPublish: false,
+  idleThresholdSeconds: DEFAULT_CAPTURE_IDLE_THRESHOLD_SECONDS,
+  categoryMap: { ...DEFAULT_CAPTURE_CATEGORY_MAP }
 };
+
+function defaultCaptureConfig(): CaptureConfig {
+  return { ...DEFAULT_CAPTURE_CONFIG, categoryMap: { ...DEFAULT_CAPTURE_CONFIG.categoryMap } };
+}
 
 const CONFIG_META_KEY = "capture.config";
 const LAST_RETENTION_DATE_META_KEY = "capture.lastRetentionDate";
@@ -31,13 +46,14 @@ type CaptureStorageOptions = {
 };
 
 type CountRow = { count: number };
-type SampleRow = { sampled_at: string; process_name: string; window_title: string };
+type SampleRow = { sampled_at: string; process_name: string; window_title: string; idle?: number | null };
 type SummaryRow = {
   summary_date: string;
   note_resource_id: string | null;
   generated_at: string;
   sample_count: number;
   summary_markdown?: string | null;
+  metrics_json?: string | null;
 };
 
 export function defaultCaptureDbPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -87,8 +103,30 @@ function normalizeConfig(value: unknown): CaptureConfig {
     excludePatterns: Array.isArray(record.excludePatterns)
       ? record.excludePatterns.filter((pattern): pattern is string => typeof pattern === "string")
       : [],
-    autoPublish: typeof record.autoPublish === "boolean" ? record.autoPublish : DEFAULT_CAPTURE_CONFIG.autoPublish
+    autoPublish: typeof record.autoPublish === "boolean" ? record.autoPublish : DEFAULT_CAPTURE_CONFIG.autoPublish,
+    idleThresholdSeconds: isValidIdleThreshold(record.idleThresholdSeconds)
+      ? record.idleThresholdSeconds
+      : DEFAULT_CAPTURE_CONFIG.idleThresholdSeconds,
+    categoryMap: normalizeCategoryMap(record.categoryMap)
   };
+}
+
+function isValidIdleThreshold(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 60 && value <= 3600;
+}
+
+function isCategoryMap(value: unknown): value is Record<string, string> {
+  return Boolean(value)
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && Object.entries(value as Record<string, unknown>).every(([processName, category]) => (
+      processName.trim().length > 0 && typeof category === "string" && category.trim().length > 0
+    ));
+}
+
+function normalizeCategoryMap(value: unknown): Record<string, string> {
+  if (!isCategoryMap(value)) return { ...DEFAULT_CAPTURE_CATEGORY_MAP };
+  return Object.fromEntries(Object.entries(value).map(([processName, category]) => [processName.trim(), category.trim()]));
 }
 
 export function validateCaptureConfigPatch(patch: Record<string, unknown>): CaptureConfigPatch {
@@ -117,6 +155,18 @@ export function validateCaptureConfigPatch(patch: Record<string, unknown>): Capt
     }
     next.autoPublish = patch.autoPublish;
   }
+  if (patch.idleThresholdSeconds !== undefined) {
+    if (!isValidIdleThreshold(patch.idleThresholdSeconds)) {
+      throw new Error("idleThresholdSeconds must be an integer between 60 and 3600.");
+    }
+    next.idleThresholdSeconds = patch.idleThresholdSeconds;
+  }
+  if (patch.categoryMap !== undefined) {
+    if (!isCategoryMap(patch.categoryMap)) {
+      throw new Error("categoryMap must be an object mapping non-empty process names to non-empty category strings.");
+    }
+    next.categoryMap = normalizeCategoryMap(patch.categoryMap);
+  }
   return next;
 }
 
@@ -124,18 +174,34 @@ function toSample(row: SampleRow): CaptureSample {
   return {
     sampledAt: row.sampled_at,
     processName: row.process_name,
-    windowTitle: row.window_title
+    windowTitle: row.window_title,
+    idle: Boolean(row.idle)
   };
 }
 
-function toSummary(row: SummaryRow, includeMarkdown = false): CaptureSummaryRecord {
+function parseMetrics(value: string | null | undefined): CaptureSummaryMetrics | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as CaptureSummaryMetrics
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function toSummary(row: SummaryRow, includeDetail = false): CaptureSummaryRecord {
   return {
     summaryDate: row.summary_date,
     noteResourceId: row.note_resource_id ?? undefined,
     generatedAt: row.generated_at,
     sampleCount: Number(row.sample_count ?? 0),
     published: Boolean(row.note_resource_id),
-    ...(includeMarkdown ? { summaryMarkdown: row.summary_markdown ?? undefined } : {})
+    ...(includeDetail ? {
+      summaryMarkdown: row.summary_markdown ?? undefined,
+      metrics: parseMetrics(row.metrics_json)
+    } : {})
   };
 }
 
@@ -160,7 +226,7 @@ function compileExcludePatterns(patterns: string[], logger?: CaptureLogger): Reg
   return compiled;
 }
 
-function isExcluded(sample: CaptureSample, config: CaptureConfig, logger?: CaptureLogger): boolean {
+function isExcluded(sample: CaptureSampleInput, config: CaptureConfig, logger?: CaptureLogger): boolean {
   const target = `${sample.processName}\n${sample.windowTitle}`;
   return compileExcludePatterns(config.excludePatterns, logger).some((pattern) => pattern.test(target));
 }
@@ -196,7 +262,8 @@ export class CaptureStorage {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         sampled_at TEXT NOT NULL,
         process_name TEXT NOT NULL,
-        window_title TEXT NOT NULL
+        window_title TEXT NOT NULL,
+        idle INTEGER NOT NULL DEFAULT 0
       );
       CREATE INDEX IF NOT EXISTS idx_capture_samples_time ON capture_samples(sampled_at);
       CREATE TABLE IF NOT EXISTS capture_summaries (
@@ -211,12 +278,28 @@ export class CaptureStorage {
       );
     `);
     this.ensureSummaryMarkdownColumn();
+    this.ensureSampleIdleColumn();
+    this.ensureSummaryMetricsColumn();
   }
 
   private ensureSummaryMarkdownColumn(): void {
     const columns = this.db.prepare("PRAGMA table_info(capture_summaries)").all() as Array<{ name?: string }>;
     if (!columns.some((column) => column.name === "summary_markdown")) {
       this.db.exec("ALTER TABLE capture_summaries ADD COLUMN summary_markdown TEXT");
+    }
+  }
+
+  private ensureSampleIdleColumn(): void {
+    const columns = this.db.prepare("PRAGMA table_info(capture_samples)").all() as Array<{ name?: string }>;
+    if (!columns.some((column) => column.name === "idle")) {
+      this.db.exec("ALTER TABLE capture_samples ADD COLUMN idle INTEGER NOT NULL DEFAULT 0");
+    }
+  }
+
+  private ensureSummaryMetricsColumn(): void {
+    const columns = this.db.prepare("PRAGMA table_info(capture_summaries)").all() as Array<{ name?: string }>;
+    if (!columns.some((column) => column.name === "metrics_json")) {
+      this.db.exec("ALTER TABLE capture_summaries ADD COLUMN metrics_json TEXT");
     }
   }
 
@@ -251,11 +334,11 @@ export class CaptureStorage {
 
   getConfig(): CaptureConfig {
     const raw = this.getMeta(CONFIG_META_KEY);
-    if (!raw) return { ...DEFAULT_CAPTURE_CONFIG };
+    if (!raw) return defaultCaptureConfig();
     try {
       return normalizeConfig(JSON.parse(raw) as unknown);
     } catch {
-      return { ...DEFAULT_CAPTURE_CONFIG };
+      return defaultCaptureConfig();
     }
   }
 
@@ -273,12 +356,12 @@ export class CaptureStorage {
     return this.setConfig({ ...this.getConfig(), enabled });
   }
 
-  insertSample(sample: CaptureSample, config = this.getConfig()): boolean {
+  insertSample(sample: CaptureSampleInput, config = this.getConfig()): boolean {
     if (isExcluded(sample, config, this.logger)) return false;
     this.db.prepare(`
-      INSERT INTO capture_samples (sampled_at, process_name, window_title)
-      VALUES (?, ?, ?)
-    `).run(sample.sampledAt, sample.processName, sample.windowTitle);
+      INSERT INTO capture_samples (sampled_at, process_name, window_title, idle)
+      VALUES (?, ?, ?, ?)
+    `).run(sample.sampledAt, sample.processName, sample.windowTitle, sample.idle ? 1 : 0);
     return true;
   }
 
@@ -286,7 +369,7 @@ export class CaptureStorage {
     const start = `${summaryDate}T00:00:00.000Z`;
     const end = `${nextDateString(summaryDate)}T00:00:00.000Z`;
     return (this.db.prepare(`
-      SELECT sampled_at, process_name, window_title
+      SELECT sampled_at, process_name, window_title, idle
       FROM capture_samples
       WHERE sampled_at >= ? AND sampled_at < ?
       ORDER BY sampled_at ASC, id ASC
@@ -309,7 +392,7 @@ export class CaptureStorage {
 
   getSummary(summaryDate: string): CaptureSummaryRecord | undefined {
     const row = this.db.prepare(`
-      SELECT summary_date, note_resource_id, generated_at, sample_count, summary_markdown
+      SELECT summary_date, note_resource_id, generated_at, sample_count, summary_markdown, metrics_json
       FROM capture_summaries
       WHERE summary_date = ?
     `).get(summaryDate) as SummaryRow | undefined;
@@ -340,16 +423,25 @@ export class CaptureStorage {
     };
   }
 
-  saveSummary(summaryDate: string, summaryMarkdown: string, sampleCount: number, generatedAt = new Date().toISOString()): CaptureSummaryRecord {
+  saveSummary(
+    summaryDate: string,
+    summaryMarkdown: string,
+    sampleCount: number,
+    metricsOrGeneratedAt?: CaptureSummaryMetrics | string,
+    generatedAt = new Date().toISOString()
+  ): CaptureSummaryRecord {
+    const metrics = typeof metricsOrGeneratedAt === "string" ? undefined : metricsOrGeneratedAt;
+    const persistedAt = typeof metricsOrGeneratedAt === "string" ? metricsOrGeneratedAt : generatedAt;
     // Preserves note_resource_id so regeneration keeps the published-note linkage.
     this.db.prepare(`
-      INSERT INTO capture_summaries (summary_date, note_resource_id, generated_at, sample_count, summary_markdown)
-      VALUES (?, NULL, ?, ?, ?)
+      INSERT INTO capture_summaries (summary_date, note_resource_id, generated_at, sample_count, summary_markdown, metrics_json)
+      VALUES (?, NULL, ?, ?, ?, ?)
       ON CONFLICT(summary_date) DO UPDATE SET
         generated_at = excluded.generated_at,
         sample_count = excluded.sample_count,
-        summary_markdown = excluded.summary_markdown
-    `).run(summaryDate, generatedAt, sampleCount, summaryMarkdown);
+        summary_markdown = excluded.summary_markdown,
+        metrics_json = excluded.metrics_json
+    `).run(summaryDate, persistedAt, sampleCount, summaryMarkdown, metrics ? JSON.stringify(metrics) : null);
     const stored = this.getSummary(summaryDate);
     if (!stored) throw new Error(`Capture summary for ${summaryDate} was not persisted.`);
     return stored;
@@ -388,7 +480,7 @@ export function readCaptureStatusSnapshot(input: {
   if (!existsSync(dbPath)) {
     return {
       dbPath,
-      config: { ...DEFAULT_CAPTURE_CONFIG },
+      config: defaultCaptureConfig(),
       status: {
         enabled: false,
         collectorAlive: input.collectorAlive ?? false,

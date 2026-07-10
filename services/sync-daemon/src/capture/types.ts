@@ -4,6 +4,8 @@ export type CaptureConfig = {
   retentionDays: number;
   excludePatterns: string[];
   autoPublish: boolean;
+  idleThresholdSeconds: number;
+  categoryMap: Record<string, string>;
 };
 
 export type CaptureConfigPatch = {
@@ -11,12 +13,34 @@ export type CaptureConfigPatch = {
   retentionDays?: number;
   excludePatterns?: string[];
   autoPublish?: boolean;
+  idleThresholdSeconds?: number;
+  categoryMap?: Record<string, string>;
 };
 
 export type CaptureSample = {
   sampledAt: string;
   processName: string;
   windowTitle: string;
+  idle?: boolean;
+};
+
+export type CaptureSampleInput = CaptureSample;
+
+export type CaptureFocusBlock = {
+  startAt: string;
+  endAt: string;
+  app: string;
+  title: string;
+  activeSeconds: number;
+};
+
+export type CaptureSummaryMetrics = {
+  activeSeconds: number;
+  idleSeconds: number;
+  contextSwitches: number;
+  focusBlocks: CaptureFocusBlock[];
+  categories: Record<string, number>;
+  apps: Record<string, number>;
 };
 
 export type CaptureSummaryRecord = {
@@ -26,6 +50,7 @@ export type CaptureSummaryRecord = {
   sampleCount: number;
   published: boolean;
   summaryMarkdown?: string;
+  metrics?: CaptureSummaryMetrics;
 };
 
 export type CaptureSummaryListResult = {

@@ -13,6 +13,12 @@ using System.Text;
 using System.Runtime.InteropServices;
 
 public static class WorkbenchCaptureWin32 {
+  [StructLayout(LayoutKind.Sequential)]
+  public struct LASTINPUTINFO {
+    public uint cbSize;
+    public uint dwTime;
+  }
+
   [DllImport("user32.dll")]
   public static extern IntPtr GetForegroundWindow();
 
@@ -21,6 +27,16 @@ public static class WorkbenchCaptureWin32 {
 
   [DllImport("user32.dll")]
   public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+  [DllImport("user32.dll", SetLastError = true)]
+  public static extern bool GetLastInputInfo(ref LASTINPUTINFO lastInputInfo);
+
+  public static uint GetIdleSeconds() {
+    var lastInputInfo = new LASTINPUTINFO();
+    lastInputInfo.cbSize = (uint)Marshal.SizeOf(lastInputInfo);
+    if (!GetLastInputInfo(ref lastInputInfo)) return 0;
+    return unchecked((uint)Environment.TickCount - lastInputInfo.dwTime) / 1000;
+  }
 }
 "@
 
@@ -36,6 +52,7 @@ while ($true) {
       sampledAt = [DateTime]::UtcNow.ToString("o")
       processName = if ($process) { $process.ProcessName } else { "" }
       windowTitle = $builder.ToString()
+      idleSeconds = [WorkbenchCaptureWin32]::GetIdleSeconds()
     }
     $record | ConvertTo-Json -Compress
   } catch {
@@ -43,6 +60,7 @@ while ($true) {
       sampledAt = [DateTime]::UtcNow.ToString("o")
       processName = ""
       windowTitle = ""
+      idleSeconds = 0
     }
     $record | ConvertTo-Json -Compress
   }

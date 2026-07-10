@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import type { CaptureConfig, CaptureLogger, CaptureSample } from "./types.js";
+import { DEFAULT_CAPTURE_IDLE_THRESHOLD_SECONDS } from "./storage.js";
 import { WINDOWS_SAMPLER_SCRIPT } from "./windowsSamplerScript.js";
 
 type SpawnImpl = typeof spawn;
@@ -59,28 +60,33 @@ function resolveBundledSamplerPath(explicitPath?: string): string {
   return fallback;
 }
 
-function parseSamplerRecord(value: unknown): CaptureSample | undefined {
+function parseSamplerRecord(value: unknown, idleThresholdSeconds: number): CaptureSample | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   if (typeof record.sampledAt !== "string") return undefined;
   if (typeof record.processName !== "string") return undefined;
   if (typeof record.windowTitle !== "string") return undefined;
+  const idleSeconds = typeof record.idleSeconds === "number" && Number.isFinite(record.idleSeconds) && record.idleSeconds >= 0
+    ? record.idleSeconds
+    : 0;
   return {
     sampledAt: record.sampledAt,
     processName: record.processName,
-    windowTitle: record.windowTitle
+    windowTitle: record.windowTitle,
+    idle: idleSeconds >= idleThresholdSeconds
   };
 }
 
 export async function ingestSamplerLine(
   line: string,
   onSample: (sample: CaptureSample) => void | Promise<void>,
-  logger?: CaptureLogger
+  logger?: CaptureLogger,
+  idleThresholdSeconds = DEFAULT_CAPTURE_IDLE_THRESHOLD_SECONDS
 ): Promise<boolean> {
   const trimmed = line.trim();
   if (!trimmed) return false;
   try {
-    const sample = parseSamplerRecord(JSON.parse(trimmed) as unknown);
+    const sample = parseSamplerRecord(JSON.parse(trimmed) as unknown, idleThresholdSeconds);
     if (!sample) {
       logger?.warn("[capture] skipped malformed sampler record");
       return false;
@@ -232,7 +238,7 @@ export class CaptureSupervisor {
       const line = this.stdoutBuffer.slice(0, newlineIndex);
       const newlineLength = this.stdoutBuffer[newlineIndex] === "\r" && this.stdoutBuffer[newlineIndex + 1] === "\n" ? 2 : 1;
       this.stdoutBuffer = this.stdoutBuffer.slice(newlineIndex + newlineLength);
-      void ingestSamplerLine(line, this.onSample, this.logger).catch((error) => {
+      void ingestSamplerLine(line, this.onSample, this.logger, this.config?.idleThresholdSeconds).catch((error) => {
         this.logger?.warn("[capture] sampler line handling failed", {
           message: error instanceof Error ? error.message : String(error)
         });

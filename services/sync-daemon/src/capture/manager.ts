@@ -5,7 +5,7 @@ import type {
   CaptureStatus,
   CaptureSummaryPublisher
 } from "./types.js";
-import { buildCaptureSummaryMarkdown } from "./summarizer.js";
+import { analyzeCaptureSummary } from "./summarizer.js";
 import { CaptureStorage, validateCaptureConfigPatch } from "./storage.js";
 import { CaptureError, CaptureSupervisor, type CaptureSupervisorOptions } from "./supervisor.js";
 
@@ -125,7 +125,10 @@ export class CaptureManager {
     const previous = this.storage.getConfig();
     const patch = validateCaptureConfigPatch(rawPatch);
     const next = this.storage.updateConfig(patch as CaptureConfigPatch);
-    if (next.enabled && previous.intervalSeconds !== next.intervalSeconds) {
+    if (next.enabled && (
+      previous.intervalSeconds !== next.intervalSeconds
+      || previous.idleThresholdSeconds !== next.idleThresholdSeconds
+    )) {
       await this.supervisor.restart(next);
     }
     return this.apiStatus();
@@ -137,15 +140,15 @@ export class CaptureManager {
     const date = validateSummaryDate(summaryDate ?? previousDateString(now));
     const config = this.storage.getConfig();
     const samples = this.storage.listSamplesForDate(date);
-    const contentMarkdown = buildCaptureSummaryMarkdown(date, samples, config.intervalSeconds);
-    let summary = this.storage.saveSummary(date, contentMarkdown, samples.length, now.toISOString());
+    const analysis = analyzeCaptureSummary(date, samples, config.intervalSeconds, config.categoryMap);
+    let summary = this.storage.saveSummary(date, analysis.markdown, samples.length, analysis.metrics, now.toISOString());
     let action: string = "saved";
     if (config.autoPublish) {
       const published = await this.publishStoredSummary(date);
       summary = published.summary;
       action = published.action;
     }
-    const { summaryMarkdown: _omitted, ...meta } = summary;
+    const { summaryMarkdown: _omitted, metrics: _metrics, ...meta } = summary;
     return {
       ...meta,
       action,
@@ -156,7 +159,7 @@ export class CaptureManager {
   listSummaries(options: { limit?: number; cursor?: string } = {}): Record<string, unknown> {
     const result = this.storage.listSummaries(options);
     return {
-      items: result.items.map(({ summaryMarkdown: _omitted, ...meta }) => meta),
+      items: result.items.map(({ summaryMarkdown: _omitted, metrics: _metrics, ...meta }) => meta),
       ...(result.nextCursor ? { nextCursor: result.nextCursor } : {})
     };
   }
@@ -173,7 +176,7 @@ export class CaptureManager {
   async publishSummary(summaryDate: string): Promise<Record<string, unknown>> {
     const date = validateSummaryDate(summaryDate);
     const published = await this.publishStoredSummary(date);
-    const { summaryMarkdown: _omitted, ...meta } = published.summary;
+    const { summaryMarkdown: _omitted, metrics: _metrics, ...meta } = published.summary;
     return { ...meta, action: published.action, title: `Capture Daily Summary ${date}` };
   }
 
@@ -186,8 +189,9 @@ export class CaptureManager {
     if (!contentMarkdown) {
       // Summaries stored before the summary_markdown migration: rebuild from samples.
       const config = this.storage.getConfig();
-      contentMarkdown = buildCaptureSummaryMarkdown(date, this.storage.listSamplesForDate(date), config.intervalSeconds);
-      this.storage.saveSummary(date, contentMarkdown, existing.sampleCount, existing.generatedAt);
+      const analysis = analyzeCaptureSummary(date, this.storage.listSamplesForDate(date), config.intervalSeconds, config.categoryMap);
+      contentMarkdown = analysis.markdown;
+      this.storage.saveSummary(date, contentMarkdown, existing.sampleCount, analysis.metrics, existing.generatedAt);
       if (existing.noteResourceId) this.storage.setSummaryNoteResourceId(date, existing.noteResourceId);
     }
     const published = await this.publisher.publishSummary({

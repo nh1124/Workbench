@@ -7,10 +7,12 @@ import { describe, it } from "node:test";
 import {
   CaptureManager,
   CaptureStorage,
+  analyzeCaptureSummary,
   assertCaptureDbPathAllowed,
   buildCaptureSummaryMarkdown,
   decodeSamplerStdoutChunk,
   ingestSamplerLine,
+  validateCaptureConfigPatch,
   type CaptureLogger,
   type CaptureSummaryPublisher
 } from "../capture/index.js";
@@ -61,7 +63,9 @@ describe("capture storage and summarization", () => {
           intervalSeconds: 15,
           retentionDays: 14,
           excludePatterns: ["SecretApp", "["],
-          autoPublish: false
+          autoPublish: false,
+          idleThresholdSeconds: 300,
+          categoryMap: { Code: "Editor" }
         });
         const skipped = storage.insertSample({
           sampledAt: "2026-07-07T09:00:00.000Z",
@@ -112,9 +116,9 @@ describe("capture storage and summarization", () => {
 
   it("builds deterministic markdown from fixed samples", () => {
     const markdown = buildCaptureSummaryMarkdown("2026-07-07", [
-      { sampledAt: "2026-07-07T09:00:00.000Z", processName: "Code", windowTitle: "Workbench" },
-      { sampledAt: "2026-07-07T09:15:00.000Z", processName: "Code", windowTitle: "Workbench" },
-      { sampledAt: "2026-07-07T10:00:00.000Z", processName: "Browser", windowTitle: "Docs" }
+      { sampledAt: "2026-07-07T09:00:00.000Z", processName: "Code", windowTitle: "Workbench", idle: false },
+      { sampledAt: "2026-07-07T09:15:00.000Z", processName: "Code", windowTitle: "Workbench", idle: false },
+      { sampledAt: "2026-07-07T10:00:00.000Z", processName: "Browser", windowTitle: "Docs", idle: false }
     ], 15);
 
     assert.equal(markdown, [
@@ -140,12 +144,100 @@ describe("capture storage and summarization", () => {
       "|---|---|---:|",
       "| 09:00 | Code | 2 |",
       "| 10:00 | Browser | 1 |",
+      "",
+      "## Focus Blocks",
+      "",
+      "| Start - End | App | Window Title | Active Time |",
+      "|---|---|---|---:|",
+      "",
+      "## Context Switches",
+      "",
+      "1",
+      "",
+      "## Categories",
+      "",
+      "| Category | Active Time |",
+      "|---|---:|",
+      "| Editor | 30s |",
+      "| Other | 15s |",
+      "",
+      "## Idle Time",
+      "",
+      "0s",
       ""
     ].join("\n"));
     assert.equal(
       buildCaptureSummaryMarkdown("2026-07-08", [], 15),
       "# Capture Daily Summary 2026-07-08\n\nNo samples recorded.\n"
     );
+  });
+
+  it("aggregates focus blocks, switches, categories, and idle time deterministically", () => {
+    const start = new Date("2026-07-09T09:00:00.000Z").getTime();
+    const codeSamples = Array.from({ length: 60 }, (_, index) => ({
+      sampledAt: new Date(start + index * 15_000).toISOString(),
+      processName: "Code",
+      windowTitle: "Workbench",
+      idle: false
+    }));
+    const analysis = analyzeCaptureSummary("2026-07-09", [
+      ...codeSamples,
+      { sampledAt: "2026-07-09T09:15:00.000Z", processName: "msedge", windowTitle: "Docs", idle: false },
+      { sampledAt: "2026-07-09T09:15:15.000Z", processName: "msedge", windowTitle: "Docs", idle: false },
+      { sampledAt: "2026-07-09T09:15:30.000Z", processName: "Code", windowTitle: "Workbench", idle: true },
+      { sampledAt: "2026-07-09T09:15:45.000Z", processName: "Code", windowTitle: "Workbench", idle: false }
+    ], 15, { CODE: "Coding", MSEDGE: "Web" });
+
+    assert.deepEqual(analysis.metrics, {
+      activeSeconds: 945,
+      idleSeconds: 15,
+      contextSwitches: 2,
+      focusBlocks: [{
+        startAt: "2026-07-09T09:00:00.000Z",
+        endAt: "2026-07-09T09:15:00.000Z",
+        app: "Code",
+        title: "Workbench",
+        activeSeconds: 900
+      }],
+      categories: { Coding: 915, Web: 30 },
+      apps: { Code: 915, msedge: 30 }
+    });
+    assert.match(analysis.markdown, /\| 09:00 - 09:15 \| Code \| Workbench \| 15m 0s \|/);
+    assert.match(analysis.markdown, /## Context Switches\n\n2/);
+    assert.match(analysis.markdown, /## Idle Time\n\n15s/);
+  });
+
+  it("splits a same-window session when a sample gap exceeds two intervals", () => {
+    const start = new Date("2026-07-10T09:00:00.000Z").getTime();
+    const samples = Array.from({ length: 59 }, (_, index) => ({
+      sampledAt: new Date(start + index * 15_000).toISOString(),
+      processName: "Code",
+      windowTitle: "Workbench",
+      idle: false
+    }));
+    samples.push({
+      sampledAt: new Date(start + 61 * 15_000).toISOString(),
+      processName: "Code",
+      windowTitle: "Workbench",
+      idle: false
+    });
+
+    const analysis = analyzeCaptureSummary("2026-07-10", samples, 15);
+
+    assert.equal(analysis.metrics.activeSeconds, 900);
+    assert.deepEqual(analysis.metrics.focusBlocks, []);
+  });
+
+  it("validates idle threshold and category map config patches", () => {
+    assert.deepEqual(validateCaptureConfigPatch({
+      idleThresholdSeconds: 60,
+      categoryMap: { CODE: "Coding" }
+    }), {
+      idleThresholdSeconds: 60,
+      categoryMap: { CODE: "Coding" }
+    });
+    assert.throws(() => validateCaptureConfigPatch({ idleThresholdSeconds: 59 }), /between 60 and 3600/);
+    assert.throws(() => validateCaptureConfigPatch({ categoryMap: { Code: "" } }), /categoryMap/);
   });
 
   it("updates the same daily summary on regeneration", async () => {
@@ -223,6 +315,14 @@ describe("capture storage and summarization", () => {
 
         const detail = manager.summaryDetail("2026-07-08");
         assert.match(String(detail.summaryMarkdown), /Capture Daily Summary 2026-07-08/);
+        assert.deepEqual(detail.metrics, {
+          activeSeconds: 15,
+          idleSeconds: 0,
+          contextSwitches: 0,
+          focusBlocks: [],
+          categories: { Editor: 15 },
+          apps: { Code: 15 }
+        });
 
         const listed = manager.listSummaries();
         const items = listed.items as Array<Record<string, unknown>>;
@@ -230,6 +330,7 @@ describe("capture storage and summarization", () => {
         assert.equal(items[0].summaryDate, "2026-07-08");
         assert.equal(items[0].published, false);
         assert.equal("summaryMarkdown" in items[0], false);
+        assert.equal("metrics" in items[0], false);
 
         const first = await manager.publishSummary("2026-07-08");
         assert.equal(first.action, "create");
@@ -278,14 +379,21 @@ describe("capture storage and summarization", () => {
     const accepted = await ingestSamplerLine(JSON.stringify({
       sampledAt: "2026-07-07T09:00:00.000Z",
       processName: "Code",
-      windowTitle: "Workbench"
+      windowTitle: "Workbench",
+      idleSeconds: 300
     }), (sample) => {
       samples.push(sample);
-    }, silentLogger(warnings));
+    }, silentLogger(warnings), 300);
 
     assert.equal(skipped, false);
     assert.equal(accepted, true);
     assert.equal(samples.length, 1);
+    assert.deepEqual(samples, [{
+      sampledAt: "2026-07-07T09:00:00.000Z",
+      processName: "Code",
+      windowTitle: "Workbench",
+      idle: true
+    }]);
     assert.ok(warnings.length >= 1);
   });
 
