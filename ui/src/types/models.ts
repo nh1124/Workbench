@@ -840,13 +840,16 @@ export interface LocalDaemonPendingJobConfirmation {
 
 export interface CaptureDaemonConfig {
   enabled: boolean;
+  screenshotsEnabled: boolean;
+  screenshotIntervalSeconds: number;
+  screenshotRetentionDays: number;
   intervalSeconds: number;
   retentionDays: number;
   excludePatterns: string[];
 }
 
 export type CaptureDaemonConfigPatch = Partial<
-  Pick<CaptureDaemonConfig, "intervalSeconds" | "retentionDays" | "excludePatterns">
+  Pick<CaptureDaemonConfig, "intervalSeconds" | "retentionDays" | "excludePatterns" | "screenshotsEnabled" | "screenshotIntervalSeconds" | "screenshotRetentionDays">
 >;
 
 export interface CaptureDaemonStatus {
@@ -883,6 +886,18 @@ export interface CaptureSummaryRecord {
 
 export interface CaptureSummaryListResult {
   items: CaptureSummaryRecord[];
+  nextCursor?: string;
+}
+
+export interface CaptureScreenshot {
+  id: number;
+  capturedAt: string;
+  processName?: string;
+  windowTitle?: string;
+}
+
+export interface CaptureScreenshotListResult {
+  items: CaptureScreenshot[];
   nextCursor?: string;
 }
 

@@ -261,6 +261,9 @@ export function CaptureSettingsSection({
   const [intervalSeconds, setIntervalSeconds] = useState("15");
   const [retentionDays, setRetentionDays] = useState("14");
   const [excludePatterns, setExcludePatterns] = useState("");
+  const [screenshotsEnabled, setScreenshotsEnabled] = useState(false);
+  const [screenshotIntervalSeconds, setScreenshotIntervalSeconds] = useState("300");
+  const [screenshotRetentionDays, setScreenshotRetentionDays] = useState("7");
   const captureFormInitializedRef = useRef(false);
 
   function applyCaptureState(next: CaptureDaemonState, options: { syncForm?: boolean } = {}): void {
@@ -269,6 +272,9 @@ export function CaptureSettingsSection({
     setIntervalSeconds(String(next.config.intervalSeconds));
     setRetentionDays(String(next.config.retentionDays));
     setExcludePatterns(next.config.excludePatterns.join("\n"));
+    setScreenshotsEnabled(next.config.screenshotsEnabled);
+    setScreenshotIntervalSeconds(String(next.config.screenshotIntervalSeconds));
+    setScreenshotRetentionDays(String(next.config.screenshotRetentionDays));
     captureFormInitializedRef.current = true;
   }
 
@@ -341,12 +347,22 @@ export function CaptureSettingsSection({
   async function saveCaptureConfig(): Promise<void> {
     const nextInterval = Number(intervalSeconds);
     const nextRetention = Number(retentionDays);
+    const nextScreenshotInterval = Number(screenshotIntervalSeconds);
+    const nextScreenshotRetention = Number(screenshotRetentionDays);
     if (!Number.isInteger(nextInterval) || nextInterval < 5 || nextInterval > 300) {
       setCaptureMessage("Interval must be a whole number from 5 to 300 seconds.");
       return;
     }
     if (!Number.isInteger(nextRetention) || nextRetention < 1 || nextRetention > 90) {
       setCaptureMessage("Retention must be a whole number from 1 to 90 days.");
+      return;
+    }
+    if (!Number.isInteger(nextScreenshotInterval) || nextScreenshotInterval < 60 || nextScreenshotInterval > 3600) {
+      setCaptureMessage("Screenshot interval must be a whole number from 60 to 3600 seconds.");
+      return;
+    }
+    if (!Number.isInteger(nextScreenshotRetention) || nextScreenshotRetention < 1 || nextScreenshotRetention > 90) {
+      setCaptureMessage("Screenshot retention must be a whole number from 1 to 90 days.");
       return;
     }
 
@@ -356,7 +372,10 @@ export function CaptureSettingsSection({
       const next = await api.updateCaptureConfig({
         intervalSeconds: nextInterval,
         retentionDays: nextRetention,
-        excludePatterns: splitCaptureExcludePatterns(excludePatterns)
+        excludePatterns: splitCaptureExcludePatterns(excludePatterns),
+        screenshotsEnabled,
+        screenshotIntervalSeconds: nextScreenshotInterval,
+        screenshotRetentionDays: nextScreenshotRetention
       });
       applyCaptureState(next);
       setCaptureMessage("Capture settings saved.");
@@ -477,6 +496,25 @@ export function CaptureSettingsSection({
             rows={4}
             placeholder="One regular expression per line"
           />
+        </label>
+        <label className="account-capture-screenshot-toggle">
+          <span>Screenshots</span>
+          <input
+            aria-label="Enable screenshots"
+            type="checkbox"
+            checked={screenshotsEnabled}
+            onChange={(event) => setScreenshotsEnabled(event.target.checked)}
+            disabled={controlsDisabled}
+          />
+          <small>Screenshots are stored locally only and never uploaded. This opt-in is independent from Capture.</small>
+        </label>
+        <label>
+          <span>Screenshot Interval Seconds</span>
+          <input aria-label="Screenshot interval seconds" type="number" min="60" max="3600" step="1" value={screenshotIntervalSeconds} onChange={(event) => setScreenshotIntervalSeconds(event.target.value)} disabled={controlsDisabled} />
+        </label>
+        <label>
+          <span>Screenshot Retention Days</span>
+          <input aria-label="Screenshot retention days" type="number" min="1" max="90" step="1" value={screenshotRetentionDays} onChange={(event) => setScreenshotRetentionDays(event.target.value)} disabled={controlsDisabled} />
         </label>
         <div className="account-capture-save-row">
           <button type="submit" disabled={controlsDisabled}>

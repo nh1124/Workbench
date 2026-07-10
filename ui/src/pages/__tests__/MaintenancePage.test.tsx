@@ -154,6 +154,7 @@ describe("MaintenancePage", () => {
         published: false
       }]
     });
+    vi.spyOn(localDaemonApi, "listCaptureScreenshots").mockResolvedValue({ items: [] });
     vi.spyOn(localDaemonApi, "publishCaptureSummary").mockResolvedValue({
       summaryDate: "2026-07-09",
       generatedAt: "2026-07-09T18:00:00.000Z",
@@ -172,6 +173,31 @@ describe("MaintenancePage", () => {
     await waitFor(() => expect(localDaemonApi.publishCaptureSummary).toHaveBeenCalledWith("2026-07-09"));
     expect(await screen.findByText("Published")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Update Note" })).toBeTruthy();
+  });
+
+  it("lists local screenshots and opens the preview", async () => {
+    window.__TAURI_INTERNALS__ = { invoke: vi.fn().mockResolvedValue(undefined) };
+    vi.spyOn(localDaemonApi, "listCaptureSummaries").mockResolvedValue({ items: [] });
+    vi.spyOn(localDaemonApi, "listCaptureScreenshots").mockResolvedValue({ items: [{ id: 42, capturedAt: "2026-07-09T10:20:30.000Z", processName: "Code" }] });
+    vi.spyOn(localDaemonApi, "captureScreenshotFileUrl").mockReturnValue("http://127.0.0.1:35780/capture/screenshots/42/file");
+
+    renderPage("/analyser?tab=activity");
+
+    const thumbnail = await screen.findByRole("img", { name: /Screenshot captured at/ });
+    expect(thumbnail.getAttribute("src")).toContain("/capture/screenshots/42/file");
+    expect(screen.getByText(/Code/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Open screenshot at/ }));
+    expect(screen.getByRole("dialog", { name: "Screenshot preview" })).toBeTruthy();
+  });
+
+  it("shows the screenshot empty state", async () => {
+    window.__TAURI_INTERNALS__ = { invoke: vi.fn().mockResolvedValue(undefined) };
+    vi.spyOn(localDaemonApi, "listCaptureSummaries").mockResolvedValue({ items: [] });
+    vi.spyOn(localDaemonApi, "listCaptureScreenshots").mockResolvedValue({ items: [] });
+
+    renderPage("/analyser?tab=activity");
+
+    expect(await screen.findByRole("heading", { name: "No screenshots" })).toBeTruthy();
   });
 
   it("shows the all-clear empty state when no queue items are waiting", async () => {

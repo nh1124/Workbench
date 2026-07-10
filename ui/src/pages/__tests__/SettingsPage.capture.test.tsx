@@ -10,6 +10,9 @@ function captureState(overrides: Partial<CaptureDaemonState> = {}): CaptureDaemo
     dbPath: "C:\\Users\\dev\\AppData\\Local\\Workbench\\capture.sqlite",
     config: {
       enabled: false,
+      screenshotsEnabled: false,
+      screenshotIntervalSeconds: 300,
+      screenshotRetentionDays: 7,
       intervalSeconds: 15,
       retentionDays: 14,
       excludePatterns: []
@@ -87,13 +90,19 @@ describe("CaptureSettingsSection", () => {
     fireEvent.change(screen.getByLabelText("Capture exclude patterns"), {
       target: { value: "Private App\n^Secret" }
     });
+    fireEvent.click(screen.getByLabelText("Enable screenshots"));
+    fireEvent.change(screen.getByLabelText("Screenshot interval seconds"), { target: { value: "600" } });
+    fireEvent.change(screen.getByLabelText("Screenshot retention days"), { target: { value: "10" } });
     fireEvent.click(screen.getByRole("button", { name: "Save capture settings" }));
 
     await waitFor(() => {
       expect(api.updateCaptureConfig).toHaveBeenCalledWith({
         intervalSeconds: 30,
         retentionDays: 21,
-        excludePatterns: ["Private App", "^Secret"]
+        excludePatterns: ["Private App", "^Secret"],
+        screenshotsEnabled: true,
+        screenshotIntervalSeconds: 600,
+        screenshotRetentionDays: 10
       });
     });
   });

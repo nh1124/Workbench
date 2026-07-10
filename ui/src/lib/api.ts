@@ -36,6 +36,7 @@ import type {
   CaptureSummaryListResult,
   CaptureSummaryRecord,
   CaptureSummaryResult,
+  CaptureScreenshotListResult,
   IntegrationManifest,
   LocalClientAuditEventRecord,
   LocalClientRecord,
@@ -1950,6 +1951,14 @@ export const localDaemonApi = {
         body: JSON.stringify({ target: "note" })
       }
     ),
+  listCaptureScreenshots: (options: { date: string; limit?: number; cursor?: string }): Promise<CaptureScreenshotListResult> => {
+    const params = new URLSearchParams({ date: options.date });
+    if (options.limit) params.set("limit", String(options.limit));
+    if (options.cursor) params.set("cursor", options.cursor);
+    return requestLocalDaemonJson<CaptureScreenshotListResult>(`/capture/screenshots?${params.toString()}`);
+  },
+  captureScreenshotFileUrl: (id: number): string =>
+    `${localDaemonBaseUrl()}/capture/screenshots/${encodeURIComponent(String(id))}/file`,
   requestRescan: (): Promise<{ scheduled: boolean; status: LocalDaemonStatus }> =>
     requestLocalDaemonJson<{ scheduled: boolean; status: LocalDaemonStatus }>("/api/sync/rescan", {
       method: "POST"

@@ -4,6 +4,7 @@ import { coreApi, isTauriNativeRuntime, localDaemonApi, maintenanceApi, notesApi
 import { formatDateTime } from "../lib/format";
 import type {
   CaptureSummaryRecord,
+  CaptureScreenshot,
   MaintenanceQueueItem,
   MaintenanceQueueKind,
   MaintenanceQueueReason,
@@ -116,6 +117,18 @@ function mergeCaptureSummaries(existing: CaptureSummaryRecord[], incoming: Captu
   return [...byDate.values()].sort((left, right) => right.summaryDate.localeCompare(left.summaryDate));
 }
 
+function localDateString(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function screenshotTime(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
 function resourceLabel(resource: MaintenanceUsageSummary["topResources"][number]): string {
   return `${resource.sourceService}/${resource.resourceType}/${resource.resourceId}`;
 }
@@ -133,6 +146,11 @@ function ActivityTab() {
   const [publishingDate, setPublishingDate] = useState<string>();
   const [summaryError, setSummaryError] = useState<string>();
   const [usageError, setUsageError] = useState<string>();
+  const [screenshots, setScreenshots] = useState<CaptureScreenshot[]>([]);
+  const [screenshotsLoading, setScreenshotsLoading] = useState(false);
+  const [screenshotsError, setScreenshotsError] = useState<string>();
+  const [expandedScreenshot, setExpandedScreenshot] = useState<CaptureScreenshot>();
+  const screenshotDate = selectedDate ?? localDateString();
 
   const loadUsageSummary = async () => {
     try {
@@ -168,6 +186,25 @@ function ActivityTab() {
       void loadSummaries();
     }
   }, [nativeRuntimeAvailable]);
+
+  useEffect(() => {
+    if (!nativeRuntimeAvailable) return;
+    let cancelled = false;
+    setScreenshotsLoading(true);
+    setScreenshots([]);
+    setScreenshotsError(undefined);
+    void localDaemonApi.listCaptureScreenshots({ date: screenshotDate }).then((result) => {
+      if (!cancelled) setScreenshots(result.items);
+    }).catch((error: unknown) => {
+      if (!cancelled) {
+        setScreenshots([]);
+        setScreenshotsError(error instanceof Error ? error.message : "Screenshots are unavailable.");
+      }
+    }).finally(() => {
+      if (!cancelled) setScreenshotsLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [nativeRuntimeAvailable, screenshotDate]);
 
   const openSummary = async (summaryDate: string) => {
     if (!nativeRuntimeAvailable) return;
@@ -312,6 +349,37 @@ function ActivityTab() {
                 ) : null}
                 {!detailLoading && !selectedSummary ? <p className="maintenance-muted">Select a daily summary to read it.</p> : null}
               </aside>
+            </div>
+          ) : null}
+
+          <div className="activity-section-header activity-screenshots-header">
+            <div>
+              <h2>Screenshots</h2>
+              <p>{screenshotDate} · Stored locally on this device.</p>
+            </div>
+          </div>
+          {screenshotsLoading ? <p className="maintenance-muted">Loading screenshots...</p> : null}
+          {screenshotsError ? <p className="maintenance-error" role="alert">{screenshotsError}</p> : null}
+          {!screenshotsLoading && !screenshotsError && screenshots.length === 0 ? (
+            <div className="activity-empty-card"><h2>No screenshots</h2><p>No local screenshots were captured for this date.</p></div>
+          ) : null}
+          {screenshots.length > 0 ? (
+            <div className="activity-screenshot-grid" aria-label={`Screenshots for ${screenshotDate}`}>
+              {screenshots.map((screenshot) => (
+                <button type="button" className="activity-screenshot-card" key={screenshot.id} onClick={() => setExpandedScreenshot(screenshot)} aria-label={`Open screenshot at ${screenshotTime(screenshot.capturedAt)}`}>
+                  <img src={localDaemonApi.captureScreenshotFileUrl(screenshot.id)} alt={`Screenshot captured at ${screenshotTime(screenshot.capturedAt)}`} loading="lazy" />
+                  <span><strong>{screenshotTime(screenshot.capturedAt)}</strong>{screenshot.processName ? ` · ${screenshot.processName}` : ""}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {expandedScreenshot ? (
+            <div className="activity-screenshot-lightbox" role="dialog" aria-modal="true" aria-label="Screenshot preview" onClick={() => setExpandedScreenshot(undefined)}>
+              <div className="activity-screenshot-lightbox-content" onClick={(event) => event.stopPropagation()}>
+                <button type="button" onClick={() => setExpandedScreenshot(undefined)} aria-label="Close screenshot preview">×</button>
+                <img src={localDaemonApi.captureScreenshotFileUrl(expandedScreenshot.id)} alt={`Screenshot captured at ${screenshotTime(expandedScreenshot.capturedAt)}`} />
+                <p>{screenshotTime(expandedScreenshot.capturedAt)}{expandedScreenshot.processName ? ` · ${expandedScreenshot.processName}` : ""}</p>
+              </div>
             </div>
           ) : null}
         </>

@@ -1142,9 +1142,15 @@
 }
 
 .account-capture-patterns,
+.account-capture-screenshot-toggle,
 .account-capture-save-row {
   grid-column: 1 / -1;
 }
+
+.account-capture-screenshot-toggle { grid-template-columns: auto 1fr; align-items: center; }
+.account-capture-screenshot-toggle > span, .account-capture-screenshot-toggle > small { grid-column: 1 / -1; }
+.account-capture-screenshot-toggle input { width: 1rem; height: 1rem; }
+.account-capture-screenshot-toggle small { color: #94a3b8; font-size: 0.72rem; line-height: 1.45; }
 
 .account-capture-save-row {
   display: flex;
