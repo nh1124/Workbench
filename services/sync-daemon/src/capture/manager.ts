@@ -3,11 +3,13 @@ import type {
   CaptureConfigPatch,
   CaptureLogger,
   CaptureStatus,
+  CaptureSample,
   CaptureSummaryPublisher
 } from "./types.js";
 import { analyzeCaptureSummary } from "./summarizer.js";
 import { CaptureStorage, validateCaptureConfigPatch } from "./storage.js";
 import { CaptureError, CaptureSupervisor, type CaptureSupervisorOptions } from "./supervisor.js";
+import { ScreenshotScheduler, type ScreenshotSchedulerOptions } from "./screenshotScheduler.js";
 
 export type CaptureManagerOptions = {
   syncRoot: string;
@@ -17,6 +19,7 @@ export type CaptureManagerOptions = {
   logger?: CaptureLogger;
   publisher: CaptureSummaryPublisher;
   supervisorOptions?: Partial<Omit<CaptureSupervisorOptions, "onSample" | "logger" | "platform">>;
+  screenshotOptions?: Partial<Omit<ScreenshotSchedulerOptions, "logger" | "platform" | "screenshotsDir" | "getConfig" | "getLastForeground" | "onCaptured">>;
 };
 
 export type CaptureApiStatus = {
@@ -51,6 +54,8 @@ export class CaptureManager {
   private readonly supervisor: CaptureSupervisor;
   private readonly publisher: CaptureSummaryPublisher;
   private readonly logger?: CaptureLogger;
+  private readonly screenshotScheduler: ScreenshotScheduler;
+  private lastForeground?: CaptureSample;
 
   constructor(options: CaptureManagerOptions) {
     this.logger = options.logger;
@@ -66,13 +71,24 @@ export class CaptureManager {
       logger: options.logger,
       ...options.supervisorOptions,
       onSample: (sample) => {
+        this.lastForeground = sample;
         this.storage.insertSample(sample, this.storage.getConfig());
       }
+    });
+    this.screenshotScheduler = new ScreenshotScheduler({
+      platform: options.platform,
+      logger: options.logger,
+      ...options.screenshotOptions,
+      screenshotsDir: this.storage.screenshotsDir,
+      getConfig: () => this.storage.getConfig(),
+      getLastForeground: () => this.lastForeground,
+      onCaptured: (input) => { this.storage.insertScreenshot(input); }
     });
   }
 
   close(): void {
     this.supervisor.stop();
+    this.screenshotScheduler.stop();
     this.storage.close();
   }
 
@@ -81,6 +97,7 @@ export class CaptureManager {
     if (!config.enabled) return;
     try {
       await this.supervisor.start(config);
+      this.screenshotScheduler.start();
     } catch (error) {
       this.logger?.warn("[capture] configured collector did not start", {
         message: error instanceof Error ? error.message : String(error)
@@ -108,6 +125,7 @@ export class CaptureManager {
     const config = this.storage.setEnabled(true);
     try {
       await this.supervisor.start(config);
+      this.screenshotScheduler.start();
     } catch (error) {
       this.storage.setEnabled(false);
       throw error;
@@ -118,6 +136,7 @@ export class CaptureManager {
   async disable(): Promise<CaptureApiStatus> {
     this.storage.setEnabled(false);
     this.supervisor.stop();
+    this.screenshotScheduler.stop();
     return this.apiStatus();
   }
 
@@ -131,7 +150,22 @@ export class CaptureManager {
     )) {
       await this.supervisor.restart(next);
     }
+    if (previous.enabled !== next.enabled || previous.screenshotsEnabled !== next.screenshotsEnabled || previous.screenshotIntervalSeconds !== next.screenshotIntervalSeconds) {
+      this.screenshotScheduler.start();
+    }
     return this.apiStatus();
+  }
+
+  listScreenshots(options: { date?: string; limit?: number; cursor?: string } = {}): Record<string, unknown> {
+    if (options.date) validateSummaryDate(options.date);
+    return this.storage.listScreenshots(options);
+  }
+
+  screenshotFilePath(id: number): string {
+    if (!Number.isSafeInteger(id) || id <= 0) throw new CaptureError("Screenshot id is invalid.", 400, "CAPTURE_SCREENSHOT_ID_INVALID");
+    const filePath = this.storage.screenshotFilePath(id);
+    if (!filePath) throw new CaptureError("Screenshot not found.", 404, "CAPTURE_SCREENSHOT_NOT_FOUND");
+    return filePath;
   }
 
   // Generates and stores the summary markdown locally; the note is only

@@ -1,4 +1,4 @@
-import { mkdirSync, existsSync } from "node:fs";
+import { mkdirSync, existsSync, readdirSync, rmdirSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -8,6 +8,7 @@ import type {
   CaptureLogger,
   CaptureSample,
   CaptureSampleInput,
+  CaptureScreenshotRecord,
   CaptureStatus,
   CaptureSummaryMetrics,
   CaptureSummaryRecord
@@ -16,6 +17,8 @@ import type {
 export const DEFAULT_CAPTURE_INTERVAL_SECONDS = 15;
 export const DEFAULT_CAPTURE_RETENTION_DAYS = 14;
 export const DEFAULT_CAPTURE_IDLE_THRESHOLD_SECONDS = 300;
+export const DEFAULT_SCREENSHOT_INTERVAL_SECONDS = 300;
+export const DEFAULT_SCREENSHOT_RETENTION_DAYS = 7;
 export const DEFAULT_CAPTURE_CATEGORY_MAP: Record<string, string> = {
   msedge: "Browser",
   chrome: "Browser",
@@ -25,6 +28,9 @@ export const DEFAULT_CAPTURE_CATEGORY_MAP: Record<string, string> = {
 
 export const DEFAULT_CAPTURE_CONFIG: CaptureConfig = {
   enabled: false,
+  screenshotsEnabled: false,
+  screenshotIntervalSeconds: DEFAULT_SCREENSHOT_INTERVAL_SECONDS,
+  screenshotRetentionDays: DEFAULT_SCREENSHOT_RETENTION_DAYS,
   intervalSeconds: DEFAULT_CAPTURE_INTERVAL_SECONDS,
   retentionDays: DEFAULT_CAPTURE_RETENTION_DAYS,
   excludePatterns: [],
@@ -94,6 +100,11 @@ function normalizeConfig(value: unknown): CaptureConfig {
     : {};
   return {
     enabled: typeof record.enabled === "boolean" ? record.enabled : DEFAULT_CAPTURE_CONFIG.enabled,
+    screenshotsEnabled: typeof record.screenshotsEnabled === "boolean" ? record.screenshotsEnabled : false,
+    screenshotIntervalSeconds: isIntegerBetween(record.screenshotIntervalSeconds, 60, 3600)
+      ? record.screenshotIntervalSeconds : DEFAULT_SCREENSHOT_INTERVAL_SECONDS,
+    screenshotRetentionDays: isIntegerBetween(record.screenshotRetentionDays, 1, 90)
+      ? record.screenshotRetentionDays : DEFAULT_SCREENSHOT_RETENTION_DAYS,
     intervalSeconds: typeof record.intervalSeconds === "number" && Number.isInteger(record.intervalSeconds) && record.intervalSeconds > 0
       ? record.intervalSeconds
       : DEFAULT_CAPTURE_CONFIG.intervalSeconds,
@@ -109,6 +120,10 @@ function normalizeConfig(value: unknown): CaptureConfig {
       : DEFAULT_CAPTURE_CONFIG.idleThresholdSeconds,
     categoryMap: normalizeCategoryMap(record.categoryMap)
   };
+}
+
+function isIntegerBetween(value: unknown, min: number, max: number): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max;
 }
 
 function isValidIdleThreshold(value: unknown): value is number {
@@ -131,6 +146,18 @@ function normalizeCategoryMap(value: unknown): Record<string, string> {
 
 export function validateCaptureConfigPatch(patch: Record<string, unknown>): CaptureConfigPatch {
   const next: CaptureConfigPatch = {};
+  if (patch.screenshotsEnabled !== undefined) {
+    if (typeof patch.screenshotsEnabled !== "boolean") throw new Error("screenshotsEnabled must be a boolean.");
+    next.screenshotsEnabled = patch.screenshotsEnabled;
+  }
+  if (patch.screenshotIntervalSeconds !== undefined) {
+    if (!isIntegerBetween(patch.screenshotIntervalSeconds, 60, 3600)) throw new Error("screenshotIntervalSeconds must be an integer between 60 and 3600.");
+    next.screenshotIntervalSeconds = patch.screenshotIntervalSeconds;
+  }
+  if (patch.screenshotRetentionDays !== undefined) {
+    if (!isIntegerBetween(patch.screenshotRetentionDays, 1, 90)) throw new Error("screenshotRetentionDays must be an integer between 1 and 90.");
+    next.screenshotRetentionDays = patch.screenshotRetentionDays;
+  }
   if (patch.intervalSeconds !== undefined) {
     if (typeof patch.intervalSeconds !== "number" || !Number.isInteger(patch.intervalSeconds) || patch.intervalSeconds <= 0) {
       throw new Error("intervalSeconds must be a positive integer.");
@@ -276,6 +303,14 @@ export class CaptureStorage {
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS capture_screenshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        captured_at TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        process_name TEXT,
+        window_title TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_capture_screenshots_time ON capture_screenshots(captured_at DESC, id DESC);
     `);
     this.ensureSummaryMarkdownColumn();
     this.ensureSampleIdleColumn();
@@ -365,6 +400,56 @@ export class CaptureStorage {
     return true;
   }
 
+  get screenshotsDir(): string {
+    return join(dirname(this.dbPath), "screenshots");
+  }
+
+  insertScreenshot(input: { capturedAt: string; filePath: string; processName?: string; windowTitle?: string }): number {
+    const result = this.db.prepare(`INSERT INTO capture_screenshots (captured_at, file_path, process_name, window_title) VALUES (?, ?, ?, ?)`)
+      .run(input.capturedAt, resolve(input.filePath), input.processName ?? null, input.windowTitle ?? null);
+    return Number(result.lastInsertRowid);
+  }
+
+  listScreenshots(options: { date?: string; limit?: number; cursor?: string } = {}): { items: CaptureScreenshotRecord[]; nextCursor?: string } {
+    const limit = Math.max(1, Math.min(100, Math.floor(options.limit ?? 30)));
+    const cursor = options.cursor && /^\d+$/.test(options.cursor) ? Number(options.cursor) : undefined;
+    const clauses: string[] = [];
+    const params: Array<string | number> = [];
+    if (options.date) { clauses.push("captured_at >= ? AND captured_at < ?"); params.push(`${options.date}T00:00:00.000Z`, `${nextDateString(options.date)}T00:00:00.000Z`); }
+    if (cursor !== undefined) { clauses.push("id < ?"); params.push(cursor); }
+    const rows = this.db.prepare(`SELECT id, captured_at, process_name, window_title FROM capture_screenshots ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""} ORDER BY captured_at DESC, id DESC LIMIT ?`)
+      .all(...params, limit + 1) as Array<{ id: number; captured_at: string; process_name: string | null; window_title: string | null }>;
+    const page = rows.slice(0, limit);
+    return {
+      items: page.map((row) => ({ id: row.id, capturedAt: row.captured_at, processName: row.process_name ?? undefined, windowTitle: row.window_title ?? undefined })),
+      ...(rows.length > limit && page.length ? { nextCursor: String(page[page.length - 1].id) } : {})
+    };
+  }
+
+  screenshotFilePath(id: number): string | undefined {
+    const row = this.db.prepare("SELECT file_path FROM capture_screenshots WHERE id = ?").get(id) as { file_path?: string } | undefined;
+    if (!row?.file_path) return undefined;
+    const filePath = resolve(row.file_path);
+    return isPathInsideDirectory(this.screenshotsDir, filePath) && filePath !== resolve(this.screenshotsDir) ? filePath : undefined;
+  }
+
+  deleteScreenshotsOlderThan(retentionDays: number, now = new Date()): number {
+    const cutoff = new Date(now.getTime() - retentionDays * 86400000).toISOString();
+    const rows = this.db.prepare("SELECT file_path FROM capture_screenshots WHERE captured_at < ?").all(cutoff) as Array<{ file_path: string }>;
+    for (const row of rows) {
+      try { unlinkSync(row.file_path); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") this.logger?.warn("[capture] failed to delete screenshot", { filePath: row.file_path, message: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    const result = this.db.prepare("DELETE FROM capture_screenshots WHERE captured_at < ?").run(cutoff);
+    if (existsSync(this.screenshotsDir)) for (const entry of readdirSync(this.screenshotsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const directory = join(this.screenshotsDir, entry.name);
+      try { if (readdirSync(directory).length === 0) rmdirSync(directory); } catch (error) { this.logger?.warn("[capture] failed to remove empty screenshot directory", { directory, message: error instanceof Error ? error.message : String(error) }); }
+    }
+    return Number(result.changes ?? 0);
+  }
+
   listSamplesForDate(summaryDate: string): CaptureSample[] {
     const start = `${summaryDate}T00:00:00.000Z`;
     const end = `${nextDateString(summaryDate)}T00:00:00.000Z`;
@@ -386,6 +471,7 @@ export class CaptureStorage {
     const today = now.toISOString().slice(0, 10);
     if (this.getLastRetentionDate() === today) return 0;
     const removed = this.deleteSamplesOlderThan(config.retentionDays, now);
+    this.deleteScreenshotsOlderThan(config.screenshotRetentionDays, now);
     this.setLastRetentionDate(today);
     return removed;
   }

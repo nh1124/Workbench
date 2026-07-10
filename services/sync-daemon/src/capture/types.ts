@@ -1,5 +1,8 @@
 export type CaptureConfig = {
   enabled: boolean;
+  screenshotsEnabled: boolean;
+  screenshotIntervalSeconds: number;
+  screenshotRetentionDays: number;
   intervalSeconds: number;
   retentionDays: number;
   excludePatterns: string[];
@@ -9,12 +12,22 @@ export type CaptureConfig = {
 };
 
 export type CaptureConfigPatch = {
+  screenshotsEnabled?: boolean;
+  screenshotIntervalSeconds?: number;
+  screenshotRetentionDays?: number;
   intervalSeconds?: number;
   retentionDays?: number;
   excludePatterns?: string[];
   autoPublish?: boolean;
   idleThresholdSeconds?: number;
   categoryMap?: Record<string, string>;
+};
+
+export type CaptureScreenshotRecord = {
+  id: number;
+  capturedAt: string;
+  processName?: string;
+  windowTitle?: string;
 };
 
 export type CaptureSample = {

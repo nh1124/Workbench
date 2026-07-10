@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -7,11 +7,13 @@ import { describe, it } from "node:test";
 import {
   CaptureManager,
   CaptureStorage,
+  DEFAULT_CAPTURE_CONFIG,
   analyzeCaptureSummary,
   assertCaptureDbPathAllowed,
   buildCaptureSummaryMarkdown,
   decodeSamplerStdoutChunk,
   ingestSamplerLine,
+  shouldCaptureScreenshot,
   validateCaptureConfigPatch,
   type CaptureLogger,
   type CaptureSummaryPublisher
@@ -60,6 +62,9 @@ describe("capture storage and summarization", () => {
       try {
         const config = storage.setConfig({
           enabled: true,
+          screenshotsEnabled: false,
+          screenshotIntervalSeconds: 300,
+          screenshotRetentionDays: 7,
           intervalSeconds: 15,
           retentionDays: 14,
           excludePatterns: ["SecretApp", "["],
@@ -170,6 +175,59 @@ describe("capture storage and summarization", () => {
       buildCaptureSummaryMarkdown("2026-07-08", [], 15),
       "# Capture Daily Summary 2026-07-08\n\nNo samples recorded.\n"
     );
+  });
+
+  it("validates screenshot config defaults and patch bounds", async () => {
+    await withTempDir(async (dir) => {
+      const storage = new CaptureStorage(join(dir, "capture.sqlite"));
+      try {
+        assert.equal(storage.getConfig().screenshotsEnabled, false);
+        assert.equal(storage.getConfig().screenshotIntervalSeconds, 300);
+        assert.equal(storage.getConfig().screenshotRetentionDays, 7);
+      } finally { storage.close(); }
+    });
+    assert.deepEqual(validateCaptureConfigPatch({ screenshotsEnabled: true, screenshotIntervalSeconds: 60, screenshotRetentionDays: 90 }), {
+      screenshotsEnabled: true, screenshotIntervalSeconds: 60, screenshotRetentionDays: 90
+    });
+    assert.throws(() => validateCaptureConfigPatch({ screenshotIntervalSeconds: 59 }), /between 60 and 3600/);
+    assert.throws(() => validateCaptureConfigPatch({ screenshotRetentionDays: 91 }), /between 1 and 90/);
+  });
+
+  it("stores and lists screenshot metadata without exposing file paths", async () => {
+    await withTempDir(async (dir) => {
+      const storage = new CaptureStorage(join(dir, "capture.sqlite"));
+      try {
+        const id = storage.insertScreenshot({ capturedAt: "2026-07-10T10:20:30.000Z", filePath: join(storage.screenshotsDir, "2026-07-10", "102030.png"), processName: "Code", windowTitle: "Workbench" });
+        storage.insertScreenshot({ capturedAt: "2026-07-09T10:20:30.000Z", filePath: join(storage.screenshotsDir, "2026-07-09", "102030.png") });
+        const result = storage.listScreenshots({ date: "2026-07-10" });
+        assert.deepEqual(result.items, [{ id, capturedAt: "2026-07-10T10:20:30.000Z", processName: "Code", windowTitle: "Workbench" }]);
+        assert.equal("filePath" in result.items[0], false);
+      } finally { storage.close(); }
+    });
+  });
+
+  it("deletes retained screenshot rows, files, and empty date directories", async () => {
+    await withTempDir(async (dir) => {
+      const storage = new CaptureStorage(join(dir, "capture.sqlite"));
+      try {
+        const dayDir = join(storage.screenshotsDir, "2026-07-01");
+        const filePath = join(dayDir, "120000.png");
+        await mkdir(dayDir, { recursive: true });
+        await writeFile(filePath, "png");
+        storage.insertScreenshot({ capturedAt: "2026-07-01T12:00:00.000Z", filePath });
+        assert.equal(storage.deleteScreenshotsOlderThan(7, new Date("2026-07-10T12:00:00.000Z")), 1);
+        await assert.rejects(access(filePath));
+        await assert.rejects(access(dayDir));
+        assert.deepEqual(storage.listScreenshots().items, []);
+      } finally { storage.close(); }
+    });
+  });
+
+  it("skips screenshots without a foreground sample or while excluded", () => {
+    const config = { ...DEFAULT_CAPTURE_CONFIG, enabled: true, screenshotsEnabled: true, excludePatterns: ["Secret"] };
+    assert.equal(shouldCaptureScreenshot(config), false);
+    assert.equal(shouldCaptureScreenshot(config, { sampledAt: "2026-07-10T00:00:00.000Z", processName: "SecretApp", windowTitle: "private" }), false);
+    assert.equal(shouldCaptureScreenshot(config, { sampledAt: "2026-07-10T00:00:00.000Z", processName: "Code", windowTitle: "Workbench" }), true);
   });
 
   it("aggregates focus blocks, switches, categories, and idle time deterministically", () => {

@@ -6558,7 +6558,7 @@ function startStatusServer(state: DaemonState): void {
 
     if (url.pathname === "/capture/status" && req.method === "GET") {
       writeJson(res, state.capture?.apiStatus() ?? {
-        config: { enabled: false, intervalSeconds: 15, retentionDays: 14, excludePatterns: [], autoPublish: false },
+        config: { enabled: false, screenshotsEnabled: false, screenshotIntervalSeconds: 300, screenshotRetentionDays: 7, intervalSeconds: 15, retentionDays: 14, excludePatterns: [], autoPublish: false },
         status: { enabled: false, collectorAlive: false, sampleCount24h: 0 }
       });
       return;
@@ -6567,6 +6567,9 @@ function startStatusServer(state: DaemonState): void {
     if (url.pathname === "/capture/config" && req.method === "GET") {
       writeJson(res, state.capture?.config() ?? {
         enabled: false,
+        screenshotsEnabled: false,
+        screenshotIntervalSeconds: 300,
+        screenshotRetentionDays: 7,
         intervalSeconds: 15,
         retentionDays: 14,
         excludePatterns: [],
@@ -6628,6 +6631,32 @@ function startStatusServer(state: DaemonState): void {
       } catch (error) {
         writeCaptureError(res, error);
       }
+      return;
+    }
+
+    if (url.pathname === "/capture/screenshots" && req.method === "GET") {
+      try {
+        const limitRaw = url.searchParams.get("limit");
+        const limit = limitRaw ? Number(limitRaw) : undefined;
+        writeJson(res, state.capture?.listScreenshots({
+          date: url.searchParams.get("date") ?? undefined,
+          limit: Number.isFinite(limit) ? limit : undefined,
+          cursor: url.searchParams.get("cursor") ?? undefined
+        }) ?? { items: [] });
+      } catch (error) { writeCaptureError(res, error); }
+      return;
+    }
+
+    const screenshotFileMatch = url.pathname.match(/^\/capture\/screenshots\/(\d+)\/file$/);
+    if (screenshotFileMatch && req.method === "GET") {
+      try {
+        if (!state.capture) throw new CaptureError("Capture is unavailable.", 404, "CAPTURE_UNAVAILABLE");
+        const data = await fs.readFile(state.capture.screenshotFilePath(Number(screenshotFileMatch[1])));
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "image/png");
+        res.setHeader("Content-Length", data.length);
+        res.end(data);
+      } catch (error) { writeCaptureError(res, error); }
       return;
     }
 
