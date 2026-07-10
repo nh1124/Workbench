@@ -87,6 +87,11 @@ AC-D5 スクリーンショット(#4後半) — 別契約・Owner承認必須
 3. **スクリーンショット(AC-D5)**: 採用。CC-D8拡張の境界(ローカルのみ・opt-in・
    rolling削除・除外パターン尊重・OCRなし)を厳守する。
 
+> **AC-D6 は置き換え済み(2026-07-10)**: Ownerのcapture本来構想(複数PC集約 +
+> エージェント定期分析)により抽出トリガー(a)(b)が要件化されたため、
+> [workbench-insights-service-plan.md](workbench-insights-service-plan.md) を正本とする。
+> maintenance/analyser の Review 側を domain 残留とする判断は不変。
+
 ```text
 AC-D6 サービス構成(Owner相談への回答、2026-07-10決定)
 - maintenance/analyserは独立microserviceに**しない**(現時点)。
@@ -104,9 +109,9 @@ AC-D6 サービス構成(Owner相談への回答、2026-07-10決定)
 
 | ID | Status | Scope | Task |
 |---|---|---|---|
-| AN-1 | `[in-progress]` | ui | nav移動(TOOL) + 「Analyser」改称 + Review/Activityタブ構成 + /maintenanceリダイレクト |
-| AN-2 | `[in-progress]` | ui | ServicesへLocal Syncカード統合 + グリッドレイアウト修正(大画面) |
-| CV2-1 | `[in-progress]` | daemon/ui | daemon側完了(commit aace73c: summary_markdown保存 + autoPublish default OFF + summaries list/get/publish API)。**Codex worker停止のためroot直接実装**。残: UI(Activityタブ閲覧/Save to Notes) |
+| AN-1 | `[implemented]` | ui | nav移動(TOOL) + 「Analyser」改称 + Review/Activityタブ構成 + /maintenanceリダイレクト (commit 739536f) |
+| AN-2 | `[implemented]` | ui | ServicesへLocal Syncカード統合 + グリッドレイアウト修正(大画面) (commit 739536f) |
+| CV2-1 | `[implemented]` | daemon/ui | daemon側 aace73c(summary_markdown保存 + autoPublish default OFF + summaries list/get/publish API)、UI側 739536f(Activityタブ閲覧/Save to Notes)。build + 22 files/114 tests pass |
 | CV2-2 | `[in-progress]` | daemon | セッション化/集中ブロック/context switch/idle検知/カテゴリ分類のsummary v2 |
 | CV2-3 | `[in-progress]` | daemon/ui | スクリーンショット(AC-D5、承認時のみ) |
 | ACV-R | `[pending]` | root | 承認後: 実装指揮・レビュー・検証・commit・受入 |
