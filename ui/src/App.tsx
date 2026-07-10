@@ -3,7 +3,7 @@ import { Layout } from "./components/Layout";
 import { ArtifactsPage } from "./pages/ArtifactsPage";
 import { HomePage } from "./pages/HomePage";
 import { ImagesPage } from "./pages/ImagesPage";
-import { MaintenancePage } from "./pages/MaintenancePage";
+import { AnalyserPage } from "./pages/AnalyserPage";
 import { LoginPage } from "./pages/LoginPage";
 import { MindmapsPage } from "./pages/MindmapsPage";
 import { NotesPage } from "./pages/NotesPage";
@@ -26,7 +26,11 @@ function resolveStartPage(): string {
     }
 
     const parsed = JSON.parse(raw) as { startPage?: string };
-    const allowed = new Set(["/", "/projects", "/maintenance", "/tasks", "/notes", "/research", "/images", "/mindmaps", "/wbs", "/artifacts"]);
+    if (parsed.startPage === "/maintenance") {
+      return "/analyser";
+    }
+
+    const allowed = new Set(["/", "/projects", "/analyser", "/tasks", "/notes", "/research", "/images", "/mindmaps", "/wbs", "/artifacts"]);
     if (parsed.startPage && allowed.has(parsed.startPage)) {
       return parsed.startPage;
     }
@@ -56,7 +60,8 @@ export default function App() {
         <Route path="/" element={<Layout />}>
           <Route index element={startPage === "/" ? <HomePage /> : <Navigate to={startPage} replace />} />
           <Route path="projects" element={<ProjectsPage />} />
-          <Route path="maintenance" element={<MaintenancePage />} />
+          <Route path="analyser" element={<AnalyserPage />} />
+          <Route path="maintenance" element={<Navigate to="/analyser" replace />} />
           <Route path="tasks" element={<TasksPage />} />
           <Route path="notes" element={<NotesPage />} />
           <Route path="research" element={<ResearchPage />} />

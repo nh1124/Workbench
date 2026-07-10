@@ -33,6 +33,8 @@ import type {
   CaptureDaemonConfig,
   CaptureDaemonConfigPatch,
   CaptureDaemonState,
+  CaptureSummaryListResult,
+  CaptureSummaryRecord,
   CaptureSummaryResult,
   IntegrationManifest,
   LocalClientAuditEventRecord,
@@ -54,6 +56,7 @@ import type {
   MaintenanceQueueKind,
   MaintenanceQueueReason,
   MaintenanceQueueResult,
+  MaintenanceUsageSummary,
   Note,
   NoteProjectSummary,
   ProjectDefaultSelection,
@@ -1849,6 +1852,8 @@ export const coreApi = {
       method: "PUT",
       body: JSON.stringify(payload)
     }),
+  maintenanceUsageSummary: (): Promise<MaintenanceUsageSummary> =>
+    fetchJson<MaintenanceUsageSummary>(`${coreBaseUrl()}/api/maintenance/usage/summary`),
   listLocalClients: (): Promise<{ items: LocalClientRecord[] }> =>
     fetchJson(`${coreBaseUrl()}/api/local-clients`),
   listLocalClientAuditEvents: (
@@ -1926,6 +1931,25 @@ export const localDaemonApi = {
       method: "POST",
       body: JSON.stringify(date ? { date } : {})
     }),
+  listCaptureSummaries: (
+    options: { limit?: number; cursor?: string } = {}
+  ): Promise<CaptureSummaryListResult> => {
+    const params = new URLSearchParams();
+    if (options.limit) params.set("limit", String(options.limit));
+    if (options.cursor) params.set("cursor", options.cursor);
+    const query = params.toString();
+    return requestLocalDaemonJson<CaptureSummaryListResult>(`/capture/summaries${query ? `?${query}` : ""}`);
+  },
+  getCaptureSummary: (summaryDate: string): Promise<CaptureSummaryRecord> =>
+    requestLocalDaemonJson<CaptureSummaryRecord>(`/capture/summaries/${encodeURIComponent(summaryDate)}`),
+  publishCaptureSummary: (summaryDate: string): Promise<CaptureSummaryRecord & { action?: "create" | "update"; title?: string }> =>
+    requestLocalDaemonJson<CaptureSummaryRecord & { action?: "create" | "update"; title?: string }>(
+      `/capture/summaries/${encodeURIComponent(summaryDate)}/publish`,
+      {
+        method: "POST",
+        body: JSON.stringify({ target: "note" })
+      }
+    ),
   requestRescan: (): Promise<{ scheduled: boolean; status: LocalDaemonStatus }> =>
     requestLocalDaemonJson<{ scheduled: boolean; status: LocalDaemonStatus }>("/api/sync/rescan", {
       method: "POST"

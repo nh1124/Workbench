@@ -1,5 +1,5 @@
 ﻿import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useLocation } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import {
   coreApi,
   clearWorkbenchSession,
@@ -101,6 +101,25 @@ function InfoHint({ label }: { label: string }) {
     <span className="settings-info-icon" tabIndex={0} role="img" aria-label={label} title={label}>
       i
     </span>
+  );
+}
+
+export function LocalSyncServiceCard() {
+  return (
+    <article className="integration-card local-sync-card">
+      <header>
+        <div className="integration-card-main">
+          <div className="integration-card-icon" aria-hidden="true"><span>↔</span></div>
+          <div>
+            <div className="integration-card-title-row"><h4>Local Sync</h4></div>
+            <p>Connect the desktop daemon to keep your local Workbench workspace in sync.</p>
+          </div>
+        </div>
+      </header>
+      <div className="integration-card-actions">
+        <Link className="integration-expand-toggle" to="/settings?tab=account&section=sync-daemon">Configure</Link>
+      </div>
+    </article>
   );
 }
 
@@ -1416,6 +1435,7 @@ export function SettingsPage() {
 
             <div className="integration-list-surface">
               <div className="integration-list">
+                <LocalSyncServiceCard />
                 {filteredManifests.length === 0 ? (
                   <div className="integration-empty-state">
                     <p>No service manifests discovered for this category.</p>

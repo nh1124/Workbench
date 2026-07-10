@@ -71,7 +71,7 @@
 .settings-content {
   min-width: 0;
   width: 100%;
-  max-width: 1360px;
+  max-width: none;
 }
 
 .services-page-title {
@@ -206,9 +206,9 @@
 
 .integration-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 0.78rem;
-  align-items: start;
+  align-items: stretch;
 }
 
 .integration-card {
@@ -217,8 +217,10 @@
   background: linear-gradient(180deg, #111827 0%, #0f172a 100%);
   padding: 0.9rem 0.78rem;
   min-height: 96px;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 0.5rem;
+  height: 100%;
 }
 
 .integration-card header {
@@ -280,6 +282,18 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
+}
+
+.local-sync-card {
+  justify-content: space-between;
+}
+
+.local-sync-card header {
+  align-items: flex-start;
+}
+
+.local-sync-card .integration-card-actions {
+  margin-top: auto;
 }
 
 .integration-switch {

@@ -28,6 +28,44 @@
   line-height: 1.05;
 }
 
+.analyser-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.55rem;
+}
+
+.analyser-tabs {
+  display: inline-flex;
+  gap: 0.2rem;
+  padding: 0.2rem;
+  border: 1px solid rgba(71, 85, 105, 0.7);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.7);
+}
+
+.analyser-tab {
+  min-height: 1.9rem;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: #94a3b8;
+  padding: 0.3rem 0.65rem;
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.analyser-tab:hover {
+  color: #cbd5e1;
+  background: rgba(51, 65, 85, 0.5);
+}
+
+.analyser-tab.active {
+  border-color: rgba(103, 232, 249, 0.36);
+  background: rgba(8, 145, 178, 0.2);
+  color: #a5f3fc;
+}
+
 .maintenance-filter-bar {
   display: grid;
   grid-template-columns: 180px 220px minmax(220px, 1fr) auto;
@@ -360,6 +398,241 @@
   justify-content: center;
 }
 
+.analyser-activity {
+  display: grid;
+  gap: 0.78rem;
+  min-width: 0;
+}
+
+.activity-usage-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.activity-usage-card,
+.activity-empty-card,
+.activity-summary-detail,
+.activity-summary-row {
+  border: 1px solid rgba(51, 65, 85, 0.72);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(13, 22, 38, 0.88), rgba(8, 14, 27, 0.96));
+}
+
+.activity-usage-card {
+  display: grid;
+  align-content: start;
+  gap: 0.32rem;
+  min-height: 7.1rem;
+  padding: 0.72rem;
+}
+
+.activity-usage-card > span {
+  color: #8fa4c0;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.activity-usage-card > strong {
+  color: #e0f2fe;
+  font-size: 1.45rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-usage-card small {
+  color: #7f93b0;
+  font-size: 0.72rem;
+}
+
+.activity-usage-card ol {
+  display: grid;
+  gap: 0.22rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.activity-usage-card li {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: #cbd5e1;
+  font-size: 0.72rem;
+}
+
+.activity-usage-card li span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-usage-card li strong {
+  margin-left: auto;
+  color: #a5f3fc;
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.8rem;
+}
+
+.activity-section-header h2,
+.activity-empty-card h2,
+.activity-summary-detail h2 {
+  margin: 0;
+  color: #eef5ff;
+  font-size: 1.02rem;
+}
+
+.activity-section-header p,
+.activity-empty-card p,
+.activity-detail-heading p {
+  margin: 0.22rem 0 0;
+  color: #8fa4c0;
+  font-size: 0.8rem;
+}
+
+.activity-empty-card {
+  display: grid;
+  justify-items: start;
+  gap: 0.3rem;
+  padding: 1rem;
+}
+
+.activity-empty-card .maintenance-link-button {
+  margin-top: 0.28rem;
+}
+
+.activity-summary-layout {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.82fr) minmax(0, 1.18fr);
+  gap: 0.72rem;
+  align-items: start;
+}
+
+.activity-summary-list {
+  display: grid;
+  gap: 0.46rem;
+}
+
+.activity-summary-row {
+  display: flex;
+  align-items: stretch;
+  overflow: hidden;
+}
+
+.activity-summary-row.selected {
+  border-color: rgba(103, 232, 249, 0.62);
+}
+
+.activity-summary-select {
+  display: grid;
+  grid-template-columns: minmax(7.7rem, 1fr) auto;
+  align-items: center;
+  gap: 0.2rem 0.6rem;
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: #cbd5e1;
+  padding: 0.66rem 0.72rem;
+  text-align: left;
+}
+
+.activity-summary-select:hover {
+  background: rgba(30, 41, 59, 0.42);
+}
+
+.activity-summary-select > strong {
+  color: #e2e8f0;
+  font-size: 0.86rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-summary-select > span {
+  color: #8fa4c0;
+  font-size: 0.71rem;
+}
+
+.activity-published-badge {
+  grid-column: 2;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: 999px;
+  color: #fde68a !important;
+  background: rgba(113, 63, 18, 0.26);
+  padding: 0.1rem 0.4rem;
+  font-size: 0.62rem !important;
+  font-weight: 800;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.activity-published-badge.published {
+  border-color: rgba(16, 185, 129, 0.38);
+  color: #86efac !important;
+  background: rgba(5, 46, 22, 0.48);
+}
+
+.activity-save-button {
+  align-self: center;
+  flex: 0 0 auto;
+  margin: 0.5rem 0.6rem 0.5rem 0;
+  border: 1px solid rgba(103, 232, 249, 0.35);
+  border-radius: 8px;
+  background: rgba(8, 145, 178, 0.18);
+  color: #a5f3fc;
+  min-height: 1.9rem;
+  padding: 0.32rem 0.55rem;
+  font-size: 0.7rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.activity-save-button:hover:not(:disabled) {
+  border-color: rgba(103, 232, 249, 0.62);
+  background: rgba(8, 145, 178, 0.3);
+}
+
+.activity-save-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.activity-summary-detail {
+  min-height: 15rem;
+  padding: 0.8rem;
+}
+
+.activity-detail-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin-bottom: 0.65rem;
+}
+
+.activity-summary-detail pre {
+  max-height: 34rem;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid rgba(51, 65, 85, 0.6);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.64);
+  color: #dbeafe;
+  padding: 0.7rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
 @media (max-width: 920px) {
   .maintenance-filter-bar {
     grid-template-columns: 1fr;
@@ -371,5 +644,44 @@
 
   .maintenance-item-top {
     display: grid;
+  }
+
+  .activity-usage-grid,
+  .activity-summary-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 620px) {
+  .maintenance-header,
+  .analyser-header-actions,
+  .activity-section-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .analyser-header-actions {
+    justify-content: stretch;
+  }
+
+  .analyser-tabs {
+    width: 100%;
+  }
+
+  .analyser-tab {
+    flex: 1;
+  }
+
+  .activity-summary-row {
+    align-items: stretch;
+  }
+
+  .activity-summary-select {
+    grid-template-columns: 1fr;
+  }
+
+  .activity-published-badge {
+    grid-column: 1;
+    justify-self: start;
   }
 }

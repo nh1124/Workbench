@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { Link } from "react-router-dom";
-import { maintenanceApi, notesApi, projectsApi } from "../lib/api";
+import { Link, useSearchParams } from "react-router-dom";
+import { coreApi, isTauriNativeRuntime, localDaemonApi, maintenanceApi, notesApi, projectsApi } from "../lib/api";
 import { formatDateTime } from "../lib/format";
 import type {
+  CaptureSummaryRecord,
   MaintenanceQueueItem,
   MaintenanceQueueKind,
   MaintenanceQueueReason,
   MaintenanceQueueResult,
+  MaintenanceUsageSummary,
   ProjectMemoryKind
 } from "../types/models";
 import "./MaintenancePage.css";
@@ -25,6 +27,7 @@ const QUEUE_REASONS: MaintenanceQueueReason[] = [
 ];
 const MEMORY_KINDS: ProjectMemoryKind[] = ["decision", "fact", "preference", "pitfall", "observation"];
 const PAGE_SIZE = 20;
+const CAPTURE_SUMMARY_PAGE_SIZE = 20;
 
 type FilterState = {
   kind: MaintenanceQueueKind | "";
@@ -105,7 +108,221 @@ function EmptyStateIcon() {
   );
 }
 
-export function MaintenancePage() {
+function mergeCaptureSummaries(existing: CaptureSummaryRecord[], incoming: CaptureSummaryRecord[]): CaptureSummaryRecord[] {
+  const byDate = new Map(existing.map((summary) => [summary.summaryDate, summary]));
+  for (const summary of incoming) {
+    byDate.set(summary.summaryDate, { ...byDate.get(summary.summaryDate), ...summary });
+  }
+  return [...byDate.values()].sort((left, right) => right.summaryDate.localeCompare(left.summaryDate));
+}
+
+function resourceLabel(resource: MaintenanceUsageSummary["topResources"][number]): string {
+  return `${resource.sourceService}/${resource.resourceType}/${resource.resourceId}`;
+}
+
+function ActivityTab() {
+  const nativeRuntimeAvailable = isTauriNativeRuntime();
+  const [summaries, setSummaries] = useState<CaptureSummaryRecord[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | undefined>();
+  const [selectedDate, setSelectedDate] = useState<string>();
+  const [selectedSummary, setSelectedSummary] = useState<CaptureSummaryRecord>();
+  const [usageSummary, setUsageSummary] = useState<MaintenanceUsageSummary>();
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [publishingDate, setPublishingDate] = useState<string>();
+  const [summaryError, setSummaryError] = useState<string>();
+  const [usageError, setUsageError] = useState<string>();
+
+  const loadUsageSummary = async () => {
+    try {
+      setUsageError(undefined);
+      setUsageSummary(await coreApi.maintenanceUsageSummary());
+    } catch (error) {
+      setUsageError(error instanceof Error ? error.message : "Usage insights are unavailable.");
+    }
+  };
+
+  const loadSummaries = async (cursor?: string) => {
+    if (!nativeRuntimeAvailable) return;
+    const isLoadingMore = Boolean(cursor);
+    if (isLoadingMore) setLoadingMore(true);
+    else setSummaryLoading(true);
+    setSummaryError(undefined);
+
+    try {
+      const result = await localDaemonApi.listCaptureSummaries({ limit: CAPTURE_SUMMARY_PAGE_SIZE, cursor });
+      setSummaries((current) => (isLoadingMore ? mergeCaptureSummaries(current, result.items) : mergeCaptureSummaries([], result.items)));
+      setNextCursor(result.nextCursor);
+    } catch (error) {
+      setSummaryError(error instanceof Error ? error.message : "Capture summaries are unavailable.");
+    } finally {
+      if (isLoadingMore) setLoadingMore(false);
+      else setSummaryLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadUsageSummary();
+    if (nativeRuntimeAvailable) {
+      void loadSummaries();
+    }
+  }, [nativeRuntimeAvailable]);
+
+  const openSummary = async (summaryDate: string) => {
+    if (!nativeRuntimeAvailable) return;
+    setSelectedDate(summaryDate);
+    setDetailLoading(true);
+    setSummaryError(undefined);
+    try {
+      setSelectedSummary(await localDaemonApi.getCaptureSummary(summaryDate));
+    } catch (error) {
+      setSelectedSummary(undefined);
+      setSummaryError(error instanceof Error ? error.message : "Capture summary could not be loaded.");
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const publishSummary = async (summaryDate: string) => {
+    if (!nativeRuntimeAvailable) return;
+    setPublishingDate(summaryDate);
+    setSummaryError(undefined);
+    try {
+      const published = await localDaemonApi.publishCaptureSummary(summaryDate);
+      const updated = { ...published, published: true };
+      setSummaries((current) => mergeCaptureSummaries(current, [updated]));
+      setSelectedSummary((current) => current?.summaryDate === summaryDate ? { ...current, ...updated } : current);
+    } catch (error) {
+      setSummaryError(error instanceof Error ? error.message : "Capture summary could not be saved to Notes.");
+    } finally {
+      setPublishingDate(undefined);
+    }
+  };
+
+  const zeroHitQueries = usageSummary?.zeroHitQueries.slice(0, 3) ?? [];
+  const topResources = usageSummary?.topResources.slice(0, 3) ?? [];
+
+  return (
+    <section className="analyser-activity" aria-label="Activity">
+      <div className="activity-usage-grid" aria-label="Usage insights">
+        <article className="activity-usage-card">
+          <span>Truncation events</span>
+          <strong>{usageSummary?.truncation.count ?? "—"}</strong>
+          <small>{usageSummary ? "in the recent usage window" : usageError ? "Core usage is unavailable" : "Loading usage insights..."}</small>
+        </article>
+        <article className="activity-usage-card">
+          <span>Zero-hit queries</span>
+          {zeroHitQueries.length > 0 ? (
+            <ol>
+              {zeroHitQueries.map((query) => <li key={query.queryText}><span>{query.queryText}</span><strong>{query.count}</strong></li>)}
+            </ol>
+          ) : <small>{usageSummary ? "No zero-hit queries recorded." : "—"}</small>}
+        </article>
+        <article className="activity-usage-card">
+          <span>Top resources</span>
+          {topResources.length > 0 ? (
+            <ol>
+              {topResources.map((resource) => <li key={`${resource.sourceService}:${resource.resourceType}:${resource.resourceId}`}><span>{resourceLabel(resource)}</span><strong>{resource.count}</strong></li>)}
+            </ol>
+          ) : <small>{usageSummary ? "No resource reads recorded." : "—"}</small>}
+        </article>
+      </div>
+
+      {!nativeRuntimeAvailable ? (
+        <div className="activity-empty-card">
+          <h2>Activity is available in Workbench desktop</h2>
+          <p>Connect the local daemon in Settings to review locally captured daily summaries.</p>
+          <Link className="maintenance-link-button" to="/settings?tab=account&section=sync-daemon">Open Local Sync settings</Link>
+        </div>
+      ) : (
+        <>
+          <div className="activity-section-header">
+            <div>
+              <h2>Capture summaries</h2>
+              <p>Daily local activity summaries stored by the desktop capture daemon.</p>
+            </div>
+            <button type="button" className="ghost-button" onClick={() => void loadSummaries()} disabled={summaryLoading}>
+              {summaryLoading ? "Refreshing..." : "Refresh"}
+            </button>
+          </div>
+
+          {summaryError ? <p className="maintenance-error" role="alert">{summaryError}</p> : null}
+          {summaryLoading ? <p className="maintenance-muted">Loading capture summaries...</p> : null}
+
+          {!summaryLoading && !summaryError && summaries.length === 0 ? (
+            <div className="activity-empty-card">
+              <h2>No capture summaries yet</h2>
+              <p>Daily summaries will appear here after Capture has collected local activity.</p>
+            </div>
+          ) : null}
+
+          {summaries.length > 0 ? (
+            <div className="activity-summary-layout">
+              <div className="activity-summary-list">
+                {summaries.map((summary) => (
+                  <article className={selectedDate === summary.summaryDate ? "activity-summary-row selected" : "activity-summary-row"} key={summary.summaryDate}>
+                    <button
+                      type="button"
+                      className="activity-summary-select"
+                      aria-label={`Open summary ${summary.summaryDate}`}
+                      aria-pressed={selectedDate === summary.summaryDate}
+                      onClick={() => void openSummary(summary.summaryDate)}
+                    >
+                      <strong>{summary.summaryDate}</strong>
+                      <span>{summary.sampleCount} sample{summary.sampleCount === 1 ? "" : "s"}</span>
+                      <span className={summary.published ? "activity-published-badge published" : "activity-published-badge"}>
+                        {summary.published ? "Published" : "Not published"}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="activity-save-button"
+                      disabled={publishingDate === summary.summaryDate}
+                      onClick={() => void publishSummary(summary.summaryDate)}
+                    >
+                      {publishingDate === summary.summaryDate ? "Saving..." : summary.published ? "Update Note" : "Save to Notes"}
+                    </button>
+                  </article>
+                ))}
+                {nextCursor ? (
+                  <div className="maintenance-load-more">
+                    <button type="button" onClick={() => void loadSummaries(nextCursor)} disabled={loadingMore}>
+                      {loadingMore ? "Loading..." : "Load more"}
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+
+              <aside className="activity-summary-detail" aria-live="polite">
+                {detailLoading ? <p className="maintenance-muted">Loading summary...</p> : null}
+                {!detailLoading && selectedSummary ? (
+                  <>
+                    <div className="activity-detail-heading">
+                      <div>
+                        <h2>{selectedSummary.summaryDate}</h2>
+                        <p>{selectedSummary.sampleCount} sample{selectedSummary.sampleCount === 1 ? "" : "s"}</p>
+                      </div>
+                      <span className={selectedSummary.published ? "activity-published-badge published" : "activity-published-badge"}>
+                        {selectedSummary.published ? "Published" : "Not published"}
+                      </span>
+                    </div>
+                    <pre>{selectedSummary.summaryMarkdown || "No summary text is available."}</pre>
+                  </>
+                ) : null}
+                {!detailLoading && !selectedSummary ? <p className="maintenance-muted">Select a daily summary to read it.</p> : null}
+              </aside>
+            </div>
+          ) : null}
+        </>
+      )}
+    </section>
+  );
+}
+
+export function AnalyserPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = searchParams.get("tab") === "activity" ? "activity" : "review";
   const [filters, setFilters] = useState<FilterState>(initialFilters);
   const [appliedFilters, setAppliedFilters] = useState<FilterState>(initialFilters);
   const [items, setItems] = useState<MaintenanceQueueItem[]>([]);
@@ -145,8 +362,16 @@ export function MaintenancePage() {
   };
 
   useEffect(() => {
+    if (activeTab !== "review") return;
     void load();
-  }, [appliedFilters]);
+  }, [activeTab, appliedFilters]);
+
+  const selectTab = (tab: "review" | "activity") => {
+    const next = new URLSearchParams(searchParams);
+    if (tab === "activity") next.set("tab", "activity");
+    else next.delete("tab");
+    setSearchParams(next);
+  };
 
   const visibleTotals = useMemo(
     () => QUEUE_REASONS.filter((reason) => (totals.byReason[reason] ?? 0) > 0),
@@ -357,11 +582,37 @@ export function MaintenancePage() {
     <div className="maintenance-page">
       <header className="maintenance-header">
         <div>
-          <h1>Maintenance</h1>
+          <h1>Analyser</h1>
         </div>
-        <button type="button" className="ghost-button" onClick={() => void load()} disabled={isLoading}>Refresh</button>
+        <div className="analyser-header-actions">
+          <div className="analyser-tabs" role="tablist" aria-label="Analyser views">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "review"}
+              className={activeTab === "review" ? "analyser-tab active" : "analyser-tab"}
+              onClick={() => selectTab("review")}
+            >
+              Review
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "activity"}
+              className={activeTab === "activity" ? "analyser-tab active" : "analyser-tab"}
+              onClick={() => selectTab("activity")}
+            >
+              Activity
+            </button>
+          </div>
+          {activeTab === "review" ? (
+            <button type="button" className="ghost-button" onClick={() => void load()} disabled={isLoading}>Refresh</button>
+          ) : null}
+        </div>
       </header>
 
+      {activeTab === "review" ? (
+        <>
       <form className="maintenance-filter-bar" onSubmit={applyFilters}>
         <label>
           <span>Kind</span>
@@ -470,6 +721,11 @@ export function MaintenancePage() {
           </button>
         </div>
       ) : null}
+        </>
+      ) : <ActivityTab />}
     </div>
   );
 }
+
+// Keep the legacy export for embedded callers while the visible product surface is Analyser.
+export const MaintenancePage = AnalyserPage;

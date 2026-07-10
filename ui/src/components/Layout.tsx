@@ -37,7 +37,7 @@ const navIconMap: Record<string, ReactNode> = {
       <path d="M8 8h8M8 12h8M8 16h5" />
     </svg>
   ),
-  Maintenance: (
+  Analyser: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
       <path d="M5 5h14v14H5z" />
       <path d="M8 9h8M8 13h5" />
@@ -100,11 +100,11 @@ const sidebarNavSections: Array<{ label?: string; items: NavItem[] }> = [
   },
   {
     label: "Project",
-    items: navItems.filter((item) => ["Project", "Maintenance", "Tasks", "Notes", "Artifacts"].includes(item.label))
+    items: navItems.filter((item) => ["Project", "Tasks", "Notes", "Artifacts"].includes(item.label))
   },
   {
     label: "Tool",
-    items: navItems.filter((item) => ["Research", "Images", "Mindmap", "WBS"].includes(item.label))
+    items: navItems.filter((item) => ["Analyser", "Research", "Images", "Mindmap", "WBS"].includes(item.label))
   }
 ];
 

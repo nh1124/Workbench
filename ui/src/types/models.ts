@@ -868,8 +868,38 @@ export interface CaptureSummaryResult {
   noteResourceId?: string;
   generatedAt: string;
   sampleCount: number;
-  action: "create" | "update";
+  action: "create" | "update" | "saved";
   title: string;
+}
+
+export interface CaptureSummaryRecord {
+  summaryDate: string;
+  noteResourceId?: string;
+  generatedAt: string;
+  sampleCount: number;
+  published: boolean;
+  summaryMarkdown?: string;
+}
+
+export interface CaptureSummaryListResult {
+  items: CaptureSummaryRecord[];
+  nextCursor?: string;
+}
+
+export interface MaintenanceUsageSummary {
+  since: string;
+  until: string;
+  truncation: {
+    count: number;
+    bySection: Array<{ section: string; count: number }>;
+  };
+  zeroHitQueries: Array<{ queryText: string; count: number }>;
+  topResources: Array<{
+    sourceService: string;
+    resourceType: string;
+    resourceId: string;
+    count: number;
+  }>;
 }
 
 export interface LocalDaemonStatus {
