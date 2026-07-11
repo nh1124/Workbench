@@ -92,7 +92,7 @@ IS-D6 UI(Activityタブのサーバ集約ビュー)
 
 | ID | Status | Scope | Task |
 |---|---|---|---|
-| IS-1 | `[pending]` | services/insights, core | service scaffold + DB migration + ingest/query API + Core routing |
+| IS-1 | `[implemented]` | services/insights, core | service scaffold + own DB + ingest/query API + Core routing + infra配線 (commit 7382826)。残: 実DB統合疎通は受入時(start_allでinsights-db自動起動) |
 | IS-2 | `[pending]` | daemon | uploader(machine登録 / upload_cursor / at-least-once batch push / uploadEnabled設定) |
 | IS-3 | `[pending]` | core | MCP tools insights.*(machines/activity/summaries/derived) |
 | IS-4 | `[pending]` | ui, skill | Activityタブのmachine横断ビュー + 分析ルーチン手順のskill化 |

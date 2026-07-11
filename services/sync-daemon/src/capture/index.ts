@@ -28,8 +28,10 @@ export {
   resolveCaptureDbPath,
   validateCaptureConfigPatch
 } from "./storage.js";
+export type { CaptureSampleUploadCursor, CaptureStoredSample } from "./storage.js";
 export { analyzeCaptureSummary, buildCaptureSummaryMarkdown } from "./summarizer.js";
 export { CaptureError, CaptureManager } from "./manager.js";
 export { CaptureSupervisor, decodeSamplerStdoutChunk, ingestSamplerLine } from "./supervisor.js";
 export { ScreenshotScheduler, shouldCaptureScreenshot } from "./screenshotScheduler.js";
+export { CAPTURE_UPLOAD_META_KEYS, CaptureUploader, type CapturePostJson, type CaptureUploaderOptions } from "./uploader.js";
 

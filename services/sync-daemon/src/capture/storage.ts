@@ -28,6 +28,7 @@ export const DEFAULT_CAPTURE_CATEGORY_MAP: Record<string, string> = {
 
 export const DEFAULT_CAPTURE_CONFIG: CaptureConfig = {
   enabled: false,
+  uploadEnabled: false,
   screenshotsEnabled: false,
   screenshotIntervalSeconds: DEFAULT_SCREENSHOT_INTERVAL_SECONDS,
   screenshotRetentionDays: DEFAULT_SCREENSHOT_RETENTION_DAYS,
@@ -52,7 +53,7 @@ type CaptureStorageOptions = {
 };
 
 type CountRow = { count: number };
-type SampleRow = { sampled_at: string; process_name: string; window_title: string; idle?: number | null };
+type SampleRow = { id?: number; sampled_at: string; process_name: string; window_title: string; idle?: number | null };
 type SummaryRow = {
   summary_date: string;
   note_resource_id: string | null;
@@ -61,6 +62,9 @@ type SummaryRow = {
   summary_markdown?: string | null;
   metrics_json?: string | null;
 };
+
+export type CaptureSampleUploadCursor = { sampledAt: string; id: number };
+export type CaptureStoredSample = CaptureSample & { id: number };
 
 export function defaultCaptureDbPath(env: NodeJS.ProcessEnv = process.env): string {
   const localAppData = env.LOCALAPPDATA?.trim();
@@ -100,6 +104,7 @@ function normalizeConfig(value: unknown): CaptureConfig {
     : {};
   return {
     enabled: typeof record.enabled === "boolean" ? record.enabled : DEFAULT_CAPTURE_CONFIG.enabled,
+    uploadEnabled: typeof record.uploadEnabled === "boolean" ? record.uploadEnabled : DEFAULT_CAPTURE_CONFIG.uploadEnabled,
     screenshotsEnabled: typeof record.screenshotsEnabled === "boolean" ? record.screenshotsEnabled : false,
     screenshotIntervalSeconds: isIntegerBetween(record.screenshotIntervalSeconds, 60, 3600)
       ? record.screenshotIntervalSeconds : DEFAULT_SCREENSHOT_INTERVAL_SECONDS,
@@ -146,6 +151,10 @@ function normalizeCategoryMap(value: unknown): Record<string, string> {
 
 export function validateCaptureConfigPatch(patch: Record<string, unknown>): CaptureConfigPatch {
   const next: CaptureConfigPatch = {};
+  if (patch.uploadEnabled !== undefined) {
+    if (typeof patch.uploadEnabled !== "boolean") throw new Error("uploadEnabled must be a boolean.");
+    next.uploadEnabled = patch.uploadEnabled;
+  }
   if (patch.screenshotsEnabled !== undefined) {
     if (typeof patch.screenshotsEnabled !== "boolean") throw new Error("screenshotsEnabled must be a boolean.");
     next.screenshotsEnabled = patch.screenshotsEnabled;
@@ -461,6 +470,28 @@ export class CaptureStorage {
     `).all(start, end) as SampleRow[]).map(toSample);
   }
 
+  listSamplesAfter(cursor: CaptureSampleUploadCursor | string | undefined, limit: number): CaptureStoredSample[] {
+    const boundedLimit = Math.max(1, Math.min(500, Math.floor(limit)));
+    const tupleCursor = typeof cursor === "string"
+      ? { sampledAt: cursor, id: Number.MAX_SAFE_INTEGER }
+      : cursor;
+    const rows = (tupleCursor
+      ? this.db.prepare(`
+          SELECT id, sampled_at, process_name, window_title, idle
+          FROM capture_samples
+          WHERE sampled_at > ? OR (sampled_at = ? AND id > ?)
+          ORDER BY sampled_at ASC, id ASC
+          LIMIT ?
+        `).all(tupleCursor.sampledAt, tupleCursor.sampledAt, tupleCursor.id, boundedLimit)
+      : this.db.prepare(`
+          SELECT id, sampled_at, process_name, window_title, idle
+          FROM capture_samples
+          ORDER BY sampled_at ASC, id ASC
+          LIMIT ?
+        `).all(boundedLimit)) as SampleRow[];
+    return rows.map((row) => ({ ...toSample(row), id: Number(row.id) }));
+  }
+
   deleteSamplesOlderThan(retentionDays: number, now = new Date()): number {
     const cutoff = new Date(now.getTime() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
     const result = this.db.prepare("DELETE FROM capture_samples WHERE sampled_at < ?").run(cutoff);
@@ -483,6 +514,25 @@ export class CaptureStorage {
       WHERE summary_date = ?
     `).get(summaryDate) as SummaryRow | undefined;
     return row ? toSummary(row, true) : undefined;
+  }
+
+  listSummariesGeneratedAfter(generatedAtExclusive: string | undefined, limit: number): CaptureSummaryRecord[] {
+    const boundedLimit = Math.max(1, Math.min(50, Math.floor(limit)));
+    const rows = (generatedAtExclusive
+      ? this.db.prepare(`
+          SELECT summary_date, note_resource_id, generated_at, sample_count, summary_markdown, metrics_json
+          FROM capture_summaries
+          WHERE generated_at > ?
+          ORDER BY generated_at ASC, summary_date ASC
+          LIMIT ?
+        `).all(generatedAtExclusive, boundedLimit)
+      : this.db.prepare(`
+          SELECT summary_date, note_resource_id, generated_at, sample_count, summary_markdown, metrics_json
+          FROM capture_summaries
+          ORDER BY generated_at ASC, summary_date ASC
+          LIMIT ?
+        `).all(boundedLimit)) as SummaryRow[];
+    return rows.map((row) => toSummary(row, true));
   }
 
   listSummaries(options: { limit?: number; cursor?: string } = {}): { items: CaptureSummaryRecord[]; nextCursor?: string } {

@@ -3394,7 +3394,7 @@ function requireInsightsConfigured(res: express.Response): boolean {
 }
 
 app.post("/api/insights/machines/register", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
+  const authContext = await requireSyncAccessContext(req, res);
   if (!authContext || !requireInsightsConfigured(res)) return;
   try {
     await ensureInsightsAccountProvisioned(authContext);
@@ -3416,7 +3416,7 @@ app.get("/api/insights/machines", async (req, res) => {
 });
 
 app.post("/api/insights/ingest/samples", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
+  const authContext = await requireSyncAccessContext(req, res);
   if (!authContext || !requireInsightsConfigured(res)) return;
   try {
     await ensureInsightsAccountProvisioned(authContext);
@@ -3427,7 +3427,7 @@ app.post("/api/insights/ingest/samples", async (req, res) => {
 });
 
 app.post("/api/insights/ingest/summaries", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
+  const authContext = await requireSyncAccessContext(req, res);
   if (!authContext || !requireInsightsConfigured(res)) return;
   try {
     await ensureInsightsAccountProvisioned(authContext);

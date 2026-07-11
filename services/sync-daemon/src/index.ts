@@ -81,6 +81,7 @@ import {
 import {
   CaptureError,
   CaptureManager,
+  CaptureUploader,
   type CaptureSummaryPublisher
 } from "./capture/index.js";
 
@@ -147,6 +148,8 @@ export type DaemonState = {
   config: DaemonConfig;
   manifestStore: ManifestStore;
   capture?: CaptureManager;
+  captureUploader?: CaptureUploader;
+  captureUploadIdentityWarned?: boolean;
   identity?: ClientIdentity;
   lastHeartbeatAt?: string;
   lastClaimAt?: string;
@@ -6149,6 +6152,16 @@ async function performTick(state: DaemonState): Promise<void> {
         message: error instanceof Error ? error.message : String(error)
       });
     });
+    const captureConfig = state.capture?.config();
+    if (captureConfig?.enabled && captureConfig.uploadEnabled && state.captureUploader) {
+      if (state.identity) {
+        state.captureUploadIdentityWarned = false;
+        await state.captureUploader.run();
+      } else if (!state.captureUploadIdentityWarned) {
+        state.captureUploadIdentityWarned = true;
+        console.warn("[capture] insights upload skipped because local client identity is not registered");
+      }
+    }
     await pushOutbox(state);
     await heartbeat(state);
     if (!recoverablePullError) {
@@ -6558,7 +6571,7 @@ function startStatusServer(state: DaemonState): void {
 
     if (url.pathname === "/capture/status" && req.method === "GET") {
       writeJson(res, state.capture?.apiStatus() ?? {
-        config: { enabled: false, screenshotsEnabled: false, screenshotIntervalSeconds: 300, screenshotRetentionDays: 7, intervalSeconds: 15, retentionDays: 14, excludePatterns: [], autoPublish: false },
+        config: { enabled: false, uploadEnabled: false, screenshotsEnabled: false, screenshotIntervalSeconds: 300, screenshotRetentionDays: 7, intervalSeconds: 15, retentionDays: 14, excludePatterns: [], autoPublish: false },
         status: { enabled: false, collectorAlive: false, sampleCount24h: 0 }
       });
       return;
@@ -6567,6 +6580,7 @@ function startStatusServer(state: DaemonState): void {
     if (url.pathname === "/capture/config" && req.method === "GET") {
       writeJson(res, state.capture?.config() ?? {
         enabled: false,
+        uploadEnabled: false,
         screenshotsEnabled: false,
         screenshotIntervalSeconds: 300,
         screenshotRetentionDays: 7,
@@ -7705,6 +7719,22 @@ async function main(): Promise<void> {
     platform: platform(),
     logger: console,
     publisher: createCaptureSummaryPublisher(state)
+  });
+  state.captureUploader = new CaptureUploader({
+    storage: state.capture.storage,
+    displayName: config.clientName || hostname(),
+    platform: platform(),
+    logger: console,
+    postJson: async <T>(pathValue: string, body: unknown): Promise<T> => {
+      const identity = state.identity;
+      if (!identity) throw new Error("Local client identity is not registered.");
+      return coreJson<T>(config, pathValue, {
+        method: "POST",
+        localIdentity: identity,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+    }
   });
   await state.capture.startFromConfig();
   startStatusServer(state);

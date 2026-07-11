@@ -1,5 +1,6 @@
 export type CaptureConfig = {
   enabled: boolean;
+  uploadEnabled: boolean;
   screenshotsEnabled: boolean;
   screenshotIntervalSeconds: number;
   screenshotRetentionDays: number;
@@ -12,6 +13,7 @@ export type CaptureConfig = {
 };
 
 export type CaptureConfigPatch = {
+  uploadEnabled?: boolean;
   screenshotsEnabled?: boolean;
   screenshotIntervalSeconds?: number;
   screenshotRetentionDays?: number;
