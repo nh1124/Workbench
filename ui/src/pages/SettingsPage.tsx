@@ -261,6 +261,7 @@ export function CaptureSettingsSection({
   const [intervalSeconds, setIntervalSeconds] = useState("15");
   const [retentionDays, setRetentionDays] = useState("14");
   const [excludePatterns, setExcludePatterns] = useState("");
+  const [uploadEnabled, setUploadEnabled] = useState(false);
   const [screenshotsEnabled, setScreenshotsEnabled] = useState(false);
   const [screenshotIntervalSeconds, setScreenshotIntervalSeconds] = useState("300");
   const [screenshotRetentionDays, setScreenshotRetentionDays] = useState("7");
@@ -272,6 +273,7 @@ export function CaptureSettingsSection({
     setIntervalSeconds(String(next.config.intervalSeconds));
     setRetentionDays(String(next.config.retentionDays));
     setExcludePatterns(next.config.excludePatterns.join("\n"));
+    setUploadEnabled(Boolean(next.config.uploadEnabled));
     setScreenshotsEnabled(next.config.screenshotsEnabled);
     setScreenshotIntervalSeconds(String(next.config.screenshotIntervalSeconds));
     setScreenshotRetentionDays(String(next.config.screenshotRetentionDays));
@@ -373,6 +375,7 @@ export function CaptureSettingsSection({
         intervalSeconds: nextInterval,
         retentionDays: nextRetention,
         excludePatterns: splitCaptureExcludePatterns(excludePatterns),
+        uploadEnabled,
         screenshotsEnabled,
         screenshotIntervalSeconds: nextScreenshotInterval,
         screenshotRetentionDays: nextScreenshotRetention
@@ -496,6 +499,17 @@ export function CaptureSettingsSection({
             rows={4}
             placeholder="One regular expression per line"
           />
+        </label>
+        <label className="account-capture-screenshot-toggle">
+          <span>Upload to Server</span>
+          <input
+            aria-label="Enable activity upload"
+            type="checkbox"
+            checked={uploadEnabled}
+            onChange={(event) => setUploadEnabled(event.target.checked)}
+            disabled={controlsDisabled}
+          />
+          <small>Upload activity metadata and daily summaries to your Workbench server for cross-machine analysis. Screenshots are never uploaded.</small>
         </label>
         <label className="account-capture-screenshot-toggle">
           <span>Screenshots</span>

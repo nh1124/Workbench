@@ -840,6 +840,7 @@ export interface LocalDaemonPendingJobConfirmation {
 
 export interface CaptureDaemonConfig {
   enabled: boolean;
+  uploadEnabled: boolean;
   screenshotsEnabled: boolean;
   screenshotIntervalSeconds: number;
   screenshotRetentionDays: number;
@@ -849,7 +850,7 @@ export interface CaptureDaemonConfig {
 }
 
 export type CaptureDaemonConfigPatch = Partial<
-  Pick<CaptureDaemonConfig, "intervalSeconds" | "retentionDays" | "excludePatterns" | "screenshotsEnabled" | "screenshotIntervalSeconds" | "screenshotRetentionDays">
+  Pick<CaptureDaemonConfig, "intervalSeconds" | "retentionDays" | "excludePatterns" | "uploadEnabled" | "screenshotsEnabled" | "screenshotIntervalSeconds" | "screenshotRetentionDays">
 >;
 
 export interface CaptureDaemonStatus {
@@ -898,6 +899,49 @@ export interface CaptureScreenshot {
 
 export interface CaptureScreenshotListResult {
   items: CaptureScreenshot[];
+  nextCursor?: string;
+}
+
+export interface InsightsMachine {
+  id: string;
+  machineKey: string;
+  displayName?: string;
+  platform?: string;
+  registeredAt: string;
+  lastSeenAt: string;
+}
+
+export interface InsightsActivityAggregate {
+  totals: {
+    activeSeconds: number;
+    idleSeconds: number;
+    contextSwitches: number;
+  };
+  categories: Record<string, number>;
+  apps: Record<string, number>;
+  days: Array<{
+    date: string;
+    machineId: string;
+    activeSeconds: number;
+    contextSwitches: number;
+  }>;
+}
+
+export interface InsightsSummaryMeta {
+  machineId: string;
+  summaryDate: string;
+  metricsJson?: Record<string, unknown>;
+  sampleCount: number;
+  generatedAt: string;
+  updatedAt: string;
+}
+
+export interface InsightsSummaryDetail extends InsightsSummaryMeta {
+  summaryMarkdown: string;
+}
+
+export interface InsightsSummaryListResult {
+  items: InsightsSummaryMeta[];
   nextCursor?: string;
 }
 

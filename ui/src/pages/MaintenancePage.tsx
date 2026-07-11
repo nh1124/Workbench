@@ -5,6 +5,10 @@ import { formatDateTime } from "../lib/format";
 import type {
   CaptureSummaryRecord,
   CaptureScreenshot,
+  InsightsActivityAggregate,
+  InsightsMachine,
+  InsightsSummaryDetail,
+  InsightsSummaryMeta,
   MaintenanceQueueItem,
   MaintenanceQueueKind,
   MaintenanceQueueReason,
@@ -133,8 +137,243 @@ function resourceLabel(resource: MaintenanceUsageSummary["topResources"][number]
   return `${resource.sourceService}/${resource.resourceType}/${resource.resourceId}`;
 }
 
+function formatActiveDuration(totalSeconds: number): string {
+  const seconds = Math.max(0, Math.round(totalSeconds));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m`;
+  return `${seconds}s`;
+}
+
+function machineLabel(machine: InsightsMachine): string {
+  return machine.displayName?.trim() || machine.machineKey;
+}
+
+function isInsightsNotConfigured(error: unknown): boolean {
+  return error instanceof Error && /not configured/i.test(error.message);
+}
+
+function summaryActiveSeconds(summary: InsightsSummaryMeta): number | undefined {
+  const value = summary.metricsJson?.activeSeconds;
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function ServerActivityView() {
+  const [machines, setMachines] = useState<InsightsMachine[]>([]);
+  const [machineId, setMachineId] = useState("");
+  const [aggregate, setAggregate] = useState<InsightsActivityAggregate>();
+  const [summaries, setSummaries] = useState<InsightsSummaryMeta[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | undefined>();
+  const [selected, setSelected] = useState<InsightsSummaryDetail>();
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [error, setError] = useState<string>();
+  const [notConfigured, setNotConfigured] = useState(false);
+
+  const range = useMemo(() => {
+    const to = new Date();
+    const from = new Date(to.getTime() - 6 * 24 * 60 * 60 * 1000);
+    return { from: localDateString(from), to: localDateString(to) };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(undefined);
+    setNotConfigured(false);
+    setSelected(undefined);
+    const machineFilter = machineId || undefined;
+    void Promise.all([
+      coreApi.insightsMachines(),
+      coreApi.insightsActivity({ ...range, machineId: machineFilter }),
+      coreApi.insightsSummaries({ machineId: machineFilter, limit: CAPTURE_SUMMARY_PAGE_SIZE })
+    ]).then(([machineResult, activityResult, summaryResult]) => {
+      if (cancelled) return;
+      setMachines(machineResult.items);
+      setAggregate(activityResult);
+      setSummaries(summaryResult.items);
+      setNextCursor(summaryResult.nextCursor);
+    }).catch((requestError: unknown) => {
+      if (cancelled) return;
+      if (isInsightsNotConfigured(requestError)) setNotConfigured(true);
+      else setError(requestError instanceof Error ? requestError.message : "Server activity is unavailable.");
+    }).finally(() => {
+      if (!cancelled) setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [machineId, range]);
+
+  const loadMore = async () => {
+    if (!nextCursor) return;
+    setLoadingMore(true);
+    try {
+      const result = await coreApi.insightsSummaries({
+        machineId: machineId || undefined,
+        limit: CAPTURE_SUMMARY_PAGE_SIZE,
+        cursor: nextCursor
+      });
+      setSummaries((current) => [...current, ...result.items]);
+      setNextCursor(result.nextCursor);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "More summaries could not be loaded.");
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  const openSummary = async (item: InsightsSummaryMeta) => {
+    setDetailLoading(true);
+    setError(undefined);
+    try {
+      setSelected(await coreApi.insightsSummary(item.machineId, item.summaryDate));
+    } catch (requestError) {
+      setSelected(undefined);
+      setError(requestError instanceof Error ? requestError.message : "Summary could not be loaded.");
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const machineName = (id: string): string => {
+    const machine = machines.find((entry) => entry.id === id);
+    return machine ? machineLabel(machine) : id.slice(0, 8);
+  };
+  const topCategories = aggregate
+    ? Object.entries(aggregate.categories).sort((left, right) => right[1] - left[1]).slice(0, 3)
+    : [];
+
+  if (notConfigured) {
+    return (
+      <div className="activity-empty-card">
+        <h2>Insights service is not configured</h2>
+        <p>Configure the insights service on your Workbench server to aggregate activity across machines.</p>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {error ? <p className="maintenance-error" role="alert">{error}</p> : null}
+      {loading ? <p className="maintenance-muted">Loading server activity...</p> : null}
+
+      {!loading && machines.length === 0 && !error ? (
+        <div className="activity-empty-card">
+          <h2>No machines have uploaded activity yet</h2>
+          <p>Enable capture upload in Settings on each device to aggregate activity here.</p>
+          <Link className="maintenance-link-button" to="/settings?tab=account&section=sync-daemon">Open Local Sync settings</Link>
+        </div>
+      ) : null}
+
+      {machines.length > 0 ? (
+        <>
+          <div className="activity-machine-bar">
+            <label className="maintenance-inline-field">
+              <span>Machine</span>
+              <select value={machineId} onChange={(event) => setMachineId(event.target.value)} aria-label="Machine filter">
+                <option value="">All machines</option>
+                {machines.map((machine) => (
+                  <option key={machine.id} value={machine.id}>{machineLabel(machine)}</option>
+                ))}
+              </select>
+            </label>
+            <span className="maintenance-muted">Last 7 days · {range.from} – {range.to}</span>
+          </div>
+
+          {aggregate ? (
+            <div className="activity-usage-grid" aria-label="Activity aggregate">
+              <article className="activity-usage-card">
+                <span>Active time</span>
+                <strong>{formatActiveDuration(aggregate.totals.activeSeconds)}</strong>
+                <small>idle {formatActiveDuration(aggregate.totals.idleSeconds)} excluded</small>
+              </article>
+              <article className="activity-usage-card">
+                <span>Context switches</span>
+                <strong>{aggregate.totals.contextSwitches}</strong>
+                <small>across the selected machines</small>
+              </article>
+              <article className="activity-usage-card">
+                <span>Top categories</span>
+                {topCategories.length > 0 ? (
+                  <ol>
+                    {topCategories.map(([category, seconds]) => (
+                      <li key={category}><span>{category}</span><strong>{formatActiveDuration(seconds)}</strong></li>
+                    ))}
+                  </ol>
+                ) : <small>No categorized activity in this range.</small>}
+              </article>
+            </div>
+          ) : null}
+
+          {!loading && summaries.length === 0 ? (
+            <div className="activity-empty-card">
+              <h2>No uploaded summaries yet</h2>
+              <p>Daily summaries appear here after devices with capture upload enabled have summarized activity.</p>
+            </div>
+          ) : null}
+
+          {summaries.length > 0 ? (
+            <div className="activity-summary-layout">
+              <div className="activity-summary-list">
+                {summaries.map((summary) => (
+                  <article
+                    className={selected?.machineId === summary.machineId && selected?.summaryDate === summary.summaryDate
+                      ? "activity-summary-row selected"
+                      : "activity-summary-row"}
+                    key={`${summary.machineId}:${summary.summaryDate}`}
+                  >
+                    <button
+                      type="button"
+                      className="activity-summary-select"
+                      aria-label={`Open summary ${summary.summaryDate} for ${machineName(summary.machineId)}`}
+                      onClick={() => void openSummary(summary)}
+                    >
+                      <strong>{summary.summaryDate}</strong>
+                      <span>{machineName(summary.machineId)}</span>
+                      <span>
+                        {summaryActiveSeconds(summary) !== undefined
+                          ? `${formatActiveDuration(summaryActiveSeconds(summary) ?? 0)} active`
+                          : `${summary.sampleCount} sample${summary.sampleCount === 1 ? "" : "s"}`}
+                      </span>
+                    </button>
+                  </article>
+                ))}
+                {nextCursor ? (
+                  <div className="maintenance-load-more">
+                    <button type="button" onClick={() => void loadMore()} disabled={loadingMore}>
+                      {loadingMore ? "Loading..." : "Load more"}
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+
+              <aside className="activity-summary-detail" aria-live="polite">
+                {detailLoading ? <p className="maintenance-muted">Loading summary...</p> : null}
+                {!detailLoading && selected ? (
+                  <>
+                    <div className="activity-detail-heading">
+                      <div>
+                        <h2>{selected.summaryDate}</h2>
+                        <p>{machineName(selected.machineId)} · {selected.sampleCount} sample{selected.sampleCount === 1 ? "" : "s"}</p>
+                      </div>
+                    </div>
+                    <pre>{selected.summaryMarkdown || "No summary text is available."}</pre>
+                  </>
+                ) : null}
+                {!detailLoading && !selected ? <p className="maintenance-muted">Select a daily summary to read it.</p> : null}
+              </aside>
+            </div>
+          ) : null}
+        </>
+      ) : null}
+    </>
+  );
+}
+
 function ActivityTab() {
   const nativeRuntimeAvailable = isTauriNativeRuntime();
+  const [source, setSource] = useState<"local" | "server">(nativeRuntimeAvailable ? "local" : "server");
   const [summaries, setSummaries] = useState<CaptureSummaryRecord[]>([]);
   const [nextCursor, setNextCursor] = useState<string | undefined>();
   const [selectedDate, setSelectedDate] = useState<string>();
@@ -266,12 +505,31 @@ function ActivityTab() {
         </article>
       </div>
 
-      {!nativeRuntimeAvailable ? (
-        <div className="activity-empty-card">
-          <h2>Activity is available in Workbench desktop</h2>
-          <p>Connect the local daemon in Settings to review locally captured daily summaries.</p>
-          <Link className="maintenance-link-button" to="/settings?tab=account&section=sync-daemon">Open Local Sync settings</Link>
+      {nativeRuntimeAvailable ? (
+        <div className="analyser-tabs activity-source-toggle" role="tablist" aria-label="Activity source">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={source === "local"}
+            className={source === "local" ? "analyser-tab active" : "analyser-tab"}
+            onClick={() => setSource("local")}
+          >
+            This device
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={source === "server"}
+            className={source === "server" ? "analyser-tab active" : "analyser-tab"}
+            onClick={() => setSource("server")}
+          >
+            All machines
+          </button>
         </div>
+      ) : null}
+
+      {source === "server" || !nativeRuntimeAvailable ? (
+        <ServerActivityView />
       ) : (
         <>
           <div className="activity-section-header">

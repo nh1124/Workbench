@@ -697,3 +697,16 @@
     justify-self: start;
   }
 }
+
+.activity-source-toggle {
+  margin-bottom: 16px;
+  width: fit-content;
+}
+
+.activity-machine-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}

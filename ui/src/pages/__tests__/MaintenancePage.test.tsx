@@ -124,17 +124,104 @@ afterEach(() => {
 
 describe("MaintenancePage", () => {
   it("switches Analyser tabs while preserving the Activity URL query", async () => {
+    vi.spyOn(coreApi, "insightsMachines").mockRejectedValue(new Error("Insights service is not configured"));
+    vi.spyOn(coreApi, "insightsActivity").mockRejectedValue(new Error("Insights service is not configured"));
+    vi.spyOn(coreApi, "insightsSummaries").mockRejectedValue(new Error("Insights service is not configured"));
     renderPage("/analyser");
 
     expect(screen.getByRole("heading", { name: "Analyser" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Review" }).getAttribute("aria-selected")).toBe("true");
     fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
 
-    expect(await screen.findByRole("heading", { name: "Activity is available in Workbench desktop" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Insights service is not configured" })).toBeTruthy();
     expect(screen.getByTestId("location").textContent).toBe("/analyser?tab=activity");
 
     fireEvent.click(screen.getByRole("tab", { name: "Review" }));
     expect(screen.getByTestId("location").textContent).toBe("/analyser");
+  });
+
+  it("shows cross-machine activity from the insights service in the browser", async () => {
+    vi.spyOn(coreApi, "insightsMachines").mockResolvedValue({
+      items: [{
+        id: "11111111-1111-4111-8111-111111111111",
+        machineKey: "machine-key-1",
+        displayName: "Desktop PC",
+        platform: "win32",
+        registeredAt: updatedAt,
+        lastSeenAt: updatedAt
+      }]
+    });
+    vi.spyOn(coreApi, "insightsActivity").mockResolvedValue({
+      totals: { activeSeconds: 5400, idleSeconds: 600, contextSwitches: 12 },
+      categories: { Editor: 3600, Browser: 1800 },
+      apps: { Code: 3600 },
+      days: []
+    });
+    vi.spyOn(coreApi, "insightsSummaries").mockResolvedValue({
+      items: [{
+        machineId: "11111111-1111-4111-8111-111111111111",
+        summaryDate: "2026-07-10",
+        metricsJson: { activeSeconds: 5400 },
+        sampleCount: 360,
+        generatedAt: updatedAt,
+        updatedAt
+      }]
+    });
+    vi.spyOn(coreApi, "insightsSummary").mockResolvedValue({
+      machineId: "11111111-1111-4111-8111-111111111111",
+      summaryDate: "2026-07-10",
+      summaryMarkdown: "# Capture Daily Summary 2026-07-10",
+      sampleCount: 360,
+      generatedAt: updatedAt,
+      updatedAt
+    });
+
+    renderPage("/analyser?tab=activity");
+
+    expect(await screen.findByLabelText("Machine filter")).toBeTruthy();
+    expect(screen.getByText("Active time")).toBeTruthy();
+    expect(screen.getByText("1h 30m")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Open summary 2026-07-10 for Desktop PC" }));
+
+    await waitFor(() => expect(coreApi.insightsSummary).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111", "2026-07-10"));
+    expect(await screen.findByText("# Capture Daily Summary 2026-07-10")).toBeTruthy();
+  });
+
+  it("shows the upload onboarding empty state when no machines exist", async () => {
+    vi.spyOn(coreApi, "insightsMachines").mockResolvedValue({ items: [] });
+    vi.spyOn(coreApi, "insightsActivity").mockResolvedValue({
+      totals: { activeSeconds: 0, idleSeconds: 0, contextSwitches: 0 },
+      categories: {},
+      apps: {},
+      days: []
+    });
+    vi.spyOn(coreApi, "insightsSummaries").mockResolvedValue({ items: [] });
+
+    renderPage("/analyser?tab=activity");
+
+    expect(await screen.findByRole("heading", { name: "No machines have uploaded activity yet" })).toBeTruthy();
+  });
+
+  it("keeps the local device view available in the desktop runtime", async () => {
+    window.__TAURI_INTERNALS__ = { invoke: vi.fn().mockResolvedValue(undefined) };
+    vi.spyOn(localDaemonApi, "listCaptureSummaries").mockResolvedValue({ items: [] });
+    vi.spyOn(localDaemonApi, "listCaptureScreenshots").mockResolvedValue({ items: [] });
+    vi.spyOn(coreApi, "insightsMachines").mockResolvedValue({ items: [] });
+    vi.spyOn(coreApi, "insightsActivity").mockResolvedValue({
+      totals: { activeSeconds: 0, idleSeconds: 0, contextSwitches: 0 },
+      categories: {},
+      apps: {},
+      days: []
+    });
+    vi.spyOn(coreApi, "insightsSummaries").mockResolvedValue({ items: [] });
+
+    renderPage("/analyser?tab=activity");
+
+    expect(await screen.findByRole("heading", { name: "No capture summaries yet" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "This device" }).getAttribute("aria-selected")).toBe("true");
+    fireEvent.click(screen.getByRole("tab", { name: "All machines" }));
+
+    expect(await screen.findByRole("heading", { name: "No machines have uploaded activity yet" })).toBeTruthy();
   });
 
   it("lists capture summaries and publishes a selected day to Notes", async () => {

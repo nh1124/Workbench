@@ -37,6 +37,10 @@ import type {
   CaptureSummaryRecord,
   CaptureSummaryResult,
   CaptureScreenshotListResult,
+  InsightsActivityAggregate,
+  InsightsMachine,
+  InsightsSummaryDetail,
+  InsightsSummaryListResult,
   IntegrationManifest,
   LocalClientAuditEventRecord,
   LocalClientRecord,
@@ -1855,6 +1859,27 @@ export const coreApi = {
     }),
   maintenanceUsageSummary: (): Promise<MaintenanceUsageSummary> =>
     fetchJson<MaintenanceUsageSummary>(`${coreBaseUrl()}/api/maintenance/usage/summary`),
+  insightsMachines: (): Promise<{ items: InsightsMachine[] }> =>
+    fetchJson(`${coreBaseUrl()}/api/insights/machines`),
+  insightsActivity: (options: { from: string; to: string; machineId?: string }): Promise<InsightsActivityAggregate> => {
+    const params = new URLSearchParams({ from: options.from, to: options.to });
+    if (options.machineId) params.set("machineId", options.machineId);
+    return fetchJson(`${coreBaseUrl()}/api/insights/activity?${params.toString()}`);
+  },
+  insightsSummaries: (
+    options: { machineId?: string; from?: string; to?: string; limit?: number; cursor?: string } = {}
+  ): Promise<InsightsSummaryListResult> => {
+    const params = new URLSearchParams();
+    if (options.machineId) params.set("machineId", options.machineId);
+    if (options.from) params.set("from", options.from);
+    if (options.to) params.set("to", options.to);
+    if (options.limit) params.set("limit", String(options.limit));
+    if (options.cursor) params.set("cursor", options.cursor);
+    const query = params.toString();
+    return fetchJson(`${coreBaseUrl()}/api/insights/summaries${query ? `?${query}` : ""}`);
+  },
+  insightsSummary: (machineId: string, date: string): Promise<InsightsSummaryDetail> =>
+    fetchJson(`${coreBaseUrl()}/api/insights/summaries/${encodeURIComponent(machineId)}/${encodeURIComponent(date)}`),
   listLocalClients: (): Promise<{ items: LocalClientRecord[] }> =>
     fetchJson(`${coreBaseUrl()}/api/local-clients`),
   listLocalClientAuditEvents: (

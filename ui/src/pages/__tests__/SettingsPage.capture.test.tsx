@@ -10,6 +10,7 @@ function captureState(overrides: Partial<CaptureDaemonState> = {}): CaptureDaemo
     dbPath: "C:\\Users\\dev\\AppData\\Local\\Workbench\\capture.sqlite",
     config: {
       enabled: false,
+      uploadEnabled: false,
       screenshotsEnabled: false,
       screenshotIntervalSeconds: 300,
       screenshotRetentionDays: 7,
@@ -90,6 +91,7 @@ describe("CaptureSettingsSection", () => {
     fireEvent.change(screen.getByLabelText("Capture exclude patterns"), {
       target: { value: "Private App\n^Secret" }
     });
+    fireEvent.click(screen.getByLabelText("Enable activity upload"));
     fireEvent.click(screen.getByLabelText("Enable screenshots"));
     fireEvent.change(screen.getByLabelText("Screenshot interval seconds"), { target: { value: "600" } });
     fireEvent.change(screen.getByLabelText("Screenshot retention days"), { target: { value: "10" } });
@@ -100,6 +102,7 @@ describe("CaptureSettingsSection", () => {
         intervalSeconds: 30,
         retentionDays: 21,
         excludePatterns: ["Private App", "^Secret"],
+        uploadEnabled: true,
         screenshotsEnabled: true,
         screenshotIntervalSeconds: 600,
         screenshotRetentionDays: 10
