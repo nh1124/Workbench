@@ -54,6 +54,44 @@ ensure_clean_worktree() {
     fi
 }
 
+# Node-run service ports (4102/artifacts excluded: it may legitimately stay
+# bound by the workbench-artifacts-service container in docker-only mode).
+NODE_SERVICE_PORT_REGEX=':(4100|4101|4103|4104|4105|4106|4107|4108|8100)[[:space:]]'
+
+artifacts_runs_in_docker() {
+    command -v docker >/dev/null 2>&1 \
+        && docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^workbench-artifacts-service$'
+}
+
+resolve_restart_command() {
+    if [[ -n "${RESTART_COMMAND:-}" ]]; then
+        echo "$RESTART_COMMAND"
+        return
+    fi
+    if artifacts_runs_in_docker; then
+        # Artifacts is docker-only on this host (see infra/start_services.sh):
+        # rebuild its image so the pulled code is reflected, then start the
+        # node stack without artifacts to avoid EADDRINUSE on 4102.
+        echo "docker compose up -d --build artifacts-db artifacts workbench-core-db notes-db tasks-db projects-db images-db mindmaps-db wbs-db insights-db && npm run dev:web:no-artifacts"
+        return
+    fi
+    echo "npm run dev"
+}
+
+wait_for_node_service_ports() {
+    if ! command -v ss >/dev/null 2>&1; then
+        sleep 5
+        return
+    fi
+    for _ in $(seq 1 15); do
+        if ! ss -ltn 2>/dev/null | grep -qE "$NODE_SERVICE_PORT_REGEX"; then
+            return
+        fi
+        sleep 2
+    done
+    log "WARN: Some service ports are still in use after waiting; the restart may fail."
+}
+
 restart_service() {
     log "Running npm install..."
     cd "$PROJECT_ROOT"
@@ -69,11 +107,14 @@ restart_service() {
         return
     fi
 
+    local restart_command
+    restart_command="$(resolve_restart_command)"
+
     log "Restarting Workbench in tmux session '${TMUX_SESSION}:${TMUX_WINDOW}'..."
     tmux send-keys -t "${TMUX_SESSION}:${TMUX_WINDOW}" C-c ""
-    sleep 2
-    tmux send-keys -t "${TMUX_SESSION}:${TMUX_WINDOW}" "cd \"$PROJECT_ROOT\" && npm run dev" Enter
-    log "Restart sent to tmux session '$TMUX_SESSION'."
+    wait_for_node_service_ports
+    tmux send-keys -t "${TMUX_SESSION}:${TMUX_WINDOW}" "cd \"$PROJECT_ROOT\" && ${restart_command}" Enter
+    log "Restart sent to tmux session '$TMUX_SESSION' (command: ${restart_command})."
 }
 
 update_once() {
