@@ -115,6 +115,26 @@ Output:
 }
 ```
 
+## insights.* (activity analysis)
+
+Aggregated capture activity from machines that opted into upload. All reads are scoped to the
+authenticated user. If the server answers "Insights service is not configured", the deployment
+has no insights service — skip activity analysis and say so.
+
+- `insights.machines.list` () → `{ items: [{ id, machineKey, displayName?, platform?, registeredAt, lastSeenAt }] }`
+- `insights.activity.query` ({ from, to, machineId? }) — dates `YYYY-MM-DD`, both inclusive →
+  `{ totals: { activeSeconds, idleSeconds, contextSwitches }, categories: { <name>: seconds }, apps: { <name>: seconds }, days: [{ date, machineId, activeSeconds, contextSwitches }] }`
+- `insights.summaries.list` ({ machineId?, from?, to?, limit?, cursor? }) → metadata + `metricsJson`, no markdown bodies; keyset cursor.
+- `insights.summaries.get` ({ machineId, date }) → one summary including `summaryMarkdown`
+  (App Activity / Top Window Titles / Timeline / Focus Blocks / Context Switches / Categories / Idle Time).
+- `insights.derived.ingest` ({ machineId?, observedDate, kind, title, contentMarkdown, payloadJson? }) —
+  the only agent write into insights. Text derived from local-only sources (screenshots) after
+  explicit human-directed processing; never image data, never automated.
+- `insights.derived.list` ({ from?, to?, kind?, limit?, cursor? }) → prior derived observations.
+
+Analysis conclusions do not go into insights; they become memory/note proposals via the
+supporting tools below.
+
 ## Supporting tools used by this skill
 
 - `projects.list` / `projects.get` — resolve projects and the default project.

@@ -93,13 +93,13 @@ IS-D6 UI(Activityタブのサーバ集約ビュー)
 | ID | Status | Scope | Task |
 |---|---|---|---|
 | IS-1 | `[implemented]` | services/insights, core | service scaffold + own DB + ingest/query API + Core routing + infra配線 (commit 7382826)。残: 実DB統合疎通は受入時(start_allでinsights-db自動起動) |
-| IS-2 | `[pending]` | daemon | uploader(machine登録 / upload_cursor / at-least-once batch push / uploadEnabled設定) |
-| IS-3 | `[pending]` | core | MCP tools insights.*(machines/activity/summaries/derived) |
-| IS-4 | `[pending]` | ui, skill | Activityタブのmachine横断ビュー + 分析ルーチン手順のskill化 |
-| IS-5 | `[pending]` | daemon, skill | スクリーンショット派生データの明示ingest導線(ローカルagent加工前提) |
-| IS-R | `[pending]` | root | 実装指揮・レビュー・検証・commit・受入 |
+| IS-2 | `[implemented]` | daemon | uploader: machineKey/Id永続化、(sampled_at,id)タプルカーソル 500×4/tick、generated_at watermark、成功時のみ前進、local-client認証(requireSyncAccessContext) (commit 7e7223b) |
+| IS-3 | `[implemented]` | core | MCP tools insights.*(machines.list/activity.query/summaries.list/get/derived.ingest/list、HTTP+stdio両登録) (commit b81517a) |
+| IS-4 | `[implemented]` | ui, skill | Activityタブ「This device / All machines」切替 + machine横断ビュー(browser可) + uploadEnabled設定 (commit b891a8a)、分析ルーチン手順を maintenance skill に追記 |
+| IS-5 | `[implemented]` | skill | スクリーンショット派生データの明示ingest導線 = insights.derived.ingest(IS-3) + skill手順(画像非送信・自動化禁止を明記)。追加の製品コード不要と判断 |
+| IS-R | `[in-progress]` | root | 実装指揮・レビュー・検証・commit完了。残: 実DB統合疎通と受入(§受入 1〜5) |
 
-前提順序: capture v2 の CV2-2 / CV2-3 完了後に着手(analyser-capture-v2-plan 参照)。
+前提順序: capture v2 の CV2-2 / CV2-3 完了後に着手(analyser-capture-v2-plan 参照) — 完了済み。
 
 ## 受入(実装後)
 

@@ -1,6 +1,6 @@
 ---
 name: workbench-maintenance
-description: Maintain Workbench knowledge freshness with the change feed, maintenance queue, flags, and the weekly digest. Use for maintenance sweeps, review-queue triage, staleness or contradiction checks, supersede/archive proposals, and generating the weekly digest note. Not for normal project work (use workbench-project for that).
+description: Maintain Workbench knowledge freshness with the change feed, maintenance queue, flags, and the weekly digest, and analyse aggregated work activity via the insights service. Use for maintenance sweeps, review-queue triage, staleness or contradiction checks, supersede/archive proposals, weekly digest generation, and activity analysis / improvement proposals from capture data. Not for normal project work (use workbench-project for that).
 ---
 
 # Workbench Maintenance
@@ -54,6 +54,36 @@ Produce the digest on request or on a scheduled routine run. It is one note per 
 4. Keep the digest factual and compact: counts, item titles with project names, and one-line findings. Link decisions the human must make to the /maintenance UI rather than restating full bodies.
 
 A missing digest note for the current week is itself a signal that the scheduled routine stopped; mention it if noticed.
+
+## Analyse work activity (insights)
+
+Capture daemons on each PC record foreground app/window metadata locally and, when the
+owner enables upload, push that metadata and daily summaries to the insights service.
+Analysis runs as an agent routine over MCP — the product stores data and serves queries;
+conclusions live in memory/notes like any other knowledge.
+
+1. Orient with `insights.machines.list`, then pull the period with `insights.activity.query`
+   (`from`/`to`, optional `machineId`). Totals, category/app breakdowns, and per-day rows are
+   aggregated server-side; do not recompute them from raw summaries.
+2. Drill into interesting days with `insights.summaries.list` (metrics without bodies) and read
+   only the specific `insights.summaries.get` bodies you need (focus blocks, context switches,
+   idle time, timelines).
+3. Report findings as proposals, not as insights-service writes:
+   - Durable observations about work patterns (e.g. 「毎午前に長い集中ブロック、会議後に切替増」)
+     go to `projects.memory.append` (`agent_observed`, kind `observation`) on the relevant project.
+   - Longer analyses or improvement proposals become a note (`lifecycleState: raw`) so they enter
+     the review queue like all agent knowledge.
+4. Keep window titles out of durable knowledge unless they are clearly non-sensitive; summarize
+   at app/category level by default.
+
+**Screenshot-derived data (explicit path only).** Screenshot images are local-only and never
+reach the server. An agent operating **on the capture machine itself** may read them via the
+daemon loopback (`GET /capture/screenshots?date=`, `GET /capture/screenshots/:id/file`), process
+them into text (e.g. what was being worked on, visible document titles), and ingest that text
+explicitly with `insights.derived.ingest` (`kind`, `title`, `contentMarkdown`, optional
+`payloadJson`/`machineId`). Never upload or embed the image itself, never transcribe credentials
+or private content, and never automate this ingest — it is an explicit, reviewed action.
+`insights.derived.list` reads prior observations for context.
 
 ## Handle missing or older tools
 
