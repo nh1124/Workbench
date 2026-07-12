@@ -8,6 +8,8 @@ import os
 import sys
 import warnings
 from dataclasses import dataclass
+from datetime import date, datetime, time
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +19,7 @@ from fastapi.testclient import TestClient
 
 
 REF_TODAY = "2026-07-01"
+REFERENCE_USER_ID = "11111111-1111-4111-8111-111111111111"
 API_KEY = "lbs-golden-fixed-api-key"
 API_KEY_PEPPER = "lbs-golden-fixed-pepper"
 
@@ -225,6 +228,55 @@ def _write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _json_value(value: Any) -> Any:
+    if isinstance(value, (date, datetime, time)):
+        return value.isoformat()
+    if isinstance(value, Enum):
+        return value.value
+    return value
+
+
+def _capture_fixture_input() -> dict[str, int]:
+    from src.models.database import (  # pylint: disable=import-outside-toplevel
+        DailyCondition,
+        SessionLocal,
+        SystemConfig,
+        Task,
+        TaskException,
+        TaskExecution,
+    )
+
+    models = {
+        "tasks": Task,
+        "task_exceptions": TaskException,
+        "task_executions": TaskExecution,
+        "daily_conditions": DailyCondition,
+        "system_config": SystemConfig,
+    }
+    with SessionLocal() as session:
+        tables = {}
+        for table_name, model in models.items():
+            primary_key = tuple(model.__table__.primary_key.columns)
+            rows = session.query(model).order_by(*primary_key).all()
+            tables[table_name] = [
+                {
+                    column.name: _json_value(getattr(row, column.name))
+                    for column in model.__table__.columns
+                }
+                for row in rows
+            ]
+
+    _write_json(
+        GOLDENS_DIR / "fixture_input.json",
+        {
+            **tables,
+            "ref_today": REF_TODAY,
+            "reference_user_id": REFERENCE_USER_ID,
+        },
+    )
+    return {table_name: len(rows) for table_name, rows in tables.items()}
+
+
 def capture() -> None:
     _configure_app()
     from src.main import app  # pylint: disable=import-outside-toplevel
@@ -236,6 +288,7 @@ def capture() -> None:
     for old_json in GOLDENS_DIR.glob("*.json"):
         old_json.unlink()
 
+    fixture_counts = _capture_fixture_input()
     calls = build_calls()
     manifest_calls = []
     headers = {"X-API-KEY": API_KEY, "X-Timezone": "UTC"}
@@ -278,6 +331,10 @@ def capture() -> None:
     }
     _write_json(GOLDENS_DIR / "manifest.json", manifest)
     print(f"Captured {len(calls)} goldens in {GOLDENS_DIR}")
+    print(
+        "Fixture input rows: "
+        + "; ".join(f"{table}={count}" for table, count in fixture_counts.items())
+    )
 
 
 if __name__ == "__main__":
