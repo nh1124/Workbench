@@ -1,0 +1,16 @@
+{
+  "active": true,
+  "base_load_score": 3.3,
+  "context": "reflection",
+  "end_time": null,
+  "exception": null,
+  "has_exception": false,
+  "is_locked": true,
+  "load": 3.3,
+  "rule_type": "MONTHLY_NTH_WEEKDAY",
+  "start_time": null,
+  "status": "todo",
+  "target_date": "2026-07-26",
+  "task_id": "T-NTH-LAST-SUN",
+  "task_name": "Last Sunday reflection"
+}

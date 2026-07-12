@@ -1,0 +1,24 @@
+{
+  "active": true,
+  "base_load_score": 2.75,
+  "context": "edge",
+  "end_time": null,
+  "exception": {
+    "end_time": null,
+    "exception_type": "MANUAL_LOCK",
+    "id": 3,
+    "is_locked": true,
+    "notes": "Creates an occurrence despite all weekday flags being false.",
+    "override_load_value": 2.75,
+    "start_time": null
+  },
+  "has_exception": true,
+  "is_locked": true,
+  "load": 2.75,
+  "rule_type": "WEEKLY",
+  "start_time": null,
+  "status": "todo",
+  "target_date": "2026-07-02",
+  "task_id": "T-WEEK-NONE",
+  "task_name": "All weekdays disabled"
+}

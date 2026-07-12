@@ -1,0 +1,10 @@
+[
+  {
+    "status": "done",
+    "target_date": "2026-06-30"
+  },
+  {
+    "status": "skipped",
+    "target_date": "2026-07-02"
+  }
+]

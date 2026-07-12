@@ -1,0 +1,24 @@
+{
+  "active": true,
+  "base_load_score": 2.4,
+  "context": "admin",
+  "end_time": null,
+  "exception": {
+    "end_time": null,
+    "exception_type": "OVERRIDE_LOAD",
+    "id": 4,
+    "is_locked": false,
+    "notes": "Load override must be visible in resolved and schedule output.",
+    "override_load_value": 6.75,
+    "start_time": null
+  },
+  "has_exception": true,
+  "is_locked": false,
+  "load": 6.75,
+  "rule_type": "WEEKLY",
+  "start_time": null,
+  "status": "todo",
+  "target_date": "2026-07-01",
+  "task_id": "T-WEEK-MWF",
+  "task_name": "Monday Wednesday Friday review"
+}

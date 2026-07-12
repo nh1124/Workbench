@@ -1,0 +1,52 @@
+{
+  "adjusted_load": 22.63,
+  "base_cap": 7.25,
+  "base_load": 13.45,
+  "cap": 5.8,
+  "cognitive_fatigue": 2,
+  "context_penalty": 1.7,
+  "count_penalty": 1.01,
+  "date": "2026-07-01",
+  "level": "CRITICAL",
+  "raw_adjusted_load": 16.16,
+  "task_count": 3,
+  "tasks": [
+    {
+      "context": "focus",
+      "end_time": "11:00:00",
+      "exception_type": null,
+      "has_exception": false,
+      "is_locked": false,
+      "load": 4.5,
+      "start_time": "09:00:00",
+      "status": "done",
+      "task_id": "T-ONCE-001",
+      "task_name": "Launch-day deep work"
+    },
+    {
+      "context": "admin",
+      "end_time": null,
+      "exception_type": null,
+      "has_exception": false,
+      "is_locked": true,
+      "load": 6.75,
+      "start_time": null,
+      "status": "todo",
+      "task_id": "T-WEEK-MWF",
+      "task_name": "Monday Wednesday Friday review"
+    },
+    {
+      "context": "health",
+      "end_time": null,
+      "exception_type": null,
+      "has_exception": false,
+      "is_locked": false,
+      "load": 2.2,
+      "start_time": null,
+      "status": "todo",
+      "task_id": "T-EVERY-003",
+      "task_name": "Every three days from anchor"
+    }
+  ],
+  "unique_contexts": 3
+}

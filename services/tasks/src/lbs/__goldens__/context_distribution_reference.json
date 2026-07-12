@@ -1,0 +1,172 @@
+{
+  "distribution": [
+    {
+      "contexts": [
+        {
+          "context": "admin",
+          "load": 2.4
+        }
+      ],
+      "date": "2026-06-29",
+      "total_load": 2.4
+    },
+    {
+      "contexts": [
+        {
+          "context": "team",
+          "load": 1.7
+        },
+        {
+          "context": "finance",
+          "load": 3.1
+        }
+      ],
+      "date": "2026-06-30",
+      "total_load": 4.8
+    },
+    {
+      "contexts": [
+        {
+          "context": "focus",
+          "load": 4.5
+        },
+        {
+          "context": "admin",
+          "load": 6.75
+        },
+        {
+          "context": "health",
+          "load": 2.2
+        }
+      ],
+      "date": "2026-07-01",
+      "total_load": 13.45
+    },
+    {
+      "contexts": [
+        {
+          "context": "team",
+          "load": 1.7
+        },
+        {
+          "context": "edge",
+          "load": 2.75
+        }
+      ],
+      "date": "2026-07-02",
+      "total_load": 4.45
+    },
+    {
+      "contexts": [
+        {
+          "context": "focus",
+          "load": 5.5
+        }
+      ],
+      "date": "2026-07-03",
+      "total_load": 5.5
+    },
+    {
+      "contexts": [
+        {
+          "context": "home",
+          "load": 4.0
+        },
+        {
+          "context": "health",
+          "load": 2.2
+        }
+      ],
+      "date": "2026-07-04",
+      "total_load": 6.2
+    },
+    {
+      "contexts": [
+        {
+          "context": "home",
+          "load": 4.0
+        }
+      ],
+      "date": "2026-07-05",
+      "total_load": 4.0
+    },
+    {
+      "contexts": [
+        {
+          "context": "admin",
+          "load": 2.4
+        }
+      ],
+      "date": "2026-07-06",
+      "total_load": 2.4
+    },
+    {
+      "contexts": [
+        {
+          "context": "team",
+          "load": 1.7
+        },
+        {
+          "context": "health",
+          "load": 2.2
+        }
+      ],
+      "date": "2026-07-07",
+      "total_load": 3.9
+    },
+    {
+      "contexts": [
+        {
+          "context": "admin",
+          "load": 2.4
+        }
+      ],
+      "date": "2026-07-08",
+      "total_load": 2.4
+    },
+    {
+      "contexts": [
+        {
+          "context": "team",
+          "load": 1.7
+        }
+      ],
+      "date": "2026-07-09",
+      "total_load": 1.7
+    },
+    {
+      "contexts": [
+        {
+          "context": "admin",
+          "load": 2.4
+        },
+        {
+          "context": "health",
+          "load": 2.2
+        }
+      ],
+      "date": "2026-07-10",
+      "total_load": 4.6
+    },
+    {
+      "contexts": [
+        {
+          "context": "home",
+          "load": 4.0
+        }
+      ],
+      "date": "2026-07-11",
+      "total_load": 4.0
+    },
+    {
+      "contexts": [
+        {
+          "context": "home",
+          "load": 4.0
+        }
+      ],
+      "date": "2026-07-12",
+      "total_load": 4.0
+    }
+  ]
+}

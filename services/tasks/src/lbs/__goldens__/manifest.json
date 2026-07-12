@@ -1,0 +1,680 @@
+{
+  "calls": [
+    {
+      "body": null,
+      "description": "List tasks with active unset.",
+      "file": "tasks_all.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks",
+      "query": []
+    },
+    {
+      "body": null,
+      "description": "List active tasks.",
+      "file": "tasks_active.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks",
+      "query": [
+        {
+          "name": "active",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "List inactive tasks.",
+      "file": "tasks_inactive.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks",
+      "query": [
+        {
+          "name": "active",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Get task definition for T-ONCE-001.",
+      "file": "task_t-once-001.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks/T-ONCE-001",
+      "query": []
+    },
+    {
+      "body": null,
+      "description": "Get task definition for T-WEEK-MWF.",
+      "file": "task_t-week-mwf.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks/T-WEEK-MWF",
+      "query": []
+    },
+    {
+      "body": null,
+      "description": "Get task definition for T-WEEK-WEEKEND.",
+      "file": "task_t-week-weekend.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks/T-WEEK-WEEKEND",
+      "query": []
+    },
+    {
+      "body": null,
+      "description": "Get task definition for T-WEEK-TUTH.",
+      "file": "task_t-week-tuth.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks/T-WEEK-TUTH",
+      "query": []
+    },
+    {
+      "body": null,
+      "description": "Get task definition for T-WEEK-NONE.",
+      "file": "task_t-week-none.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks/T-WEEK-NONE",
+      "query": []
+    },
+    {
+      "body": null,
+      "description": "Get task definition for T-EVERY-003.",
+      "file": "task_t-every-003.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks/T-EVERY-003",
+      "query": []
+    },
+    {
+      "body": null,
+      "description": "Get task definition for T-MONTH-31.",
+      "file": "task_t-month-31.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks/T-MONTH-31",
+      "query": []
+    },
+    {
+      "body": null,
+      "description": "Get task definition for T-NTH-LAST-SUN.",
+      "file": "task_t-nth-last-sun.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks/T-NTH-LAST-SUN",
+      "query": []
+    },
+    {
+      "body": null,
+      "description": "Get task definition for T-NTH-SECOND-TUE.",
+      "file": "task_t-nth-second-tue.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks/T-NTH-SECOND-TUE",
+      "query": []
+    },
+    {
+      "body": null,
+      "description": "Get task definition for T-INACTIVE-ONCE.",
+      "file": "task_t-inactive-once.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks/T-INACTIVE-ONCE",
+      "query": []
+    },
+    {
+      "body": null,
+      "description": "Schedule from REF_TODAY - 14 days through REF_TODAY + 45 days.",
+      "file": "schedule_reference_window.json",
+      "method": "GET",
+      "path": "/api/lbs/schedule",
+      "query": [
+        {
+          "name": "start_date",
+          "value": "2026-06-17"
+        },
+        {
+          "name": "end_date",
+          "value": "2026-08-15"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Schedule across an August/September month boundary.",
+      "file": "schedule_month_boundary.json",
+      "method": "GET",
+      "path": "/api/lbs/schedule",
+      "query": [
+        {
+          "name": "start_date",
+          "value": "2026-08-28"
+        },
+        {
+          "name": "end_date",
+          "value": "2026-09-03"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "February 2027 window proving month_day=31 clamps to February 28.",
+      "file": "schedule_february_clamp.json",
+      "method": "GET",
+      "path": "/api/lbs/schedule",
+      "query": [
+        {
+          "name": "start_date",
+          "value": "2027-02-01"
+        },
+        {
+          "name": "end_date",
+          "value": "2027-03-02"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Schedule across the 2026/2027 year boundary.",
+      "file": "schedule_year_boundary.json",
+      "method": "GET",
+      "path": "/api/lbs/schedule",
+      "query": [
+        {
+          "name": "start_date",
+          "value": "2026-12-28"
+        },
+        {
+          "name": "end_date",
+          "value": "2027-01-05"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Resolve T-ONCE-001 on 2026-07-01 (normal due date).",
+      "file": "resolved_t-once-001_2026-07-01_normal_due_date.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks/T-ONCE-001/resolved",
+      "query": [
+        {
+          "name": "target_date",
+          "value": "2026-07-01"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Resolve T-ONCE-001 on 2026-07-03 (force do non rule date).",
+      "file": "resolved_t-once-001_2026-07-03_force_do_non_rule_date.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks/T-ONCE-001/resolved",
+      "query": [
+        {
+          "name": "target_date",
+          "value": "2026-07-03"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Resolve T-WEEK-MWF on 2026-07-01 (override load).",
+      "file": "resolved_t-week-mwf_2026-07-01_override_load.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks/T-WEEK-MWF/resolved",
+      "query": [
+        {
+          "name": "target_date",
+          "value": "2026-07-01"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Resolve T-WEEK-MWF on 2026-07-03 (skip).",
+      "file": "resolved_t-week-mwf_2026-07-03_skip.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks/T-WEEK-MWF/resolved",
+      "query": [
+        {
+          "name": "target_date",
+          "value": "2026-07-03"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Resolve T-WEEK-NONE on 2026-07-02 (manual lock).",
+      "file": "resolved_t-week-none_2026-07-02_manual_lock.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks/T-WEEK-NONE/resolved",
+      "query": [
+        {
+          "name": "target_date",
+          "value": "2026-07-02"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Resolve T-WEEK-WEEKEND on 2026-07-04 (reschedule times).",
+      "file": "resolved_t-week-weekend_2026-07-04_reschedule_times.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks/T-WEEK-WEEKEND/resolved",
+      "query": [
+        {
+          "name": "target_date",
+          "value": "2026-07-04"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Resolve T-MONTH-31 on 2027-02-28 (february clamp).",
+      "file": "resolved_t-month-31_2027-02-28_february_clamp.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks/T-MONTH-31/resolved",
+      "query": [
+        {
+          "name": "target_date",
+          "value": "2027-02-28"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Resolve T-NTH-LAST-SUN on 2026-07-26 (last sunday).",
+      "file": "resolved_t-nth-last-sun_2026-07-26_last_sunday.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks/T-NTH-LAST-SUN/resolved",
+      "query": [
+        {
+          "name": "target_date",
+          "value": "2026-07-26"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Dashboard for the week containing REF_TODAY; its today field uses the endpoint's real current UTC date.",
+      "file": "dashboard_reference_week.json",
+      "method": "GET",
+      "path": "/api/lbs/dashboard",
+      "query": [
+        {
+          "name": "start_date",
+          "value": "2026-06-29"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Heatmap including TODO, DONE, and SKIPPED statuses.",
+      "file": "heatmap_reference.json",
+      "method": "GET",
+      "path": "/api/lbs/heatmap",
+      "query": [
+        {
+          "name": "start",
+          "value": "2026-06-29"
+        },
+        {
+          "name": "end",
+          "value": "2026-07-12"
+        },
+        {
+          "name": "status",
+          "value": "todo"
+        },
+        {
+          "name": "status",
+          "value": "done"
+        },
+        {
+          "name": "status",
+          "value": "skipped"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Four fixed weeks of trend data with every status.",
+      "file": "trends_reference.json",
+      "method": "GET",
+      "path": "/api/lbs/trends",
+      "query": [
+        {
+          "name": "weeks",
+          "value": "4"
+        },
+        {
+          "name": "start_date",
+          "value": "2026-06-15"
+        },
+        {
+          "name": "status",
+          "value": "todo"
+        },
+        {
+          "name": "status",
+          "value": "done"
+        },
+        {
+          "name": "status",
+          "value": "skipped"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Context distribution including every status.",
+      "file": "context_distribution_reference.json",
+      "method": "GET",
+      "path": "/api/lbs/context-distribution",
+      "query": [
+        {
+          "name": "start",
+          "value": "2026-06-29"
+        },
+        {
+          "name": "end",
+          "value": "2026-07-12"
+        },
+        {
+          "name": "status",
+          "value": "todo"
+        },
+        {
+          "name": "status",
+          "value": "done"
+        },
+        {
+          "name": "status",
+          "value": "skipped"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Daily load at cognitive fatigue 0 with every status.",
+      "file": "calculate_2026-06-29_all.json",
+      "method": "GET",
+      "path": "/api/lbs/calculate/2026-06-29",
+      "query": [
+        {
+          "name": "status",
+          "value": "todo"
+        },
+        {
+          "name": "status",
+          "value": "done"
+        },
+        {
+          "name": "status",
+          "value": "skipped"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Daily load at cognitive fatigue 2 with the endpoint's default TODO/DONE filter.",
+      "file": "calculate_2026-07-01_default.json",
+      "method": "GET",
+      "path": "/api/lbs/calculate/2026-07-01",
+      "query": []
+    },
+    {
+      "body": null,
+      "description": "Daily load at cognitive fatigue 2 with TODO only.",
+      "file": "calculate_2026-07-01_todo.json",
+      "method": "GET",
+      "path": "/api/lbs/calculate/2026-07-01",
+      "query": [
+        {
+          "name": "status",
+          "value": "todo"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Daily load at cognitive fatigue 2 with DONE only.",
+      "file": "calculate_2026-07-01_done.json",
+      "method": "GET",
+      "path": "/api/lbs/calculate/2026-07-01",
+      "query": [
+        {
+          "name": "status",
+          "value": "done"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Daily load including a SKIPPED execution and MANUAL_LOCK.",
+      "file": "calculate_2026-07-02_all.json",
+      "method": "GET",
+      "path": "/api/lbs/calculate/2026-07-02",
+      "query": [
+        {
+          "name": "status",
+          "value": "todo"
+        },
+        {
+          "name": "status",
+          "value": "done"
+        },
+        {
+          "name": "status",
+          "value": "skipped"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "High-fatigue daily load at cognitive fatigue 5 with every status.",
+      "file": "calculate_2026-07-04_all.json",
+      "method": "GET",
+      "path": "/api/lbs/calculate/2026-07-04",
+      "query": [
+        {
+          "name": "status",
+          "value": "todo"
+        },
+        {
+          "name": "status",
+          "value": "done"
+        },
+        {
+          "name": "status",
+          "value": "skipped"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "List all exception types in the fixture.",
+      "file": "exceptions_all.json",
+      "method": "GET",
+      "path": "/api/lbs/exceptions",
+      "query": [
+        {
+          "name": "start_date",
+          "value": "2026-01-01"
+        },
+        {
+          "name": "end_date",
+          "value": "2027-12-31"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Execution history for T-ONCE-001.",
+      "file": "history_t-once-001.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks/T-ONCE-001/history",
+      "query": [
+        {
+          "name": "start_date",
+          "value": "2026-01-01"
+        },
+        {
+          "name": "end_date",
+          "value": "2027-12-31"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Execution history for T-WEEK-MWF.",
+      "file": "history_t-week-mwf.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks/T-WEEK-MWF/history",
+      "query": [
+        {
+          "name": "start_date",
+          "value": "2026-01-01"
+        },
+        {
+          "name": "end_date",
+          "value": "2027-12-31"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Execution history for T-WEEK-WEEKEND.",
+      "file": "history_t-week-weekend.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks/T-WEEK-WEEKEND/history",
+      "query": [
+        {
+          "name": "start_date",
+          "value": "2026-01-01"
+        },
+        {
+          "name": "end_date",
+          "value": "2027-12-31"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Execution history for T-WEEK-TUTH.",
+      "file": "history_t-week-tuth.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks/T-WEEK-TUTH/history",
+      "query": [
+        {
+          "name": "start_date",
+          "value": "2026-01-01"
+        },
+        {
+          "name": "end_date",
+          "value": "2027-12-31"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Execution history for T-WEEK-NONE.",
+      "file": "history_t-week-none.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks/T-WEEK-NONE/history",
+      "query": [
+        {
+          "name": "start_date",
+          "value": "2026-01-01"
+        },
+        {
+          "name": "end_date",
+          "value": "2027-12-31"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Execution history for T-EVERY-003.",
+      "file": "history_t-every-003.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks/T-EVERY-003/history",
+      "query": [
+        {
+          "name": "start_date",
+          "value": "2026-01-01"
+        },
+        {
+          "name": "end_date",
+          "value": "2027-12-31"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Execution history for T-MONTH-31.",
+      "file": "history_t-month-31.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks/T-MONTH-31/history",
+      "query": [
+        {
+          "name": "start_date",
+          "value": "2026-01-01"
+        },
+        {
+          "name": "end_date",
+          "value": "2027-12-31"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Execution history for T-NTH-LAST-SUN.",
+      "file": "history_t-nth-last-sun.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks/T-NTH-LAST-SUN/history",
+      "query": [
+        {
+          "name": "start_date",
+          "value": "2026-01-01"
+        },
+        {
+          "name": "end_date",
+          "value": "2027-12-31"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Execution history for T-NTH-SECOND-TUE.",
+      "file": "history_t-nth-second-tue.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks/T-NTH-SECOND-TUE/history",
+      "query": [
+        {
+          "name": "start_date",
+          "value": "2026-01-01"
+        },
+        {
+          "name": "end_date",
+          "value": "2027-12-31"
+        }
+      ]
+    },
+    {
+      "body": null,
+      "description": "Execution history for T-INACTIVE-ONCE.",
+      "file": "history_t-inactive-once.json",
+      "method": "GET",
+      "path": "/api/lbs/tasks/T-INACTIVE-ONCE/history",
+      "query": [
+        {
+          "name": "start_date",
+          "value": "2026-01-01"
+        },
+        {
+          "name": "end_date",
+          "value": "2027-12-31"
+        }
+      ]
+    }
+  ],
+  "caveats": [
+    "GET /api/lbs/dashboard calculates its today field with get_local_today at capture time even when start_date is supplied; the fixed weekly breakdown is still anchored by start_date=2026-06-29."
+  ],
+  "fixture": "scripts/lbs-golden/fixture.db",
+  "golden_count": 46,
+  "reference_date": "2026-07-01"
+}

@@ -1,0 +1,24 @@
+{
+  "active": true,
+  "base_load_score": 4.0,
+  "context": "home",
+  "end_time": "18:15:00",
+  "exception": {
+    "end_time": "18:15:00",
+    "exception_type": "RESCHEDULE",
+    "id": 5,
+    "is_locked": true,
+    "notes": "Time overrides with a locked exception.",
+    "override_load_value": null,
+    "start_time": "16:30:00"
+  },
+  "has_exception": true,
+  "is_locked": true,
+  "load": 4.0,
+  "rule_type": "WEEKLY",
+  "start_time": "16:30:00",
+  "status": "done",
+  "target_date": "2026-07-04",
+  "task_id": "T-WEEK-WEEKEND",
+  "task_name": "Weekend maintenance"
+}

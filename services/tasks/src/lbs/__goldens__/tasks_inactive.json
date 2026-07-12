@@ -1,0 +1,31 @@
+[
+  {
+    "active": false,
+    "anchor_date": null,
+    "base_load_score": 9.0,
+    "context": "archive",
+    "due_date": "2026-07-02",
+    "end_date": null,
+    "end_time": null,
+    "external_sync_id": null,
+    "fri": false,
+    "interval_days": null,
+    "is_locked": false,
+    "mon": false,
+    "month_day": null,
+    "notes": null,
+    "nth_in_month": null,
+    "rule_type": "ONCE",
+    "sat": false,
+    "start_date": null,
+    "start_time": null,
+    "sun": false,
+    "task_id": "T-INACTIVE-ONCE",
+    "task_name": "Inactive archived task",
+    "thu": false,
+    "timezone": "UTC",
+    "tue": false,
+    "wed": false,
+    "weekday_mon1": null
+  }
+]

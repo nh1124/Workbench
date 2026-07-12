@@ -1,0 +1,524 @@
+[
+  {
+    "date": "2027-02-02",
+    "tasks": [
+      {
+        "context": "team",
+        "end_time": "15:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 1.7,
+        "start_time": "14:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-TUTH",
+        "task_name": "Tuesday Thursday collaboration",
+        "timezone": "UTC"
+      },
+      {
+        "context": "health",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 2.2,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-EVERY-003",
+        "task_name": "Every three days from anchor",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 5.34
+  },
+  {
+    "date": "2027-02-04",
+    "tasks": [
+      {
+        "context": "team",
+        "end_time": "15:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 1.7,
+        "start_time": "14:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-TUTH",
+        "task_name": "Tuesday Thursday collaboration",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 1.93
+  },
+  {
+    "date": "2027-02-05",
+    "tasks": [
+      {
+        "context": "health",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 2.2,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-EVERY-003",
+        "task_name": "Every three days from anchor",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 2.43
+  },
+  {
+    "date": "2027-02-06",
+    "tasks": [
+      {
+        "context": "home",
+        "end_time": "12:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 4.0,
+        "start_time": "10:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-WEEKEND",
+        "task_name": "Weekend maintenance",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 4.23
+  },
+  {
+    "date": "2027-02-07",
+    "tasks": [
+      {
+        "context": "home",
+        "end_time": "12:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 4.0,
+        "start_time": "10:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-WEEKEND",
+        "task_name": "Weekend maintenance",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 4.23
+  },
+  {
+    "date": "2027-02-08",
+    "tasks": [
+      {
+        "context": "health",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 2.2,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-EVERY-003",
+        "task_name": "Every three days from anchor",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 2.43
+  },
+  {
+    "date": "2027-02-09",
+    "tasks": [
+      {
+        "context": "team",
+        "end_time": "15:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 1.7,
+        "start_time": "14:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-TUTH",
+        "task_name": "Tuesday Thursday collaboration",
+        "timezone": "UTC"
+      },
+      {
+        "context": "planning",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 1.4,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-NTH-SECOND-TUE",
+        "task_name": "Second Tuesday planning",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 4.54
+  },
+  {
+    "date": "2027-02-11",
+    "tasks": [
+      {
+        "context": "team",
+        "end_time": "15:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 1.7,
+        "start_time": "14:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-TUTH",
+        "task_name": "Tuesday Thursday collaboration",
+        "timezone": "UTC"
+      },
+      {
+        "context": "health",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 2.2,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-EVERY-003",
+        "task_name": "Every three days from anchor",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 5.34
+  },
+  {
+    "date": "2027-02-13",
+    "tasks": [
+      {
+        "context": "home",
+        "end_time": "12:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 4.0,
+        "start_time": "10:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-WEEKEND",
+        "task_name": "Weekend maintenance",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 4.23
+  },
+  {
+    "date": "2027-02-14",
+    "tasks": [
+      {
+        "context": "home",
+        "end_time": "12:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 4.0,
+        "start_time": "10:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-WEEKEND",
+        "task_name": "Weekend maintenance",
+        "timezone": "UTC"
+      },
+      {
+        "context": "health",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 2.2,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-EVERY-003",
+        "task_name": "Every three days from anchor",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 7.64
+  },
+  {
+    "date": "2027-02-16",
+    "tasks": [
+      {
+        "context": "team",
+        "end_time": "15:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 1.7,
+        "start_time": "14:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-TUTH",
+        "task_name": "Tuesday Thursday collaboration",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 1.93
+  },
+  {
+    "date": "2027-02-17",
+    "tasks": [
+      {
+        "context": "health",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 2.2,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-EVERY-003",
+        "task_name": "Every three days from anchor",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 2.43
+  },
+  {
+    "date": "2027-02-18",
+    "tasks": [
+      {
+        "context": "team",
+        "end_time": "15:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 1.7,
+        "start_time": "14:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-TUTH",
+        "task_name": "Tuesday Thursday collaboration",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 1.93
+  },
+  {
+    "date": "2027-02-20",
+    "tasks": [
+      {
+        "context": "home",
+        "end_time": "12:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 4.0,
+        "start_time": "10:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-WEEKEND",
+        "task_name": "Weekend maintenance",
+        "timezone": "UTC"
+      },
+      {
+        "context": "health",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 2.2,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-EVERY-003",
+        "task_name": "Every three days from anchor",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 7.64
+  },
+  {
+    "date": "2027-02-21",
+    "tasks": [
+      {
+        "context": "home",
+        "end_time": "12:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 4.0,
+        "start_time": "10:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-WEEKEND",
+        "task_name": "Weekend maintenance",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 4.23
+  },
+  {
+    "date": "2027-02-23",
+    "tasks": [
+      {
+        "context": "team",
+        "end_time": "15:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 1.7,
+        "start_time": "14:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-TUTH",
+        "task_name": "Tuesday Thursday collaboration",
+        "timezone": "UTC"
+      },
+      {
+        "context": "health",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 2.2,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-EVERY-003",
+        "task_name": "Every three days from anchor",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 5.34
+  },
+  {
+    "date": "2027-02-25",
+    "tasks": [
+      {
+        "context": "team",
+        "end_time": "15:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 1.7,
+        "start_time": "14:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-TUTH",
+        "task_name": "Tuesday Thursday collaboration",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 1.93
+  },
+  {
+    "date": "2027-02-26",
+    "tasks": [
+      {
+        "context": "health",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 2.2,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-EVERY-003",
+        "task_name": "Every three days from anchor",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 2.43
+  },
+  {
+    "date": "2027-02-27",
+    "tasks": [
+      {
+        "context": "home",
+        "end_time": "12:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 4.0,
+        "start_time": "10:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-WEEKEND",
+        "task_name": "Weekend maintenance",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 4.23
+  },
+  {
+    "date": "2027-02-28",
+    "tasks": [
+      {
+        "context": "home",
+        "end_time": "12:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 4.0,
+        "start_time": "10:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-WEEKEND",
+        "task_name": "Weekend maintenance",
+        "timezone": "UTC"
+      },
+      {
+        "context": "finance",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 3.1,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-MONTH-31",
+        "task_name": "Month end clamped from day 31",
+        "timezone": "UTC"
+      },
+      {
+        "context": "reflection",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": true,
+        "load": 3.3,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-NTH-LAST-SUN",
+        "task_name": "Last Sunday reflection",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 13.11
+  },
+  {
+    "date": "2027-03-01",
+    "tasks": [
+      {
+        "context": "health",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 2.2,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-EVERY-003",
+        "task_name": "Every three days from anchor",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 2.43
+  },
+  {
+    "date": "2027-03-02",
+    "tasks": [
+      {
+        "context": "team",
+        "end_time": "15:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 1.7,
+        "start_time": "14:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-TUTH",
+        "task_name": "Tuesday Thursday collaboration",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 1.93
+  }
+]
