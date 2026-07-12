@@ -23,7 +23,7 @@ import {
   type TaskOccurrenceRow,
   toTaskStatus
 } from "../types";
-import { occurrenceMembershipKey, taskOccurrenceRowKey } from "../lib/taskOccurrenceIdentity";
+import { buildTodayRows } from "../lib/taskTodayRows";
 
 export interface TaskDataState {
   tasks: Task[];
@@ -123,32 +123,10 @@ export function useTaskDataLoader(
         }
       }
 
-      const todayMemberships = new Set<string>();
-      const builtTodayRows: TaskOccurrenceRow[] = myDayTasks.map((t) => {
-        const occurrenceDate = t.occurrenceDate || t.scheduledDate || todayKey;
-        const scheduledDate = t.scheduledDate || todayKey;
-        todayMemberships.add(occurrenceMembershipKey(t.id, occurrenceDate, scheduledDate));
-        return {
-          key: taskOccurrenceRowKey({
-            taskId: t.id,
-            occurrenceDate,
-            scheduledDate,
-            scheduleId: t.scheduleId
-          }),
-          taskId: t.id,
-          date: scheduledDate,
-          occurrenceDate,
-          scheduledDate,
-          scheduleId: t.scheduleId,
-          title: t.title,
-          context: t.contextName ?? t.context,
-          status: toTaskStatus(t.status),
-          load: t.baseLoadScore,
-          startTime: t.startTime ?? undefined,
-          endTime: t.endTime ?? undefined,
-          isLocked: t.isLocked
-        };
-      });
+      const {
+        rows: builtTodayRows,
+        membershipKeys: todayMemberships
+      } = buildTodayRows(taskList, myDayTasks, todaySchedule, todayKey);
       setTodayRows(builtTodayRows);
 
       // Planned/overdue counts

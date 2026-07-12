@@ -149,7 +149,7 @@ export interface TaskOccurrenceRow {
   date: string;
   /** LBS execution date used for completion/history operations. */
   occurrenceDate?: string;
-  /** Planned work date when this row comes from an explicit schedule item. */
+  /** Planned/display date for Today/Schedule rows, including generated occurrences. */
   scheduledDate?: string;
   /** Explicit schedule item id, when available. */
   scheduleId?: number;

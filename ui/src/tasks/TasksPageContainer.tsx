@@ -318,15 +318,34 @@ export function TasksPageContainer() {
     });
   };
 
+  const occurrenceCollections = {
+    todayRows,
+    occurrenceRows,
+    inboxUpcomingRows,
+    inboxDoneRows
+  };
+  const occurrenceCollectionSetters = {
+    setTodayRows,
+    setOccurrenceRows,
+    setInboxUpcomingRows,
+    setInboxDoneRows
+  };
+
   const handleToggleOccurrenceDone = async (row: TaskOccurrenceRow) => {
-    await _handleToggleOccDone(row, setTodayRows, setOccurrenceRows, setInboxUpcomingRows, setInboxDoneRows);
+    await _handleToggleOccDone(row, occurrenceCollections, occurrenceCollectionSetters);
   };
 
   const closeMenu = () => setOccurrenceMenu((prev) => ({ ...prev, visible: false }));
 
   const handleMarkSelectedOccurrences = async (status: TaskStatus) => {
     const rows = getSelectedOccurrenceRows(activeOccurrenceRows);
-    await _handleMarkSelected(status, rows, setTodayRows, setOccurrenceRows, setInboxUpcomingRows, setInboxDoneRows, closeMenu);
+    await _handleMarkSelected(
+      status,
+      rows,
+      occurrenceCollections,
+      occurrenceCollectionSetters,
+      closeMenu
+    );
   };
 
   const handleSkipSelectedTasks = async () => {

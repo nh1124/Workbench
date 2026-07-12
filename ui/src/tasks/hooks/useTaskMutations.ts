@@ -21,6 +21,11 @@ import {
   taskOccurrenceRowKey
 } from "../lib/taskOccurrenceIdentity";
 import {
+  runOptimisticOccurrenceMutation,
+  type TaskOccurrenceCollections,
+  type TaskOccurrenceCollectionSetters
+} from "../lib/taskOccurrenceStatusMutation";
+import {
   emptyDraft,
   taskToDraft,
   type QuickFilter,
@@ -112,18 +117,14 @@ export interface TaskMutationsActions {
   handleTogglePin: (task: Task) => Promise<void>;
   handleToggleOccurrenceDone: (
     row: TaskOccurrenceRow,
-    setTodayRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>,
-    setOccurrenceRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>,
-    setInboxUpcomingRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>,
-    setInboxDoneRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>
+    current: TaskOccurrenceCollections,
+    setters: TaskOccurrenceCollectionSetters
   ) => Promise<void>;
   handleMarkSelectedOccurrences: (
     status: import("../../types/models").TaskStatus,
     selectedRows: TaskOccurrenceRow[],
-    setTodayRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>,
-    setOccurrenceRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>,
-    setInboxUpcomingRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>,
-    setInboxDoneRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>,
+    current: TaskOccurrenceCollections,
+    setters: TaskOccurrenceCollectionSetters,
     closeMenu: () => void
   ) => Promise<void>;
   handleSkipSelectedTasks: (
@@ -235,6 +236,8 @@ export function useTaskMutations(
   // always reads the freshest draft without stale closure issues.
   const draftRef = useRef<TaskDraft>(emptyDraft);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
+  const occurrenceMutationSequenceRef = useRef(0);
+  const occurrenceMutationVersionsRef = useRef(new Map<string, number>());
 
   // ── Derived ────────────────────────────────────────────────────────────────
 
@@ -553,23 +556,33 @@ export function useTaskMutations(
 
   const handleToggleOccurrenceDone = async (
     row: TaskOccurrenceRow,
-    setTodayRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>,
-    setOccurrenceRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>,
-    setInboxUpcomingRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>,
-    setInboxDoneRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>
+    current: TaskOccurrenceCollections,
+    setters: TaskOccurrenceCollectionSetters
   ) => {
     const nextStatus = (row.status === "done" ? "todo" : "done") as import("../../types/models").TaskStatus;
     const occurrenceDate = row.occurrenceDate ?? row.date;
+    const mutationVersion = ++occurrenceMutationSequenceRef.current;
+    occurrenceMutationVersionsRef.current.set(row.key, mutationVersion);
     try {
-      await tasksApi.completeOccurrence(row.taskId, occurrenceDate, nextStatus);
-      const updateRows = (prev: TaskOccurrenceRow[]) =>
-        prev.map((r) => (r.key === row.key ? { ...r, status: nextStatus } : r));
-      setTodayRows(updateRows);
-      setOccurrenceRows(updateRows);
-      setInboxUpcomingRows(updateRows);
-      setInboxDoneRows(updateRows);
-      setTimeout(() => { void refreshAfterOccurrenceMutation(); }, 800);
+      await runOptimisticOccurrenceMutation({
+        current,
+        selectedRows: [row],
+        status: nextStatus,
+        setters,
+        mutate: () => tasksApi.completeOccurrence(row.taskId, occurrenceDate, nextStatus),
+        shouldRollback: (key) => occurrenceMutationVersionsRef.current.get(key) === mutationVersion
+      });
+      const shouldReconcile = occurrenceMutationVersionsRef.current.get(row.key) === mutationVersion;
+      if (shouldReconcile) {
+        occurrenceMutationVersionsRef.current.delete(row.key);
+        setTimeout(() => { void refreshAfterOccurrenceMutation(); }, 800);
+      }
     } catch {
+      const shouldReconcile = occurrenceMutationVersionsRef.current.get(row.key) === mutationVersion;
+      if (shouldReconcile) {
+        occurrenceMutationVersionsRef.current.delete(row.key);
+        setTimeout(() => { void refreshAfterOccurrenceMutation(); }, 800);
+      }
       pushErrorNotification("Failed to update occurrence status.");
     }
   };
@@ -577,27 +590,52 @@ export function useTaskMutations(
   const handleMarkSelectedOccurrences = async (
     status: import("../../types/models").TaskStatus,
     selectedRows: TaskOccurrenceRow[],
-    setTodayRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>,
-    setOccurrenceRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>,
-    setInboxUpcomingRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>,
-    setInboxDoneRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>,
+    current: TaskOccurrenceCollections,
+    setters: TaskOccurrenceCollectionSetters,
     closeMenu: () => void
   ) => {
     if (selectedRows.length === 0) return;
+    const mutationVersion = ++occurrenceMutationSequenceRef.current;
+    selectedRows.forEach((row) => occurrenceMutationVersionsRef.current.set(row.key, mutationVersion));
     try {
-      await Promise.all(
-        selectedRows.map((row) => tasksApi.completeOccurrence(row.taskId, row.occurrenceDate ?? row.date, status))
+      await runOptimisticOccurrenceMutation({
+        current,
+        selectedRows,
+        status,
+        setters,
+        mutate: () => Promise.all(
+          selectedRows.map((row) => tasksApi.completeOccurrence(
+            row.taskId,
+            row.occurrenceDate ?? row.date,
+            status
+          ))
+        ),
+        shouldRollback: (key) => occurrenceMutationVersionsRef.current.get(key) === mutationVersion
+      });
+      const shouldReconcile = selectedRows.every(
+        (row) => occurrenceMutationVersionsRef.current.get(row.key) === mutationVersion
       );
-      const updatedKeys = new Set(selectedRows.map((r) => r.key));
-      const updateRows = (prev: TaskOccurrenceRow[]) =>
-        prev.map((r) => (updatedKeys.has(r.key) ? { ...r, status } : r));
-      setTodayRows(updateRows);
-      setOccurrenceRows(updateRows);
-      setInboxUpcomingRows(updateRows);
-      setInboxDoneRows(updateRows);
+      selectedRows.forEach((row) => {
+        if (occurrenceMutationVersionsRef.current.get(row.key) === mutationVersion) {
+          occurrenceMutationVersionsRef.current.delete(row.key);
+        }
+      });
       closeMenu();
-      setTimeout(() => { void refreshAfterOccurrenceMutation(); }, 800);
+      if (shouldReconcile) {
+        setTimeout(() => { void refreshAfterOccurrenceMutation(); }, 800);
+      }
     } catch {
+      const shouldReconcile = selectedRows.every(
+        (row) => occurrenceMutationVersionsRef.current.get(row.key) === mutationVersion
+      );
+      selectedRows.forEach((row) => {
+        if (occurrenceMutationVersionsRef.current.get(row.key) === mutationVersion) {
+          occurrenceMutationVersionsRef.current.delete(row.key);
+        }
+      });
+      if (shouldReconcile) {
+        setTimeout(() => { void refreshAfterOccurrenceMutation(); }, 800);
+      }
       pushErrorNotification("Failed to update selected occurrences.");
     }
   };
