@@ -16,6 +16,7 @@ import {
 } from "./scheduleContract.js";
 import {
   applyResolvedStatus,
+  createTaskResolver,
   createLbsClient,
   getLbsConfig,
   normalizeResponseTask,
@@ -27,7 +28,6 @@ import { listDateKeys, taskOccursOnDateKey } from "./taskRecurrenceUtils.js";
 import type {
   ScheduleCalendarDay,
   ScheduleCalendarItem,
-  Task,
   TodayTask
 } from "./types.js";
 
@@ -40,6 +40,20 @@ export interface ScheduleItemInput {
   timezone?: string;
 }
 
+type TaskScheduleStoreDependencies = {
+  listPinnedTaskIds: typeof listPinnedTaskIds;
+  listItemsByScheduledDate: typeof listItemsByScheduledDate;
+  listItemsForCalendarWindow: typeof listItemsForCalendarWindow;
+  createLbsClient: typeof createLbsClient;
+};
+
+const defaultDependencies: TaskScheduleStoreDependencies = {
+  listPinnedTaskIds,
+  listItemsByScheduledDate,
+  listItemsForCalendarWindow,
+  createLbsClient
+};
+
 /**
  * List Today tasks for the given date.
  *
@@ -49,16 +63,44 @@ export interface ScheduleItemInput {
 export async function listTaskToday(
   ownerUsername: string,
   date: string,
-  lbsAccessToken: string
+  lbsAccessToken: string,
+  dependencyOverrides: Partial<TaskScheduleStoreDependencies> = {}
 ): Promise<TodayTask[]> {
   console.log(`[tasks-service] listTaskToday owner=${ownerUsername} date=${date}`);
 
   const config = getLbsConfig();
-  const client = createLbsClient(config, lbsAccessToken);
-  const pinnedIds = new Set(await listPinnedTaskIds(ownerUsername));
+  const dependencies = { ...defaultDependencies, ...dependencyOverrides };
+  const client = dependencies.createLbsClient(config, lbsAccessToken);
+  const pinnedIds = new Set(await dependencies.listPinnedTaskIds(ownerUsername));
 
-  const scheduleItems = await listItemsByScheduledDate(ownerUsername, date);
+  const scheduleItems = await dependencies.listItemsByScheduledDate(ownerUsername, date);
   console.log(`[tasks-service] listTaskToday explicit schedule items=${scheduleItems.length} date=${date}`);
+
+  if (scheduleItems.length === 0) return [];
+
+  const occurrenceDates = scheduleItems.map((item) => item.occurrenceDate).sort();
+  const minOccurrenceDate = occurrenceDates[0];
+  const maxOccurrenceDate = occurrenceDates[occurrenceDates.length - 1];
+  const [rawTasks, lbsSchedule] = await Promise.all([
+    (client.listTasks(undefined, config.defaultActive) as unknown as Promise<LbsTask[]>).catch((error) => {
+      console.warn(
+        `[tasks-service] listTaskToday definition batch failed; using per-item fallback: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return [];
+    }),
+    client.getSchedule(minOccurrenceDate, maxOccurrenceDate).catch((error) => {
+      console.warn(
+        `[tasks-service] listTaskToday status batch failed; using per-item fallback: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return [];
+    })
+  ]);
+  const resolveTask = createTaskResolver(client, rawTasks.map(normalizeResponseTask));
+  const statusMap = buildScheduleStatusMap(lbsSchedule);
 
   const resolveEntry = async (
     taskId: string,
@@ -66,14 +108,17 @@ export async function listTaskToday(
     scheduleItem?: ScheduleItemRow
   ): Promise<TodayTask | null> => {
     try {
-      const raw = (await client.getTask(taskId)) as unknown as LbsTask;
-      const normalized = normalizeResponseTask(raw);
-      const resolved = await applyResolvedStatus(
-        normalized,
-        lbsAccessToken,
-        config.timezone,
-        occurrenceDate
-      );
+      const normalized = await resolveTask(taskId);
+      if (!normalized) return null;
+      const mappedStatus = statusMap.get(`${taskId}::${occurrenceDate}`);
+      const resolved = mappedStatus
+        ? {
+            ...normalized,
+            status: mappedStatus.status,
+            baseLoadScore: mappedStatus.load ?? normalized.baseLoadScore,
+            isLocked: mappedStatus.isLocked ?? normalized.isLocked
+          }
+        : await applyResolvedStatus(normalized, lbsAccessToken, config.timezone, occurrenceDate);
       return {
         ...resolved,
         isPinned: pinnedIds.has(resolved.id),
@@ -141,7 +186,6 @@ export async function updateTaskScheduleItem(
   scheduleId: number,
   patch: {
     scheduledDate?: string;
-    occurrenceDate?: string;
     startTime?: string | null;
     endTime?: string | null;
     timezone?: string | null;
@@ -205,15 +249,17 @@ export async function listTaskScheduleCalendar(
   ownerUsername: string,
   startDate: string,
   endDate: string,
-  lbsAccessToken: string
+  lbsAccessToken: string,
+  dependencyOverrides: Partial<TaskScheduleStoreDependencies> = {}
 ): Promise<ScheduleCalendarDay[]> {
   console.log(
     `[tasks-service] listTaskScheduleCalendar owner=${ownerUsername} ${startDate}->${endDate}`
   );
 
   const config = getLbsConfig();
-  const client = createLbsClient(config, lbsAccessToken);
-  const items = await listItemsForCalendarWindow(ownerUsername, startDate, endDate);
+  const dependencies = { ...defaultDependencies, ...dependencyOverrides };
+  const client = dependencies.createLbsClient(config, lbsAccessToken);
+  const items = await dependencies.listItemsForCalendarWindow(ownerUsername, startDate, endDate);
   const explicitOccurrenceKeys = new Set(
     items.map((item) => `${item.taskId}::${item.occurrenceDate}`)
   );
@@ -225,41 +271,18 @@ export async function listTaskScheduleCalendar(
   const tasks = rawTasks.map(normalizeResponseTask);
   const taskMap = new Map(tasks.map((task) => [task.id, task]));
   const lbsSchedule = (await client.getSchedule(startDate, endDate)) as LbsScheduleDay[];
-  const generatedStatusMap = new Map<string, { status: ReturnType<typeof toUiStatus>; load?: number; isLocked?: boolean }>();
-  for (const day of lbsSchedule) {
-    for (const task of day.tasks || []) {
-      generatedStatusMap.set(`${task.task_id}::${day.date}`, {
-        status: toUiStatus(task.status),
-        load: task.load,
-        isLocked: task.is_locked === true
-      });
-    }
-  }
-
-  const resolveTask = async (taskId: string): Promise<Task | null> => {
-    const cached = taskMap.get(taskId);
-    if (cached) return cached;
-    try {
-      const raw = (await client.getTask(taskId)) as unknown as LbsTask;
-      const normalized = normalizeResponseTask(raw);
-      taskMap.set(normalized.id, normalized);
-      return normalized;
-    } catch {
-      return null;
-    }
-  };
+  const generatedStatusMap = buildScheduleStatusMap(lbsSchedule);
+  const resolveTask = createTaskResolver(client, [...taskMap.values()]);
 
   const resolved = await Promise.all(
     explicitItemsInWindow.map(async (item): Promise<ScheduleCalendarItem | null> => {
       try {
         const normalized = await resolveTask(item.taskId);
         if (!normalized) return null;
-        const withStatus = await applyResolvedStatus(
-          normalized,
-          lbsAccessToken,
-          config.timezone,
-          item.occurrenceDate
-        );
+        const mappedStatus = generatedStatusMap.get(`${item.taskId}::${item.occurrenceDate}`);
+        const withStatus = mappedStatus
+          ? { ...normalized, status: mappedStatus.status }
+          : await applyResolvedStatus(normalized, lbsAccessToken, config.timezone, item.occurrenceDate);
         return {
           scheduleId: item.id,
           taskId: item.taskId,
@@ -268,11 +291,11 @@ export async function listTaskScheduleCalendar(
           status: withStatus.status,
           occurrenceDate: item.occurrenceDate,
           scheduledDate: item.scheduledDate,
-          load: withStatus.baseLoadScore,
+          load: mappedStatus?.load ?? withStatus.baseLoadScore,
           startTime: item.startTime,
           endTime: item.endTime,
           timezone: item.timezone,
-          isLocked: withStatus.isLocked
+          isLocked: mappedStatus?.isLocked ?? withStatus.isLocked
         };
       } catch (error) {
         console.warn(
@@ -287,7 +310,7 @@ export async function listTaskScheduleCalendar(
 
   const generated = await Promise.all(
     tasks
-      .filter((task) => task.recurrence !== "ONCE" && (task.startTime || task.endTime))
+      .filter((task) => task.recurrence !== "ONCE")
       .flatMap((task) =>
         listDateKeys(startDate, endDate)
           .filter((dateKey) => taskOccursOnDateKey(task, dateKey))
@@ -335,3 +358,23 @@ export async function listTaskScheduleCalendar(
 }
 
 export type { ScheduleItemRow };
+
+function buildScheduleStatusMap(lbsSchedule: LbsScheduleDay[]): Map<
+  string,
+  { status: ReturnType<typeof toUiStatus>; load?: number; isLocked?: boolean }
+> {
+  const statusMap = new Map<
+    string,
+    { status: ReturnType<typeof toUiStatus>; load?: number; isLocked?: boolean }
+  >();
+  for (const day of lbsSchedule) {
+    for (const task of day.tasks || []) {
+      statusMap.set(`${task.task_id}::${day.date}`, {
+        status: toUiStatus(task.status),
+        load: task.load,
+        isLocked: task.is_locked === true
+      });
+    }
+  }
+  return statusMap;
+}

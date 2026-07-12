@@ -365,7 +365,6 @@ const taskTodayAddSchema = z.object({
 
 const scheduleItemUpdateSchema = z.object({
   scheduledDate: z.string().min(1).optional(),
-  occurrenceDate: z.string().min(1).optional(),
   startTime: z.string().nullable().optional(),
   endTime: z.string().nullable().optional(),
   timezone: z.string().nullable().optional()
@@ -459,6 +458,11 @@ app.put("/tasks/schedule-items/:id", requireUserAuth, async (req, res) => {
   try {
     if (!owner) return res.status(401).json({ message: "Missing auth context" });
     if (isNaN(scheduleId)) return res.status(400).json({ message: "id must be a number" });
+    if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "occurrenceDate")) {
+      console.warn(
+        `[tasks-service] PUT /tasks/schedule-items/${scheduleId} ignored immutable occurrenceDate; use the occurrence move route`
+      );
+    }
     const parsed = scheduleItemUpdateSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
     const result = await updateTaskScheduleItem(owner, scheduleId, parsed.data);
@@ -843,7 +847,13 @@ app.patch("/tasks/:id/occurrences/:date/subtasks/:subtaskId", requireUserAuth, a
     if (!owner) return res.status(401).json({ message: "Missing auth context" });
     const parsed = subtaskUpdateSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
-    const updated = await updateSubtask(String(req.params.subtaskId), String(req.params.id), owner, parsed.data);
+    const updated = await updateSubtask(
+      String(req.params.subtaskId),
+      String(req.params.id),
+      String(req.params.date),
+      owner,
+      parsed.data
+    );
     if (!updated) return res.status(404).json({ message: "Subtask not found" });
     return res.json(updated);
   } catch (error) {
@@ -855,7 +865,12 @@ app.delete("/tasks/:id/occurrences/:date/subtasks/:subtaskId", requireUserAuth, 
   try {
     const owner = req.authUser?.coreUserId;
     if (!owner) return res.status(401).json({ message: "Missing auth context" });
-    const deleted = await deleteSubtask(String(req.params.subtaskId), String(req.params.id), owner);
+    const deleted = await deleteSubtask(
+      String(req.params.subtaskId),
+      String(req.params.id),
+      String(req.params.date),
+      owner
+    );
     if (!deleted) return res.status(404).json({ message: "Subtask not found" });
     return res.status(204).send();
   } catch (error) {

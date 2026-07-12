@@ -216,6 +216,37 @@ export function normalizeResponseTask(task: LbsTask): Task {
   };
 }
 
+export function createTaskResolver(
+  client: LbsClient,
+  initialTasks: Task[] = []
+): (taskId: string) => Promise<Task | null> {
+  const taskMap = new Map(initialTasks.map((task) => [task.id, task]));
+  const inFlight = new Map<string, Promise<Task | null>>();
+
+  return async function resolveTask(taskId: string): Promise<Task | null> {
+    const cached = taskMap.get(taskId);
+    if (cached) return cached;
+
+    const pending = inFlight.get(taskId);
+    if (pending) return pending;
+
+    const request = (async () => {
+      try {
+        const raw = (await client.getTask(taskId)) as unknown as LbsTask;
+        const normalized = normalizeResponseTask(raw);
+        taskMap.set(normalized.id, normalized);
+        return normalized;
+      } catch {
+        return null;
+      } finally {
+        inFlight.delete(taskId);
+      }
+    })();
+    inFlight.set(taskId, request);
+    return request;
+  };
+}
+
 export function resolveStatusTargetDate(
   recurrence: RecurrenceType | undefined,
   dueDate: string | undefined,
