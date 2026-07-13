@@ -53,6 +53,7 @@ import {
   updateTaskScheduleItem
 } from "./taskScheduleStore.js";
 import { RECURRENCE_TYPES, TASK_STATUSES } from "./types.js";
+import { getTasksLbsMode } from "./lbs/backendFactory.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -215,6 +216,7 @@ function isLbsTokenFresh(token: string): boolean {
 }
 
 async function ensureLbsAccessToken(req: express.Request): Promise<string | undefined> {
+  if (getTasksLbsMode() === "local") return "local-mode";
   const existing = req.authUser?.lbsAccessToken;
   if (existing && isLbsTokenFresh(existing)) {
     return existing;
@@ -266,11 +268,13 @@ app.use(requireCoreMutationOriginMiddleware);
 
 app.get("/tasks/export", requireUserAuth, async (req, res) => {
   try {
+    const owner = req.authUser?.coreUserId;
     const lbsAccessToken = await ensureLbsAccessToken(req);
+    if (!owner) return res.status(401).json({ message: "Missing auth context" });
     if (!lbsAccessToken) {
       return res.status(403).json({ message: "LBS account token not provisioned" });
     }
-    const csv = await exportTasksCsv(lbsAccessToken);
+    const csv = await exportTasksCsv({ ownerCoreUserId: owner, lbsAccessToken });
     res.setHeader("Content-Type", "text/csv");
     res.setHeader("Content-Disposition", "attachment; filename=\"tasks.csv\"");
     return res.send(csv);
@@ -281,7 +285,9 @@ app.get("/tasks/export", requireUserAuth, async (req, res) => {
 
 app.post("/tasks/import", requireUserAuth, express.text({ type: "text/csv", limit: "10mb" }), async (req, res) => {
   try {
+    const owner = req.authUser?.coreUserId;
     const lbsAccessToken = await ensureLbsAccessToken(req);
+    if (!owner) return res.status(401).json({ message: "Missing auth context" });
     if (!lbsAccessToken) {
       return res.status(403).json({ message: "LBS account token not provisioned" });
     }
@@ -289,7 +295,7 @@ app.post("/tasks/import", requireUserAuth, express.text({ type: "text/csv", limi
     if (!csvContent.trim()) {
       return res.status(400).json({ message: "CSV content is required" });
     }
-    const result = await importTasksCsv(csvContent, lbsAccessToken);
+    const result = await importTasksCsv(csvContent, { ownerCoreUserId: owner, lbsAccessToken });
     return res.json(result);
   } catch (error) {
     return handleError(res, error);
@@ -323,11 +329,11 @@ app.get("/tasks", requireUserAuth, async (req, res) => {
     };
 
     if (paged) {
-      const page = await listTasksPage({ ...filters, cursor }, owner, lbsAccessToken);
+      const page = await listTasksPage({ ...filters, cursor }, owner, { ownerCoreUserId: owner, lbsAccessToken });
       return res.json(page);
     }
 
-    const tasks = await listTasks(filters, owner, lbsAccessToken);
+    const tasks = await listTasks(filters, owner, { ownerCoreUserId: owner, lbsAccessToken });
 
     return res.json(tasks);
   } catch (error) {
@@ -381,7 +387,7 @@ app.get("/tasks/today", requireUserAuth, async (req, res) => {
     if (!owner) return res.status(401).json({ message: "Missing auth context" });
     if (!lbsAccessToken) return res.status(403).json({ message: "LBS account token not provisioned" });
     if (!date) return res.status(400).json({ message: "date query parameter is required (YYYY-MM-DD)" });
-    const tasks = await listTaskToday(owner, date, lbsAccessToken);
+    const tasks = await listTaskToday(owner, date, { ownerCoreUserId: owner, lbsAccessToken });
     console.log(`[tasks-service] GET /tasks/today  returned ${tasks.length} TodayTask(s) for ${date}`);
     return res.json(tasks);
   } catch (error) {
@@ -443,7 +449,7 @@ app.get("/tasks/schedule-calendar", requireUserAuth, async (req, res) => {
     if (!owner) return res.status(401).json({ message: "Missing auth context" });
     if (!lbsAccessToken) return res.status(403).json({ message: "LBS account token not provisioned" });
     if (!startDate || !endDate) return res.status(400).json({ message: "startDate and endDate query parameters are required" });
-    const days = await listTaskScheduleCalendar(owner, startDate, endDate, lbsAccessToken);
+    const days = await listTaskScheduleCalendar(owner, startDate, endDate, { ownerCoreUserId: owner, lbsAccessToken });
     return res.json(days);
   } catch (error) {
     return handleError(res, error);
@@ -506,6 +512,7 @@ app.put("/tasks/:id/pin", requireUserAuth, async (req, res) => {
 
 app.get("/tasks/schedule", requireUserAuth, async (req, res) => {
   try {
+    const owner = req.authUser?.coreUserId;
     const startDate = typeof req.query.startDate === "string" ? req.query.startDate : undefined;
     const endDate = typeof req.query.endDate === "string" ? req.query.endDate : undefined;
     const context = typeof req.query.context === "string" ? req.query.context : undefined;
@@ -515,6 +522,7 @@ app.get("/tasks/schedule", requireUserAuth, async (req, res) => {
     }
 
     const lbsAccessToken = await ensureLbsAccessToken(req);
+    if (!owner) return res.status(401).json({ message: "Missing auth context" });
     if (!lbsAccessToken) {
       return res.status(403).json({ message: "LBS account token not provisioned" });
     }
@@ -522,7 +530,7 @@ app.get("/tasks/schedule", requireUserAuth, async (req, res) => {
     const parsedStatus = TASK_STATUSES.includes(status as (typeof TASK_STATUSES)[number])
       ? (status as (typeof TASK_STATUSES)[number])
       : undefined;
-    const schedule = await getTaskSchedule(startDate, endDate, context, parsedStatus, lbsAccessToken);
+    const schedule = await getTaskSchedule(startDate, endDate, context, parsedStatus, { ownerCoreUserId: owner, lbsAccessToken });
     return res.json(schedule);
   } catch (error) {
     return handleError(res, error);
@@ -531,11 +539,13 @@ app.get("/tasks/schedule", requireUserAuth, async (req, res) => {
 
 app.post("/tasks/:id/occurrences/complete", requireUserAuth, async (req, res) => {
   try {
+    const owner = req.authUser?.coreUserId;
     const parsed = occurrenceStatusSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ message: parsed.error.flatten() });
     }
     const lbsAccessToken = await ensureLbsAccessToken(req);
+    if (!owner) return res.status(401).json({ message: "Missing auth context" });
     if (!lbsAccessToken) {
       return res.status(403).json({ message: "LBS account token not provisioned" });
     }
@@ -543,7 +553,7 @@ app.post("/tasks/:id/occurrences/complete", requireUserAuth, async (req, res) =>
       String(req.params.id),
       parsed.data.targetDate,
       parsed.data.status,
-      lbsAccessToken
+      { ownerCoreUserId: owner, lbsAccessToken }
     );
     return res.json(result);
   } catch (error) {
@@ -553,11 +563,13 @@ app.post("/tasks/:id/occurrences/complete", requireUserAuth, async (req, res) =>
 
 app.post("/tasks/:id/occurrences/move", requireUserAuth, async (req, res) => {
   try {
+    const owner = req.authUser?.coreUserId;
     const parsed = occurrenceMoveSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ message: parsed.error.flatten() });
     }
     const lbsAccessToken = await ensureLbsAccessToken(req);
+    if (!owner) return res.status(401).json({ message: "Missing auth context" });
     if (!lbsAccessToken) {
       return res.status(403).json({ message: "LBS account token not provisioned" });
     }
@@ -565,7 +577,7 @@ app.post("/tasks/:id/occurrences/move", requireUserAuth, async (req, res) => {
       String(req.params.id),
       parsed.data.sourceDate,
       parsed.data.targetDate,
-      lbsAccessToken
+      { ownerCoreUserId: owner, lbsAccessToken }
     );
     return res.json(result);
   } catch (error) {
@@ -575,18 +587,20 @@ app.post("/tasks/:id/occurrences/move", requireUserAuth, async (req, res) => {
 
 app.post("/tasks/:id/occurrences/skip-exception", requireUserAuth, async (req, res) => {
   try {
+    const owner = req.authUser?.coreUserId;
     const parsed = z.object({ targetDate: z.string().min(1) }).safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ message: parsed.error.flatten() });
     }
     const lbsAccessToken = await ensureLbsAccessToken(req);
+    if (!owner) return res.status(401).json({ message: "Missing auth context" });
     if (!lbsAccessToken) {
       return res.status(403).json({ message: "LBS account token not provisioned" });
     }
     const result = await skipTaskOccurrenceException(
       String(req.params.id),
       parsed.data.targetDate,
-      lbsAccessToken
+      { ownerCoreUserId: owner, lbsAccessToken }
     );
     return res.json(result);
   } catch (error) {
@@ -596,11 +610,13 @@ app.post("/tasks/:id/occurrences/skip-exception", requireUserAuth, async (req, r
 
 app.get("/tasks/:id/history", requireUserAuth, async (req, res) => {
   try {
+    const owner = req.authUser?.coreUserId;
     const lbsAccessToken = await ensureLbsAccessToken(req);
+    if (!owner) return res.status(401).json({ message: "Missing auth context" });
     if (!lbsAccessToken) {
       return res.status(403).json({ message: "LBS account token not provisioned" });
     }
-    const history = await getTaskHistory(String(req.params.id), lbsAccessToken);
+    const history = await getTaskHistory(String(req.params.id), { ownerCoreUserId: owner, lbsAccessToken });
     return res.json(history);
   } catch (error) {
     return handleError(res, error);
@@ -630,7 +646,7 @@ app.get("/tasks/:id", requireUserAuth, async (req, res) => {
     if (!lbsAccessToken) {
       return res.status(403).json({ message: "LBS account token not provisioned" });
     }
-    const task = await getTask(String(req.params.id), owner, lbsAccessToken);
+    const task = await getTask(String(req.params.id), owner, { ownerCoreUserId: owner, lbsAccessToken });
 
     if (!task) {
       return res.status(404).json({ message: "Task not found" });
@@ -659,7 +675,11 @@ app.post("/tasks", requireUserAuth, async (req, res) => {
     if (!lbsAccessToken) {
       return res.status(403).json({ message: "LBS account token not provisioned" });
     }
-    const created = await createTask(normalized as unknown as Parameters<typeof createTask>[0], owner, lbsAccessToken);
+    const created = await createTask(
+      normalized as unknown as Parameters<typeof createTask>[0],
+      owner,
+      { ownerCoreUserId: owner, lbsAccessToken }
+    );
     return res.status(201).json(created);
   } catch (error) {
     return handleError(res, error);
@@ -687,7 +707,7 @@ app.patch("/tasks/:id", requireUserAuth, async (req, res) => {
       String(req.params.id),
       normalized as unknown as Parameters<typeof updateTask>[1],
       owner,
-      lbsAccessToken
+      { ownerCoreUserId: owner, lbsAccessToken }
     );
 
     if (!updated) {
@@ -711,7 +731,7 @@ app.delete("/tasks/:id", requireUserAuth, async (req, res) => {
       return res.status(403).json({ message: "LBS account token not provisioned" });
     }
     const taskId = String(req.params.id);
-    const deleted = await deleteTask(taskId, owner, lbsAccessToken);
+    const deleted = await deleteTask(taskId, owner, { ownerCoreUserId: owner, lbsAccessToken });
 
     if (!deleted) {
       return res.status(404).json({ message: "Task not found" });
@@ -888,7 +908,7 @@ app.get("/projects", requireUserAuth, async (req, res) => {
     if (!lbsAccessToken) {
       return res.status(403).json({ message: "LBS account token not provisioned" });
     }
-    const projects = await listTaskProjects(owner, lbsAccessToken);
+    const projects = await listTaskProjects(owner, { ownerCoreUserId: owner, lbsAccessToken });
     return res.json(projects);
   } catch (error) {
     return handleError(res, error);

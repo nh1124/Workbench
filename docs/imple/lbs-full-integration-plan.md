@@ -84,9 +84,9 @@ tasks ⇔ LBS の HTTP 境界を消滅させ、タスク定義・繰り返し・
 
 | ID | Status | Owner | Task | 受け入れ条件 |
 |---|---|---|---|---|
-| W0 | `[pending]` | codex | Golden capture harness + 合成 fixture + goldens 生成 | goldens が §5.1 の網羅項目を含む; capture 再現手順が README 化 |
-| W1 | `[pending]` | codex | 新テーブル schema + stores（owner スコープ・監査テスト） | store unit tests 緑; 監査テスト緑 |
-| W2 | `[pending]` | codex | engine.ts 移植 + golden parity | goldenParity.test.ts 全一致 |
+| W0 | `[implemented]` | codex | Golden capture harness + 合成 fixture + goldens 生成 | 46 goldens・11 coverage checks 緑（commit 6484eba） |
+| W1 | `[implemented]` | codex | 新テーブル schema + stores（owner スコープ・監査テスト） | 83 tests 緑（commit 4fcb030）。注: live Postgres 未検証（W7 で実施） |
+| W2 | `[implemented]` | codex | engine.ts 移植 + golden parity | 46/46 golden 一致（commit 77d510b; fixture 入力エクスポートは 90c3157） |
 | W3 | `[pending]` | codex | LocalLbsBackend + TASKS_LBS_MODE 配線 + characterization swap | 全ルート characterization 緑（local/remote 両モード） |
 | W4 | `[pending]` | codex | 移行 CLI（dry-run/冪等/ユーザーマップ検証） | migration tests 緑; dev lbs.db で実移行成功 |
 | W5 | `[pending]` | codex | recurrence 二重実装統合（taskRecurrenceUtils→engine 委譲、UI 側も同期） | 既存 recurrence テスト + 新規クランプ/nth=-1 テスト緑 |

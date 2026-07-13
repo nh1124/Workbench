@@ -1,4 +1,5 @@
-export type LbsTaskStatus = "todo" | "done" | "skipped";
+import type { LbsDataPlane, LbsScheduleDay, LbsTaskStatus } from "./lbs/dataPlane.js";
+export type { LbsScheduleDay, LbsScheduleTask, LbsTaskStatus } from "./lbs/dataPlane.js";
 
 export interface LbsClientConfig {
   baseUrl: string;
@@ -21,26 +22,6 @@ interface LbsRequestOptions {
   allowSharedAuth?: boolean;
   expectText?: boolean;
   contentType?: string;
-}
-
-export interface LbsScheduleTask {
-  task_id: string;
-  task_name: string;
-  context: string;
-  status?: string | null;
-  load?: number;
-  start_time?: string | null;
-  end_time?: string | null;
-  is_locked?: boolean | null;
-}
-
-export interface LbsScheduleDay {
-  date: string;
-  total_load?: number;
-  base_load?: number;
-  cap?: number;
-  level?: string;
-  tasks: LbsScheduleTask[];
 }
 
 function toQueryString(query?: Record<string, QueryValue>): string {
@@ -70,7 +51,7 @@ function isFormDataBody(value: unknown): value is FormData {
   return typeof FormData !== "undefined" && value instanceof FormData;
 }
 
-export class LbsClient {
+export class LbsClient implements LbsDataPlane {
   private readonly baseUrl: string;
   private readonly authBaseUrl: string;
   private readonly timezone: string;

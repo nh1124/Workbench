@@ -38,6 +38,7 @@ import type {
   TaskException,
   TaskStatus
 } from "./types.js";
+import type { LbsDataPlane, LbsScheduleDay } from "./dataPlane.js";
 
 const DEFAULT_STATUSES: readonly TaskStatus[] = ["todo", "done"];
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -245,7 +246,7 @@ function validateTaskUpdate(payload: Record<string, unknown>): TaskDefinitionUpd
   return patch;
 }
 
-export class LocalLbsBackend {
+export class LocalLbsBackend implements LbsDataPlane {
   readonly owner: string;
 
   constructor(ownerCoreUserId: string, private readonly database?: LbsStoreDatabase) {
@@ -431,10 +432,10 @@ export class LocalLbsBackend {
     return [CSV_FIELDS.join(","), ...rows].join("\r\n");
   }
 
-  async getSchedule(startDate: string, endDate: string): Promise<Record<string, unknown>[]> {
+  async getSchedule(startDate: string, endDate: string): Promise<LbsScheduleDay[]> {
     const start = requireDate(startDate, "start_date");
     const end = requireDate(endDate, "end_date");
-    return (await this.shapes(start, end)).schedule(start, end);
+    return (await this.shapes(start, end)).schedule(start, end) as unknown as LbsScheduleDay[];
   }
 
   async getDashboard(startDate?: string): Promise<Record<string, unknown>> {

@@ -1,5 +1,6 @@
-import type { LbsClient } from "./lbsClient.js";
-import { createLbsClient, getLbsConfig, toDueDateOnly } from "./lbsTaskService.js";
+import { getLbsBackend } from "./lbs/backendFactory.js";
+import type { LbsBackendContext, LbsDataPlane } from "./lbs/dataPlane.js";
+import { toDueDateOnly } from "./lbsTaskService.js";
 
 function extractExceptionId(record: Record<string, unknown>): number | undefined {
   const id = record.id;
@@ -18,7 +19,7 @@ function extractExceptionDate(record: Record<string, unknown>): string | undefin
 }
 
 async function upsertTaskException(
-  client: LbsClient,
+  client: LbsDataPlane,
   taskId: string,
   targetDate: string,
   exceptionType: "SKIP" | "FORCE_DO",
@@ -77,7 +78,7 @@ function findExceptionForDate(
 }
 
 async function restoreTaskException(
-  client: LbsClient,
+  client: LbsDataPlane,
   taskId: string,
   targetDate: string,
   previous: Record<string, unknown> | undefined,
@@ -117,10 +118,9 @@ export async function moveTaskOccurrence(
   taskId: string,
   sourceDate: string,
   targetDate: string,
-  lbsAccessToken: string
+  backendContext: LbsBackendContext
 ): Promise<{ taskId: string; sourceDate: string; targetDate: string }> {
-  const config = getLbsConfig();
-  const client = createLbsClient(config, lbsAccessToken);
+  const client = getLbsBackend(backendContext);
   const normalizedSource = toDueDateOnly(sourceDate);
   const normalizedTarget = toDueDateOnly(targetDate);
   if (!normalizedSource || !normalizedTarget) {
@@ -178,10 +178,9 @@ export async function moveTaskOccurrence(
 export async function skipTaskOccurrenceException(
   taskId: string,
   targetDate: string,
-  lbsAccessToken: string
+  backendContext: LbsBackendContext
 ): Promise<{ taskId: string; targetDate: string }> {
-  const config = getLbsConfig();
-  const client = createLbsClient(config, lbsAccessToken);
+  const client = getLbsBackend(backendContext);
   const normalizedDate = toDueDateOnly(targetDate);
   if (!normalizedDate) {
     throw new Error("targetDate must be in YYYY-MM-DD format");

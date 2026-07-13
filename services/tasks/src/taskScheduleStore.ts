@@ -17,13 +17,14 @@ import {
 import {
   applyResolvedStatus,
   createTaskResolver,
-  createLbsClient,
   getLbsConfig,
   normalizeResponseTask,
   toUiStatus,
   type LbsTask
 } from "./lbsTaskService.js";
 import type { LbsScheduleDay } from "./lbsClient.js";
+import { getLbsBackend } from "./lbs/backendFactory.js";
+import type { LbsBackendContext, LbsDataPlane } from "./lbs/dataPlane.js";
 import { listDateKeys, taskOccursOnDateKey } from "./taskRecurrenceUtils.js";
 import type {
   ScheduleCalendarDay,
@@ -44,14 +45,14 @@ type TaskScheduleStoreDependencies = {
   listPinnedTaskIds: typeof listPinnedTaskIds;
   listItemsByScheduledDate: typeof listItemsByScheduledDate;
   listItemsForCalendarWindow: typeof listItemsForCalendarWindow;
-  createLbsClient: typeof createLbsClient;
+  getLbsBackend: (context: LbsBackendContext) => LbsDataPlane;
 };
 
 const defaultDependencies: TaskScheduleStoreDependencies = {
   listPinnedTaskIds,
   listItemsByScheduledDate,
   listItemsForCalendarWindow,
-  createLbsClient
+  getLbsBackend
 };
 
 /**
@@ -63,14 +64,14 @@ const defaultDependencies: TaskScheduleStoreDependencies = {
 export async function listTaskToday(
   ownerUsername: string,
   date: string,
-  lbsAccessToken: string,
+  backendContext: LbsBackendContext,
   dependencyOverrides: Partial<TaskScheduleStoreDependencies> = {}
 ): Promise<TodayTask[]> {
   console.log(`[tasks-service] listTaskToday owner=${ownerUsername} date=${date}`);
 
   const config = getLbsConfig();
   const dependencies = { ...defaultDependencies, ...dependencyOverrides };
-  const client = dependencies.createLbsClient(config, lbsAccessToken);
+  const client = dependencies.getLbsBackend(backendContext);
   const pinnedIds = new Set(await dependencies.listPinnedTaskIds(ownerUsername));
 
   const scheduleItems = await dependencies.listItemsByScheduledDate(ownerUsername, date);
@@ -118,7 +119,7 @@ export async function listTaskToday(
             baseLoadScore: mappedStatus.load ?? normalized.baseLoadScore,
             isLocked: mappedStatus.isLocked ?? normalized.isLocked
           }
-        : await applyResolvedStatus(normalized, lbsAccessToken, config.timezone, occurrenceDate);
+        : await applyResolvedStatus(normalized, client, config.timezone, occurrenceDate);
       return {
         ...resolved,
         isPinned: pinnedIds.has(resolved.id),
@@ -249,7 +250,7 @@ export async function listTaskScheduleCalendar(
   ownerUsername: string,
   startDate: string,
   endDate: string,
-  lbsAccessToken: string,
+  backendContext: LbsBackendContext,
   dependencyOverrides: Partial<TaskScheduleStoreDependencies> = {}
 ): Promise<ScheduleCalendarDay[]> {
   console.log(
@@ -258,7 +259,7 @@ export async function listTaskScheduleCalendar(
 
   const config = getLbsConfig();
   const dependencies = { ...defaultDependencies, ...dependencyOverrides };
-  const client = dependencies.createLbsClient(config, lbsAccessToken);
+  const client = dependencies.getLbsBackend(backendContext);
   const items = await dependencies.listItemsForCalendarWindow(ownerUsername, startDate, endDate);
   const explicitOccurrenceKeys = new Set(
     items.map((item) => `${item.taskId}::${item.occurrenceDate}`)
@@ -282,7 +283,7 @@ export async function listTaskScheduleCalendar(
         const mappedStatus = generatedStatusMap.get(`${item.taskId}::${item.occurrenceDate}`);
         const withStatus = mappedStatus
           ? { ...normalized, status: mappedStatus.status }
-          : await applyResolvedStatus(normalized, lbsAccessToken, config.timezone, item.occurrenceDate);
+          : await applyResolvedStatus(normalized, client, config.timezone, item.occurrenceDate);
         return {
           scheduleId: item.id,
           taskId: item.taskId,

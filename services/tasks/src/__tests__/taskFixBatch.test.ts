@@ -76,7 +76,10 @@ describe("task fix batch", () => {
     }) as typeof fetch;
 
     await assert.rejects(
-      () => moveTaskOccurrence("task-1", "2026-07-13", "2026-07-14", "token"),
+      () => moveTaskOccurrence("task-1", "2026-07-13", "2026-07-14", {
+        ownerCoreUserId: "owner",
+        lbsAccessToken: "token"
+      }),
       /Failed to upsert exception/
     );
 
@@ -94,9 +97,12 @@ describe("task fix batch", () => {
       }]
     } as unknown as LbsClient;
 
-    const days = await listTaskScheduleCalendar("owner", "2026-07-13", "2026-07-13", "token", {
+    const days = await listTaskScheduleCalendar("owner", "2026-07-13", "2026-07-13", {
+      ownerCoreUserId: "owner",
+      lbsAccessToken: "token"
+    }, {
       listItemsForCalendarWindow: async () => [],
-      createLbsClient: () => fakeClient
+      getLbsBackend: () => fakeClient
     });
 
     assert.equal(days.length, 1);
@@ -127,14 +133,17 @@ describe("task fix batch", () => {
       getTaskHistory: async () => { counters.getTaskHistory += 1; throw new Error("unexpected history"); }
     } as unknown as LbsClient;
 
-    const result = await listTaskToday("owner", "2026-07-13", "token", {
+    const result = await listTaskToday("owner", "2026-07-13", {
+      ownerCoreUserId: "owner",
+      lbsAccessToken: "token"
+    }, {
       listPinnedTaskIds: async () => ["b"],
       listItemsByScheduledDate: async () => [
         scheduleItem(1, "a", "2026-07-10"),
         scheduleItem(2, "b", "2026-07-11"),
         scheduleItem(3, "c", "2026-07-12")
       ],
-      createLbsClient: () => fakeClient
+      getLbsBackend: () => fakeClient
     });
 
     assert.deepEqual(counters, {

@@ -1,14 +1,14 @@
 import { config as loadEnv } from "dotenv";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { LbsClient, type LbsClientConfig } from "./lbsClient.js";
+import type { LbsDataPlane } from "./lbs/dataPlane.js";
+export { getLbsConfig } from "./lbs/backendFactory.js";
+export type { LbsConfig } from "./lbs/backendFactory.js";
 import type { RecurrenceType, Task, TaskStatus } from "./types.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 loadEnv({ path: path.resolve(__dirname, "../.env") });
-
-const defaultTimezone = "Asia/Tokyo";
 
 export interface LbsTask {
   task_id: string;
@@ -53,66 +53,6 @@ interface LbsHistoryEntry {
 
 interface LbsResolvedTask {
   status?: string | null;
-}
-
-export interface LbsConfig {
-  baseUrl: string;
-  authBaseUrl: string;
-  authLoginPath: string;
-  authUserCreatePath: string;
-  accountPasswordSeed: string;
-  apiKey?: string;
-  token?: string;
-  timezone: string;
-  forceOverride: boolean;
-  defaultActive: boolean;
-}
-
-function toClientConfig(config: LbsConfig): LbsClientConfig {
-  return {
-    baseUrl: config.baseUrl,
-    authBaseUrl: config.authBaseUrl,
-    authLoginPath: config.authLoginPath,
-    authUserCreatePath: config.authUserCreatePath,
-    timezone: config.timezone,
-    apiKey: config.apiKey,
-    sharedToken: config.token
-  };
-}
-
-function requireEnv(name: string): string {
-  const value = process.env[name]?.trim();
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-  return value;
-}
-
-export function getLbsConfig(): LbsConfig {
-  const baseUrl = requireEnv("TASKS_LBS_BASE_URL").replace(/\/+$/, "");
-  const authBaseUrl = (process.env.TASKS_LBS_AUTH_BASE_URL?.trim() || baseUrl).replace(/\/+$/, "");
-  const authLoginPath = process.env.TASKS_LBS_AUTH_LOGIN_PATH?.trim() || "/auth/login";
-  const authUserCreatePath = process.env.TASKS_LBS_AUTH_USER_CREATE_PATH?.trim() || "/users/";
-  const accountPasswordSeed = process.env.TASKS_LBS_ACCOUNT_PASSWORD_SEED?.trim() || "workbench-tasks-lbs-seed";
-  const forceOverride = (process.env.TASKS_LBS_FORCE_OVERRIDE ?? "true").toLowerCase() !== "false";
-  const defaultActive = (process.env.TASKS_LBS_DEFAULT_ACTIVE ?? "true").toLowerCase() !== "false";
-
-  return {
-    baseUrl,
-    authBaseUrl,
-    authLoginPath,
-    authUserCreatePath,
-    accountPasswordSeed,
-    apiKey: process.env.TASKS_LBS_API_KEY?.trim() || undefined,
-    token: process.env.TASKS_LBS_AUTH_TOKEN?.trim() || undefined,
-    timezone: process.env.TASKS_LBS_TIMEZONE?.trim() || defaultTimezone,
-    forceOverride,
-    defaultActive
-  };
-}
-
-export function createLbsClient(config: LbsConfig, authToken?: string): LbsClient {
-  return new LbsClient(toClientConfig(config), authToken);
 }
 
 export function toValidRecurrence(value: string | null | undefined): RecurrenceType {
@@ -217,7 +157,7 @@ export function normalizeResponseTask(task: LbsTask): Task {
 }
 
 export function createTaskResolver(
-  client: LbsClient,
+  client: LbsDataPlane,
   initialTasks: Task[] = []
 ): (taskId: string) => Promise<Task | null> {
   const taskMap = new Map(initialTasks.map((task) => [task.id, task]));
@@ -265,13 +205,11 @@ function resolveTargetDate(task: Task, fallbackTimezone: string): string {
 
 export async function applyResolvedStatus(
   task: Task,
-  lbsAccessToken: string,
+  client: LbsDataPlane,
   fallbackTimezone: string,
   overrideDate?: string
 ): Promise<Task> {
   const targetDate = overrideDate ?? resolveTargetDate(task, fallbackTimezone);
-  const config = getLbsConfig();
-  const client = createLbsClient(config, lbsAccessToken);
   try {
     const resolved = (await client.resolveTask(task.id, targetDate)) as unknown as LbsResolvedTask;
     return { ...task, status: toUiStatus(resolved.status) };
