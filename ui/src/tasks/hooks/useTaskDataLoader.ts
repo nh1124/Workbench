@@ -24,6 +24,7 @@ import {
   toTaskStatus
 } from "../types";
 import { buildTodayRows } from "../lib/taskTodayRows";
+import { countDistinctOverdueTasks, countDistinctPlannedTasks } from "../lib/taskOccurrenceCounts";
 
 export interface TaskDataState {
   tasks: Task[];
@@ -129,25 +130,15 @@ export function useTaskDataLoader(
       } = buildTodayRows(taskList, myDayTasks, todaySchedule, todayKey);
       setTodayRows(builtTodayRows);
 
-      // Planned/overdue counts
-      let pCnt = 0;
-      let oCnt = 0;
-      for (const day of countScheduleCalendar) {
-        if (day.date > todayKey) {
-          pCnt += day.items.filter((item) => !contextFilter || item.context === contextFilter).length;
-        }
-      }
-      for (const day of countSchedule) {
-        if (day.date < todayKey) {
-          oCnt += day.tasks.filter((t) => toTaskStatus(t.status) !== "done").length;
-        }
-      }
-      setPlannedCount(pCnt);
-      setOverdueCount(oCnt);
+      setPlannedCount(countDistinctPlannedTasks(countScheduleCalendar, todayKey, contextFilter));
+      setOverdueCount(countDistinctOverdueTasks(countSchedule, todayKey, contextFilter));
 
-      // Inbox: DueDate-based, one row per task. See src/lib/inboxBuilder.ts for spec.
       const { upcomingRows: builtInboxUpcoming, doneRows: builtInboxDone } =
-        buildInboxRows(taskList);
+        buildInboxRows(taskList, {
+          countSchedule,
+          scheduleCalendar: countScheduleCalendar,
+          todayKey
+        });
       setInboxUpcomingRows(builtInboxUpcoming);
       setInboxDoneRows(builtInboxDone);
 

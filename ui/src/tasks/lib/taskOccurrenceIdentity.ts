@@ -8,6 +8,10 @@ export function scheduleItemKey(scheduleId: string | number): string {
   return `schedule:${encodeKeyPart(scheduleId)}`;
 }
 
+export function taskDefinitionRowKey(taskId: string): string {
+  return `task:${encodeKeyPart(taskId)}`;
+}
+
 export function occurrenceMembershipKey(
   taskId: string,
   occurrenceDate: string,

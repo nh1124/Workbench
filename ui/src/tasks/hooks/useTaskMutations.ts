@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useRef, useState } from "react";
-import { projectsApi, taskAttachmentsApi, taskSubtasksApi, tasksApi } from "../../lib/api";
+import { formatApiErrorMessage, projectsApi, taskAttachmentsApi, taskSubtasksApi, tasksApi } from "../../lib/api";
 import { pushErrorNotification } from "../../lib/notificationService";
 import { startOfDay, toDateKey } from "../../lib/taskDateUtils";
 import { mergeProjectOptions, normalizeText, type ProjectOption } from "../../lib/taskDisplayUtils";
@@ -113,7 +113,14 @@ export interface TaskMutationsActions {
   openAddPanel: () => void;
   handleAddTask: () => Promise<void>;
   handleDeleteDetail: () => Promise<void>;
-  handleToggleDone: (task: Task) => Promise<void>;
+  handleToggleDone: (
+    task: Task,
+    occurrenceContext?: {
+      row: TaskOccurrenceRow;
+      current: TaskOccurrenceCollections;
+      setters: TaskOccurrenceCollectionSetters;
+    }
+  ) => Promise<void>;
   handleTogglePin: (task: Task) => Promise<void>;
   handleToggleOccurrenceDone: (
     row: TaskOccurrenceRow,
@@ -242,6 +249,12 @@ export function useTaskMutations(
   // ── Derived ────────────────────────────────────────────────────────────────
 
   const selectedTask = tasks.find((t) => t.id === selectedTaskId) || null;
+
+  const reportMutationError = (action: string, error: unknown) => {
+    const message = formatApiErrorMessage(action, error);
+    console.error(message, error);
+    pushErrorNotification(message);
+  };
 
   // ── Detail / selection helpers ─────────────────────────────────────────────
 
@@ -425,8 +438,8 @@ export function useTaskMutations(
         });
         if (updated) setDraft(taskToDraft(updated));
         await onReload();
-      } catch {
-        /* errors routed to notification center */
+      } catch (error) {
+        reportMutationError("Failed to save task", error);
       } finally {
         setIsSaving(false);
       }
@@ -487,8 +500,8 @@ export function useTaskMutations(
       setAddDraft({ ...emptyDraft });
       setAddContextInput("");
       await onReload();
-    } catch {
-      /* API errors routed to notification center */
+    } catch (error) {
+      reportMutationError("Failed to add task", error);
     } finally {
       setIsSaving(false);
     }
@@ -508,7 +521,14 @@ export function useTaskMutations(
     }
   };
 
-  const handleToggleDone = async (task: Task) => {
+  const handleToggleDone = async (
+    task: Task,
+    occurrenceContext?: {
+      row: TaskOccurrenceRow;
+      current: TaskOccurrenceCollections;
+      setters: TaskOccurrenceCollectionSetters;
+    }
+  ) => {
     const newStatus = task.status === "done" ? "todo" : "done";
     const previousStatus = task.status;
     setTasks((prev) =>
@@ -518,16 +538,26 @@ export function useTaskMutations(
       setDraft((prev) => ({ ...prev, status: newStatus }));
     }
     try {
-      await tasksApi.update(task.id, { status: newStatus });
+      if (occurrenceContext) {
+        await runOptimisticOccurrenceMutation({
+          current: occurrenceContext.current,
+          selectedRows: [occurrenceContext.row],
+          status: newStatus,
+          setters: occurrenceContext.setters,
+          mutate: () => tasksApi.update(task.id, { status: newStatus })
+        });
+      } else {
+        await tasksApi.update(task.id, { status: newStatus });
+      }
       await onReload();
-    } catch {
+    } catch (error) {
       setTasks((prev) =>
         prev.map((item) => (item.id === task.id ? { ...item, status: previousStatus } : item))
       );
       if (selectedTaskId === task.id) {
         setDraft((prev) => ({ ...prev, status: previousStatus }));
       }
-      pushErrorNotification("Failed to update task status.");
+      reportMutationError("Failed to update task status", error);
     }
   };
 
@@ -559,6 +589,12 @@ export function useTaskMutations(
     current: TaskOccurrenceCollections,
     setters: TaskOccurrenceCollectionSetters
   ) => {
+    if (!row.occurrenceDate && !row.date) {
+      const task = tasks.find((item) => item.id === row.taskId);
+      if (!task) return;
+      await handleToggleDone(task, { row, current, setters });
+      return;
+    }
     const nextStatus = (row.status === "done" ? "todo" : "done") as import("../../types/models").TaskStatus;
     const occurrenceDate = row.occurrenceDate ?? row.date;
     const mutationVersion = ++occurrenceMutationSequenceRef.current;
@@ -577,13 +613,13 @@ export function useTaskMutations(
         occurrenceMutationVersionsRef.current.delete(row.key);
         setTimeout(() => { void refreshAfterOccurrenceMutation(); }, 800);
       }
-    } catch {
+    } catch (error) {
       const shouldReconcile = occurrenceMutationVersionsRef.current.get(row.key) === mutationVersion;
       if (shouldReconcile) {
         occurrenceMutationVersionsRef.current.delete(row.key);
         setTimeout(() => { void refreshAfterOccurrenceMutation(); }, 800);
       }
-      pushErrorNotification("Failed to update occurrence status.");
+      reportMutationError("Failed to update occurrence", error);
     }
   };
 
@@ -624,7 +660,7 @@ export function useTaskMutations(
       if (shouldReconcile) {
         setTimeout(() => { void refreshAfterOccurrenceMutation(); }, 800);
       }
-    } catch {
+    } catch (error) {
       const shouldReconcile = selectedRows.every(
         (row) => occurrenceMutationVersionsRef.current.get(row.key) === mutationVersion
       );
@@ -636,7 +672,7 @@ export function useTaskMutations(
       if (shouldReconcile) {
         setTimeout(() => { void refreshAfterOccurrenceMutation(); }, 800);
       }
-      pushErrorNotification("Failed to update selected occurrences.");
+      reportMutationError("Failed to update selected occurrences", error);
     }
   };
 
@@ -651,8 +687,8 @@ export function useTaskMutations(
       );
       closeMenu();
       await refreshAfterOccurrenceMutation();
-    } catch {
-      pushErrorNotification("Failed to skip selected tasks.");
+    } catch (error) {
+      reportMutationError("Failed to skip selected occurrences", error);
     }
   };
 
@@ -687,8 +723,8 @@ export function useTaskMutations(
       setMoveDateInput("");
       closeMenu();
       setTimeout(() => { void refreshAfterOccurrenceMutation(); }, 800);
-    } catch {
-      pushErrorNotification("Failed to move selected occurrences.");
+    } catch (error) {
+      reportMutationError("Failed to move selected occurrences", error);
     }
   };
 
@@ -744,8 +780,8 @@ export function useTaskMutations(
       clearSelection();
       closeMenu();
       setTimeout(() => { void refreshAfterOccurrenceMutation(); }, 800);
-    } catch {
-      pushErrorNotification("Failed to remove selected occurrences.");
+    } catch (error) {
+      reportMutationError("Failed to remove selected occurrences", error);
     }
   };
 
@@ -834,8 +870,8 @@ export function useTaskMutations(
         });
       }
       closeMenu();
-    } catch {
-      pushErrorNotification("Failed to update Today.");
+    } catch (error) {
+      reportMutationError("Failed to update Today", error);
     }
   };
 
