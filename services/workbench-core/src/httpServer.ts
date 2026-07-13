@@ -5,6 +5,7 @@ import jwt from "jsonwebtoken";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { existsSync } from "node:fs";
+import { EventEmitter } from "node:events";
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { lookup as dnsLookup } from "node:dns/promises";
@@ -1360,6 +1361,71 @@ function objectId(value: unknown): string | undefined {
   return undefined;
 }
 
+export type LiveSyncEvent = {
+  domain: SyncDomain;
+  resourceId: string;
+  action: SyncAction;
+  ts: string;
+};
+
+type LiveSyncEventListener = (event: LiveSyncEvent) => void;
+type LiveSyncSubscriber = {
+  listener: LiveSyncEventListener;
+  drop: () => void;
+};
+
+const MAX_SYNC_EVENT_LISTENERS_PER_USER = 10;
+const syncEventEmitters = new Map<string, EventEmitter>();
+const syncEventSubscribers = new Map<string, LiveSyncSubscriber[]>();
+
+export const syncEventBroadcaster = {
+  publish(userId: string, event: LiveSyncEvent): void {
+    syncEventEmitters.get(userId)?.emit("sync", event);
+  },
+
+  subscribe(
+    userId: string,
+    listener: LiveSyncEventListener,
+    drop: () => void = () => undefined
+  ): () => void {
+    const emitter = syncEventEmitters.get(userId) ?? new EventEmitter();
+    const subscribers = syncEventSubscribers.get(userId) ?? [];
+    syncEventEmitters.set(userId, emitter);
+    syncEventSubscribers.set(userId, subscribers);
+
+    while (subscribers.length >= MAX_SYNC_EVENT_LISTENERS_PER_USER) {
+      const oldest = subscribers.shift();
+      if (!oldest) break;
+      emitter.off("sync", oldest.listener);
+      oldest.drop();
+    }
+
+    const subscriber = { listener, drop };
+    subscribers.push(subscriber);
+    emitter.on("sync", listener);
+
+    let subscribed = true;
+    return () => {
+      if (!subscribed) return;
+      subscribed = false;
+      emitter.off("sync", listener);
+      const currentSubscribers = syncEventSubscribers.get(userId);
+      if (currentSubscribers) {
+        const index = currentSubscribers.indexOf(subscriber);
+        if (index >= 0) currentSubscribers.splice(index, 1);
+      }
+      if (emitter.listenerCount("sync") === 0) {
+        syncEventEmitters.delete(userId);
+        syncEventSubscribers.delete(userId);
+      }
+    };
+  },
+
+  listenerCount(userId: string): number {
+    return syncEventEmitters.get(userId)?.listenerCount("sync") ?? 0;
+  }
+};
+
 function recordSyncEventBestEffort(
   userId: string,
   domain: SyncDomain,
@@ -1368,10 +1434,19 @@ function recordSyncEventBestEffort(
   payload: Record<string, unknown> = {}
 ): void {
   if (!resourceId) return;
-  void recordSyncEvent(userId, domain, resourceId, action, payload).catch((error) => {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn("[sync] failed to record event", { domain, resourceId, action, message });
-  });
+  void recordSyncEvent(userId, domain, resourceId, action, payload)
+    .then((event) => {
+      syncEventBroadcaster.publish(userId, {
+        domain: event.domain,
+        resourceId: event.resourceId,
+        action: event.action,
+        ts: event.createdAt
+      });
+    })
+    .catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn("[sync] failed to record event", { domain, resourceId, action, message });
+    });
 }
 
 async function invalidateProjectContextFromApi(
@@ -4531,6 +4606,42 @@ app.get("/api/sync/snapshot", async (req, res) => {
   } catch (error) {
     return respondInternalError(res, error);
   }
+});
+
+app.get("/api/sync/events", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  res.status(200);
+  res.set({
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no"
+  });
+  res.flushHeaders();
+
+  let unsubscribe: () => void = () => undefined;
+  const pingTimer = setInterval(() => {
+    if (!res.writableEnded) res.write(": ping\n\n");
+  }, 25_000);
+  const cleanup = () => {
+    clearInterval(pingTimer);
+    unsubscribe();
+  };
+
+  unsubscribe = syncEventBroadcaster.subscribe(
+    authContext.userId,
+    (event) => {
+      if (!res.writableEnded) {
+        res.write(`event: sync\ndata: ${JSON.stringify(event)}\n\n`);
+      }
+    },
+    () => {
+      if (!res.writableEnded) res.end();
+    }
+  );
+  res.once("close", cleanup);
 });
 
 app.get("/api/sync/changes", async (req, res) => {

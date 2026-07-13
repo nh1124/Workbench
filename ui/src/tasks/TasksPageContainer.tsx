@@ -16,6 +16,7 @@ import {
 import { useLocation } from "react-router-dom";
 import { readWorkbenchSession, tasksApi } from "../lib/api";
 import { pushErrorNotification } from "../lib/notificationService";
+import { createDebouncedCallback, subscribeSyncEvents } from "../lib/syncEvents";
 import {
   buildMonthCells,
   contextColor,
@@ -127,6 +128,8 @@ export function TasksPageContainer() {
     setSelectedTaskId(null);
     setSelectedOccurrenceDate(null);
   });
+  const syncLoadRef = useRef(load);
+  const syncLoadPendingRef = useRef(isLoading);
 
   // ── Occurrence paging hook ────────────────────────────────────────────────
   const {
@@ -532,6 +535,26 @@ export function TasksPageContainer() {
   const displayError = useMemo(() => (error && !isAuthError ? error : null), [error, isAuthError]);
 
   // ── Effects ───────────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    syncLoadRef.current = load;
+    syncLoadPendingRef.current = isLoading;
+  }, [isLoading, load]);
+
+  useEffect(() => {
+    const debouncedReload = createDebouncedCallback(() => {
+      if (syncLoadPendingRef.current) {
+        debouncedReload.schedule();
+        return;
+      }
+      void syncLoadRef.current();
+    }, 500);
+    const unsubscribe = subscribeSyncEvents(["tasks"], () => debouncedReload.schedule());
+    return () => {
+      unsubscribe();
+      debouncedReload.cancel();
+    };
+  }, []);
 
   // Initial + context-filter reload
   useEffect(() => {

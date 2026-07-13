@@ -330,7 +330,7 @@ function localDaemonBaseUrl(): string {
   return configuredUrl;
 }
 
-function authHeaders(extra?: HeadersInit): HeadersInit {
+export function sessionAuthHeaders(extra?: HeadersInit): HeadersInit {
   const session = readStoredSession();
   return {
     ...(session ? { Authorization: `Bearer ${session.accessToken}` } : {}),
@@ -507,7 +507,7 @@ async function requestJson<T>(
       ...options,
       headers: {
         "Content-Type": "application/json",
-        ...(withSessionAuth ? authHeaders(options?.headers) : (options?.headers ?? {}))
+        ...(withSessionAuth ? sessionAuthHeaders(options?.headers) : (options?.headers ?? {}))
       }
     });
   } catch (error) {
@@ -702,7 +702,7 @@ function coreArtifactPath(path: string): string {
   return `${coreBaseUrl()}${path}`;
 }
 
-function coreApiPath(path: string): string {
+export function coreApiPath(path: string): string {
   return `${coreBaseUrl()}${path}`;
 }
 
@@ -870,7 +870,7 @@ async function fetchWithSessionAuth(
     try {
       return await fetch(url, {
         ...options,
-        headers: authHeaders(options?.headers)
+        headers: sessionAuthHeaders(options?.headers)
       });
     } catch (error) {
       const detail = error instanceof Error ? error.message : "network error";
