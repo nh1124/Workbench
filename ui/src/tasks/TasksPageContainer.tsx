@@ -115,7 +115,7 @@ export function TasksPageContainer() {
   // ── Data loader hook ──────────────────────────────────────────────────────
   const {
     tasks, projectOptions,
-    todayTaskIds, todayMembershipKeys, todayRows,
+    todayTaskIds, todayScheduleOccurrenceStatuses, todayMembershipKeys, todayRows,
     inboxUpcomingRows, inboxDoneRows,
     plannedCount, overdueCount,
     calendarStatusMap,
@@ -193,6 +193,7 @@ export function TasksPageContainer() {
       projectOptions,
       contextFilter,
       today,
+      todayScheduleOccurrenceStatuses,
     },
     tasks,
     setTasks,

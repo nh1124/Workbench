@@ -11,7 +11,10 @@ import { taskToDraft, type TaskOccurrenceRow } from "../types";
 
 const apiMocks = vi.hoisted(() => ({
   completeOccurrence: vi.fn(),
-  update: vi.fn()
+  update: vi.fn(),
+  removeScheduleItem: vi.fn(),
+  removeFromToday: vi.fn(),
+  skipOccurrenceException: vi.fn()
 }));
 
 vi.mock("../../lib/api", () => ({
@@ -77,7 +80,10 @@ function occurrenceCollections(row: TaskOccurrenceRow): {
   };
 }
 
-function renderMutations(task: Task) {
+function renderMutations(
+  task: Task,
+  todayScheduleOccurrenceStatuses: Map<string, Task["status"]> = new Map()
+) {
   const onReload = vi.fn().mockResolvedValue(undefined);
   const result = renderHook(() => useTaskMutations(
     {
@@ -89,7 +95,8 @@ function renderMutations(task: Task) {
       quickFilter: "inbox",
       projectOptions: [],
       contextFilter: "",
-      today: new Date(2026, 6, 13)
+      today: new Date(2026, 6, 13),
+      todayScheduleOccurrenceStatuses
     },
     [task],
     vi.fn(),
@@ -144,5 +151,78 @@ describe("useTaskMutations", () => {
     });
 
     expect(apiMocks.update.mock.calls[0]?.[1]).toMatchObject({ status: "done" });
+  });
+
+  it("removes explicit Today membership and skips a rule-due unfinished occurrence", async () => {
+    const task = makeTask({ recurrence: "WEEKLY" });
+    const occurrenceKey = "occurrence:task-1:2026-07-13:2026-07-13";
+    const { result } = renderMutations(task, new Map([[occurrenceKey, "todo"]]));
+    const row: TaskOccurrenceRow = {
+      key: "schedule:42",
+      scheduleId: 42,
+      taskId: task.id,
+      date: "2026-07-13",
+      occurrenceDate: "2026-07-13",
+      scheduledDate: "2026-07-13",
+      title: task.title,
+      context: task.context,
+      status: "todo"
+    };
+
+    await act(async () => {
+      await result.current.handleToggleTodayForSelected(false, [row], vi.fn(), vi.fn(), vi.fn());
+    });
+
+    expect(apiMocks.removeScheduleItem).toHaveBeenCalledWith(42);
+    expect(apiMocks.skipOccurrenceException).toHaveBeenCalledWith("task-1", "2026-07-13");
+    expect(apiMocks.removeScheduleItem.mock.invocationCallOrder[0])
+      .toBeLessThan(apiMocks.skipOccurrenceException.mock.invocationCallOrder[0]);
+  });
+
+  it("removes explicit Today membership without skipping when the occurrence is not rule-due", async () => {
+    const task = makeTask();
+    const { result } = renderMutations(task);
+    const row: TaskOccurrenceRow = {
+      key: "schedule:43",
+      scheduleId: 43,
+      taskId: task.id,
+      date: "2026-07-13",
+      occurrenceDate: "2026-07-13",
+      scheduledDate: "2026-07-13",
+      title: task.title,
+      context: task.context,
+      status: "todo"
+    };
+
+    await act(async () => {
+      await result.current.handleToggleTodayForSelected(false, [row], vi.fn(), vi.fn(), vi.fn());
+    });
+
+    expect(apiMocks.removeScheduleItem).toHaveBeenCalledWith(43);
+    expect(apiMocks.skipOccurrenceException).not.toHaveBeenCalled();
+  });
+
+  it("does not skip a done explicit Today row even when its occurrence is rule-due", async () => {
+    const task = makeTask({ status: "done", recurrence: "WEEKLY" });
+    const occurrenceKey = "occurrence:task-1:2026-07-13:2026-07-13";
+    const { result } = renderMutations(task, new Map([[occurrenceKey, "todo"]]));
+    const row: TaskOccurrenceRow = {
+      key: "schedule:44",
+      scheduleId: 44,
+      taskId: task.id,
+      date: "2026-07-13",
+      occurrenceDate: "2026-07-13",
+      scheduledDate: "2026-07-13",
+      title: task.title,
+      context: task.context,
+      status: "done"
+    };
+
+    await act(async () => {
+      await result.current.handleToggleTodayForSelected(false, [row], vi.fn(), vi.fn(), vi.fn());
+    });
+
+    expect(apiMocks.removeScheduleItem).toHaveBeenCalledWith(44);
+    expect(apiMocks.skipOccurrenceException).not.toHaveBeenCalled();
   });
 });

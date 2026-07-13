@@ -4,6 +4,7 @@ import { getLbsBackend, getLbsConfig } from "../lbs/backendFactory.js";
 import { LocalLbsBackend } from "../lbs/localBackend.js";
 import type { LbsBackendContext } from "../lbs/dataPlane.js";
 import type { LbsStoreDatabase } from "../lbs/storeUtils.js";
+import { todayInTimezone } from "../lbsTaskService.js";
 import {
   completeTaskOccurrence,
   createTask,
@@ -114,6 +115,17 @@ class SmokeLbsDatabase {
   }
 }
 
+class NullCacheStatusLbsBackend extends LocalLbsBackend {
+  override async resolveTask(taskId: string, targetDate: string): Promise<Record<string, unknown>> {
+    try {
+      return await super.resolveTask(taskId, targetDate);
+    } catch {
+      // Mirror Python get_resolved_task when the rule cache has no entry.
+      return { status: null };
+    }
+  }
+}
+
 describe("LBS backend factory", () => {
   it("defaults to local mode and uses TASKS_TIMEZONE", () => {
     clearLbsEnv();
@@ -181,5 +193,50 @@ describe("local mode task data-plane smoke", () => {
     assert.equal(today.length, 1);
     assert.equal(today[0].id, created.id);
     assert.equal(today[0].status, "done");
+  });
+
+  it("uses execution history when an undated ONCE task has no resolved rule-cache status", async () => {
+    clearLbsEnv();
+    process.env.TASKS_LBS_MODE = "local";
+    process.env.TASKS_TIMEZONE = "UTC";
+    const date = todayInTimezone("UTC");
+    const database = new SmokeLbsDatabase();
+    const getBackend = (context: LbsBackendContext) =>
+      new NullCacheStatusLbsBackend(context.ownerCoreUserId, database.asDatabase());
+    const dependencies: Partial<TaskStoreDependencies> = {
+      getLbsBackend: getBackend,
+      listPinnedTaskIds: async () => [],
+      cacheTasks: async () => undefined
+    };
+    const owner = { ownerCoreUserId: "owner-a" };
+    const created = await createTask({
+      title: "Undated ONCE",
+      context: "inbox",
+      recurrence: "ONCE",
+      status: "todo"
+    }, "owner-a", owner, dependencies);
+    const explicitTodayItem: ScheduleItemRow = {
+      id: 2,
+      taskId: created.id,
+      occurrenceDate: date,
+      scheduledDate: date,
+      createdAt: `${date}T00:00:00.000Z`,
+      updatedAt: `${date}T00:00:00.000Z`
+    };
+    const todayDependencies = {
+      getLbsBackend: getBackend,
+      listPinnedTaskIds: async () => [],
+      listItemsByScheduledDate: async () => [explicitTodayItem]
+    };
+
+    await completeTaskOccurrence(created.id, date, "done", owner, dependencies);
+
+    assert.equal((await listTaskToday("owner-a", date, owner, todayDependencies))[0].status, "done");
+    assert.equal((await listTasks(undefined, "owner-a", owner, dependencies))[0].status, "done");
+
+    await completeTaskOccurrence(created.id, date, "todo", owner, dependencies);
+
+    assert.equal((await listTaskToday("owner-a", date, owner, todayDependencies))[0].status, "todo");
+    assert.equal((await listTasks(undefined, "owner-a", owner, dependencies))[0].status, "todo");
   });
 });

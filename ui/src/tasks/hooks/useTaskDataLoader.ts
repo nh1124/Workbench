@@ -25,11 +25,13 @@ import {
 } from "../types";
 import { buildTodayRows } from "../lib/taskTodayRows";
 import { countDistinctOverdueTasks, countDistinctPlannedTasks } from "../lib/taskOccurrenceCounts";
+import { taskOccurrenceRowKey } from "../lib/taskOccurrenceIdentity";
 
 export interface TaskDataState {
   tasks: Task[];
   projectOptions: ProjectOption[];
   todayTaskIds: Set<string>;
+  todayScheduleOccurrenceStatuses: Map<string, TaskStatus>;
   todayMembershipKeys: Set<string>;
   todayRows: TaskOccurrenceRow[];
   inboxUpcomingRows: TaskOccurrenceRow[];
@@ -65,6 +67,7 @@ export function useTaskDataLoader(
   const [tasks, setTasks] = useState<Task[]>([]);
   const [projectOptions, setProjectOptions] = useState<ProjectOption[]>([]);
   const [todayTaskIds, setTodayTaskIds] = useState<Set<string>>(new Set());
+  const [todayScheduleOccurrenceStatuses, setTodayScheduleOccurrenceStatuses] = useState<Map<string, TaskStatus>>(new Map());
   const [todayMembershipKeys, setTodayMembershipKeys] = useState<Set<string>>(new Set());
   const [todayRows, setTodayRows] = useState<TaskOccurrenceRow[]>([]);
   const [inboxUpcomingRows, setInboxUpcomingRows] = useState<TaskOccurrenceRow[]>([]);
@@ -117,10 +120,16 @@ export function useTaskDataLoader(
       // Build Today status map from LBS schedule (used to merge live status into task list)
       const todayIds = new Set<string>();
       const todayStatusMap = new Map<string, TaskStatus>();
+      const todayOccurrenceStatuses = new Map<string, TaskStatus>();
       for (const day of todaySchedule) {
         for (const item of day.tasks) {
+          const status = toTaskStatus(item.status);
           todayIds.add(item.taskId);
-          todayStatusMap.set(item.taskId, toTaskStatus(item.status));
+          todayStatusMap.set(item.taskId, status);
+          todayOccurrenceStatuses.set(taskOccurrenceRowKey({
+            taskId: item.taskId,
+            occurrenceDate: day.date
+          }), status);
         }
       }
 
@@ -171,6 +180,7 @@ export function useTaskDataLoader(
 
       setTasks(mergedTasks);
       setTodayTaskIds(todayIds);
+      setTodayScheduleOccurrenceStatuses(todayOccurrenceStatuses);
       setTodayMembershipKeys(todayMemberships);
       setProjectOptions(
         projectsResult.ok
@@ -188,6 +198,7 @@ export function useTaskDataLoader(
     } catch (e) {
       const message = e instanceof Error ? e.message : "Failed to load tasks.";
       setTodayTaskIds(new Set());
+      setTodayScheduleOccurrenceStatuses(new Map());
       setTodayMembershipKeys(new Set());
       if (isAuthErrorMessage(message)) {
         setError(message);
@@ -203,6 +214,7 @@ export function useTaskDataLoader(
     tasks,
     projectOptions,
     todayTaskIds,
+    todayScheduleOccurrenceStatuses,
     todayMembershipKeys,
     todayRows,
     inboxUpcomingRows,

@@ -15,6 +15,8 @@ Last updated: 2026-07-13（ユーザー確認済みの決定を反映）
 | Planned / Overdue | occurrence | schedule（±30日窓） | 窓内の未来/過去の未完了 occurrence |
 | Inbox（改定） | occurrence | tasks.list + schedule 窓 | 下記 §2 |
 
+- Today からの remove は明示的メンバーシップ削除であり、当日ルール発生する未完了 occurrence は同時に SKIP 例外を作成して再出現を防ぐ。
+
 ## 2. Inbox（決定: occurrence ベースへ変更）
 
 - **Upcoming**: タスクごとに 1 行。

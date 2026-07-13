@@ -12,7 +12,7 @@ import { formatApiErrorMessage, projectsApi, taskAttachmentsApi, taskSubtasksApi
 import { pushErrorNotification } from "../../lib/notificationService";
 import { startOfDay, toDateKey } from "../../lib/taskDateUtils";
 import { mergeProjectOptions, normalizeText, type ProjectOption } from "../../lib/taskDisplayUtils";
-import type { Task, TaskAttachment, TaskHistoryEntry, TaskSubtask } from "../../types/models";
+import type { Task, TaskAttachment, TaskHistoryEntry, TaskStatus, TaskSubtask } from "../../types/models";
 import {
   normalizeDateKey,
   occurrenceMembershipKey,
@@ -70,6 +70,8 @@ export interface TaskMutationsProps {
   contextFilter: string;
   /** Today's date key (for add-to-today). */
   today: Date;
+  /** Current LBS occurrences for Today, keyed by task/date occurrence identity. */
+  todayScheduleOccurrenceStatuses: Map<string, TaskStatus>;
 }
 
 // ── Returned state + actions ─────────────────────────────────────────────────
@@ -216,7 +218,8 @@ export function useTaskMutations(
     quickFilter,
     projectOptions,
     contextFilter,
-    today
+    today,
+    todayScheduleOccurrenceStatuses
   } = props;
 
   // ── Draft / editing state ──────────────────────────────────────────────────
@@ -897,15 +900,6 @@ export function useTaskMutations(
           return next;
         });
       } else {
-        await Promise.all(
-          uniqueRows.map(({ row, taskId, occurrenceDate }) => {
-            const scheduledDate = rowScheduledDate(row) ?? todayKey;
-            if (row.scheduleId != null && scheduledDate === todayKey) {
-              return tasksApi.removeScheduleItem(row.scheduleId);
-            }
-            return tasksApi.removeFromToday(taskId, todayKey, occurrenceDate);
-          })
-        );
         const removedKeys = new Set(
           uniqueRows.map(({ membershipKey }) => membershipKey)
         );
@@ -915,6 +909,48 @@ export function useTaskMutations(
           uniqueRows.forEach(({ membershipKey }) => next.delete(membershipKey));
           return next;
         });
+        try {
+          await Promise.all(
+            uniqueRows.map(async ({ row, taskId, occurrenceDate }) => {
+              const scheduledDate = rowScheduledDate(row) ?? todayKey;
+              if (row.scheduleId != null && scheduledDate === todayKey) {
+                await tasksApi.removeScheduleItem(row.scheduleId);
+              } else {
+                await tasksApi.removeFromToday(taskId, todayKey, occurrenceDate);
+              }
+
+              const generatedStatus = todayScheduleOccurrenceStatuses.get(taskOccurrenceRowKey({
+                taskId,
+                occurrenceDate: todayKey
+              }));
+              if (
+                generatedStatus != null
+                && generatedStatus !== "done"
+                && generatedStatus !== "skipped"
+                && row.status !== "done"
+                && row.status !== "skipped"
+              ) {
+                await tasksApi.skipOccurrenceException(taskId, todayKey);
+              }
+            })
+          );
+        } catch (error) {
+          setTodayRows((prev) => {
+            const existingKeys = new Set(prev.map((row) => rowTodayMembershipKey(row, todayKey)));
+            return [
+              ...prev,
+              ...uniqueRows
+                .filter(({ membershipKey }) => !existingKeys.has(membershipKey))
+                .map(({ row }) => row)
+            ];
+          });
+          setTodayMembershipKeys((prev) => {
+            const next = new Set(prev);
+            uniqueRows.forEach(({ membershipKey }) => next.add(membershipKey));
+            return next;
+          });
+          throw error;
+        }
       }
       closeMenu();
     } catch (error) {

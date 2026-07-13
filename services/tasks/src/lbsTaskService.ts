@@ -211,20 +211,27 @@ export async function applyResolvedStatus(
 ): Promise<Task> {
   const targetDate = overrideDate ?? resolveTargetDate(task, fallbackTimezone);
   try {
-    const resolved = (await client.resolveTask(task.id, targetDate)) as unknown as LbsResolvedTask;
-    return { ...task, status: toUiStatus(resolved.status) };
+    const resolved = (await client.resolveTask(task.id, targetDate)) as unknown as LbsResolvedTask | null | undefined;
+    if (resolved?.status != null) {
+      return { ...task, status: toUiStatus(resolved.status) };
+    }
+    // Batch D1 bug: Python get_resolved_task returns status=null when the rule has no
+    // cache entry (for example ONCE without due_date). Unlike the golden-covered
+    // non-null resolved statuses, that null must yield to execution history.
   } catch {
-    try {
-      const history = (await client.getTaskHistory(task.id, targetDate, targetDate)) as unknown as LbsHistoryEntry[];
-      if (history.length === 0) {
-        return task;
-      }
-      const latest = history
-        .slice()
-        .sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""))[0];
-      return { ...task, status: toUiStatus(latest.status) };
-    } catch {
+    // Resolution failures use the same execution-history fallback as a null cache status.
+  }
+
+  try {
+    const history = (await client.getTaskHistory(task.id, targetDate, targetDate)) as unknown as LbsHistoryEntry[];
+    if (history.length === 0) {
       return task;
     }
+    const latest = history
+      .slice()
+      .sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""))[0];
+    return { ...task, status: toUiStatus(latest.status) };
+  } catch {
+    return task;
   }
 }
