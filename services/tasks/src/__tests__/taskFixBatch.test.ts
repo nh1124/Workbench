@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, it } from "node:test";
-import type { LbsClient, LbsScheduleDay } from "../lbsClient.js";
+import { describe, it } from "node:test";
+import type { LbsDataPlane, LbsScheduleDay } from "../lbs/dataPlane.js";
 import type { LbsTask } from "../lbsTaskService.js";
 import { moveTaskOccurrence } from "../taskExceptionStore.js";
 import {
@@ -11,15 +11,6 @@ import {
   listTaskToday,
   type ScheduleItemRow
 } from "../taskScheduleStore.js";
-
-const originalFetch = globalThis.fetch;
-const originalLbsBaseUrl = process.env.TASKS_LBS_BASE_URL;
-
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-  if (originalLbsBaseUrl === undefined) delete process.env.TASKS_LBS_BASE_URL;
-  else process.env.TASKS_LBS_BASE_URL = originalLbsBaseUrl;
-});
 
 function lbsTask(id: string, overrides: Partial<LbsTask> = {}): LbsTask {
   return {
@@ -46,45 +37,32 @@ function scheduleItem(id: number, taskId: string, occurrenceDate: string): Sched
 
 describe("task fix batch", () => {
   it("compensates the source SKIP when the move target write fails", async () => {
-    process.env.TASKS_LBS_BASE_URL = "https://lbs.example.test";
-    const calls: Array<{ method: string; url: string }> = [];
-    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-      const url = String(input);
-      const method = init?.method ?? "GET";
-      calls.push({ method, url });
-
-      if (method === "GET" && url.includes("/exceptions?")) {
-        return new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } });
+    const calls: Array<{ method: string; target?: string | number }> = [];
+    const fakeBackend = {
+      listExceptions: async (_taskId: string, startDate?: string) => {
+        calls.push({ method: "list", target: startDate });
+        return [];
+      },
+      createException: async (payload: Record<string, unknown>) => {
+        const targetDate = String(payload.target_date);
+        calls.push({ method: "create", target: targetDate });
+        if (targetDate === "2026-07-14") throw new Error("target failed");
+        return { id: 101 };
+      },
+      deleteException: async (id: number) => {
+        calls.push({ method: "delete", target: id });
       }
-      if (method === "POST" && url.includes("/exceptions")) {
-        const body = JSON.parse(String(init?.body)) as { target_date: string };
-        if (body.target_date === "2026-07-14") {
-          return new Response('{"message":"target failed"}', {
-            status: 500,
-            headers: { "Content-Type": "application/json" }
-          });
-        }
-        return new Response('{"id":101}', {
-          status: 200,
-          headers: { "Content-Type": "application/json" }
-        });
-      }
-      if (method === "DELETE" && url.includes("/exceptions/101")) {
-        return new Response(null, { status: 204 });
-      }
-      throw new Error(`Unexpected request: ${method} ${url}`);
-    }) as typeof fetch;
+    } as unknown as LbsDataPlane;
 
     await assert.rejects(
       () => moveTaskOccurrence("task-1", "2026-07-13", "2026-07-14", {
-        ownerCoreUserId: "owner",
-        lbsAccessToken: "token"
-      }),
+        ownerCoreUserId: "owner"
+      }, { getLbsBackend: () => fakeBackend }),
       /Failed to upsert exception/
     );
 
-    assert.equal(calls.filter((call) => call.method === "GET").length, 3);
-    assert.ok(calls.some((call) => call.method === "DELETE" && call.url.endsWith("/exceptions/101?force_override=true")));
+    assert.equal(calls.filter((call) => call.method === "list").length, 3);
+    assert.ok(calls.some((call) => call.method === "delete" && call.target === 101));
   });
 
   it("includes an untimed recurring task in generated calendar items", async () => {
@@ -95,11 +73,10 @@ describe("task fix batch", () => {
         date: "2026-07-13",
         tasks: [{ task_id: task.task_id, task_name: task.task_name, context: task.context, status: "todo" }]
       }]
-    } as unknown as LbsClient;
+    } as unknown as LbsDataPlane;
 
     const days = await listTaskScheduleCalendar("owner", "2026-07-13", "2026-07-13", {
-      ownerCoreUserId: "owner",
-      lbsAccessToken: "token"
+      ownerCoreUserId: "owner"
     }, {
       listItemsForCalendarWindow: async () => [],
       getLbsBackend: () => fakeClient
@@ -131,11 +108,10 @@ describe("task fix batch", () => {
       getTask: async () => { counters.getTask += 1; throw new Error("unexpected getTask"); },
       resolveTask: async () => { counters.resolveTask += 1; throw new Error("unexpected resolveTask"); },
       getTaskHistory: async () => { counters.getTaskHistory += 1; throw new Error("unexpected history"); }
-    } as unknown as LbsClient;
+    } as unknown as LbsDataPlane;
 
     const result = await listTaskToday("owner", "2026-07-13", {
-      ownerCoreUserId: "owner",
-      lbsAccessToken: "token"
+      ownerCoreUserId: "owner"
     }, {
       listPinnedTaskIds: async () => ["b"],
       listItemsByScheduledDate: async () => [

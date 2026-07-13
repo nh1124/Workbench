@@ -79,9 +79,6 @@ function canonicalEnv() {
     "MINDMAPS_PORT",
     "WBS_PORT",
     "INSIGHTS_PORT",
-    "LBS_PORT",
-    "LBS_API_PREFIX",
-    "LBS_BIND_HOST",
     "UI_DEV_HOST",
     "UI_DEV_PORT",
   ];
@@ -99,11 +96,6 @@ function serviceUrl(env, portKey) {
   return `http://${env.WORKBENCH_HOST}:${env[portKey]}`;
 }
 
-function lbsUrl(env) {
-  const prefix = env.LBS_API_PREFIX.startsWith("/") ? env.LBS_API_PREFIX : `/${env.LBS_API_PREFIX}`;
-  return `${serviceUrl(env, "LBS_PORT")}${prefix}`.replace(/\/+$/, "");
-}
-
 function desiredRuntimeUpdates(env) {
   const coreUrl = serviceUrl(env, "CORE_PORT");
   const notesUrl = serviceUrl(env, "NOTES_PORT");
@@ -114,7 +106,6 @@ function desiredRuntimeUpdates(env) {
   const mindmapsUrl = serviceUrl(env, "MINDMAPS_PORT");
   const wbsUrl = serviceUrl(env, "WBS_PORT");
   const insightsUrl = serviceUrl(env, "INSIGHTS_PORT");
-  const lbsBaseUrl = lbsUrl(env);
   const uiDevUrl = `http://${env.UI_DEV_HOST}:${env.UI_DEV_PORT}`;
   const requireCoreMutationOrigin = env.WORKBENCH_REQUIRE_CORE_MUTATION_ORIGIN || "false";
   const coreMutationToken = env.WORKBENCH_CORE_MUTATION_TOKEN || "";
@@ -147,8 +138,6 @@ function desiredRuntimeUpdates(env) {
       updates: {
         TASKS_SERVICE_HOST: env.WORKBENCH_HOST,
         TASKS_SERVICE_PORT: env.TASKS_PORT,
-        TASKS_LBS_BASE_URL: lbsBaseUrl,
-        TASKS_LBS_AUTH_BASE_URL: lbsBaseUrl,
         WORKBENCH_REQUIRE_CORE_MUTATION_ORIGIN: requireCoreMutationOrigin,
         WORKBENCH_CORE_MUTATION_TOKEN: coreMutationToken,
       },
@@ -196,17 +185,6 @@ function desiredRuntimeUpdates(env) {
       },
     },
     {
-      file: "services/lbs/.env",
-      sample: "services/lbs/.env.example",
-      updates: {
-        API_V1_STR: env.LBS_API_PREFIX,
-        BACKEND_PORT: env.LBS_PORT,
-        LBS_HOST_PORT: env.LBS_PORT,
-        LBS_BIND_HOST: env.LBS_BIND_HOST,
-        VITE_API_BASE_URL: lbsBaseUrl,
-      },
-    },
-    {
       file: "services/workbench-core/.env",
       sample: "services/workbench-core/.env.example",
       updates: {
@@ -220,7 +198,6 @@ function desiredRuntimeUpdates(env) {
         MINDMAPS_SERVICE_URL: mindmapsUrl,
         WBS_SERVICE_URL: wbsUrl,
         INSIGHTS_SERVICE_URL: insightsUrl,
-        LBS_SERVICE_URL: lbsBaseUrl,
         INTERNAL_API_KEY_IMAGES: "workbench-internal-images",
         INTERNAL_API_KEY_MINDMAPS: "workbench-internal-mindmaps",
         INTERNAL_API_KEY_WBS: "workbench-internal-wbs",
@@ -288,10 +265,6 @@ function desiredExampleUpdates(env) {
     {
       file: "infra/env_samples/insights.env.example",
       updates: desiredRuntimeUpdates(env).find((target) => target.file === "services/insights/.env").updates,
-    },
-    {
-      file: "infra/env_samples/lbs.env.example",
-      updates: desiredRuntimeUpdates(env).find((target) => target.file === "services/lbs/.env").updates,
     },
     {
       file: "infra/env_samples/ui.env.example",
@@ -400,7 +373,6 @@ function printPorts(env) {
     env.MINDMAPS_PORT,
     env.WBS_PORT,
     env.INSIGHTS_PORT,
-    env.LBS_PORT,
   ];
   if (args.has("--ui")) {
     ports.push(env.UI_DEV_PORT);

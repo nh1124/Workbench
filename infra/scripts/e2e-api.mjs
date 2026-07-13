@@ -1225,7 +1225,7 @@ async function run() {
     if (tasksWithBearer.status === 200) {
       ensure(true, "tasks service accepts valid bearer", undefined, state);
     } else if (tasksWithBearer.status === 503) {
-      warn("tasks business call reachable but LBS upstream unavailable", trimBody(tasksWithBearer.text), state);
+      warn("tasks business call failed", trimBody(tasksWithBearer.text), state);
     } else {
       ensure(false, "tasks service auth/business call", `status=${tasksWithBearer.status} body=${trimBody(tasksWithBearer.text)}`, state);
     }

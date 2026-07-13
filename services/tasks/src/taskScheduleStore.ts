@@ -22,9 +22,8 @@ import {
   toUiStatus,
   type LbsTask
 } from "./lbsTaskService.js";
-import type { LbsScheduleDay } from "./lbsClient.js";
 import { getLbsBackend } from "./lbs/backendFactory.js";
-import type { LbsBackendContext, LbsDataPlane } from "./lbs/dataPlane.js";
+import type { LbsBackendContext, LbsDataPlane, LbsScheduleDay } from "./lbs/dataPlane.js";
 import { listDateKeys, taskOccursOnDateKey } from "./taskRecurrenceUtils.js";
 import type {
   ScheduleCalendarDay,

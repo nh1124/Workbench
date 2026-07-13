@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { LbsClient } from "../lbsClient.js";
 import { getLbsBackend, getLbsConfig } from "../lbs/backendFactory.js";
 import { LocalLbsBackend } from "../lbs/localBackend.js";
 import type { LbsBackendContext } from "../lbs/dataPlane.js";
@@ -9,23 +8,12 @@ import {
   completeTaskOccurrence,
   createTask,
   listTasks,
-  provisionLbsAccount,
   type TaskStoreDependencies
 } from "../store.js";
 import { listTaskToday, type ScheduleItemRow } from "../taskScheduleStore.js";
 
 const ENV_KEYS = [
   "TASKS_LBS_MODE",
-  "TASKS_LBS_BASE_URL",
-  "TASKS_LBS_AUTH_BASE_URL",
-  "TASKS_LBS_AUTH_LOGIN_PATH",
-  "TASKS_LBS_AUTH_USER_CREATE_PATH",
-  "TASKS_LBS_ACCOUNT_PASSWORD_SEED",
-  "TASKS_LBS_API_KEY",
-  "TASKS_LBS_AUTH_TOKEN",
-  "TASKS_LBS_TIMEZONE",
-  "TASKS_LBS_FORCE_OVERRIDE",
-  "TASKS_LBS_DEFAULT_ACTIVE",
   "TASKS_TIMEZONE"
 ] as const;
 const originalEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
@@ -127,31 +115,25 @@ class SmokeLbsDatabase {
 }
 
 describe("LBS backend factory", () => {
-  it("selects local mode without a token or TASKS_LBS configuration", async () => {
+  it("defaults to local mode and uses TASKS_TIMEZONE", () => {
     clearLbsEnv();
-    process.env.TASKS_LBS_MODE = "local";
     process.env.TASKS_TIMEZONE = "Pacific/Auckland";
     const database = new SmokeLbsDatabase().asDatabase();
 
-    const withoutToken = getLbsBackend({ ownerCoreUserId: " Owner-A " }, { database });
-    const withToken = getLbsBackend({ ownerCoreUserId: "Owner-A", lbsAccessToken: "ignored" }, { database });
+    const backend = getLbsBackend({ ownerCoreUserId: " Owner-A " }, { database });
 
-    assert.ok(withoutToken instanceof LocalLbsBackend);
-    assert.ok(withToken instanceof LocalLbsBackend);
-    assert.equal(withoutToken.owner, "owner-a");
+    assert.ok(backend instanceof LocalLbsBackend);
+    assert.equal(backend.owner, "owner-a");
     assert.equal(getLbsConfig().timezone, "Pacific/Auckland");
-    await provisionLbsAccount("owner-a", "Owner A");
   });
 
-  it("defaults to remote mode and requires TASKS_LBS_BASE_URL", () => {
+  it("rejects remote mode with the production migration runbook", () => {
     clearLbsEnv();
+    process.env.TASKS_LBS_MODE = "remote";
     assert.throws(
-      () => getLbsBackend({ ownerCoreUserId: "owner", lbsAccessToken: "token" }),
-      /TASKS_LBS_BASE_URL/
+      () => getLbsBackend({ ownerCoreUserId: "owner" }),
+      /scripts\/lbs-migrate\/README\.md/
     );
-
-    process.env.TASKS_LBS_BASE_URL = "https://lbs.example.test/";
-    assert.ok(getLbsBackend({ ownerCoreUserId: "owner", lbsAccessToken: "token" }) instanceof LbsClient);
   });
 });
 

@@ -3,7 +3,6 @@ import type { RequestHandler } from "express";
 import jwt from "jsonwebtoken";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { findServiceAccountByCoreUserId } from "./db.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,14 +18,9 @@ function requireEnv(name: string): string {
 
 const jwtSecret = requireEnv("JWT_SECRET");
 const jwtIssuer = requireEnv("JWT_ISSUER");
-const internalApiKey = requireEnv("INTERNAL_API_KEY");
-
 export interface AuthenticatedUser {
-  serviceAccountId: string;
   coreUserId: string;
   usernameSnapshot: string;
-  lbsAccessToken?: string;
-  lbsRefreshToken?: string;
 }
 
 declare global {
@@ -77,18 +71,9 @@ export const requireUserAuth: RequestHandler = async (req, res, next) => {
 
   try {
     const claims = parseClaims(token);
-    const account = await findServiceAccountByCoreUserId(claims.coreUserId);
-    if (!account) {
-      res.status(403).json({ message: "Service account not provisioned" });
-      return;
-    }
-
     req.authUser = {
-      serviceAccountId: account.id,
-      coreUserId: account.coreUserId,
-      usernameSnapshot: account.usernameSnapshot || claims.username,
-      lbsAccessToken: account.lbsAccessToken,
-      lbsRefreshToken: account.lbsRefreshToken
+      coreUserId: claims.coreUserId,
+      usernameSnapshot: claims.username
     };
 
     next();
@@ -101,13 +86,4 @@ export const requireUserAuth: RequestHandler = async (req, res, next) => {
     const message = error instanceof Error ? error.message : "Authentication failed";
     res.status(401).json({ message });
   }
-};
-
-export const requireInternalApiKey: RequestHandler = (req, res, next) => {
-  const provided = req.header("x-api-key")?.trim();
-  if (!provided || provided !== internalApiKey) {
-    res.status(403).json({ message: "Forbidden" });
-    return;
-  }
-  next();
 };

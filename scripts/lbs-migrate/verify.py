@@ -97,7 +97,7 @@ def verify_user(source_url: str, target_url: str, lbs_user_id: str, user_map_pat
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", default="sqlite:///services/lbs/lbs.db", help="LBS SQLAlchemy DB URL")
+    parser.add_argument("--source", required=True, help="Legacy LBS SQLAlchemy DB URL")
     parser.add_argument("--target", required=True, help="Tasks Postgres SQLAlchemy DB URL")
     parser.add_argument("--user", required=True, dest="lbs_user_id", help="LBS users.user_id to verify")
     parser.add_argument("--user-map", help="Optional JSON {lbs_user_id: owner_core_user_id}")

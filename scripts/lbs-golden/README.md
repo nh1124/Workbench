@@ -1,8 +1,17 @@
 # LBS golden-capture harness
 
-This harness builds a synthetic SQLite fixture and captures the Python LBS API contract for the TypeScript port. It never reads or writes `services/lbs/lbs.db`, uses the fixed reference date `2026-07-01`, and runs the FastAPI app in-process with `TestClient`.
+The committed JSON goldens are frozen as the parity contract for the TypeScript implementation. Normal Workbench development and tests consume those files and do not require the retired Python service.
 
-The venv at `scripts/lbs-golden/.venv` is already provisioned. From the repository root, run:
+Re-capturing goldens now requires a separate checkout of the standalone [LBS repository](https://github.com/nh1124/LBS). Set `LBS_SOURCE_ROOT` to that checkout, then expose it at the `services/lbs`-equivalent path expected by the unchanged capture scripts (for example, with a temporary directory junction). The environment variable documents the authoritative checkout; the scripts themselves still import from the equivalent repository path.
+
+```powershell
+$env:LBS_SOURCE_ROOT = "C:/src/LBS"
+New-Item -ItemType Junction -Path services/lbs -Target $env:LBS_SOURCE_ROOT
+```
+
+Remove the temporary junction after capture. Never point it at production data: the harness builds a synthetic SQLite fixture, uses the fixed reference date `2026-07-01`, and runs the FastAPI app in-process with `TestClient`.
+
+The venv at `scripts/lbs-golden/.venv` is already provisioned. With the standalone checkout exposed at that equivalent path, run from the Workbench repository root:
 
 ```powershell
 scripts/lbs-golden/.venv/Scripts/python.exe scripts/lbs-golden/build_fixture.py

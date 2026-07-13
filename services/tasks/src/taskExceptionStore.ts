@@ -118,9 +118,10 @@ export async function moveTaskOccurrence(
   taskId: string,
   sourceDate: string,
   targetDate: string,
-  backendContext: LbsBackendContext
+  backendContext: LbsBackendContext,
+  dependencyOverrides: Partial<TaskExceptionStoreDependencies> = {}
 ): Promise<{ taskId: string; sourceDate: string; targetDate: string }> {
-  const client = getLbsBackend(backendContext);
+  const client = { ...defaultDependencies, ...dependencyOverrides }.getLbsBackend(backendContext);
   const normalizedSource = toDueDateOnly(sourceDate);
   const normalizedTarget = toDueDateOnly(targetDate);
   if (!normalizedSource || !normalizedTarget) {
@@ -178,9 +179,10 @@ export async function moveTaskOccurrence(
 export async function skipTaskOccurrenceException(
   taskId: string,
   targetDate: string,
-  backendContext: LbsBackendContext
+  backendContext: LbsBackendContext,
+  dependencyOverrides: Partial<TaskExceptionStoreDependencies> = {}
 ): Promise<{ taskId: string; targetDate: string }> {
-  const client = getLbsBackend(backendContext);
+  const client = { ...defaultDependencies, ...dependencyOverrides }.getLbsBackend(backendContext);
   const normalizedDate = toDueDateOnly(targetDate);
   if (!normalizedDate) {
     throw new Error("targetDate must be in YYYY-MM-DD format");
@@ -188,3 +190,8 @@ export async function skipTaskOccurrenceException(
   await upsertTaskException(client, taskId, normalizedDate, "SKIP", "Removed via UI");
   return { taskId, targetDate: normalizedDate };
 }
+interface TaskExceptionStoreDependencies {
+  getLbsBackend: (context: LbsBackendContext) => LbsDataPlane;
+}
+
+const defaultDependencies: TaskExceptionStoreDependencies = { getLbsBackend };

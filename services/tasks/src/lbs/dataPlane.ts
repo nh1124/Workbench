@@ -22,7 +22,6 @@ export interface LbsScheduleDay {
 
 export interface LbsBackendContext {
   ownerCoreUserId: string;
-  lbsAccessToken?: string;
 }
 
 export interface LbsDataPlane {

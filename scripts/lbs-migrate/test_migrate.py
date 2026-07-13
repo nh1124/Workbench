@@ -3,11 +3,10 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 import tempfile
-from datetime import date, datetime, time, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import create_engine, text
@@ -15,13 +14,50 @@ from sqlalchemy import create_engine, text
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[1]
-LBS_ROOT = REPO_ROOT / "services" / "lbs"
 MIGRATE = SCRIPT_DIR / "migrate.py"
 VERIFY = SCRIPT_DIR / "verify.py"
 LBS_USER_ID = "11111111-1111-4111-8111-111111111111"
 CORE_USER_ID = "Core-User_01"
 OWNER = CORE_USER_ID.lower()
 FIXED = datetime(2026, 7, 1, 0, 0, tzinfo=timezone.utc)
+
+
+SOURCE_DDL = (
+    """CREATE TABLE users (
+        user_id VARCHAR PRIMARY KEY, email VARCHAR NOT NULL UNIQUE, password_hash VARCHAR,
+        name VARCHAR, is_active BOOLEAN, created_at DATETIME, updated_at DATETIME)""",
+    """CREATE TABLE external_identities (
+        id VARCHAR PRIMARY KEY, user_id VARCHAR NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+        issuer VARCHAR NOT NULL, subject VARCHAR NOT NULL, created_at DATETIME,
+        CONSTRAINT _issuer_subject_uc UNIQUE (issuer, subject))""",
+    """CREATE TABLE tasks (
+        task_id VARCHAR PRIMARY KEY, user_id VARCHAR NOT NULL REFERENCES users(user_id),
+        task_name VARCHAR NOT NULL, context VARCHAR NOT NULL, base_load_score FLOAT NOT NULL,
+        active BOOLEAN, rule_type VARCHAR NOT NULL, due_date DATE, mon BOOLEAN, tue BOOLEAN,
+        wed BOOLEAN, thu BOOLEAN, fri BOOLEAN, sat BOOLEAN, sun BOOLEAN, interval_days INTEGER,
+        anchor_date DATE, month_day INTEGER, nth_in_month INTEGER, weekday_mon1 INTEGER,
+        start_date DATE, end_date DATE, start_time TIME, end_time TIME, notes TEXT,
+        external_sync_id VARCHAR, timezone VARCHAR, is_locked BOOLEAN,
+        created_at DATETIME, updated_at DATETIME)""",
+    """CREATE TABLE task_exceptions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, user_id VARCHAR NOT NULL REFERENCES users(user_id),
+        task_id VARCHAR NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
+        target_date DATE NOT NULL, exception_type VARCHAR NOT NULL, override_load_value FLOAT,
+        start_time TIME, end_time TIME, notes TEXT, is_locked BOOLEAN, created_at DATETIME)""",
+    """CREATE TABLE task_executions (
+        id INTEGER PRIMARY KEY, user_id VARCHAR NOT NULL REFERENCES users(user_id),
+        task_id VARCHAR NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
+        target_date DATE NOT NULL, status VARCHAR(7), progress INTEGER, actual_time INTEGER,
+        created_at DATETIME,
+        CONSTRAINT uq_task_execution_user_date UNIQUE (user_id, task_id, target_date))""",
+    """CREATE TABLE daily_conditions (
+        user_id VARCHAR NOT NULL REFERENCES users(user_id), target_date DATE NOT NULL,
+        cognitive_fatigue INTEGER, physical_fatigue INTEGER, note TEXT, updated_at DATETIME,
+        PRIMARY KEY (user_id, target_date))""",
+    """CREATE TABLE system_config (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, user_id VARCHAR NOT NULL REFERENCES users(user_id),
+        key VARCHAR NOT NULL, value VARCHAR NOT NULL, description TEXT, updated_at DATETIME)""",
+)
 
 
 TARGET_DDL = (
@@ -72,53 +108,57 @@ def run(*args: str, expected: int = 0) -> subprocess.CompletedProcess[str]:
 
 
 def build_source(path: Path) -> None:
-    os.environ["DATABASE_URL"] = db_url(path)
-    os.environ["LBS_ENV"] = "test"
-    sys.path.insert(0, str(LBS_ROOT))
-    from src.models.database import (  # pylint: disable=import-outside-toplevel
-        Base, DailyCondition, LBSDailyCache, SessionLocal, SystemConfig, Task, TaskException,
-        TaskExecution, TaskStatus, User, engine,
-    )
-
-    Base.metadata.create_all(bind=engine)
-    with SessionLocal() as session:
-        session.add(User(
-            user_id=LBS_USER_ID,
-            email="wb_coreuser01@workbench.local",
-            name="Migrated Workbench user",
-            is_active=True,
-            created_at=FIXED,
-            updated_at=FIXED,
-        ))
-        session.add(Task(
-            task_id="T-MIGRATE-1", user_id=LBS_USER_ID, task_name="Migration task",
-            context="focus", base_load_score=3.5, active=True, rule_type="WEEKLY",
-            mon=True, wed=True, start_date=date(2026, 7, 1), end_date=date(2026, 12, 31),
-            start_time=time(9, 30), end_time=time(10, 45), notes="Keep me",
-            timezone="Asia/Tokyo", is_locked=True, created_at=FIXED, updated_at=FIXED,
-        ))
-        session.add(TaskException(
-            id=41, user_id=LBS_USER_ID, task_id="T-MIGRATE-1", target_date=date(2026, 7, 8),
-            exception_type="RESCHEDULE", start_time=time(13, 0), end_time=time(14, 0),
-            notes="Moved", is_locked=False, created_at=FIXED,
-        ))
-        session.add(TaskExecution(
-            id=51, user_id=LBS_USER_ID, task_id="T-MIGRATE-1", target_date=date(2026, 7, 1),
-            status=TaskStatus.DONE, progress=80, actual_time=65, created_at=FIXED,
-        ))
-        session.add(DailyCondition(
-            user_id=LBS_USER_ID, target_date=date(2026, 7, 1), cognitive_fatigue=2,
-            physical_fatigue=3, note="Normal", updated_at=FIXED,
-        ))
+    engine = create_engine(db_url(path), future=True)
+    with engine.begin() as connection:
+        for statement in SOURCE_DDL:
+            connection.exec_driver_sql(statement)
+        connection.execute(text("""INSERT INTO users
+            (user_id, email, name, is_active, created_at, updated_at)
+            VALUES (:user_id, :email, :name, :is_active, :created_at, :updated_at)"""), {
+                "user_id": LBS_USER_ID, "email": "wb_coreuser01@workbench.local",
+                "name": "Migrated Workbench user", "is_active": True,
+                "created_at": FIXED, "updated_at": FIXED,
+            })
+        connection.execute(text("""INSERT INTO external_identities
+            (id, user_id, issuer, subject, created_at)
+            VALUES (:id, :user_id, 'workbench-core', :subject, :created_at)"""), {
+                "id": "identity-1", "user_id": LBS_USER_ID,
+                "subject": CORE_USER_ID, "created_at": FIXED,
+            })
+        connection.execute(text("""INSERT INTO tasks
+            (task_id, user_id, task_name, context, base_load_score, active, rule_type,
+             mon, tue, wed, thu, fri, sat, sun, start_date, end_date, start_time, end_time,
+             notes, timezone, is_locked, created_at, updated_at)
+            VALUES (:task_id, :user_id, 'Migration task', 'focus', 3.5, 1, 'WEEKLY',
+                    1, 0, 1, 0, 0, 0, 0, '2026-07-01', '2026-12-31', '09:30:00',
+                    '10:45:00', 'Keep me', 'Asia/Tokyo', 1, :created_at, :updated_at)"""), {
+                "task_id": "T-MIGRATE-1", "user_id": LBS_USER_ID,
+                "created_at": FIXED, "updated_at": FIXED,
+            })
+        connection.execute(text("""INSERT INTO task_exceptions
+            (id, user_id, task_id, target_date, exception_type, start_time, end_time,
+             notes, is_locked, created_at)
+            VALUES (41, :user_id, 'T-MIGRATE-1', '2026-07-08', 'RESCHEDULE',
+                    '13:00:00', '14:00:00', 'Moved', 0, :created_at)"""), {
+                "user_id": LBS_USER_ID, "created_at": FIXED,
+            })
+        connection.execute(text("""INSERT INTO task_executions
+            (id, user_id, task_id, target_date, status, progress, actual_time, created_at)
+            VALUES (51, :user_id, 'T-MIGRATE-1', '2026-07-01', 'DONE', 80, 65, :created_at)"""), {
+                "user_id": LBS_USER_ID, "created_at": FIXED,
+            })
+        connection.execute(text("""INSERT INTO daily_conditions
+            (user_id, target_date, cognitive_fatigue, physical_fatigue, note, updated_at)
+            VALUES (:user_id, '2026-07-01', 2, 3, 'Normal', :updated_at)"""), {
+                "user_id": LBS_USER_ID, "updated_at": FIXED,
+            })
         for key, value in {"ALPHA": "0.25", "BETA": "1.4", "SWITCH_COST": "0.75", "CAP": "7.5", "IGNORED": "9"}.items():
-            session.add(SystemConfig(
-                user_id=LBS_USER_ID, key=key, value=value, description=f"{key} test", updated_at=FIXED,
-            ))
-        session.add(LBSDailyCache(
-            id=61, user_id=LBS_USER_ID, target_date=date(2026, 7, 1), task_id="T-MIGRATE-1",
-            calculated_load=3.5, status=TaskStatus.TODO, is_overflow=False, generated_at=FIXED,
-        ))
-        session.commit()
+            connection.execute(text("""INSERT INTO system_config
+                (user_id, key, value, description, updated_at)
+                VALUES (:user_id, :key, :value, :description, :updated_at)"""), {
+                    "user_id": LBS_USER_ID, "key": key, "value": value,
+                    "description": f"{key} test", "updated_at": FIXED,
+                })
     engine.dispose()
 
 

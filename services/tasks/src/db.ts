@@ -1,7 +1,6 @@
 import { config as loadEnv } from "dotenv";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createHash } from "node:crypto";
 import { Pool } from "pg";
 import type { Task } from "./types.js";
 import { ensureLbsSchema } from "./lbs/schema.js";
@@ -30,14 +29,6 @@ const DB_STARTUP_RETRY_ATTEMPTS = 20;
 const DB_STARTUP_RETRY_DELAY_MS = 1000;
 
 let schemaReady: Promise<void> | undefined;
-
-export interface ServiceAccount {
-  id: string;
-  coreUserId: string;
-  usernameSnapshot: string;
-  lbsAccessToken?: string;
-  lbsRefreshToken?: string;
-}
 
 function normalizeOwner(ownerCoreUserId: string): string {
   return ownerCoreUserId.trim().toLowerCase();
@@ -101,6 +92,8 @@ export async function ensureTasksSchema(): Promise<void> {
         await pool.query(`ALTER TABLE service_accounts ADD COLUMN IF NOT EXISTS username_snapshot TEXT;`);
         await pool.query(`ALTER TABLE service_accounts ADD COLUMN IF NOT EXISTS username TEXT;`);
         await pool.query(`ALTER TABLE service_accounts ADD COLUMN IF NOT EXISTS password_hash TEXT;`);
+        // Legacy LBS token columns remain for rollback/schema compatibility only.
+        // Runtime code intentionally does not read or write them.
         await pool.query(`ALTER TABLE service_accounts ADD COLUMN IF NOT EXISTS lbs_access_token TEXT;`);
         await pool.query(`ALTER TABLE service_accounts ADD COLUMN IF NOT EXISTS lbs_refresh_token TEXT;`);
         await pool.query(`ALTER TABLE service_accounts ADD COLUMN IF NOT EXISTS lbs_token_updated_at TIMESTAMPTZ;`);
@@ -227,76 +220,6 @@ export async function ensureTasksSchema(): Promise<void> {
     schemaReady = undefined;
     throw error;
   }
-}
-
-function accountIdFromCoreUserId(coreUserId: string): string {
-  return createHash("sha256").update(coreUserId).digest("hex").slice(0, 32);
-}
-
-export async function upsertServiceAccount(
-  coreUserId: string,
-  usernameSnapshot: string,
-  tokens?: { accessToken?: string; refreshToken?: string }
-): Promise<void> {
-  await ensureTasksSchema();
-  const normalizedCoreUserId = coreUserId.trim();
-  const normalizedUsername = usernameSnapshot.trim().toLowerCase();
-  if (!normalizedCoreUserId || !normalizedUsername) {
-    throw new Error("coreUserId and username are required");
-  }
-
-  const id = accountIdFromCoreUserId(normalizedCoreUserId);
-
-  await pool.query(
-    `
-      INSERT INTO service_accounts (id, core_user_id, username_snapshot, username, password_hash)
-      VALUES ($1, $2, $3, $3, $2)
-      ON CONFLICT (core_user_id)
-      DO UPDATE SET
-        username_snapshot = EXCLUDED.username_snapshot,
-        username = EXCLUDED.username,
-        lbs_access_token = COALESCE($4, service_accounts.lbs_access_token),
-        lbs_refresh_token = COALESCE($5, service_accounts.lbs_refresh_token),
-        lbs_token_updated_at = CASE
-          WHEN $4 IS NOT NULL OR $5 IS NOT NULL THEN NOW()
-          ELSE service_accounts.lbs_token_updated_at
-        END,
-        updated_at = NOW();
-    `,
-    [id, normalizedCoreUserId, normalizedUsername, tokens?.accessToken ?? null, tokens?.refreshToken ?? null]
-  );
-}
-
-export async function findServiceAccountByCoreUserId(coreUserId: string): Promise<ServiceAccount | undefined> {
-  await ensureTasksSchema();
-  const normalizedCoreUserId = coreUserId.trim();
-  const result = await pool.query<{
-    id: string;
-    core_user_id: string | null;
-    username_snapshot: string | null;
-    username: string | null;
-    lbs_access_token: string | null;
-    lbs_refresh_token: string | null;
-  }>(
-    `
-      SELECT id, core_user_id, username_snapshot, username, lbs_access_token, lbs_refresh_token
-      FROM service_accounts
-      WHERE core_user_id = $1
-      LIMIT 1
-    `,
-    [normalizedCoreUserId]
-  );
-
-  const row = result.rows[0];
-  if (!row || !row.core_user_id) return undefined;
-
-  return {
-    id: row.id,
-    coreUserId: row.core_user_id,
-    usernameSnapshot: (row.username_snapshot ?? row.username ?? "unknown").trim().toLowerCase(),
-    lbsAccessToken: row.lbs_access_token ?? undefined,
-    lbsRefreshToken: row.lbs_refresh_token ?? undefined
-  };
 }
 
 export async function cacheTasks(tasks: Task[], ownerCoreUserId: string): Promise<void> {

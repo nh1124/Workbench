@@ -12,7 +12,7 @@ import {
   toValidRecurrence,
   todayInTimezone
 } from "../lbsTaskService.js";
-import type { LbsClient } from "../lbsClient.js";
+import type { LbsDataPlane } from "../lbs/dataPlane.js";
 
 describe("lbsTaskService", () => {
   it("coalesces concurrent task resolution by task id", async () => {
@@ -30,7 +30,7 @@ describe("lbsTaskService", () => {
           rule_type: "ONCE"
         };
       }
-    } as unknown as LbsClient;
+    } as unknown as LbsDataPlane;
     const resolveTask = createTaskResolver(client);
 
     const [first, second] = await Promise.all([

@@ -469,7 +469,7 @@ def run_migration(source_url: str, target_url: str, user_map_path: str | None, e
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", default="sqlite:///services/lbs/lbs.db", help="LBS SQLAlchemy DB URL")
+    parser.add_argument("--source", required=True, help="Legacy LBS SQLAlchemy DB URL")
     parser.add_argument("--target", required=True, help="Tasks Postgres SQLAlchemy DB URL (required; no write default)")
     parser.add_argument("--user-map", help="Optional JSON {lbs_user_id: owner_core_user_id}")
     mode = parser.add_mutually_exclusive_group()

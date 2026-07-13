@@ -9,7 +9,7 @@ The target `owner_username` is the Workbench Core user ID after the tasks-servic
 Automatic mapping uses `service_accounts.core_user_id` in the target database and accepts exactly one of these deterministic links:
 
 1. An LBS `external_identities` row whose issuer is `workbench-core` and whose subject exactly identifies a target `service_accounts.core_user_id` after owner normalization.
-2. The local LBS account email created by `provisionLbsAccount`: `wb_<compact-core-id>@workbench.local`, where `<compact-core-id>` is the lowercased Core user ID with every non-ASCII-alphanumeric character removed. The email is matched against all target service accounts and is accepted only when it yields one owner.
+2. The historical local LBS account email created by the retired provisioner: `wb_<compact-core-id>@workbench.local`, where `<compact-core-id>` is the lowercased Core user ID with every non-ASCII-alphanumeric character removed. The email is matched against all target service accounts and is accepted only when it yields one owner.
 
 The provisioned email cannot safely be inverted by itself because compaction can collide (for example, punctuation is discarded). The tool therefore derives candidate emails from the target service accounts and aborts on zero or multiple matches. `users.name`, `username_snapshot`, and LBS display names are never treated as identity.
 
@@ -43,23 +43,24 @@ Use the preinstalled golden-harness virtual environment; do not install packages
 
 ```powershell
 $python = "scripts/lbs-golden/.venv/Scripts/python.exe"
+$source = "sqlite:///C:/backups/lbs-production/lbs.db"
 $target = "postgresql://tasks_user:password@db-host:5432/tasks_db"
 
 # Dry-run is the default. This reads both databases and rolls back the target transaction.
-& $python scripts/lbs-migrate/migrate.py --source sqlite:///services/lbs/lbs.db --target $target
+& $python scripts/lbs-migrate/migrate.py --source $source --target $target
 
 # An explicit flag is required to write.
-& $python scripts/lbs-migrate/migrate.py --source sqlite:///services/lbs/lbs.db --target $target --user-map C:/secure/lbs-user-map.json --execute
+& $python scripts/lbs-migrate/migrate.py --source $source --target $target --user-map C:/secure/lbs-user-map.json --execute
 
 # Verify one source LBS user after migration.
-& $python scripts/lbs-migrate/verify.py --source sqlite:///services/lbs/lbs.db --target $target --user legacy-lbs-user-id --user-map C:/secure/lbs-user-map.json
+& $python scripts/lbs-migrate/verify.py --source $source --target $target --user legacy-lbs-user-id --user-map C:/secure/lbs-user-map.json
 ```
 
 Both `postgres://` and `postgresql://` source/target URLs are accepted. SQLite targets are supported only for the isolated test harness. A migration run reports source counts per table, per-user counts, mapping evidence, unmappable rows, existing target `task_id` collisions, and predicted/actual inserted, updated, and unchanged counts. All target upserts run in one transaction and any error rolls the entire run back.
 
 ## Production cutover
 
-1. Keep `TASKS_LBS_MODE=remote` and stop every writer to the legacy LBS database.
+1. On the currently deployed pre-W6 version, stop every writer to the legacy LBS database. Do not deploy W6 while production is still in remote mode.
 2. Take the normal database backups/snapshots and prepare/review any required user-map file.
 3. Run the migration without `--execute`. Resolve every unmappable user and review all row counts and task-ID collisions.
 4. Run the same command with `--execute`. Do not change the source database or user map between dry-run and execute.
@@ -75,4 +76,4 @@ Never execute against production without the required user confirmation in the r
 & scripts/lbs-golden/.venv/Scripts/python.exe scripts/lbs-migrate/test_migrate.py
 ```
 
-The test builds a temporary SQLite source through the real LBS SQLAlchemy models, creates an isolated SQLite target, checks dry-run safety and field formats, executes twice to prove idempotency, and runs the verifier.
+The test builds a temporary SQLite source from literal legacy DDL with SQLAlchemy Core, creates an isolated SQLite target, checks dry-run safety and field formats, executes twice to prove idempotency, and runs the verifier. The migration and verifier import no code from the retired Python service.
