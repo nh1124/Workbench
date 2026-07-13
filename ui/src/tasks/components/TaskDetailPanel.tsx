@@ -64,6 +64,7 @@ function describeRecurringSchedule(draft: TaskDraft): string {
 
 export interface TaskDetailPanelProps {
   selectedTask: Task;
+  hasOccurrenceDate: boolean;
   draft: TaskDraft;
   setDraft: Dispatch<SetStateAction<TaskDraft>>;
   isSaving: boolean;
@@ -111,6 +112,7 @@ export interface TaskDetailPanelProps {
 
 export function TaskDetailPanel({
   selectedTask,
+  hasOccurrenceDate,
   draft,
   setDraft,
   isSaving,
@@ -226,7 +228,11 @@ export function TaskDetailPanel({
           )}
 
           <div className="edit-section subtask-section-top">
-            {subtasksLoading ? (
+            {!hasOccurrenceDate ? (
+              <p className="detail-card-recurring-note">
+                Subtasks are available for dated occurrences.
+              </p>
+            ) : subtasksLoading ? (
               <p style={{ color: "#6b7280", fontSize: "0.75rem", margin: "0.4rem 0" }}>
                 Loading...
               </p>
@@ -508,7 +514,11 @@ export function TaskDetailPanel({
                 </button>
               )}
             </div>
-            {scheduleItemLoading ? (
+            {!hasOccurrenceDate ? (
+              <p className="detail-card-recurring-note">
+                Choose a due date before scheduling this task.
+              </p>
+            ) : scheduleItemLoading ? (
               <p className="detail-card-loading">Loading...</p>
             ) : scheduleDraft && draft.recurrence !== "ONCE" && scheduleItemId == null ? (
               <>

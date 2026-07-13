@@ -14,6 +14,7 @@ import { startOfDay, toDateKey } from "../../lib/taskDateUtils";
 import { mergeProjectOptions, normalizeText, type ProjectOption } from "../../lib/taskDisplayUtils";
 import type { Task, TaskAttachment, TaskHistoryEntry, TaskSubtask } from "../../types/models";
 import {
+  normalizeDateKey,
   occurrenceMembershipKey,
   rowOccurrenceDate,
   rowScheduledDate,
@@ -107,6 +108,7 @@ export interface TaskMutationsActions {
   setAddContextInput: React.Dispatch<React.SetStateAction<string>>;
   setScheduleDraft: React.Dispatch<React.SetStateAction<ScheduleDraft | null>>;
   setAdvancedOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  loadTaskDetail: (task: Task) => void;
   applyAndSave: (update: Partial<TaskDraft>) => void;
   saveDetail: (d: TaskDraft) => Promise<void>;
   clearDetail: () => void;
@@ -186,10 +188,10 @@ export interface TaskMutationsActions {
   handleExport: () => Promise<void>;
   handleImport: (e: React.ChangeEvent<HTMLInputElement>) => void;
   loadAttachments: (taskId: string) => Promise<void>;
-  loadSubtasks: (taskId: string, occDate: string) => Promise<void>;
+  loadSubtasks: (taskId: string, occDate?: string) => Promise<void>;
   loadScheduleItem: (
     taskId: string,
-    occurrenceDate: string,
+    occurrenceDate?: string,
     identity?: { scheduleId?: number; scheduledDate?: string }
   ) => Promise<void>;
   /** Ref to keep draft fresh for applyAndSave. Must be set each render. */
@@ -242,6 +244,7 @@ export function useTaskMutations(
   // draftRef — kept in sync by the consumer each render so applyAndSave
   // always reads the freshest draft without stale closure issues.
   const draftRef = useRef<TaskDraft>(emptyDraft);
+  const taskStatusBaselineRef = useRef<{ taskId: string; status: Task["status"] } | null>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const occurrenceMutationSequenceRef = useRef(0);
   const occurrenceMutationVersionsRef = useRef(new Map<string, number>());
@@ -258,6 +261,11 @@ export function useTaskMutations(
 
   // ── Detail / selection helpers ─────────────────────────────────────────────
 
+  const loadTaskDetail = useCallback((task: Task) => {
+    taskStatusBaselineRef.current = { taskId: task.id, status: task.status };
+    setDraft(taskToDraft(task));
+  }, []);
+
   const loadAttachments = useCallback(async (taskId: string) => {
     setAttachmentsLoading(true);
     try {
@@ -270,10 +278,16 @@ export function useTaskMutations(
     }
   }, []);
 
-  const loadSubtasks = useCallback(async (taskId: string, occDate: string) => {
+  const loadSubtasks = useCallback(async (taskId: string, occDate?: string) => {
+    const occurrenceDate = normalizeDateKey(occDate);
+    if (!occurrenceDate) {
+      setSubtasks([]);
+      setSubtasksLoading(false);
+      return;
+    }
     setSubtasksLoading(true);
     try {
-      const data = await taskSubtasksApi.list(taskId, occDate);
+      const data = await taskSubtasksApi.list(taskId, occurrenceDate);
       setSubtasks(data);
     } catch {
       /* non-critical */
@@ -285,23 +299,28 @@ export function useTaskMutations(
   const loadScheduleItem = useCallback(
     async (
       taskId: string,
-      occurrenceDate: string,
+      occurrenceDate?: string,
       identity?: { scheduleId?: number; scheduledDate?: string }
     ) => {
-      setScheduleItemLoading(true);
       setScheduleDraft(null);
       setScheduleItemId(null);
-      const fallbackScheduledDate = identity?.scheduledDate ?? occurrenceDate;
+      const normalizedOccurrenceDate = normalizeDateKey(occurrenceDate);
+      if (!normalizedOccurrenceDate) {
+        setScheduleItemLoading(false);
+        return;
+      }
+      setScheduleItemLoading(true);
+      const fallbackScheduledDate = normalizeDateKey(identity?.scheduledDate) ?? normalizedOccurrenceDate;
       try {
         const items = await tasksApi.scheduleItemsForTask(taskId);
         const matchingItem =
           (identity?.scheduleId != null
             ? items.find((item) => item.id === identity.scheduleId)
             : undefined)
-          ?? (identity?.scheduledDate
-            ? items.find((item) => item.occurrenceDate === occurrenceDate && item.scheduledDate === identity.scheduledDate)
+          ?? (normalizeDateKey(identity?.scheduledDate)
+            ? items.find((item) => item.occurrenceDate === normalizedOccurrenceDate && item.scheduledDate === normalizeDateKey(identity?.scheduledDate))
             : undefined)
-          ?? items.find((item) => item.occurrenceDate === occurrenceDate);
+          ?? items.find((item) => item.occurrenceDate === normalizedOccurrenceDate);
         if (matchingItem) {
           setScheduleItemId(matchingItem.id);
           setScheduleDraft({
@@ -336,6 +355,7 @@ export function useTaskMutations(
     // Note: selectedTaskId is managed by the parent (TasksPage).
     // Callers also call setSelectedTaskId(null) when invoking clearDetail.
     setDraft(emptyDraft);
+    taskStatusBaselineRef.current = null;
     setHistory([]);
     setAdvancedOpen(false);
     setScheduleDraft(null);
@@ -413,11 +433,17 @@ export function useTaskMutations(
       if (!selectedTaskId || !d.title.trim() || !d.context.trim()) return;
       setIsSaving(true);
       try {
+        const baselineStatus = taskStatusBaselineRef.current?.taskId === selectedTaskId
+          ? taskStatusBaselineRef.current.status
+          : selectedTask?.status;
+        const statusPatch = baselineStatus && d.status !== baselineStatus
+          ? { status: d.status }
+          : {};
         const updated = await tasksApi.update(selectedTaskId, {
           title: d.title.trim(),
           notes: d.notes,
           context: d.context,
-          status: d.status,
+          ...statusPatch,
           isLocked: d.isLocked,
           baseLoadScore: d.baseLoadScore,
           recurrence: d.recurrence,
@@ -437,6 +463,9 @@ export function useTaskMutations(
           weekdayMon1: d.weekdayMon1
         });
         if (updated) setDraft(taskToDraft(updated));
+        if ("status" in statusPatch) {
+          taskStatusBaselineRef.current = { taskId: selectedTaskId, status: d.status };
+        }
         await onReload();
       } catch (error) {
         reportMutationError("Failed to save task", error);
@@ -445,7 +474,7 @@ export function useTaskMutations(
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectedTaskId]
+    [selectedTaskId, selectedTask?.status]
   );
 
   const applyAndSave = useCallback(
@@ -536,6 +565,7 @@ export function useTaskMutations(
     );
     if (selectedTaskId === task.id) {
       setDraft((prev) => ({ ...prev, status: newStatus }));
+      taskStatusBaselineRef.current = { taskId: task.id, status: newStatus };
     }
     try {
       if (occurrenceContext) {
@@ -556,6 +586,7 @@ export function useTaskMutations(
       );
       if (selectedTaskId === task.id) {
         setDraft((prev) => ({ ...prev, status: previousStatus }));
+        taskStatusBaselineRef.current = { taskId: task.id, status: previousStatus };
       }
       reportMutationError("Failed to update task status", error);
     }
@@ -589,14 +620,14 @@ export function useTaskMutations(
     current: TaskOccurrenceCollections,
     setters: TaskOccurrenceCollectionSetters
   ) => {
-    if (!row.occurrenceDate && !row.date) {
+    const occurrenceDate = rowOccurrenceDate(row);
+    if (!occurrenceDate) {
       const task = tasks.find((item) => item.id === row.taskId);
       if (!task) return;
       await handleToggleDone(task, { row, current, setters });
       return;
     }
     const nextStatus = (row.status === "done" ? "todo" : "done") as import("../../types/models").TaskStatus;
-    const occurrenceDate = row.occurrenceDate ?? row.date;
     const mutationVersion = ++occurrenceMutationSequenceRef.current;
     occurrenceMutationVersionsRef.current.set(row.key, mutationVersion);
     try {
@@ -640,11 +671,12 @@ export function useTaskMutations(
         status,
         setters,
         mutate: () => Promise.all(
-          selectedRows.map((row) => tasksApi.completeOccurrence(
-            row.taskId,
-            row.occurrenceDate ?? row.date,
-            status
-          ))
+          selectedRows.map((row) => {
+            const occurrenceDate = rowOccurrenceDate(row);
+            return occurrenceDate
+              ? tasksApi.completeOccurrence(row.taskId, occurrenceDate, status)
+              : tasksApi.update(row.taskId, { status });
+          })
         ),
         shouldRollback: (key) => occurrenceMutationVersionsRef.current.get(key) === mutationVersion
       });
@@ -683,7 +715,12 @@ export function useTaskMutations(
     if (selectedRows.length === 0) return;
     try {
       await Promise.all(
-        selectedRows.map((row) => tasksApi.completeOccurrence(row.taskId, row.occurrenceDate ?? row.date, "skipped"))
+        selectedRows.map((row) => {
+          const occurrenceDate = rowOccurrenceDate(row);
+          return occurrenceDate
+            ? tasksApi.completeOccurrence(row.taskId, occurrenceDate, "skipped")
+            : tasksApi.update(row.taskId, { status: "skipped" });
+        })
       );
       closeMenu();
       await refreshAfterOccurrenceMutation();
@@ -711,7 +748,12 @@ export function useTaskMutations(
     }
     try {
       await Promise.all(
-        selectedRows.map((row) => tasksApi.moveOccurrence(row.taskId, row.occurrenceDate ?? row.date, moveDateInput))
+        selectedRows.map((row) => {
+          const occurrenceDate = rowOccurrenceDate(row);
+          return occurrenceDate
+            ? tasksApi.moveOccurrence(row.taskId, occurrenceDate, moveDateInput)
+            : tasksApi.update(row.taskId, { dueDate: moveDateInput });
+        })
       );
       const movedKeys = new Set(selectedRows.map((r) => r.key));
       setOccurrenceRows((prev) => prev.filter((r) => !movedKeys.has(r.key)));
@@ -770,7 +812,12 @@ export function useTaskMutations(
     if (!confirmed) return;
     try {
       await Promise.all(
-        selectedRows.map((row) => tasksApi.skipOccurrenceException(row.taskId, row.occurrenceDate ?? row.date))
+        selectedRows.map((row) => {
+          const occurrenceDate = rowOccurrenceDate(row);
+          return occurrenceDate
+            ? tasksApi.skipOccurrenceException(row.taskId, occurrenceDate)
+            : tasksApi.update(row.taskId, { status: "skipped" });
+        })
       );
       const removedKeys = new Set(selectedRows.map((r) => r.key));
       setOccurrenceRows((prev) => prev.filter((r) => !removedKeys.has(r.key)));
@@ -800,7 +847,7 @@ export function useTaskMutations(
           rowTodayMembershipKey(r, todayKey),
           {
             taskId: r.taskId,
-            occurrenceDate: rowOccurrenceDate(r) || todayKey,
+            occurrenceDate: rowOccurrenceDate(r) ?? todayKey,
             membershipKey: rowTodayMembershipKey(r, todayKey),
             row: r
           }
@@ -852,7 +899,7 @@ export function useTaskMutations(
       } else {
         await Promise.all(
           uniqueRows.map(({ row, taskId, occurrenceDate }) => {
-            const scheduledDate = rowScheduledDate(row);
+            const scheduledDate = rowScheduledDate(row) ?? todayKey;
             if (row.scheduleId != null && scheduledDate === todayKey) {
               return tasksApi.removeScheduleItem(row.scheduleId);
             }
@@ -910,11 +957,12 @@ export function useTaskMutations(
   // ── Subtask handlers ────────────────────────────────────────────────────────
 
   const handleAddSubtask = async () => {
-    if (!selectedTaskId || !selectedOccurrenceDate || !newSubtaskTitle.trim()) return;
+    const occurrenceDate = normalizeDateKey(selectedOccurrenceDate);
+    if (!selectedTaskId || !occurrenceDate || !newSubtaskTitle.trim()) return;
     try {
       const created = await taskSubtasksApi.create(
         selectedTaskId,
-        selectedOccurrenceDate,
+        occurrenceDate,
         newSubtaskTitle.trim()
       );
       setSubtasks((prev) => [...prev, created]);
@@ -925,13 +973,14 @@ export function useTaskMutations(
   };
 
   const handleToggleSubtask = async (subtask: TaskSubtask) => {
-    if (!selectedTaskId || !selectedOccurrenceDate) return;
+    const occurrenceDate = normalizeDateKey(selectedOccurrenceDate);
+    if (!selectedTaskId || !occurrenceDate) return;
     const next = !subtask.isDone;
     setSubtasks((prev) =>
       prev.map((s) => (s.id === subtask.id ? { ...s, isDone: next } : s))
     );
     try {
-      await taskSubtasksApi.update(selectedTaskId, selectedOccurrenceDate, subtask.id, {
+      await taskSubtasksApi.update(selectedTaskId, occurrenceDate, subtask.id, {
         isDone: next
       });
     } catch {
@@ -943,9 +992,10 @@ export function useTaskMutations(
   };
 
   const handleDeleteSubtask = async (subtaskId: string) => {
-    if (!selectedTaskId || !selectedOccurrenceDate) return;
+    const occurrenceDate = normalizeDateKey(selectedOccurrenceDate);
+    if (!selectedTaskId || !occurrenceDate) return;
     try {
-      await taskSubtasksApi.remove(selectedTaskId, selectedOccurrenceDate, subtaskId);
+      await taskSubtasksApi.remove(selectedTaskId, occurrenceDate, subtaskId);
       setSubtasks((prev) => prev.filter((s) => s.id !== subtaskId));
     } catch {
       pushErrorNotification("Failed to delete subtask.");
@@ -955,13 +1005,15 @@ export function useTaskMutations(
   // ── Schedule item handlers ─────────────────────────────────────────────────
 
   const handleSaveScheduleItem = async () => {
-    if (!selectedTaskId || !scheduleDraft || !selectedOccurrenceDate) return;
+    const occurrenceDate = normalizeDateKey(selectedOccurrenceDate);
+    if (!selectedTaskId || !scheduleDraft || !occurrenceDate) return;
     const { scheduledDate, startTime, endTime, timezone } = scheduleDraft;
-    if (!scheduledDate) return;
+    const normalizedScheduledDate = normalizeDateKey(scheduledDate);
+    if (!normalizedScheduledDate) return;
     try {
       if (scheduleItemId != null) {
         await tasksApi.updateScheduleItem(scheduleItemId, {
-          scheduledDate,
+          scheduledDate: normalizedScheduledDate,
           startTime: startTime || null,
           endTime: endTime || null,
           timezone: timezone || null
@@ -969,8 +1021,8 @@ export function useTaskMutations(
       } else {
         const result = await tasksApi.addToToday(
           selectedTaskId,
-          scheduledDate,
-          selectedOccurrenceDate,
+          normalizedScheduledDate,
+          occurrenceDate,
           {
             startTime: startTime || undefined,
             endTime: endTime || undefined,
@@ -985,14 +1037,15 @@ export function useTaskMutations(
   };
 
   const handleRemoveScheduleItem = async () => {
-    if (!selectedTaskId || !selectedOccurrenceDate || !scheduleDraft) return;
+    const occurrenceDate = normalizeDateKey(selectedOccurrenceDate);
+    if (!selectedTaskId || !occurrenceDate || !scheduleDraft) return;
     try {
       if (scheduleItemId != null) {
         await tasksApi.removeScheduleItem(scheduleItemId);
       }
       setScheduleItemId(null);
       setScheduleDraft((prev) =>
-        prev ? { ...prev, scheduledDate: selectedOccurrenceDate, startTime: "", endTime: "" } : null
+        prev ? { ...prev, scheduledDate: occurrenceDate, startTime: "", endTime: "" } : null
       );
     } catch {
       pushErrorNotification("Failed to remove schedule entry.");
@@ -1058,7 +1111,7 @@ export function useTaskMutations(
     scheduleDraft, setScheduleDraft, scheduleItemId, scheduleItemLoading,
     history, historyOpen, historyLoading, advancedOpen, setAdvancedOpen,
     draftRef, attachmentInputRef,
-    applyAndSave, saveDetail, clearDetail, openAddPanel,
+    loadTaskDetail, applyAndSave, saveDetail, clearDetail, openAddPanel,
     handleAddTask, handleDeleteDetail,
     handleToggleDone, handleTogglePin,
     handleToggleOccurrenceDone, handleMarkSelectedOccurrences,

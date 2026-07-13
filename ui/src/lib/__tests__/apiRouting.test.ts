@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   formatApiErrorMessage,
+  taskSubtasksApi,
   tasksApi
 } from "../api";
 import {
@@ -56,6 +57,27 @@ describe("API error detail and auto routing", () => {
     expect(formatApiErrorMessage("Failed to update occurrence", error)).toBe(
       "Failed to update occurrence (core POST /api/tasks/task%201/occurrences/complete, 403): LBS account token not provisioned"
     );
+  });
+
+  it("rejects empty occurrence-date path segments before building subtask requests", () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(() => taskSubtasksApi.list("task-1", "")).toThrow("Subtask occurrence date must be a valid YYYY-MM-DD date.");
+    expect(() => taskSubtasksApi.create("task-1", "   ", "Child")).toThrow("Subtask occurrence date must be a valid YYYY-MM-DD date.");
+    expect(() => taskSubtasksApi.update("task-1", "", "subtask-1", { isDone: true })).toThrow("Subtask occurrence date must be a valid YYYY-MM-DD date.");
+    expect(() => taskSubtasksApi.remove("task-1", "", "subtask-1")).toThrow("Subtask occurrence date must be a valid YYYY-MM-DD date.");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects empty occurrence mutation dates before sending a request", () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(() => tasksApi.completeOccurrence("task-1", "", "done")).toThrow("Occurrence target date must be a valid YYYY-MM-DD date.");
+    expect(() => tasksApi.moveOccurrence("task-1", "", "2026-07-14")).toThrow("Occurrence source date must be a valid YYYY-MM-DD date.");
+    expect(() => tasksApi.skipOccurrenceException("task-1", " ")).toThrow("Occurrence target date must be a valid YYYY-MM-DD date.");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("never falls back to local for mutations", async () => {

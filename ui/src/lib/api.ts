@@ -12,6 +12,7 @@ import {
 } from "./keyboardShortcuts";
 import { pushErrorNotification } from "./notificationService";
 import { buildProjectIndexQuery, buildProjectMemoryQuery } from "../projects/projectContextQueries";
+import { normalizeDateKey } from "../tasks/lib/taskOccurrenceIdentity";
 import type {
   Artifact,
   ArtifactProjectMembershipsResult,
@@ -1426,6 +1427,14 @@ export const wbsApi = {
     })
 };
 
+function requireTaskDate(value: string, fieldName: string): string {
+  const normalized = normalizeDateKey(value);
+  if (!normalized) {
+    throw new Error(`${fieldName} must be a valid YYYY-MM-DD date.`);
+  }
+  return normalized;
+}
+
 export const tasksApi = {
   list: (context?: string, status?: TaskStatus, limit?: number): Promise<Task[]> => {
     const params = new URLSearchParams();
@@ -1505,30 +1514,37 @@ export const tasksApi = {
     fetchTasksFacadeJson<ScheduleItem[]>(
       `/api/tasks/${encodeURIComponent(taskId)}/schedule-items`
     ),
-  completeOccurrence: (id: string, targetDate: string, status: TaskStatus): Promise<{ taskId: string; targetDate: string; status: TaskStatus }> =>
-    fetchTasksFacadeJson<{ taskId: string; targetDate: string; status: TaskStatus }>(
+  completeOccurrence: (id: string, targetDate: string, status: TaskStatus): Promise<{ taskId: string; targetDate: string; status: TaskStatus }> => {
+    const normalizedTargetDate = requireTaskDate(targetDate, "Occurrence target date");
+    return fetchTasksFacadeJson<{ taskId: string; targetDate: string; status: TaskStatus }>(
       `/api/tasks/${encodeURIComponent(id)}/occurrences/complete`,
       {
         method: "POST",
-        body: JSON.stringify({ targetDate, status })
+        body: JSON.stringify({ targetDate: normalizedTargetDate, status })
       }
-    ),
-  moveOccurrence: (id: string, sourceDate: string, targetDate: string): Promise<{ taskId: string; sourceDate: string; targetDate: string }> =>
-    fetchTasksFacadeJson<{ taskId: string; sourceDate: string; targetDate: string }>(
+    );
+  },
+  moveOccurrence: (id: string, sourceDate: string, targetDate: string): Promise<{ taskId: string; sourceDate: string; targetDate: string }> => {
+    const normalizedSourceDate = requireTaskDate(sourceDate, "Occurrence source date");
+    const normalizedTargetDate = requireTaskDate(targetDate, "Occurrence target date");
+    return fetchTasksFacadeJson<{ taskId: string; sourceDate: string; targetDate: string }>(
       `/api/tasks/${encodeURIComponent(id)}/occurrences/move`,
       {
         method: "POST",
-        body: JSON.stringify({ sourceDate, targetDate })
+        body: JSON.stringify({ sourceDate: normalizedSourceDate, targetDate: normalizedTargetDate })
       }
-    ),
-  skipOccurrenceException: (id: string, targetDate: string): Promise<{ taskId: string; targetDate: string }> =>
-    fetchTasksFacadeJson<{ taskId: string; targetDate: string }>(
+    );
+  },
+  skipOccurrenceException: (id: string, targetDate: string): Promise<{ taskId: string; targetDate: string }> => {
+    const normalizedTargetDate = requireTaskDate(targetDate, "Occurrence target date");
+    return fetchTasksFacadeJson<{ taskId: string; targetDate: string }>(
       `/api/tasks/${encodeURIComponent(id)}/occurrences/skip-exception`,
       {
         method: "POST",
-        body: JSON.stringify({ targetDate })
+        body: JSON.stringify({ targetDate: normalizedTargetDate })
       }
-    ),
+    );
+  },
   schedule: (startDate: string, endDate: string, context?: string, status?: TaskStatus): Promise<TaskScheduleDay[]> => {
     const params = new URLSearchParams();
     params.set("startDate", startDate);
@@ -1658,33 +1674,41 @@ export const taskAttachmentsApi = {
 };
 
 export const taskSubtasksApi = {
-  list: (taskId: string, occurrenceDate: string): Promise<TaskSubtask[]> =>
-    fetchTasksFacadeJson<TaskSubtask[]>(
-      `/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(occurrenceDate)}/subtasks`
-    ),
+  list: (taskId: string, occurrenceDate: string): Promise<TaskSubtask[]> => {
+    const date = requireTaskDate(occurrenceDate, "Subtask occurrence date");
+    return fetchTasksFacadeJson<TaskSubtask[]>(
+      `/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(date)}/subtasks`
+    );
+  },
 
-  create: (taskId: string, occurrenceDate: string, title: string): Promise<TaskSubtask> =>
-    fetchTasksFacadeJson<TaskSubtask>(
-      `/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(occurrenceDate)}/subtasks`,
+  create: (taskId: string, occurrenceDate: string, title: string): Promise<TaskSubtask> => {
+    const date = requireTaskDate(occurrenceDate, "Subtask occurrence date");
+    return fetchTasksFacadeJson<TaskSubtask>(
+      `/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(date)}/subtasks`,
       { method: "POST", body: JSON.stringify({ title }) }
-    ),
+    );
+  },
 
   update: (
     taskId: string,
     occurrenceDate: string,
     subtaskId: string,
     updates: { title?: string; isDone?: boolean; sortOrder?: number }
-  ): Promise<TaskSubtask> =>
-    fetchTasksFacadeJson<TaskSubtask>(
-      `/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(occurrenceDate)}/subtasks/${encodeURIComponent(subtaskId)}`,
+  ): Promise<TaskSubtask> => {
+    const date = requireTaskDate(occurrenceDate, "Subtask occurrence date");
+    return fetchTasksFacadeJson<TaskSubtask>(
+      `/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(date)}/subtasks/${encodeURIComponent(subtaskId)}`,
       { method: "PATCH", body: JSON.stringify(updates) }
-    ),
+    );
+  },
 
-  remove: (taskId: string, occurrenceDate: string, subtaskId: string): Promise<void> =>
-    fetchTasksFacadeJson<void>(
-      `/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(occurrenceDate)}/subtasks/${encodeURIComponent(subtaskId)}`,
+  remove: (taskId: string, occurrenceDate: string, subtaskId: string): Promise<void> => {
+    const date = requireTaskDate(occurrenceDate, "Subtask occurrence date");
+    return fetchTasksFacadeJson<void>(
+      `/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(date)}/subtasks/${encodeURIComponent(subtaskId)}`,
       { method: "DELETE" }
-    )
+    );
+  }
 };
 
 export const projectsApi = {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  normalizeDateKey,
   occurrenceMembershipKey,
   rowOccurrenceDate,
   rowScheduledDate,
@@ -24,6 +25,15 @@ function makeRow(overrides: Partial<TaskOccurrenceRow> = {}): TaskOccurrenceRow 
 }
 
 describe("taskOccurrenceIdentity", () => {
+  it("normalizes valid date keys and rejects blank or invalid values", () => {
+    expect(normalizeDateKey(" 2026-03-30 ")).toBe("2026-03-30");
+    expect(normalizeDateKey("")).toBeUndefined();
+    expect(normalizeDateKey("   ")).toBeUndefined();
+    expect(normalizeDateKey("2026-3-30")).toBeUndefined();
+    expect(normalizeDateKey("2026-02-30")).toBeUndefined();
+    expect(normalizeDateKey(undefined)).toBeUndefined();
+  });
+
   it("builds schedule item keys from scheduleId", () => {
     expect(scheduleItemKey(42)).toBe("schedule:42");
   });
@@ -42,6 +52,8 @@ describe("taskOccurrenceIdentity", () => {
   it("derives occurrence and scheduled dates with display-date fallbacks", () => {
     expect(rowOccurrenceDate(makeRow({ occurrenceDate: undefined }))).toBe("2026-03-30");
     expect(rowScheduledDate(makeRow({ scheduledDate: undefined }))).toBe("2026-03-30");
+    expect(rowOccurrenceDate(makeRow({ occurrenceDate: "", date: "   " }))).toBeUndefined();
+    expect(rowScheduledDate(makeRow({ scheduledDate: "", date: "   " }))).toBeUndefined();
   });
 
   it("uses todayKey for Today membership even when the source row is planned elsewhere", () => {
