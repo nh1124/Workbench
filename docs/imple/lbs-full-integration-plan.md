@@ -87,9 +87,9 @@ tasks ⇔ LBS の HTTP 境界を消滅させ、タスク定義・繰り返し・
 | W0 | `[implemented]` | codex | Golden capture harness + 合成 fixture + goldens 生成 | 46 goldens・11 coverage checks 緑（commit 6484eba） |
 | W1 | `[implemented]` | codex | 新テーブル schema + stores（owner スコープ・監査テスト） | 83 tests 緑（commit 4fcb030）。注: live Postgres 未検証（W7 で実施） |
 | W2 | `[implemented]` | codex | engine.ts 移植 + golden parity | 46/46 golden 一致（commit 77d510b; fixture 入力エクスポートは 90c3157） |
-| W3 | `[pending]` | codex | LocalLbsBackend + TASKS_LBS_MODE 配線 + characterization swap | 全ルート characterization 緑（local/remote 両モード） |
-| W4 | `[pending]` | codex | 移行 CLI（dry-run/冪等/ユーザーマップ検証） | migration tests 緑; dev lbs.db で実移行成功 |
-| W5 | `[pending]` | codex | recurrence 二重実装統合（taskRecurrenceUtils→engine 委譲、UI 側も同期） | 既存 recurrence テスト + 新規クランプ/nth=-1 テスト緑 |
+| W3 | `[implemented]` | codex | LocalLbsBackend + TASKS_LBS_MODE 配線 + characterization swap | 46/46 golden 経由一致・137 tests 緑（commits de2e19a, debd8e3）。todo-complete は Python 同様「実行行削除」に修正済み |
+| W4 | `[implemented]` | codex | 移行 CLI（dry-run/冪等/ユーザーマップ検証） | test_migrate 緑・dev lbs.db dry-run 成功（データは空; commit 6111420）。実データ移行は prod で W7 時に実施 |
+| W5 | `[implemented]` | codex | recurrence 二重実装統合（taskRecurrenceUtils→engine 委譲、UI 側も同期） | 月末クランプ・nth=-1 採用、Workbench フォールバック保持（commit 186245b） |
 | W6 | `[pending]` | root | local default 化・auth/remote コード削除・services/lbs を dev 起動から除外・docs 更新 | 全 workspace テスト + e2e 緑 |
 | W7 | `[pending]` | root | 統合検証・手動シナリオ・prod 移行手順書（実行はユーザー確認後） | §5.5 全緑 |
 
