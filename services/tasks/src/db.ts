@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { Pool } from "pg";
 import type { Task } from "./types.js";
+import { ensureLbsSchema } from "./lbs/schema.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -214,6 +215,8 @@ export async function ensureTasksSchema(): Promise<void> {
           CREATE UNIQUE INDEX IF NOT EXISTS ux_task_occ_schedule_owner_task_occ_scheduled
           ON task_occurrence_schedule(owner_username, task_id, occurrence_date, scheduled_date);
         `);
+
+        await ensureLbsSchema(pool);
       });
     })();
   }
