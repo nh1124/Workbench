@@ -44,6 +44,22 @@ export async function getCondition(ownerCoreUserId: string, targetDate: string, 
   return result.rows[0] ? toCondition(result.rows[0]) : undefined;
 }
 
+export async function listConditionsInRange(
+  ownerCoreUserId: string,
+  startDate: string,
+  endDate: string,
+  database?: LbsStoreDatabase
+): Promise<DailyCondition[]> {
+  const db = await getLbsStoreDatabase(database);
+  const result = await db.query<ConditionRow>(
+    `SELECT ${COLUMNS} FROM daily_conditions
+     WHERE owner_username = $1 AND target_date >= $2 AND target_date <= $3
+     ORDER BY target_date`,
+    [requireOwner(ownerCoreUserId), startDate, endDate]
+  );
+  return result.rows.map(toCondition);
+}
+
 export async function deleteCondition(ownerCoreUserId: string, targetDate: string, database?: LbsStoreDatabase): Promise<boolean> {
   const db = await getLbsStoreDatabase(database);
   const result = await db.query(`DELETE FROM daily_conditions WHERE owner_username = $1 AND target_date = $2`, [requireOwner(ownerCoreUserId), targetDate]);

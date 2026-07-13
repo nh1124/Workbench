@@ -27,6 +27,21 @@ export async function upsertExecution(
   return toExecution(result.rows[0]);
 }
 
+export async function deleteExecution(
+  ownerCoreUserId: string,
+  taskId: string,
+  targetDate: string,
+  database?: LbsStoreDatabase
+): Promise<boolean> {
+  const db = await getLbsStoreDatabase(database);
+  const result = await db.query(
+    `DELETE FROM task_executions
+     WHERE owner_username = $1 AND task_id = $2 AND target_date = $3`,
+    [requireOwner(ownerCoreUserId), taskId.trim(), targetDate]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
 async function list(ownerCoreUserId: string, startDate: string, endDate: string, taskId: string | undefined, database?: LbsStoreDatabase): Promise<TaskExecution[]> {
   const values: unknown[] = [requireOwner(ownerCoreUserId), startDate, endDate];
   let taskPredicate = "";
