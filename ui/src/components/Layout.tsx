@@ -17,11 +17,13 @@ import {
 import {
   clearWorkbenchSession,
   localDaemonApi,
+  openCalendarWindow,
   openMainWindow,
   openQuickNoteWindow,
   readWorkbenchSession,
   syncNativeGlobalShortcuts
 } from "../lib/api";
+import { buildStandaloneCalendarUrl } from "../tasks/lib/calendarInteractionUtils";
 import { useNotifications } from "../lib/notificationService";
 import type { LocalDaemonStatus } from "../types/models";
 import { QuickNoteModal } from "./QuickNoteModal";
@@ -372,6 +374,12 @@ export function Layout() {
         setIsUserMenuOpen(false);
         setIsShortcutsOpen(false);
         setIsNotificationOpen(false);
+        return;
+      }
+
+      if (matchesShortcut("open_calendar_window")) {
+        event.preventDefault();
+        void openCalendarWindow(buildStandaloneCalendarUrl());
         return;
       }
 

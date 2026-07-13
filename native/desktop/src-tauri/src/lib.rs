@@ -108,6 +108,7 @@ pub fn run() {
       commands::secure_local_daemon_client_clear,
       commands::open_main_window,
       commands::open_quick_note_window,
+      commands::open_calendar_window,
       commands::open_app_window,
       commands::close_quick_note_window,
       shortcuts::set_global_shortcuts,

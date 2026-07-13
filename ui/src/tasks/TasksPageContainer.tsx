@@ -14,7 +14,7 @@ import {
   type DragEvent, type MouseEvent as ReactMouseEvent, type UIEvent
 } from "react";
 import { useLocation } from "react-router-dom";
-import { readWorkbenchSession, tasksApi } from "../lib/api";
+import { openCalendarWindow, readWorkbenchSession, tasksApi } from "../lib/api";
 import { pushErrorNotification } from "../lib/notificationService";
 import { createDebouncedCallback, subscribeSyncEvents } from "../lib/syncEvents";
 import {
@@ -42,6 +42,13 @@ import { useTaskSelection } from "./hooks/useTaskSelection";
 import { filterAndSortTasks, computeTaskCounters } from "./lib/taskFilterUtils";
 import { sortOccurrenceRows, groupOccurrencesByProject } from "./lib/taskOccurrenceDisplayUtils";
 import { normalizeDateKey, rowOccurrenceDate, rowScheduledDate } from "./lib/taskOccurrenceIdentity";
+import {
+  buildMonthCellContextPayload,
+  buildStandaloneCalendarUrl,
+  timelineDragToSnappedRange,
+  type MonthCellContextPayload,
+  type TimelineDragRange,
+} from "./lib/calendarInteractionUtils";
 import {
   buildMonthWindow, buildTasksByDate, calendarMonthKey, extendMonthWindow, filterScheduleItems,
   monthWindowDirectionForScroll,
@@ -76,12 +83,30 @@ import "./css/tasks-detail.css";
 
 // ── Exported component ───────────────────────────────────────────────────────
 
-export function TasksPageContainer() {
+interface TasksPageContainerProps {
+  standalone?: boolean;
+  initialSidebarMode?: SidebarMode;
+  initialCalendarMode?: CalendarMode;
+}
+
+type TimelineSelection = TimelineDragRange & {
+  date: string;
+  columnKey: string;
+  dragging: boolean;
+  popoverX: number;
+  popoverY: number;
+};
+
+export function TasksPageContainer({
+  standalone = false,
+  initialSidebarMode = "list",
+  initialCalendarMode = "month",
+}: TasksPageContainerProps = {}) {
   const location = useLocation();
 
   // ── UI-only local state ──────────────────────────────────────────────────
-  const [sidebarMode, setSidebarMode] = useState<SidebarMode>("list");
-  const [calendarMode, setCalendarMode] = useState<CalendarMode>("month");
+  const [sidebarMode, setSidebarMode] = useState<SidebarMode>(initialSidebarMode);
+  const [calendarMode, setCalendarMode] = useState<CalendarMode>(initialCalendarMode);
   const [quickFilter, setQuickFilter] = useState<QuickFilter>("today");
   const [calendarStatusFilter, setCalendarStatusFilter] = useState<"all" | "open" | "done">("all");
   const [contextFilter, setContextFilter] = useState("");
@@ -102,6 +127,11 @@ export function TasksPageContainer() {
   const [scheduleRefreshTick, setScheduleRefreshTick] = useState(0);
   const [todaySuggestionHandled, setTodaySuggestionHandled] = useState(false);
   const [todaySuggestionApplying, setTodaySuggestionApplying] = useState(false);
+  const [calendarCreateMenu, setCalendarCreateMenu] = useState<MonthCellContextPayload | null>(null);
+  const [timelineSelection, setTimelineSelection] = useState<TimelineSelection | null>(null);
+  const [taskPickerOpen, setTaskPickerOpen] = useState(false);
+  const [taskPickerQuery, setTaskPickerQuery] = useState("");
+  const [scheduleCreating, setScheduleCreating] = useState(false);
 
   const importRef = useRef<HTMLInputElement>(null);
   const weekTimelineScrollRef = useRef<HTMLDivElement | null>(null);
@@ -118,6 +148,13 @@ export function TasksPageContainer() {
   const calendarStatusGenerationRef = useRef(0);
   const scheduleGenerationRef = useRef(0);
   const scheduleRequestCountRef = useRef(0);
+  const timelineDragRef = useRef<{
+    date: string;
+    columnKey: string;
+    anchorClientY: number;
+    rect: DOMRect;
+    hourHeight: number;
+  } | null>(null);
 
   const todayKey = useMemo(() => toDateKey(startOfDay(nowMarker)), [nowMarker]);
   const today = useMemo(() => {
@@ -526,6 +563,13 @@ export function TasksPageContainer() {
 
   const tasksById = useMemo(() => new Map(tasks.map((task) => [task.id, task])), [tasks]);
 
+  const taskPickerTasks = useMemo(() => {
+    const query = normalizeText(taskPickerQuery.trim());
+    return tasks
+      .filter((task) => !query || normalizeText(`${task.title} ${task.contextName ?? ""} ${task.context}`).includes(query))
+      .slice(0, 30);
+  }, [taskPickerQuery, tasks]);
+
   const scheduleItemsByDate = useMemo(() => {
     const map = new Map<string, ScheduleCalendarItem[]>();
     for (const day of scheduleDays) map.set(day.date, day.items);
@@ -862,6 +906,75 @@ export function TasksPageContainer() {
     if (monthScrollFrameRef.current !== null) window.cancelAnimationFrame(monthScrollFrameRef.current);
   }, []);
 
+  useEffect(() => {
+    const onMouseMove = (event: MouseEvent) => {
+      const drag = timelineDragRef.current;
+      if (!drag) return;
+      const range = timelineDragToSnappedRange(
+        drag.anchorClientY - drag.rect.top,
+        event.clientY - drag.rect.top,
+        drag.hourHeight,
+        TIMELINE_START_HOUR,
+        TIMELINE_END_HOUR
+      );
+      setTimelineSelection((current) => current ? { ...current, ...range } : current);
+    };
+    const onMouseUp = (event: MouseEvent) => {
+      const drag = timelineDragRef.current;
+      if (!drag) return;
+      timelineDragRef.current = null;
+      if (Math.abs(event.clientY - drag.anchorClientY) < 4) {
+        setTimelineSelection(null);
+        return;
+      }
+      const range = timelineDragToSnappedRange(
+        drag.anchorClientY - drag.rect.top,
+        event.clientY - drag.rect.top,
+        drag.hourHeight,
+        TIMELINE_START_HOUR,
+        TIMELINE_END_HOUR
+      );
+      setTimelineSelection({
+        ...range,
+        date: drag.date,
+        columnKey: drag.columnKey,
+        dragging: false,
+        popoverX: Math.max(12, Math.min(window.innerWidth - 300, drag.rect.left + drag.rect.width / 2)),
+        popoverY: Math.max(12, Math.min(window.innerHeight - 260, drag.rect.top + range.top + range.height + 8)),
+      });
+    };
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+    return () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!calendarCreateMenu && !timelineSelection) return;
+    const cancel = (event: MouseEvent) => {
+      if ((event.target as HTMLElement).closest("[data-calendar-interaction-popup='true']")) return;
+      setCalendarCreateMenu(null);
+      setTimelineSelection(null);
+      setTaskPickerOpen(false);
+      setTaskPickerQuery("");
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setCalendarCreateMenu(null);
+      setTimelineSelection(null);
+      setTaskPickerOpen(false);
+      setTaskPickerQuery("");
+    };
+    document.addEventListener("mousedown", cancel);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", cancel);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [calendarCreateMenu, timelineSelection]);
+
   const scrollToMonth = (target: Date, behavior: ScrollBehavior) => {
     const normalizedTarget = startOfMonth(target);
     const key = calendarMonthKey(normalizedTarget);
@@ -900,6 +1013,85 @@ export function TasksPageContainer() {
     if (remaining < 140) void loadOccurrencePage(quickFilter, false);
   };
 
+  const openCalendarQuickAdd = (date: string, startTime = "", endTime = "") => {
+    const dueDate = normalizeDateKey(date);
+    if (!dueDate) return;
+    openAddPanel();
+    setAddDraft((current) => ({
+      ...current,
+      recurrence: "ONCE",
+      dueDate,
+      startTime,
+      endTime,
+    }));
+    setCalendarCreateMenu(null);
+    setTimelineSelection(null);
+    setTaskPickerOpen(false);
+    setTaskPickerQuery("");
+  };
+
+  const handleMonthCreateContextMenu = (event: ReactMouseEvent<HTMLDivElement>, date: Date) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setTimelineSelection(null);
+    setCalendarCreateMenu(buildMonthCellContextPayload(date, event.clientX, event.clientY));
+  };
+
+  const handleTimelineMouseDown = (event: ReactMouseEvent<HTMLDivElement>, day: Date) => {
+    if (event.button !== 0 || event.target !== event.currentTarget) return;
+    const date = normalizeDateKey(toDateKey(day));
+    if (!date) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const columnKey = `timeline-${date}`;
+    const range = timelineDragToSnappedRange(
+      event.clientY - rect.top,
+      event.clientY - rect.top,
+      timelineHourHeight,
+      TIMELINE_START_HOUR,
+      TIMELINE_END_HOUR
+    );
+    timelineDragRef.current = {
+      date,
+      columnKey,
+      anchorClientY: event.clientY,
+      rect,
+      hourHeight: timelineHourHeight,
+    };
+    setCalendarCreateMenu(null);
+    setTaskPickerOpen(false);
+    setTaskPickerQuery("");
+    setTimelineSelection({
+      ...range,
+      date,
+      columnKey,
+      dragging: true,
+      popoverX: 0,
+      popoverY: 0,
+    });
+    event.preventDefault();
+  };
+
+  const handleScheduleExistingTask = async (task: Task) => {
+    if (!timelineSelection || scheduleCreating) return;
+    const date = normalizeDateKey(timelineSelection.date);
+    if (!date) return;
+    setScheduleCreating(true);
+    try {
+      await tasksApi.addToToday(task.id, date, date, {
+        startTime: timelineSelection.startTime,
+        endTime: timelineSelection.endTime,
+      });
+      setScheduleRefreshTick((value) => value + 1);
+      setTimelineSelection(null);
+      setTaskPickerOpen(false);
+      setTaskPickerQuery("");
+    } catch {
+      pushErrorNotification("Failed to add the task to the selected schedule range.");
+    } finally {
+      setScheduleCreating(false);
+    }
+  };
+
   // ── Inline row render helpers ─────────────────────────────────────────────
 
   const renderOccurrenceRow = (row: TaskOccurrenceRow) => {
@@ -924,10 +1116,14 @@ export function TasksPageContainer() {
   // ── JSX ───────────────────────────────────────────────────────────────────
 
   return (
-    <section className={selectedTask ? "tasks-shell has-detail" : "tasks-shell"}>
+    <section className={[
+      "tasks-shell",
+      selectedTask ? "has-detail" : "",
+      standalone ? "tasks-shell-standalone" : "",
+    ].filter(Boolean).join(" ")}>
 
       {/* Left secondary sidebar */}
-      <TasksSecondarySidebar
+      {!standalone && <TasksSecondarySidebar
         sidebarMode={sidebarMode}
         setSidebarMode={setSidebarMode}
         quickFilter={quickFilter}
@@ -938,7 +1134,11 @@ export function TasksPageContainer() {
         projectOptions={projectOptions}
         calendarStatusFilter={calendarStatusFilter}
         setCalendarStatusFilter={setCalendarStatusFilter}
-      />
+        calendarMode={calendarMode}
+        onOpenCalendarWindow={(calendar, view) => {
+          void openCalendarWindow(buildStandaloneCalendarUrl(calendar, view));
+        }}
+      />}
 
       {/* ── Center column ─────────────────────────────── */}
       <div
@@ -962,6 +1162,8 @@ export function TasksPageContainer() {
           onImport={handleImport}
           importRef={importRef}
           onOpenAddPanel={openAddPanel}
+          standalone={standalone}
+          onSetCalendarKind={setSidebarMode}
         />
 
         {displayError && <p className="error" style={{ margin: "0 0 0.5rem", fontSize: "0.8rem" }}>{displayError}</p>}
@@ -975,7 +1177,7 @@ export function TasksPageContainer() {
         )}
 
         {/* Quick Add Panel */}
-        {showAddPanel && sidebarMode === "list" && (
+        {showAddPanel && (
           <TaskQuickAddPanel
             addDraft={addDraft}
             setAddDraft={setAddDraft}
@@ -1068,6 +1270,7 @@ export function TasksPageContainer() {
                     onOpenDayDetail={setDayDetailDate}
                     onSelectDueTask={(task, date) => selectTask(task, task.status, toDateKey(date))}
                     onSelectScheduleItem={() => undefined}
+                    onOpenCreateMenu={handleMonthCreateContextMenu}
                   />
                 ))}
               </div>
@@ -1115,11 +1318,14 @@ export function TasksPageContainer() {
                       const showNowLine = isCurrentDay && nowMinuteOfDay >= TIMELINE_START_HOUR * 60 && nowMinuteOfDay <= TIMELINE_END_HOUR * 60;
                       const nowLineTop = ((nowMinuteOfDay - TIMELINE_START_HOUR * 60) / 60) * timelineHourHeight;
                       return (
-                        <div key={`col-${day.toISOString()}`} className="calendar-week-day-column" style={{ height: timelineBodyHeight }}>
+                        <div key={`col-${day.toISOString()}`} className="calendar-week-day-column" style={{ height: timelineBodyHeight }} onMouseDown={(event) => handleTimelineMouseDown(event, day)}>
                           {timelineHours.map((hour) => (
                             <span key={`line-${hour}`} className="calendar-week-hour-line" style={{ top: (hour - TIMELINE_START_HOUR) * timelineHourHeight }} />
                           ))}
                           {showNowLine && <span className="calendar-week-now-line" style={{ top: nowLineTop }} />}
+                          {timelineSelection?.columnKey === `timeline-${toDateKey(day)}` && (
+                            <span className="calendar-week-drag-selection" style={{ top: timelineSelection.top, height: timelineSelection.height }} />
+                          )}
                           {laidOut.map((event, idx) => {
                             const t = (event as unknown as { task: Task }).task;
                             const compactClass = event.height < 44 ? " title-only" : event.height < 64 ? " title-priority" : "";
@@ -1166,6 +1372,7 @@ export function TasksPageContainer() {
                     onOpenDayDetail={() => undefined}
                     onSelectDueTask={() => undefined}
                     onSelectScheduleItem={(item, task) => selectTask(task, item.status as TaskStatus, item.occurrenceDate, item.scheduleId, item.scheduledDate)}
+                    onOpenCreateMenu={handleMonthCreateContextMenu}
                   />
                 ))}
               </div>
@@ -1197,11 +1404,14 @@ export function TasksPageContainer() {
                       const showNowLine = isCurrentDay && nowMinuteOfDay >= TIMELINE_START_HOUR * 60 && nowMinuteOfDay <= TIMELINE_END_HOUR * 60;
                       const nowLineTop = ((nowMinuteOfDay - TIMELINE_START_HOUR * 60) / 60) * timelineHourHeight;
                       return (
-                        <div key={`sched-col-${day.toISOString()}`} className="calendar-week-day-column" style={{ height: timelineBodyHeight }}>
+                        <div key={`sched-col-${day.toISOString()}`} className="calendar-week-day-column" style={{ height: timelineBodyHeight }} onMouseDown={(event) => handleTimelineMouseDown(event, day)}>
                           {timelineHours.map((hour) => (
                             <span key={`sched-line-${hour}`} className="calendar-week-hour-line" style={{ top: (hour - TIMELINE_START_HOUR) * timelineHourHeight }} />
                           ))}
                           {showNowLine && <span className="calendar-week-now-line" style={{ top: nowLineTop }} />}
+                          {timelineSelection?.columnKey === `timeline-${toDateKey(day)}` && (
+                            <span className="calendar-week-drag-selection" style={{ top: timelineSelection.top, height: timelineSelection.height }} />
+                          )}
                           {laidOut.map((event, idx) => {
                             const item = event as typeof event & ScheduleCalendarItem;
                             const fullTask = tasks.find((t) => t.id === item.taskId);
@@ -1241,6 +1451,59 @@ export function TasksPageContainer() {
             resolveContextDisplayName={resolveContextDisplayName}
             contextColor={contextColor}
           />
+        )}
+
+        {calendarCreateMenu && (
+          <div
+            className="task-occurrence-menu calendar-create-menu"
+            data-calendar-interaction-popup="true"
+            style={{ left: calendarCreateMenu.x, top: calendarCreateMenu.y }}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            <button type="button" onClick={() => openCalendarQuickAdd(calendarCreateMenu.date)}>
+              この日にタスクを追加
+            </button>
+          </div>
+        )}
+
+        {timelineSelection && !timelineSelection.dragging && (
+          <div
+            className="calendar-range-popover"
+            data-calendar-interaction-popup="true"
+            style={{ left: timelineSelection.popoverX, top: timelineSelection.popoverY }}
+          >
+            <p>{timelineSelection.date} {timelineSelection.startTime}–{timelineSelection.endTime}</p>
+            {!taskPickerOpen ? (
+              <div className="calendar-range-actions">
+                <button type="button" onClick={() => openCalendarQuickAdd(timelineSelection.date, timelineSelection.startTime, timelineSelection.endTime)}>
+                  新規タスク（この日時）
+                </button>
+                <button type="button" onClick={() => setTaskPickerOpen(true)}>
+                  既存タスクを予定
+                </button>
+              </div>
+            ) : (
+              <div className="calendar-task-picker">
+                <input
+                  type="search"
+                  value={taskPickerQuery}
+                  onChange={(event) => setTaskPickerQuery(event.target.value)}
+                  placeholder="タスクを検索"
+                  aria-label="Search existing tasks"
+                  autoFocus
+                />
+                <div className="calendar-task-picker-list">
+                  {taskPickerTasks.map((task) => (
+                    <button key={task.id} type="button" disabled={scheduleCreating} onClick={() => { void handleScheduleExistingTask(task); }}>
+                      <strong>{task.title}</strong>
+                      <small>{resolveContextDisplayName(task.context, task.contextName)}</small>
+                    </button>
+                  ))}
+                  {taskPickerTasks.length === 0 && <small className="calendar-task-picker-empty">該当するタスクはありません</small>}
+                </div>
+              </div>
+            )}
+          </div>
         )}
       </div>
 

@@ -147,6 +147,17 @@
   background: #0f172a;
   overflow: hidden;
 }
+.calendar-week-drag-selection {
+  position: absolute;
+  left: 0.18rem;
+  right: 0.18rem;
+  z-index: 12;
+  border: 1px solid rgba(34, 211, 238, 0.9);
+  border-radius: 6px;
+  background: rgba(8, 145, 178, 0.3);
+  box-shadow: inset 0 0 0 1px rgba(103, 232, 249, 0.15);
+  pointer-events: none;
+}
 .calendar-week-hour-line {
   position: absolute;
   left: 0;
@@ -225,6 +236,75 @@
 .calendar-state-card h4 { margin: 0; }
 .calendar-state-card p { margin: 0; color: #94a3b8; font-size: 0.78rem; }
 .calendar-empty-hint { position: absolute; right: 0.6rem; bottom: 0.55rem; border: 1px solid var(--line); border-radius: 8px; background: rgba(15,23,42,0.95); padding: 0.28rem 0.45rem; font-size: 0.62rem; color: #64748b; }
+
+.calendar-create-menu { min-width: 180px; }
+.calendar-range-popover {
+  position: fixed;
+  z-index: 90;
+  width: min(290px, calc(100vw - 24px));
+  border: 1px solid rgba(71, 85, 105, 0.8);
+  border-radius: 11px;
+  background: rgba(15, 23, 42, 0.98);
+  box-shadow: 0 14px 36px rgba(2, 6, 23, 0.7);
+  padding: 0.55rem;
+}
+.calendar-range-popover > p {
+  margin: 0 0 0.45rem;
+  color: #94a3b8;
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+.calendar-range-actions { display: grid; gap: 0.25rem; }
+.calendar-range-actions > button,
+.calendar-task-picker-list > button {
+  border: 0;
+  border-radius: 7px;
+  background: rgba(30, 41, 59, 0.9);
+  color: #cbd5e1;
+  padding: 0.42rem 0.5rem;
+  text-align: left;
+  font-size: 0.74rem;
+}
+.calendar-range-actions > button:hover,
+.calendar-task-picker-list > button:hover { background: rgba(51, 65, 85, 0.9); }
+.calendar-task-picker { display: grid; gap: 0.4rem; }
+.calendar-task-picker > input {
+  width: 100%;
+  border: 1px solid rgba(71, 85, 105, 0.7);
+  border-radius: 7px;
+  background: #0b1220;
+  color: #e2e8f0;
+  padding: 0.38rem 0.45rem;
+  font-size: 0.74rem;
+}
+.calendar-task-picker-list {
+  max-height: 220px;
+  overflow-y: auto;
+  display: grid;
+  gap: 0.2rem;
+}
+.calendar-task-picker-list > button { display: grid; gap: 0.08rem; }
+.calendar-task-picker-list > button strong { font-size: 0.72rem; }
+.calendar-task-picker-list > button small { color: #64748b; font-size: 0.62rem; }
+.calendar-task-picker-empty { color: #64748b; padding: 0.5rem; text-align: center; }
+
+.calendar-kind-toggle {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.12rem;
+  background: #0f172a;
+  gap: 0.2rem;
+}
+.calendar-kind-toggle > button {
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #94a3b8;
+  padding: 0.28rem 0.48rem;
+  font-size: 0.68rem;
+}
+.calendar-kind-toggle > button.active { background: rgba(8,145,178,0.75); color: #f0f9ff; }
 
 /* ── Schedule calendar ──────────────────────────────────────────────────────── */
 

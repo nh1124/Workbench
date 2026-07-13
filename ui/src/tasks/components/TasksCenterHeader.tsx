@@ -18,6 +18,8 @@ interface TasksCenterHeaderProps {
   onImport: (event: ChangeEvent<HTMLInputElement>) => void;
   importRef: RefObject<HTMLInputElement | null>;
   onOpenAddPanel: () => void;
+  standalone?: boolean;
+  onSetCalendarKind?: (mode: "calendar" | "schedule") => void;
 }
 
 export function TasksCenterHeader({
@@ -36,6 +38,8 @@ export function TasksCenterHeader({
   onImport,
   importRef,
   onOpenAddPanel,
+  standalone = false,
+  onSetCalendarKind,
 }: TasksCenterHeaderProps) {
   if (sidebarMode === "calendar" || sidebarMode === "schedule") {
     return (
@@ -47,6 +51,12 @@ export function TasksCenterHeader({
           <strong>{periodLabel}</strong>
         </div>
         <div className="tasks-head-actions calendar-head-actions">
+          {standalone && (
+            <div className="calendar-kind-toggle" aria-label="Calendar kind">
+              <button type="button" className={sidebarMode === "calendar" ? "active" : ""} onClick={() => onSetCalendarKind?.("calendar")}>Due</button>
+              <button type="button" className={sidebarMode === "schedule" ? "active" : ""} onClick={() => onSetCalendarKind?.("schedule")}>Schedule</button>
+            </div>
+          )}
           <div className="calendar-view-toggle">
             <button type="button" className={calendarMode === "month" ? "active" : ""} onClick={() => onSetCalendarMode("month")} aria-label="Month view" title="Month view"><IcoCal /></button>
             <button type="button" className={calendarMode === "week" ? "active" : ""} onClick={() => onSetCalendarMode("week")} aria-label="Week view" title="Week view"><IcoList /></button>

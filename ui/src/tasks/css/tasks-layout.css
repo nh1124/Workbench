@@ -27,6 +27,17 @@
   grid-template-columns: clamp(210px, 21vw, 270px) minmax(0, 1fr);
 }
 
+.tasks-shell.tasks-shell-standalone {
+  grid-template-columns: minmax(0, 1fr);
+  width: 100vw;
+  height: 100vh;
+  border-top: 0;
+}
+
+.tasks-shell.tasks-shell-standalone.has-detail {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 /* ── Left sidebar ──────────────────────────────────────────────────────────── */
 .tasks-secondary {
   border-right: 1px solid var(--line);

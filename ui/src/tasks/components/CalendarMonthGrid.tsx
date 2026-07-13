@@ -1,4 +1,4 @@
-import { useMemo, type RefCallback } from "react";
+import { useMemo, type MouseEvent, type RefCallback } from "react";
 import { buildMonthCells } from "../../lib/taskDisplayUtils";
 import { isSameDay, startOfDay, toDateKey } from "../../lib/taskDateUtils";
 import type { ScheduleCalendarItem, Task, TaskStatus } from "../../types/models";
@@ -17,6 +17,7 @@ interface CalendarMonthGridProps {
   onOpenDayDetail: (date: Date) => void;
   onSelectDueTask: (task: Task, date: Date) => void;
   onSelectScheduleItem: (item: ScheduleCalendarItem, task: Task) => void;
+  onOpenCreateMenu: (event: MouseEvent<HTMLDivElement>, date: Date) => void;
 }
 
 export function CalendarMonthGrid({
@@ -31,6 +32,7 @@ export function CalendarMonthGrid({
   onOpenDayDetail,
   onSelectDueTask,
   onSelectScheduleItem,
+  onOpenCreateMenu,
 }: CalendarMonthGridProps) {
   const monthKey = calendarMonthKey(monthCursor);
   const monthCells = useMemo(() => buildMonthCells(monthCursor), [monthCursor]);
@@ -63,6 +65,10 @@ export function CalendarMonthGrid({
               key={cell.key}
               className={["calendar-cell", !cell.inCurrentMonth ? "muted" : "", isToday ? "is-today" : ""].filter(Boolean).join(" ")}
               onClick={mode === "due" ? () => onOpenDayDetail(cell.date) : undefined}
+              onContextMenu={(event) => {
+                if ((event.target as HTMLElement).closest("button")) return;
+                onOpenCreateMenu(event, cell.date);
+              }}
             >
               <strong>{cell.date.getDate()}</strong>
               {mode === "due" ? dayTasks.slice(0, 3).map((task) => (
