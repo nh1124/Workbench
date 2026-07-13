@@ -90,8 +90,8 @@ tasks ⇔ LBS の HTTP 境界を消滅させ、タスク定義・繰り返し・
 | W3 | `[implemented]` | codex | LocalLbsBackend + TASKS_LBS_MODE 配線 + characterization swap | 46/46 golden 経由一致・137 tests 緑（commits de2e19a, debd8e3）。todo-complete は Python 同様「実行行削除」に修正済み |
 | W4 | `[implemented]` | codex | 移行 CLI（dry-run/冪等/ユーザーマップ検証） | test_migrate 緑・dev lbs.db dry-run 成功（データは空; commit 6111420）。実データ移行は prod で W7 時に実施 |
 | W5 | `[implemented]` | codex | recurrence 二重実装統合（taskRecurrenceUtils→engine 委譲、UI 側も同期） | 月末クランプ・nth=-1 採用、Workbench フォールバック保持（commit 186245b） |
-| W6 | `[pending]` | root | local default 化・auth/remote コード削除・services/lbs を dev 起動から除外・docs 更新 | 全 workspace テスト + e2e 緑 |
-| W7 | `[pending]` | root | 統合検証・手動シナリオ・prod 移行手順書（実行はユーザー確認後） | §5.5 全緑 |
+| W6 | `[implemented]` | codex | local default 化・remote/provisioning コード削除・services/lbs 完全削除 | tasks 138 / core 93 / sync-daemon 120 緑（commit 9987962）。migrate CLI は standalone 化済み |
+| W7 | `[in-progress]` | root | dev 移行完了（lbs.db→tasks Postgres, verify 済）。**prod 移行が未実施** — rocky の LBS DB に対し scripts/lbs-migrate を実行してからこのバージョンをデプロイすること（ユーザー確認必須） | dev: 済 / prod: 未 |
 
 レビュー方針: 各 workstream は codex 実装 → root（Claude）が差分レビュー・検証・commit。W2 の golden 不一致は「golden が正」を原則とし、LBS 側バグと判断した場合のみ理由を本計画書に記録して例外とする。
 
