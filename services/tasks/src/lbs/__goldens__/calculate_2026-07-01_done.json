@@ -1,0 +1,28 @@
+{
+  "adjusted_load": 6.62,
+  "base_cap": 7.25,
+  "base_load": 4.5,
+  "cap": 5.8,
+  "cognitive_fatigue": 2,
+  "context_penalty": 0.0,
+  "count_penalty": 0.23,
+  "date": "2026-07-01",
+  "level": "CRITICAL",
+  "raw_adjusted_load": 4.73,
+  "task_count": 1,
+  "tasks": [
+    {
+      "context": "focus",
+      "end_time": "11:00:00",
+      "exception_type": null,
+      "has_exception": false,
+      "is_locked": false,
+      "load": 4.5,
+      "start_time": "09:00:00",
+      "status": "done",
+      "task_id": "T-ONCE-001",
+      "task_name": "Launch-day deep work"
+    }
+  ],
+  "unique_contexts": 1
+}

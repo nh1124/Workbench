@@ -1,7 +1,0 @@
-task_name,context,base_load_score,active,is_locked,rule_type,due_date,mon,tue,wed,thu,fri,sat,sun,interval_days,anchor_date,month_day,nth_in_month,weekday_mon1,start_date,end_date,notes,external_sync_id
-Weekly Meeting,work,2.5,true,false,WEEKLY,,true,false,false,false,false,false,false,,,,,,,,"Regular sync meeting",
-Gym Session,life,1.5,true,false,WEEKLY,,false,true,false,true,false,false,false,,,,,,,,"Health & Fitness",
-Write Monthly Report,work,5.0,true,false,MONTHLY_DAY,,,,,,,,,,15,,,,,"Monthly reporting task",
-Every 2nd Monday Sync,work,2.0,true,false,MONTHLY_NTH_WEEKDAY,,,,,,,,,,2,1,,,,"Every second Monday",SYNC-101
-Every 3 Days Check,work,1.0,true,false,EVERY_N_DAYS,,,,,,,,,,3,2025-12-20,,,,,"Periodic maintenance",
-One-time Project,work,8.0,true,false,ONCE,2025-12-25,,,,,,,,,,,,,,,"Special project deadline",PROJECT-ALPHA-99

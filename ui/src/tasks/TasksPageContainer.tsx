@@ -16,6 +16,7 @@ import {
 import { useLocation } from "react-router-dom";
 import { readWorkbenchSession, tasksApi } from "../lib/api";
 import { pushErrorNotification } from "../lib/notificationService";
+import { createDebouncedCallback, subscribeSyncEvents } from "../lib/syncEvents";
 import {
   buildMonthCells,
   contextColor,
@@ -40,12 +41,12 @@ import { useTaskMutations } from "./hooks/useTaskMutations";
 import { useTaskSelection } from "./hooks/useTaskSelection";
 import { filterAndSortTasks, computeTaskCounters } from "./lib/taskFilterUtils";
 import { sortOccurrenceRows, groupOccurrencesByProject } from "./lib/taskOccurrenceDisplayUtils";
+import { normalizeDateKey, rowOccurrenceDate, rowScheduledDate } from "./lib/taskOccurrenceIdentity";
 import { buildTasksByDate, filterScheduleItems } from "./lib/taskCalendarUtils";
 import { layoutTimedItems } from "./lib/timelineLayoutUtils";
 import {
   emptyDraft,
   TIMELINE_END_HOUR, TIMELINE_HOUR_HEIGHT, TIMELINE_START_HOUR,
-  taskToDraft,
   weekdays,
   type CalendarMode, type QuickFilter, type SidebarMode, type SortMode,
   type TaskOccurrenceRow,
@@ -114,7 +115,7 @@ export function TasksPageContainer() {
   // ── Data loader hook ──────────────────────────────────────────────────────
   const {
     tasks, projectOptions,
-    todayTaskIds, todayMembershipKeys, todayRows,
+    todayTaskIds, todayScheduleOccurrenceStatuses, todayMembershipKeys, todayRows,
     inboxUpcomingRows, inboxDoneRows,
     plannedCount, overdueCount,
     calendarStatusMap,
@@ -127,6 +128,8 @@ export function TasksPageContainer() {
     setSelectedTaskId(null);
     setSelectedOccurrenceDate(null);
   });
+  const syncLoadRef = useRef(load);
+  const syncLoadPendingRef = useRef(isLoading);
 
   // ── Occurrence paging hook ────────────────────────────────────────────────
   const {
@@ -190,6 +193,7 @@ export function TasksPageContainer() {
       projectOptions,
       contextFilter,
       today,
+      todayScheduleOccurrenceStatuses,
     },
     tasks,
     setTasks,
@@ -220,6 +224,7 @@ export function TasksPageContainer() {
     advancedOpen, setAdvancedOpen,
     draftRef,
     attachmentInputRef,
+    loadTaskDetail,
     applyAndSave,
     saveDetail,
     clearDetail: _clearDetail,
@@ -278,22 +283,24 @@ export function TasksPageContainer() {
 
   const selectTask = useCallback((
     task: Task,
-    occurrenceStatus?: TaskStatus,
+    _occurrenceStatus?: TaskStatus,
     occurrenceDate?: string,
     scheduleId?: number,
     scheduledDate?: string
   ) => {
     setSelectedTaskId(task.id);
-    const d = taskToDraft(task);
-    setDraft(occurrenceStatus !== undefined ? { ...d, status: occurrenceStatus } : d);
+    loadTaskDetail(task);
     setShowAddPanel(false);
-    const date = occurrenceDate ?? task.dueDate ?? new Date().toISOString().slice(0, 10);
-    setSelectedOccurrenceDate(date);
+    const date = normalizeDateKey(occurrenceDate) ?? normalizeDateKey(task.dueDate);
+    setSelectedOccurrenceDate(date ?? null);
     void loadAttachments(task.id);
     void loadSubtasks(task.id, date);
-    void loadScheduleItem(task.id, date, { scheduleId, scheduledDate });
+    void loadScheduleItem(task.id, date, {
+      scheduleId,
+      scheduledDate: normalizeDateKey(scheduledDate)
+    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadAttachments, loadSubtasks, loadScheduleItem, setDraft, setShowAddPanel]);
+  }, [loadAttachments, loadSubtasks, loadScheduleItem, loadTaskDetail, setShowAddPanel]);
 
   const clearDetail = useCallback(() => {
     setSelectedTaskId(null);
@@ -314,19 +321,38 @@ export function TasksPageContainer() {
   const handleOccurrenceClick = (event: ReactMouseEvent<HTMLButtonElement>, row: TaskOccurrenceRow) => {
     _handleOccClick(event, row, occurrenceOrderedKeys, (r) => {
       const task = tasks.find((t) => t.id === r.taskId);
-      if (task) selectTask(task, r.status, r.occurrenceDate ?? r.date, r.scheduleId, r.scheduledDate ?? r.date);
+      if (task) selectTask(task, r.status, rowOccurrenceDate(r), r.scheduleId, rowScheduledDate(r));
     });
   };
 
+  const occurrenceCollections = {
+    todayRows,
+    occurrenceRows,
+    inboxUpcomingRows,
+    inboxDoneRows
+  };
+  const occurrenceCollectionSetters = {
+    setTodayRows,
+    setOccurrenceRows,
+    setInboxUpcomingRows,
+    setInboxDoneRows
+  };
+
   const handleToggleOccurrenceDone = async (row: TaskOccurrenceRow) => {
-    await _handleToggleOccDone(row, setTodayRows, setOccurrenceRows, setInboxUpcomingRows, setInboxDoneRows);
+    await _handleToggleOccDone(row, occurrenceCollections, occurrenceCollectionSetters);
   };
 
   const closeMenu = () => setOccurrenceMenu((prev) => ({ ...prev, visible: false }));
 
   const handleMarkSelectedOccurrences = async (status: TaskStatus) => {
     const rows = getSelectedOccurrenceRows(activeOccurrenceRows);
-    await _handleMarkSelected(status, rows, setTodayRows, setOccurrenceRows, setInboxUpcomingRows, setInboxDoneRows, closeMenu);
+    await _handleMarkSelected(
+      status,
+      rows,
+      occurrenceCollections,
+      occurrenceCollectionSetters,
+      closeMenu
+    );
   };
 
   const handleSkipSelectedTasks = async () => {
@@ -513,6 +539,26 @@ export function TasksPageContainer() {
   const displayError = useMemo(() => (error && !isAuthError ? error : null), [error, isAuthError]);
 
   // ── Effects ───────────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    syncLoadRef.current = load;
+    syncLoadPendingRef.current = isLoading;
+  }, [isLoading, load]);
+
+  useEffect(() => {
+    const debouncedReload = createDebouncedCallback(() => {
+      if (syncLoadPendingRef.current) {
+        debouncedReload.schedule();
+        return;
+      }
+      void syncLoadRef.current();
+    }, 500);
+    const unsubscribe = subscribeSyncEvents(["tasks"], () => debouncedReload.schedule());
+    return () => {
+      unsubscribe();
+      debouncedReload.cancel();
+    };
+  }, []);
 
   // Initial + context-filter reload
   useEffect(() => {
@@ -794,7 +840,7 @@ export function TasksPageContainer() {
                         {dayTasks.slice(0, 3).map((t) => (
                           <button key={t.id} type="button"
                             className={`calendar-task-pill${t.status === "done" ? " done" : ""}`}
-                            onClick={(e) => { e.stopPropagation(); selectTask(t, t.status); }}>{t.title}</button>
+                            onClick={(e) => { e.stopPropagation(); selectTask(t, t.status, toDateKey(cell.date)); }}>{t.title}</button>
                         ))}
                         {dayTasks.length > 3 && <small style={{ color: "#6b7280", fontSize: "0.62rem" }}>+{dayTasks.length - 3}</small>}
                       </div>
@@ -824,7 +870,7 @@ export function TasksPageContainer() {
                         {allDayTasks.slice(0, 2).map((t) => (
                           <button key={t.id} type="button"
                             className={`calendar-task-pill${t.status === "done" ? " done" : ""}`}
-                            onClick={() => selectTask(t, t.status)}>{t.title}</button>
+                            onClick={() => selectTask(t, t.status, toDateKey(day))}>{t.title}</button>
                         ))}
                         {allDayTasks.length > 2 && <span className="calendar-week-more">+{allDayTasks.length - 2} more</span>}
                       </div>
@@ -859,7 +905,7 @@ export function TasksPageContainer() {
                               <button key={`${t.id}-${idx}`} type="button"
                                 className={`calendar-week-event-block${t.status === "done" ? " done" : ""}${compactClass}`}
                                 style={{ top: event.top, height: event.height, left: `calc(${laneW * event.lane}% + 2px)`, width: `calc(${laneW}% - 4px)`, zIndex: event.lane + 1 }}
-                                onClick={() => selectTask(t, t.status)}>
+                                onClick={() => selectTask(t, t.status, toDateKey(day))}>
                                 <strong>{t.title}</strong>
                                 <span>{resolveContextDisplayName(t.context, t.contextName)}</span>
                                 <small className="calendar-week-event-time">{event.timeLabel}</small>
@@ -976,7 +1022,7 @@ export function TasksPageContainer() {
             dayDetailTasks={dayDetailTasks}
             onClose={() => setDayDetailDate(null)}
             onSelectTask={(task) => {
-              selectTask(task);
+              selectTask(task, undefined, toDateKey(dayDetailDate));
               setDayDetailDate(null);
             }}
             resolveContextDisplayName={resolveContextDisplayName}
@@ -989,6 +1035,7 @@ export function TasksPageContainer() {
       {selectedTask && (
         <TaskDetailPanel
           selectedTask={selectedTask}
+          hasOccurrenceDate={selectedOccurrenceDate != null}
           draft={draft}
           setDraft={setDraft}
           isSaving={isSaving}

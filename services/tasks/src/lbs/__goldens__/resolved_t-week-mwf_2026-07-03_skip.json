@@ -1,0 +1,24 @@
+{
+  "active": true,
+  "base_load_score": 2.4,
+  "context": "admin",
+  "end_time": null,
+  "exception": {
+    "end_time": null,
+    "exception_type": "SKIP",
+    "id": 1,
+    "is_locked": false,
+    "notes": "Normal Friday occurrence must be absent.",
+    "override_load_value": null,
+    "start_time": null
+  },
+  "has_exception": true,
+  "is_locked": false,
+  "load": 2.4,
+  "rule_type": "WEEKLY",
+  "start_time": null,
+  "status": null,
+  "target_date": "2026-07-03",
+  "task_id": "T-WEEK-MWF",
+  "task_name": "Monday Wednesday Friday review"
+}

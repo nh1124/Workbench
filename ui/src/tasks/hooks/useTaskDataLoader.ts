@@ -23,12 +23,15 @@ import {
   type TaskOccurrenceRow,
   toTaskStatus
 } from "../types";
-import { occurrenceMembershipKey, taskOccurrenceRowKey } from "../lib/taskOccurrenceIdentity";
+import { buildTodayRows } from "../lib/taskTodayRows";
+import { countDistinctOverdueTasks, countDistinctPlannedTasks } from "../lib/taskOccurrenceCounts";
+import { taskOccurrenceRowKey } from "../lib/taskOccurrenceIdentity";
 
 export interface TaskDataState {
   tasks: Task[];
   projectOptions: ProjectOption[];
   todayTaskIds: Set<string>;
+  todayScheduleOccurrenceStatuses: Map<string, TaskStatus>;
   todayMembershipKeys: Set<string>;
   todayRows: TaskOccurrenceRow[];
   inboxUpcomingRows: TaskOccurrenceRow[];
@@ -64,6 +67,7 @@ export function useTaskDataLoader(
   const [tasks, setTasks] = useState<Task[]>([]);
   const [projectOptions, setProjectOptions] = useState<ProjectOption[]>([]);
   const [todayTaskIds, setTodayTaskIds] = useState<Set<string>>(new Set());
+  const [todayScheduleOccurrenceStatuses, setTodayScheduleOccurrenceStatuses] = useState<Map<string, TaskStatus>>(new Map());
   const [todayMembershipKeys, setTodayMembershipKeys] = useState<Set<string>>(new Set());
   const [todayRows, setTodayRows] = useState<TaskOccurrenceRow[]>([]);
   const [inboxUpcomingRows, setInboxUpcomingRows] = useState<TaskOccurrenceRow[]>([]);
@@ -116,60 +120,34 @@ export function useTaskDataLoader(
       // Build Today status map from LBS schedule (used to merge live status into task list)
       const todayIds = new Set<string>();
       const todayStatusMap = new Map<string, TaskStatus>();
+      const todayOccurrenceStatuses = new Map<string, TaskStatus>();
       for (const day of todaySchedule) {
         for (const item of day.tasks) {
+          const status = toTaskStatus(item.status);
           todayIds.add(item.taskId);
-          todayStatusMap.set(item.taskId, toTaskStatus(item.status));
+          todayStatusMap.set(item.taskId, status);
+          todayOccurrenceStatuses.set(taskOccurrenceRowKey({
+            taskId: item.taskId,
+            occurrenceDate: day.date
+          }), status);
         }
       }
 
-      const todayMemberships = new Set<string>();
-      const builtTodayRows: TaskOccurrenceRow[] = myDayTasks.map((t) => {
-        const occurrenceDate = t.occurrenceDate || t.scheduledDate || todayKey;
-        const scheduledDate = t.scheduledDate || todayKey;
-        todayMemberships.add(occurrenceMembershipKey(t.id, occurrenceDate, scheduledDate));
-        return {
-          key: taskOccurrenceRowKey({
-            taskId: t.id,
-            occurrenceDate,
-            scheduledDate,
-            scheduleId: t.scheduleId
-          }),
-          taskId: t.id,
-          date: scheduledDate,
-          occurrenceDate,
-          scheduledDate,
-          scheduleId: t.scheduleId,
-          title: t.title,
-          context: t.contextName ?? t.context,
-          status: toTaskStatus(t.status),
-          load: t.baseLoadScore,
-          startTime: t.startTime ?? undefined,
-          endTime: t.endTime ?? undefined,
-          isLocked: t.isLocked
-        };
-      });
+      const {
+        rows: builtTodayRows,
+        membershipKeys: todayMemberships
+      } = buildTodayRows(taskList, myDayTasks, todaySchedule, todayKey);
       setTodayRows(builtTodayRows);
 
-      // Planned/overdue counts
-      let pCnt = 0;
-      let oCnt = 0;
-      for (const day of countScheduleCalendar) {
-        if (day.date > todayKey) {
-          pCnt += day.items.filter((item) => !contextFilter || item.context === contextFilter).length;
-        }
-      }
-      for (const day of countSchedule) {
-        if (day.date < todayKey) {
-          oCnt += day.tasks.filter((t) => toTaskStatus(t.status) !== "done").length;
-        }
-      }
-      setPlannedCount(pCnt);
-      setOverdueCount(oCnt);
+      setPlannedCount(countDistinctPlannedTasks(countScheduleCalendar, todayKey, contextFilter));
+      setOverdueCount(countDistinctOverdueTasks(countSchedule, todayKey, contextFilter));
 
-      // Inbox: DueDate-based, one row per task. See src/lib/inboxBuilder.ts for spec.
       const { upcomingRows: builtInboxUpcoming, doneRows: builtInboxDone } =
-        buildInboxRows(taskList);
+        buildInboxRows(taskList, {
+          countSchedule,
+          scheduleCalendar: countScheduleCalendar,
+          todayKey
+        });
       setInboxUpcomingRows(builtInboxUpcoming);
       setInboxDoneRows(builtInboxDone);
 
@@ -202,6 +180,7 @@ export function useTaskDataLoader(
 
       setTasks(mergedTasks);
       setTodayTaskIds(todayIds);
+      setTodayScheduleOccurrenceStatuses(todayOccurrenceStatuses);
       setTodayMembershipKeys(todayMemberships);
       setProjectOptions(
         projectsResult.ok
@@ -219,6 +198,7 @@ export function useTaskDataLoader(
     } catch (e) {
       const message = e instanceof Error ? e.message : "Failed to load tasks.";
       setTodayTaskIds(new Set());
+      setTodayScheduleOccurrenceStatuses(new Map());
       setTodayMembershipKeys(new Set());
       if (isAuthErrorMessage(message)) {
         setError(message);
@@ -234,6 +214,7 @@ export function useTaskDataLoader(
     tasks,
     projectOptions,
     todayTaskIds,
+    todayScheduleOccurrenceStatuses,
     todayMembershipKeys,
     todayRows,
     inboxUpcomingRows,

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  createTaskResolver,
   normalizeResponseTask,
   resolveStatusTargetDate,
   toDueDateOnly,
@@ -11,8 +12,37 @@ import {
   toValidRecurrence,
   todayInTimezone
 } from "../lbsTaskService.js";
+import type { LbsDataPlane } from "../lbs/dataPlane.js";
 
 describe("lbsTaskService", () => {
+  it("coalesces concurrent task resolution by task id", async () => {
+    let getTaskCalls = 0;
+    const client = {
+      getTask: async () => {
+        getTaskCalls += 1;
+        await Promise.resolve();
+        return {
+          task_id: "task-1",
+          task_name: "Task 1",
+          context: "inbox",
+          base_load_score: 1,
+          active: true,
+          rule_type: "ONCE"
+        };
+      }
+    } as unknown as LbsDataPlane;
+    const resolveTask = createTaskResolver(client);
+
+    const [first, second] = await Promise.all([
+      resolveTask("task-1"),
+      resolveTask("task-1")
+    ]);
+
+    assert.equal(getTaskCalls, 1);
+    assert.equal(first?.id, "task-1");
+    assert.equal(second?.id, "task-1");
+  });
+
   it("normalizes recurrence safely", () => {
     assert.equal(toValidRecurrence("WEEKLY"), "WEEKLY");
     assert.equal(toValidRecurrence("INVALID"), "ONCE");

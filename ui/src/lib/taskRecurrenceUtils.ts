@@ -7,6 +7,18 @@
 import type { Task } from "../types/models";
 import { DAY_MS, isSameDay, parseDateOnly, startOfDay } from "./taskDateUtils";
 
+function engineWeekdayFromJs(weekday: number): number {
+  return weekday === 0 ? 7 : weekday;
+}
+
+function weekdayMon0(date: Date): number {
+  return (date.getDay() + 6) % 7;
+}
+
+function daysInMonth(date: Date): number {
+  return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+}
+
 /** Returns true if `date` falls within the task's active period. */
 export function taskWithinActivePeriod(task: Task, date: Date): boolean {
   if (task.recurrence === "ONCE") return true;
@@ -52,14 +64,23 @@ export function taskOccursOnDate(task: Task, date: Date): boolean {
 
   if (task.recurrence === "MONTHLY_DAY") {
     const dayOfMonth = Math.min(31, Math.max(1, task.monthDay ?? 1));
-    return day.getDate() === dayOfMonth;
+    return day.getDate() === Math.min(dayOfMonth, daysInMonth(day));
   }
 
   if (task.recurrence === "MONTHLY_NTH_WEEKDAY") {
-    const nthInMonth = Math.min(5, Math.max(1, task.nthInMonth ?? 1));
-    const weekday = Math.min(6, Math.max(0, task.weekdayMon1 ?? 0));
+    const nthInMonth = task.nthInMonth === -1
+      ? -1
+      : Math.min(5, Math.max(1, task.nthInMonth ?? 1));
+    const jsWeekday = Math.min(6, Math.max(0, task.weekdayMon1 ?? 0));
+    const engineWeekday = engineWeekdayFromJs(jsWeekday) - 1;
+    if (weekdayMon0(day) !== engineWeekday) return false;
+    if (nthInMonth === -1) {
+      const nextOccurrence = new Date(day);
+      nextOccurrence.setDate(nextOccurrence.getDate() + 7);
+      return nextOccurrence.getMonth() !== day.getMonth();
+    }
     const weekIndex = Math.floor((day.getDate() - 1) / 7) + 1;
-    return day.getDay() === weekday && weekIndex === nthInMonth;
+    return weekIndex === nthInMonth;
   }
 
   return false;

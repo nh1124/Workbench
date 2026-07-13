@@ -6,7 +6,7 @@ Workbench is split into a Core gateway plus internal domain services.
 
 - External consumers (UI, agent runtimes, future clients) call **Workbench Core only**.
 - **Workbench Core** is the single public MCP/tool provider and external HTTP facade.
-- `notes`, `artifacts`, `tasks`, `projects`, `images`, and `lbs` are internal business services.
+- `notes`, `artifacts`, `tasks`, `projects`, `images`, `mindmaps`, `wbs`, and `insights` are internal business services.
 - Each service keeps its own database and service-local account table.
 - Core delegates to services through internal HTTP clients.
 
@@ -21,8 +21,8 @@ Flow:
 - UI stores both tokens, sends `Authorization: Bearer <access token>`, and refreshes access tokens via refresh token.
 - Core validates JWT for external API and Core MCP execution.
 - Core forwards bearer JWT to internal service business routes.
-- Services validate **access** JWT and resolve local account by `core_user_id` (`JWT sub`).
-- Tasks service provisions a per-user LBS account/token on `/internal/accounts` and calls LBS with that user token.
+- Services validate **access** JWT. Tasks uses the JWT `sub` directly as the local LBS owner identity.
+- Tasks runs the TypeScript/Postgres LBS data plane in-process; there is no remote LBS account or token provisioning.
 - Internal provisioning/admin endpoints (`/internal/accounts`) require `x-api-key`.
 - `x-workbench-username` trust model is removed.
 - `owner = "system"` fallback on protected CRUD is removed.
@@ -39,13 +39,11 @@ Flow:
 - `services/artifacts`
   - Internal artifacts HTTP API
 - `services/tasks`
-  - Internal tasks HTTP API
+  - Internal tasks HTTP API and local TypeScript/Postgres LBS engine
 - `services/projects`
   - Internal projects HTTP API
 - `services/images`
   - Internal image generation HTTP API
-- `services/lbs`
-  - Local FastAPI LBS backend consumed by Tasks and Core MCP tools
 
 ## Core External Endpoints
 
@@ -83,6 +81,7 @@ Common internal contract:
 
 - `POST /internal/accounts` (requires `x-api-key`, payload `{ coreUserId, username }`)
 - Business CRUD routes require bearer JWT and resolve account by `core_user_id`.
+- Tasks is the exception to provisioning: it has no `/internal/accounts` route and scopes data directly by the bearer JWT owner.
 
 ## Environment Variables
 
@@ -90,14 +89,14 @@ Workbench keeps port and local URL settings in one canonical file:
 
 - `infra/workbench.env`
 
-`infra/initialize_system.*` creates this file from `infra/workbench.env.example` and synchronizes derived values into service `.env` files. Edit `infra/workbench.env` when changing local ports, hosts, `LBS_API_PREFIX`, or the UI dev port, then run:
+`infra/initialize_system.*` creates this file from `infra/workbench.env.example` and synchronizes derived values into service `.env` files. Edit `infra/workbench.env` when changing local ports, hosts, or the UI dev port, then run:
 
 ```bash
 node infra/scripts/workbench-env.mjs sync
 node infra/scripts/workbench-env.mjs check
 ```
 
-Service `.env` files should keep secrets and DB credentials. Values such as `LBS_SERVICE_URL`, `TASKS_LBS_BASE_URL`, service ports, and `VITE_WORKBENCH_CORE_URL` are generated from `infra/workbench.env`.
+Service `.env` files should keep secrets and DB credentials. Service ports and values such as `VITE_WORKBENCH_CORE_URL` are generated from `infra/workbench.env`.
 
 ### Core
 
@@ -115,10 +114,8 @@ Service `.env` files should keep secrets and DB credentials. Values such as `LBS
 - `TASKS_SERVICE_URL`
 - `PROJECTS_SERVICE_URL` (optional)
 - `IMAGES_SERVICE_URL`
-- `LBS_SERVICE_URL`
 - `INTERNAL_API_KEY_NOTES`
 - `INTERNAL_API_KEY_ARTIFACTS`
-- `INTERNAL_API_KEY_TASKS`
 - `INTERNAL_API_KEY_PROJECTS` (optional)
 - `INTERNAL_API_KEY_IMAGES`
 - `WORKBENCH_CORE_MUTATION_TOKEN` (optional, sent to domain services with Core-origin mutations)
@@ -132,11 +129,8 @@ Service `.env` files should keep secrets and DB credentials. Values such as `LBS
 - `WORKBENCH_CORE_MUTATION_TOKEN` (optional, must match Core when the mutation-origin guard is enabled)
 - service-specific DB variables
   - Tasks service additionally uses:
-    - `TASKS_LBS_BASE_URL`
-    - `TASKS_LBS_AUTH_BASE_URL`
-    - `TASKS_LBS_AUTH_LOGIN_PATH`
-    - `TASKS_LBS_AUTH_USER_CREATE_PATH`
-    - `TASKS_LBS_ACCOUNT_PASSWORD_SEED`
+    - `TASKS_LBS_MODE=local`
+    - `TASKS_TIMEZONE`
 
 ## UI Config
 
@@ -218,5 +212,4 @@ For stable remote OAuth or MCP clients, set `CORE_EXTERNAL_BASE_URL` in `service
 - Images DB: `5547`
 - Mindmaps DB: `5548`
 - WBS DB: `5549`
-
-LBS defaults to local sqlite for development when `services/lbs/.env` does not set `DATABASE_URL`.
+- Insights DB: `5550`

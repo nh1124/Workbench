@@ -2,8 +2,9 @@ import {
   getWorkbenchCoreUrl,
   getWorkbenchLocalDaemonToken,
   getWorkbenchLocalDaemonUrl,
+  getWorkbenchAutoLocalFallbackActive,
   getWorkbenchLocalRoutingMode,
-  resolveWorkbenchLocalRoutingTarget
+  setWorkbenchAutoLocalFallbackActive
 } from "../config/services";
 import {
   getNativeGlobalShortcutRegistrations,
@@ -11,6 +12,7 @@ import {
 } from "./keyboardShortcuts";
 import { pushErrorNotification } from "./notificationService";
 import { buildProjectIndexQuery, buildProjectMemoryQuery } from "../projects/projectContextQueries";
+import { normalizeDateKey } from "../tasks/lib/taskOccurrenceIdentity";
 import type {
   Artifact,
   ArtifactProjectMembershipsResult,
@@ -329,7 +331,7 @@ function localDaemonBaseUrl(): string {
   return configuredUrl;
 }
 
-function authHeaders(extra?: HeadersInit): HeadersInit {
+export function sessionAuthHeaders(extra?: HeadersInit): HeadersInit {
   const session = readStoredSession();
   return {
     ...(session ? { Authorization: `Bearer ${session.accessToken}` } : {}),
@@ -346,15 +348,122 @@ function localDaemonHeaders(extra?: HeadersInit): HeadersInit {
   return headers;
 }
 
-class ApiError extends Error {
-  status: number;
-  code?: string;
+export type ApiBackend = "core" | "local";
 
-  constructor(message: string, status: number, code?: string) {
-    super(message);
-    this.status = status;
-    this.code = code;
+export class ApiError extends Error {
+  status?: number;
+  code?: string;
+  backend: ApiBackend;
+  method: string;
+  path: string;
+  url: string;
+  responseBody?: string;
+  responseMessage?: string;
+  networkFailure: boolean;
+
+  constructor(options: {
+    backend: ApiBackend;
+    method: string;
+    path: string;
+    url: string;
+    detail: string;
+    status?: number;
+    code?: string;
+    responseBody?: string;
+    responseMessage?: string;
+    networkFailure?: boolean;
+  }) {
+    const statusPart = options.status == null ? "" : `, ${options.status}`;
+    super(`(${options.backend} ${options.method} ${options.path}${statusPart}): ${options.detail}`);
+    this.name = "ApiError";
+    this.status = options.status;
+    this.code = options.code;
+    this.backend = options.backend;
+    this.method = options.method;
+    this.path = options.path;
+    this.url = options.url;
+    this.responseBody = options.responseBody;
+    this.responseMessage = options.responseMessage;
+    this.networkFailure = options.networkFailure === true;
   }
+}
+
+export function formatApiErrorMessage(action: string, error: unknown): string {
+  if (error instanceof ApiError) {
+    return `${action} ${error.message}`;
+  }
+  const detail = error instanceof Error ? error.message : String(error);
+  return `${action}: ${detail}`;
+}
+
+function requestMethod(options?: RequestInit): string {
+  return (options?.method || "GET").toUpperCase();
+}
+
+function requestPath(url: string): string {
+  try {
+    const parsed = new URL(url, typeof window !== "undefined" ? window.location.origin : "http://localhost");
+    return `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return url;
+  }
+}
+
+function logApiFailure(error: ApiError): void {
+  console.error(`[api] ${error.backend} ${error.method} ${error.url} failed`, {
+    status: error.status,
+    responseBody: error.responseBody,
+    error
+  });
+}
+
+function connectionApiError(backend: ApiBackend, url: string, options: RequestInit | undefined, detail: string): ApiError {
+  const error = new ApiError({
+    backend,
+    method: requestMethod(options),
+    path: requestPath(url),
+    url,
+    detail: `Connection failed: ${detail}`,
+    networkFailure: true
+  });
+  logApiFailure(error);
+  return error;
+}
+
+async function responseApiError(
+  backend: ApiBackend,
+  url: string,
+  options: RequestInit | undefined,
+  response: Response
+): Promise<ApiError> {
+  const responseBody = await response.text();
+  let parsed: { message?: string; code?: string } | undefined;
+  try {
+    parsed = responseBody ? JSON.parse(responseBody) as { message?: string; code?: string } : undefined;
+  } catch {
+    parsed = undefined;
+  }
+  const responseMessage = typeof parsed?.message === "string" && parsed.message.trim()
+    ? parsed.message.trim()
+    : undefined;
+  const fallback = responseBody
+    ? (looksLikeHtmlResponse(responseBody)
+      ? normalizeHtmlErrorMessage(responseBody, response.status, url)
+      : responseBody)
+    : `Request failed: ${response.status}`;
+  const error = new ApiError({
+    backend,
+    method: requestMethod(options),
+    path: requestPath(url),
+    url,
+    status: response.status,
+    code: parsed?.code,
+    responseBody,
+    responseMessage,
+    detail: responseMessage ?? fallback
+  });
+  logApiFailure(error);
+  return error;
 }
 
 function isAuthRefreshRoute(url: string): boolean {
@@ -399,64 +508,44 @@ async function requestJson<T>(
       ...options,
       headers: {
         "Content-Type": "application/json",
-        ...(withSessionAuth ? authHeaders(options?.headers) : (options?.headers ?? {}))
+        ...(withSessionAuth ? sessionAuthHeaders(options?.headers) : (options?.headers ?? {}))
       }
     });
   } catch (error) {
     const detail = error instanceof Error ? error.message : "network error";
-    const message = `Connection failed for ${url}: ${detail}`;
+    const apiError = connectionApiError("core", url, options, detail);
     if (!notificationOptions.suppressConnectionError) {
-      pushErrorNotification(message, "Connection Error");
+      pushErrorNotification(apiError.message, "Connection Error");
     }
-    throw new Error(message);
+    throw apiError;
   }
 
   if (!response.ok) {
-    const text = await response.text();
+    const apiError = await responseApiError("core", url, options, response);
     let shouldNotify = !(response.status === 401 && !isAuthRefreshRoute(url));
     if (response.status === 404 && isDeepResearchHistoryRoute(url)) {
       // Backward compatibility: old core may not expose history endpoint yet.
       shouldNotify = false;
     }
-    if (text) {
-      let parsed: { message?: string; code?: string } | undefined;
-      try {
-        parsed = JSON.parse(text) as { message?: string; code?: string };
-      } catch {
-        parsed = undefined;
-      }
-
-      const normalizedText = looksLikeHtmlResponse(text) ? normalizeHtmlErrorMessage(text, response.status, url) : text;
-
-      if (parsed && typeof parsed.message === "string" && parsed.message.trim().length > 0) {
-        if (parsed.code === "LBS_UNREACHABLE" && response.status !== 401) {
+    if (apiError.responseMessage) {
+        if (apiError.code === "LBS_UNREACHABLE" && response.status !== 401) {
           if (shouldNotify) {
             pushErrorNotification(
               "Tasks backend (LBS) is unreachable. Please start/check LBS and retry.",
               "Tasks Service Error"
             );
           }
-          throw new ApiError(
-            "Tasks backend (LBS) is unreachable. Please start/check LBS and retry.",
-            response.status,
-            parsed.code
-          );
+          throw apiError;
         }
         if (shouldNotify) {
-          pushErrorNotification(parsed.message, "Service Error");
+          pushErrorNotification(apiError.responseMessage, "Service Error");
         }
-        throw new ApiError(parsed.message, response.status, parsed.code);
-      }
-
-      if (shouldNotify) {
-        pushErrorNotification(normalizedText, "Service Error");
-      }
-      throw new ApiError(normalizedText, response.status);
+        throw apiError;
     }
     if (shouldNotify) {
-      pushErrorNotification(`Request failed: ${response.status}`, "Service Error");
+      pushErrorNotification(apiError.message, "Service Error");
     }
-    throw new ApiError(`Request failed: ${response.status}`, response.status);
+    throw apiError;
   }
 
   if (response.status === 204) {
@@ -476,7 +565,17 @@ async function requestJson<T>(
       ? `Service returned an HTML error page instead of JSON for ${url}`
       : `Service returned invalid JSON for ${url}`;
     pushErrorNotification(message, "Service Error");
-    throw new Error(message);
+    const error = new ApiError({
+      backend: "core",
+      method: requestMethod(options),
+      path: requestPath(url),
+      url,
+      status: response.status,
+      responseBody: responseText,
+      detail: message
+    });
+    logApiFailure(error);
+    throw error;
   }
 }
 
@@ -505,7 +604,7 @@ async function requestLocalDaemon(path: string, options?: RequestInit): Promise<
       : error instanceof Error
         ? error.message
         : "network error";
-    throw new Error(`Local daemon connection failed for ${url}: ${detail}`);
+    throw connectionApiError("local", url, options, detail);
   } finally {
     clearTimeout(timeoutId);
     upstreamSignal?.removeEventListener("abort", onUpstreamAbort);
@@ -522,68 +621,34 @@ async function requestLocalDaemonJson<T>(path: string, options?: RequestInit): P
       ...(options?.headers ?? {})
     }
   });
-  const text = await response.text();
   if (!response.ok) {
-    let parsed: { message?: string; code?: string } | undefined;
-    try {
-      parsed = JSON.parse(text) as { message?: string; code?: string };
-    } catch {
-      parsed = undefined;
-    }
-    throw new ApiError(
-      parsed?.message ?? (text || `Local daemon request failed: ${response.status}`),
-      response.status,
-      parsed?.code
-    );
+    throw await responseApiError("local", `${localDaemonBaseUrl()}${path}`, options, response);
   }
+  const text = await response.text();
   if (!text.trim()) {
     return undefined as T;
   }
-  return JSON.parse(text) as T;
-}
-
-async function requestArtifactFacade(path: string, options?: RequestInit): Promise<Response> {
-  if (artifactsFacadeEnabled()) {
-    return requestLocalDaemon(path, options);
-  }
   try {
-    return await fetchWithSessionAuth(coreArtifactPath(path), options, {
-      suppressConnectionError: getWorkbenchLocalRoutingMode() === "auto"
+    return JSON.parse(text) as T;
+  } catch {
+    const url = `${localDaemonBaseUrl()}${path}`;
+    const error = new ApiError({
+      backend: "local",
+      method: requestMethod(options),
+      path: requestPath(url),
+      url,
+      status: response.status,
+      responseBody: text,
+      detail: `Local daemon returned invalid JSON for ${path}`
     });
-  } catch (error) {
-    if (autoRoutingCanFallbackToLocal(error, options)) {
-      return requestLocalDaemon(path, options);
-    }
+    logApiFailure(error);
     throw error;
   }
 }
 
-async function requestTasksFacade(path: string, options?: RequestInit): Promise<Response> {
-  if (tasksFacadeEnabled()) {
-    return requestLocalDaemon(path, options);
-  }
-  try {
-    return await fetchWithSessionAuth(coreApiPath(path), options, {
-      suppressConnectionError: getWorkbenchLocalRoutingMode() === "auto"
-    });
-  } catch (error) {
-    if (autoRoutingCanFallbackToLocal(error, options)) {
-      return requestLocalDaemon(path, options);
-    }
-    throw error;
-  }
-}
-
-async function fetchArtifactFacadeBlob(path: string): Promise<Blob> {
-  const response = await requestArtifactFacade(path);
-
-  if (!response.ok) {
-    const message = `Download failed: ${response.status}`;
-    pushErrorNotification(message, "Artifacts Download Error");
-    throw new Error(message);
-  }
-
-  return response.blob();
+function isReadRequest(options?: RequestInit): boolean {
+  const method = requestMethod(options);
+  return method === "GET" || method === "HEAD";
 }
 
 function browserReportsOnline(): boolean {
@@ -591,94 +656,142 @@ function browserReportsOnline(): boolean {
   return navigator.onLine;
 }
 
-function localRoutingTarget(): "core" | "local" {
-  return resolveWorkbenchLocalRoutingTarget(getWorkbenchLocalRoutingMode(), browserReportsOnline());
-}
-
-function autoRoutingCanFallbackToLocal(error: unknown, options?: RequestInit): boolean {
+export function autoRoutingCanFallbackToLocal(error: unknown, options?: RequestInit): boolean {
   if (getWorkbenchLocalRoutingMode() !== "auto") return false;
+  if (!isReadRequest(options)) return false;
   if (options?.signal?.aborted) return false;
-  return error instanceof Error && error.message.startsWith("Connection failed for ");
+  return error instanceof ApiError && error.backend === "core" && error.networkFailure;
 }
 
-function artifactsFacadeEnabled(): boolean {
-  return localRoutingTarget() === "local";
+function facadeRoutesToLocal(options?: RequestInit): boolean {
+  const mode = getWorkbenchLocalRoutingMode();
+  if (mode === "local") return true;
+  return mode === "auto"
+    && isReadRequest(options)
+    && (getWorkbenchAutoLocalFallbackActive() || !browserReportsOnline());
 }
 
-function notesFacadeEnabled(): boolean {
-  return localRoutingTarget() === "local";
+function markSuccessfulLocalRead(options?: RequestInit): void {
+  if (getWorkbenchLocalRoutingMode() === "auto" && isReadRequest(options)) {
+    setWorkbenchAutoLocalFallbackActive(true);
+  }
 }
 
-function projectsFacadeEnabled(): boolean {
-  return localRoutingTarget() === "local";
+function markSuccessfulCoreRequest(): void {
+  if (getWorkbenchLocalRoutingMode() === "auto") {
+    setWorkbenchAutoLocalFallbackActive(false);
+  }
 }
 
-function tasksFacadeEnabled(): boolean {
-  return localRoutingTarget() === "local";
+function artifactsFacadeEnabled(options?: RequestInit): boolean {
+  return facadeRoutesToLocal(options);
+}
+
+function notesFacadeEnabled(options?: RequestInit): boolean {
+  return facadeRoutesToLocal(options);
+}
+
+function projectsFacadeEnabled(options?: RequestInit): boolean {
+  return facadeRoutesToLocal(options);
+}
+
+function tasksFacadeEnabled(options?: RequestInit): boolean {
+  return facadeRoutesToLocal(options);
 }
 
 function coreArtifactPath(path: string): string {
   return `${coreBaseUrl()}${path}`;
 }
 
-function coreApiPath(path: string): string {
+export function coreApiPath(path: string): string {
   return `${coreBaseUrl()}${path}`;
 }
 
-async function fetchArtifactFacadeJson<T>(path: string, options?: RequestInit): Promise<T> {
-  if (artifactsFacadeEnabled()) {
-    return requestLocalDaemonJson<T>(path, options);
+async function requestFacade(
+  path: string,
+  options: RequestInit | undefined,
+  corePath: (path: string) => string
+): Promise<Response> {
+  if (facadeRoutesToLocal(options)) {
+    const response = await requestLocalDaemon(path, options);
+    if (!response.ok) {
+      throw await responseApiError("local", `${localDaemonBaseUrl()}${path}`, options, response);
+    }
+    markSuccessfulLocalRead(options);
+    return response;
   }
   try {
-    return await fetchJson<T>(coreArtifactPath(path), options, { suppressConnectionError: getWorkbenchLocalRoutingMode() === "auto" });
+    const response = await fetchWithSessionAuth(corePath(path), options, {
+      suppressConnectionError: getWorkbenchLocalRoutingMode() === "auto"
+    });
+    markSuccessfulCoreRequest();
+    return response;
   } catch (error) {
     if (autoRoutingCanFallbackToLocal(error, options)) {
-      return requestLocalDaemonJson<T>(path, options);
+      const response = await requestLocalDaemon(path, options);
+      if (!response.ok) {
+        throw await responseApiError("local", `${localDaemonBaseUrl()}${path}`, options, response);
+      }
+      markSuccessfulLocalRead(options);
+      return response;
     }
     throw error;
   }
+}
+
+async function requestArtifactFacade(path: string, options?: RequestInit): Promise<Response> {
+  return requestFacade(path, options, coreArtifactPath);
+}
+
+async function requestTasksFacade(path: string, options?: RequestInit): Promise<Response> {
+  return requestFacade(path, options, coreApiPath);
+}
+
+async function fetchArtifactFacadeBlob(path: string): Promise<Blob> {
+  const response = await requestArtifactFacade(path);
+  return response.blob();
+}
+
+async function fetchFacadeJson<T>(
+  path: string,
+  options: RequestInit | undefined,
+  corePath: (path: string) => string
+): Promise<T> {
+  if (facadeRoutesToLocal(options)) {
+    const result = await requestLocalDaemonJson<T>(path, options);
+    markSuccessfulLocalRead(options);
+    return result;
+  }
+  try {
+    const result = await fetchJson<T>(corePath(path), options, {
+      suppressConnectionError: getWorkbenchLocalRoutingMode() === "auto"
+    });
+    markSuccessfulCoreRequest();
+    return result;
+  } catch (error) {
+    if (autoRoutingCanFallbackToLocal(error, options)) {
+      const result = await requestLocalDaemonJson<T>(path, options);
+      markSuccessfulLocalRead(options);
+      return result;
+    }
+    throw error;
+  }
+}
+
+async function fetchArtifactFacadeJson<T>(path: string, options?: RequestInit): Promise<T> {
+  return fetchFacadeJson<T>(path, options, coreArtifactPath);
 }
 
 async function fetchNotesFacadeJson<T>(path: string, options?: RequestInit): Promise<T> {
-  if (notesFacadeEnabled()) {
-    return requestLocalDaemonJson<T>(path, options);
-  }
-  try {
-    return await fetchJson<T>(coreApiPath(path), options, { suppressConnectionError: getWorkbenchLocalRoutingMode() === "auto" });
-  } catch (error) {
-    if (autoRoutingCanFallbackToLocal(error, options)) {
-      return requestLocalDaemonJson<T>(path, options);
-    }
-    throw error;
-  }
+  return fetchFacadeJson<T>(path, options, coreApiPath);
 }
 
 async function fetchProjectsFacadeJson<T>(path: string, options?: RequestInit): Promise<T> {
-  if (projectsFacadeEnabled()) {
-    return requestLocalDaemonJson<T>(path, options);
-  }
-  try {
-    return await fetchJson<T>(coreApiPath(path), options, { suppressConnectionError: getWorkbenchLocalRoutingMode() === "auto" });
-  } catch (error) {
-    if (autoRoutingCanFallbackToLocal(error, options)) {
-      return requestLocalDaemonJson<T>(path, options);
-    }
-    throw error;
-  }
+  return fetchFacadeJson<T>(path, options, coreApiPath);
 }
 
 async function fetchTasksFacadeJson<T>(path: string, options?: RequestInit): Promise<T> {
-  if (tasksFacadeEnabled()) {
-    return requestLocalDaemonJson<T>(path, options);
-  }
-  try {
-    return await fetchJson<T>(coreApiPath(path), options, { suppressConnectionError: getWorkbenchLocalRoutingMode() === "auto" });
-  } catch (error) {
-    if (autoRoutingCanFallbackToLocal(error, options)) {
-      return requestLocalDaemonJson<T>(path, options);
-    }
-    throw error;
-  }
+  return fetchFacadeJson<T>(path, options, coreApiPath);
 }
 
 async function fileToBase64(file: File): Promise<string> {
@@ -722,7 +835,9 @@ async function fetchJson<T>(
 ): Promise<T> {
   await initializeSessionStorage();
   try {
-    return await requestJson<T>(url, options, true, notificationOptions);
+    const result = await requestJson<T>(url, options, true, notificationOptions);
+    markSuccessfulCoreRequest();
+    return result;
   } catch (error) {
     if (!(error instanceof ApiError) || error.status !== 401 || isAuthRefreshRoute(url)) {
       throw error;
@@ -735,7 +850,9 @@ async function fetchJson<T>(
 
     try {
       await refreshAccessToken(session.refreshToken);
-      return await requestJson<T>(url, options, true, notificationOptions);
+      const result = await requestJson<T>(url, options, true, notificationOptions);
+      markSuccessfulCoreRequest();
+      return result;
     } catch {
       await clearWorkbenchSession();
       throw error;
@@ -754,36 +871,35 @@ async function fetchWithSessionAuth(
     try {
       return await fetch(url, {
         ...options,
-        headers: authHeaders(options?.headers)
+        headers: sessionAuthHeaders(options?.headers)
       });
     } catch (error) {
       const detail = error instanceof Error ? error.message : "network error";
-      const message = `Connection failed for ${url}: ${detail}`;
+      const apiError = connectionApiError("core", url, options, detail);
       if (!notificationOptions.suppressConnectionError) {
-        pushErrorNotification(message, "Connection Error");
+        pushErrorNotification(apiError.message, "Connection Error");
       }
-      throw new Error(message);
+      throw apiError;
     }
   };
 
   let response = await requestOnce();
-  if (response.status !== 401 || isAuthRefreshRoute(url)) {
-    return response;
+  if (response.status === 401 && !isAuthRefreshRoute(url)) {
+    const session = readStoredSession();
+    if (session?.refreshToken) {
+      try {
+        await refreshAccessToken(session.refreshToken);
+        response = await requestOnce();
+      } catch {
+        await clearWorkbenchSession();
+      }
+    }
   }
-
-  const session = readStoredSession();
-  if (!session?.refreshToken) {
-    return response;
+  if (!response.ok) {
+    throw await responseApiError("core", url, options, response);
   }
-
-  try {
-    await refreshAccessToken(session.refreshToken);
-    response = await requestOnce();
-    return response;
-  } catch {
-    await clearWorkbenchSession();
-    return response;
-  }
+  markSuccessfulCoreRequest();
+  return response;
 }
 
 export const notesApi = {
@@ -1311,6 +1427,14 @@ export const wbsApi = {
     })
 };
 
+function requireTaskDate(value: string, fieldName: string): string {
+  const normalized = normalizeDateKey(value);
+  if (!normalized) {
+    throw new Error(`${fieldName} must be a valid YYYY-MM-DD date.`);
+  }
+  return normalized;
+}
+
 export const tasksApi = {
   list: (context?: string, status?: TaskStatus, limit?: number): Promise<Task[]> => {
     const params = new URLSearchParams();
@@ -1390,30 +1514,37 @@ export const tasksApi = {
     fetchTasksFacadeJson<ScheduleItem[]>(
       `/api/tasks/${encodeURIComponent(taskId)}/schedule-items`
     ),
-  completeOccurrence: (id: string, targetDate: string, status: TaskStatus): Promise<{ taskId: string; targetDate: string; status: TaskStatus }> =>
-    fetchTasksFacadeJson<{ taskId: string; targetDate: string; status: TaskStatus }>(
+  completeOccurrence: (id: string, targetDate: string, status: TaskStatus): Promise<{ taskId: string; targetDate: string; status: TaskStatus }> => {
+    const normalizedTargetDate = requireTaskDate(targetDate, "Occurrence target date");
+    return fetchTasksFacadeJson<{ taskId: string; targetDate: string; status: TaskStatus }>(
       `/api/tasks/${encodeURIComponent(id)}/occurrences/complete`,
       {
         method: "POST",
-        body: JSON.stringify({ targetDate, status })
+        body: JSON.stringify({ targetDate: normalizedTargetDate, status })
       }
-    ),
-  moveOccurrence: (id: string, sourceDate: string, targetDate: string): Promise<{ taskId: string; sourceDate: string; targetDate: string }> =>
-    fetchTasksFacadeJson<{ taskId: string; sourceDate: string; targetDate: string }>(
+    );
+  },
+  moveOccurrence: (id: string, sourceDate: string, targetDate: string): Promise<{ taskId: string; sourceDate: string; targetDate: string }> => {
+    const normalizedSourceDate = requireTaskDate(sourceDate, "Occurrence source date");
+    const normalizedTargetDate = requireTaskDate(targetDate, "Occurrence target date");
+    return fetchTasksFacadeJson<{ taskId: string; sourceDate: string; targetDate: string }>(
       `/api/tasks/${encodeURIComponent(id)}/occurrences/move`,
       {
         method: "POST",
-        body: JSON.stringify({ sourceDate, targetDate })
+        body: JSON.stringify({ sourceDate: normalizedSourceDate, targetDate: normalizedTargetDate })
       }
-    ),
-  skipOccurrenceException: (id: string, targetDate: string): Promise<{ taskId: string; targetDate: string }> =>
-    fetchTasksFacadeJson<{ taskId: string; targetDate: string }>(
+    );
+  },
+  skipOccurrenceException: (id: string, targetDate: string): Promise<{ taskId: string; targetDate: string }> => {
+    const normalizedTargetDate = requireTaskDate(targetDate, "Occurrence target date");
+    return fetchTasksFacadeJson<{ taskId: string; targetDate: string }>(
       `/api/tasks/${encodeURIComponent(id)}/occurrences/skip-exception`,
       {
         method: "POST",
-        body: JSON.stringify({ targetDate })
+        body: JSON.stringify({ targetDate: normalizedTargetDate })
       }
-    ),
+    );
+  },
   schedule: (startDate: string, endDate: string, context?: string, status?: TaskStatus): Promise<TaskScheduleDay[]> => {
     const params = new URLSearchParams();
     params.set("startDate", startDate);
@@ -1450,7 +1581,8 @@ export const taskAttachmentsApi = {
     fetchTasksFacadeJson<TaskAttachment[]>(`/api/tasks/${encodeURIComponent(taskId)}/attachments`),
 
   upload: async (taskId: string, file: File): Promise<TaskAttachment> => {
-    if (tasksFacadeEnabled()) {
+    const uploadOptions: RequestInit = { method: "POST" };
+    if (tasksFacadeEnabled(uploadOptions)) {
       return fetchTasksFacadeJson<TaskAttachment>(`/api/tasks/${encodeURIComponent(taskId)}/attachments`, {
         method: "POST",
         body: JSON.stringify({
@@ -1471,7 +1603,7 @@ export const taskAttachmentsApi = {
         body: formData
       }, { suppressConnectionError: getWorkbenchLocalRoutingMode() === "auto" });
     } catch (error) {
-      if (autoRoutingCanFallbackToLocal(error)) {
+      if (autoRoutingCanFallbackToLocal(error, uploadOptions)) {
         return fetchTasksFacadeJson<TaskAttachment>(`/api/tasks/${encodeURIComponent(taskId)}/attachments`, {
           method: "POST",
           body: JSON.stringify({
@@ -1542,33 +1674,41 @@ export const taskAttachmentsApi = {
 };
 
 export const taskSubtasksApi = {
-  list: (taskId: string, occurrenceDate: string): Promise<TaskSubtask[]> =>
-    fetchTasksFacadeJson<TaskSubtask[]>(
-      `/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(occurrenceDate)}/subtasks`
-    ),
+  list: (taskId: string, occurrenceDate: string): Promise<TaskSubtask[]> => {
+    const date = requireTaskDate(occurrenceDate, "Subtask occurrence date");
+    return fetchTasksFacadeJson<TaskSubtask[]>(
+      `/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(date)}/subtasks`
+    );
+  },
 
-  create: (taskId: string, occurrenceDate: string, title: string): Promise<TaskSubtask> =>
-    fetchTasksFacadeJson<TaskSubtask>(
-      `/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(occurrenceDate)}/subtasks`,
+  create: (taskId: string, occurrenceDate: string, title: string): Promise<TaskSubtask> => {
+    const date = requireTaskDate(occurrenceDate, "Subtask occurrence date");
+    return fetchTasksFacadeJson<TaskSubtask>(
+      `/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(date)}/subtasks`,
       { method: "POST", body: JSON.stringify({ title }) }
-    ),
+    );
+  },
 
   update: (
     taskId: string,
     occurrenceDate: string,
     subtaskId: string,
     updates: { title?: string; isDone?: boolean; sortOrder?: number }
-  ): Promise<TaskSubtask> =>
-    fetchTasksFacadeJson<TaskSubtask>(
-      `/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(occurrenceDate)}/subtasks/${encodeURIComponent(subtaskId)}`,
+  ): Promise<TaskSubtask> => {
+    const date = requireTaskDate(occurrenceDate, "Subtask occurrence date");
+    return fetchTasksFacadeJson<TaskSubtask>(
+      `/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(date)}/subtasks/${encodeURIComponent(subtaskId)}`,
       { method: "PATCH", body: JSON.stringify(updates) }
-    ),
+    );
+  },
 
-  remove: (taskId: string, occurrenceDate: string, subtaskId: string): Promise<void> =>
-    fetchTasksFacadeJson<void>(
-      `/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(occurrenceDate)}/subtasks/${encodeURIComponent(subtaskId)}`,
+  remove: (taskId: string, occurrenceDate: string, subtaskId: string): Promise<void> => {
+    const date = requireTaskDate(occurrenceDate, "Subtask occurrence date");
+    return fetchTasksFacadeJson<void>(
+      `/api/tasks/${encodeURIComponent(taskId)}/occurrences/${encodeURIComponent(date)}/subtasks/${encodeURIComponent(subtaskId)}`,
       { method: "DELETE" }
-    )
+    );
+  }
 };
 
 export const projectsApi = {

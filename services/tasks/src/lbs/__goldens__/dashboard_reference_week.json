@@ -1,0 +1,284 @@
+{
+  "config": {
+    "ALPHA": 0.23,
+    "BETA": 1.35,
+    "CAP": 7.25,
+    "SWITCH_COST": 0.85
+  },
+  "daily_breakdown": [
+    {
+      "adjusted_load": 2.63,
+      "base_cap": 7.25,
+      "base_load": 2.4,
+      "cap": 7.25,
+      "cognitive_fatigue": 0,
+      "context_penalty": 0.0,
+      "count_penalty": 0.23,
+      "date": "2026-06-29",
+      "level": "SAFE",
+      "raw_adjusted_load": 2.63,
+      "task_count": 1,
+      "tasks": [
+        {
+          "context": "admin",
+          "end_time": null,
+          "exception_type": null,
+          "has_exception": false,
+          "is_locked": true,
+          "load": 2.4,
+          "start_time": null,
+          "status": "done",
+          "task_id": "T-WEEK-MWF",
+          "task_name": "Monday Wednesday Friday review"
+        }
+      ],
+      "unique_contexts": 1
+    },
+    {
+      "adjusted_load": 7.48,
+      "base_cap": 7.25,
+      "base_load": 4.8,
+      "cap": 6.53,
+      "cognitive_fatigue": 1,
+      "context_penalty": 0.85,
+      "count_penalty": 0.59,
+      "date": "2026-06-30",
+      "level": "CRITICAL",
+      "raw_adjusted_load": 6.24,
+      "task_count": 2,
+      "tasks": [
+        {
+          "context": "team",
+          "end_time": "15:00:00",
+          "exception_type": null,
+          "has_exception": false,
+          "is_locked": false,
+          "load": 1.7,
+          "start_time": "14:00:00",
+          "status": "done",
+          "task_id": "T-WEEK-TUTH",
+          "task_name": "Tuesday Thursday collaboration"
+        },
+        {
+          "context": "finance",
+          "end_time": null,
+          "exception_type": null,
+          "has_exception": false,
+          "is_locked": false,
+          "load": 3.1,
+          "start_time": null,
+          "status": "todo",
+          "task_id": "T-MONTH-31",
+          "task_name": "Month end clamped from day 31"
+        }
+      ],
+      "unique_contexts": 2
+    },
+    {
+      "adjusted_load": 22.63,
+      "base_cap": 7.25,
+      "base_load": 13.45,
+      "cap": 5.8,
+      "cognitive_fatigue": 2,
+      "context_penalty": 1.7,
+      "count_penalty": 1.01,
+      "date": "2026-07-01",
+      "level": "CRITICAL",
+      "raw_adjusted_load": 16.16,
+      "task_count": 3,
+      "tasks": [
+        {
+          "context": "focus",
+          "end_time": "11:00:00",
+          "exception_type": null,
+          "has_exception": false,
+          "is_locked": false,
+          "load": 4.5,
+          "start_time": "09:00:00",
+          "status": "done",
+          "task_id": "T-ONCE-001",
+          "task_name": "Launch-day deep work"
+        },
+        {
+          "context": "admin",
+          "end_time": null,
+          "exception_type": null,
+          "has_exception": false,
+          "is_locked": true,
+          "load": 6.75,
+          "start_time": null,
+          "status": "todo",
+          "task_id": "T-WEEK-MWF",
+          "task_name": "Monday Wednesday Friday review"
+        },
+        {
+          "context": "health",
+          "end_time": null,
+          "exception_type": null,
+          "has_exception": false,
+          "is_locked": false,
+          "load": 2.2,
+          "start_time": null,
+          "status": "todo",
+          "task_id": "T-EVERY-003",
+          "task_name": "Every three days from anchor"
+        }
+      ],
+      "unique_contexts": 3
+    },
+    {
+      "adjusted_load": 9.42,
+      "base_cap": 7.25,
+      "base_load": 4.45,
+      "cap": 5.07,
+      "cognitive_fatigue": 3,
+      "context_penalty": 0.85,
+      "count_penalty": 0.59,
+      "date": "2026-07-02",
+      "level": "CRITICAL",
+      "raw_adjusted_load": 5.89,
+      "task_count": 2,
+      "tasks": [
+        {
+          "context": "team",
+          "end_time": "15:00:00",
+          "exception_type": null,
+          "has_exception": false,
+          "is_locked": false,
+          "load": 1.7,
+          "start_time": "14:00:00",
+          "status": "skipped",
+          "task_id": "T-WEEK-TUTH",
+          "task_name": "Tuesday Thursday collaboration"
+        },
+        {
+          "context": "edge",
+          "end_time": null,
+          "exception_type": null,
+          "has_exception": false,
+          "is_locked": false,
+          "load": 2.75,
+          "start_time": null,
+          "status": "todo",
+          "task_id": "T-WEEK-NONE",
+          "task_name": "All weekdays disabled"
+        }
+      ],
+      "unique_contexts": 2
+    },
+    {
+      "adjusted_load": 10.31,
+      "base_cap": 7.25,
+      "base_load": 5.5,
+      "cap": 4.35,
+      "cognitive_fatigue": 4,
+      "context_penalty": 0.0,
+      "count_penalty": 0.23,
+      "date": "2026-07-03",
+      "level": "CRITICAL",
+      "raw_adjusted_load": 5.73,
+      "task_count": 1,
+      "tasks": [
+        {
+          "context": "focus",
+          "end_time": "11:00:00",
+          "exception_type": null,
+          "has_exception": false,
+          "is_locked": false,
+          "load": 5.5,
+          "start_time": "09:00:00",
+          "status": "todo",
+          "task_id": "T-ONCE-001",
+          "task_name": "Launch-day deep work"
+        }
+      ],
+      "unique_contexts": 1
+    },
+    {
+      "adjusted_load": 15.27,
+      "base_cap": 7.25,
+      "base_load": 6.2,
+      "cap": 3.62,
+      "cognitive_fatigue": 5,
+      "context_penalty": 0.85,
+      "count_penalty": 0.59,
+      "date": "2026-07-04",
+      "level": "CRITICAL",
+      "raw_adjusted_load": 7.64,
+      "task_count": 2,
+      "tasks": [
+        {
+          "context": "home",
+          "end_time": "12:00:00",
+          "exception_type": null,
+          "has_exception": false,
+          "is_locked": false,
+          "load": 4.0,
+          "start_time": "10:00:00",
+          "status": "done",
+          "task_id": "T-WEEK-WEEKEND",
+          "task_name": "Weekend maintenance"
+        },
+        {
+          "context": "health",
+          "end_time": null,
+          "exception_type": null,
+          "has_exception": false,
+          "is_locked": false,
+          "load": 2.2,
+          "start_time": null,
+          "status": "todo",
+          "task_id": "T-EVERY-003",
+          "task_name": "Every three days from anchor"
+        }
+      ],
+      "unique_contexts": 2
+    },
+    {
+      "adjusted_load": 4.23,
+      "base_cap": 7.25,
+      "base_load": 4.0,
+      "cap": 7.25,
+      "cognitive_fatigue": 0,
+      "context_penalty": 0.0,
+      "count_penalty": 0.23,
+      "date": "2026-07-05",
+      "level": "SAFE",
+      "raw_adjusted_load": 4.23,
+      "task_count": 1,
+      "tasks": [
+        {
+          "context": "home",
+          "end_time": "12:00:00",
+          "exception_type": null,
+          "has_exception": false,
+          "is_locked": false,
+          "load": 4.0,
+          "start_time": "10:00:00",
+          "status": "todo",
+          "task_id": "T-WEEK-WEEKEND",
+          "task_name": "Weekend maintenance"
+        }
+      ],
+      "unique_contexts": 1
+    }
+  ],
+  "today": {
+    "adjusted_load": 0.0,
+    "base_cap": 7.25,
+    "base_load": 0.0,
+    "cap": 7.25,
+    "cognitive_fatigue": 0,
+    "context_penalty": 0.0,
+    "count_penalty": 0.0,
+    "date": "2026-07-12",
+    "level": "SAFE",
+    "task_count": 0,
+    "tasks": [],
+    "unique_contexts": 0
+  },
+  "weekly": {
+    "average_load": 10.28,
+    "recovery_rate": 14.3
+  }
+}

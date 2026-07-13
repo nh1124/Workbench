@@ -1,20 +1,7 @@
-/**
- * Unit tests for buildInboxRows (src/lib/inboxBuilder.ts)
- *
- * These tests guard the Inbox spec against regressions.
- * If any test fails after a code change, the Inbox spec has been broken.
- *
- * Inbox spec (DO NOT change without updating these tests):
- *   Source  : taskList from DB, keyed on dueDate  ← NOT the LBS schedule API
- *   Upcoming: all incomplete tasks, sorted by dueDate ASC; no-dueDate rows last
- *   Done    : all completed tasks, sorted by dueDate DESC; no-dueDate rows last
- */
-
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { buildInboxRows } from "../inboxBuilder";
-import type { Task } from "../../types/models";
-
-// ─── helpers ──────────────────────────────────────────────────────────────────
+import type { ScheduleCalendarDay, Task, TaskScheduleDay } from "../../types/models";
+import { taskDefinitionRowKey, taskOccurrenceRowKey } from "../../tasks/lib/taskOccurrenceIdentity";
 
 function makeTask(overrides: Partial<Task> & { id: string }): Task {
   return {
@@ -32,150 +19,96 @@ function makeTask(overrides: Partial<Task> & { id: string }): Task {
   };
 }
 
-// ─── 1. Routing: done vs upcoming ─────────────────────────────────────────────
+const todayKey = "2026-07-13";
 
-describe("buildInboxRows — routing", () => {
-  it("routes done tasks to doneRows, not upcomingRows", () => {
-    const tasks = [makeTask({ id: "a", status: "done", dueDate: "2026-03-01" })];
-    const { upcomingRows, doneRows } = buildInboxRows(tasks);
-    expect(doneRows).toHaveLength(1);
-    expect(upcomingRows).toHaveLength(0);
-    expect(doneRows[0].taskId).toBe("a");
-  });
+describe("buildInboxRows", () => {
+  it("keeps a dueDate-less ONCE task as a task-identity row", () => {
+    const task = makeTask({ id: "no-date" });
+    const { upcomingRows, doneRows } = buildInboxRows([task], { todayKey });
 
-  it("routes todo tasks to upcomingRows, not doneRows", () => {
-    const tasks = [makeTask({ id: "b", status: "todo", dueDate: "2026-12-31" })];
-    const { upcomingRows, doneRows } = buildInboxRows(tasks);
-    expect(upcomingRows).toHaveLength(1);
-    expect(doneRows).toHaveLength(0);
-    expect(upcomingRows[0].taskId).toBe("b");
-  });
-
-  it("routes skipped tasks to upcomingRows (not done)", () => {
-    const tasks = [makeTask({ id: "c", status: "skipped", dueDate: "2026-03-01" })];
-    const { upcomingRows, doneRows } = buildInboxRows(tasks);
-    expect(upcomingRows).toHaveLength(1);
+    expect(upcomingRows).toEqual([expect.objectContaining({
+      key: taskDefinitionRowKey("no-date"),
+      taskId: "no-date",
+      date: ""
+    })]);
+    expect(upcomingRows[0]).not.toHaveProperty("occurrenceDate");
     expect(doneRows).toHaveLength(0);
   });
-});
 
-// ─── 2. DueDate is used as the display date ───────────────────────────────────
+  it("builds a dueDate ONCE task as an occurrence row", () => {
+    const task = makeTask({ id: "once", dueDate: "2026-07-18" });
+    const { upcomingRows } = buildInboxRows([task], { todayKey });
 
-describe("buildInboxRows — dueDate as date field", () => {
-  it("sets row.date to the task dueDate", () => {
-    const tasks = [makeTask({ id: "d", dueDate: "2026-05-10" })];
-    const { upcomingRows } = buildInboxRows(tasks);
-    expect(upcomingRows[0].date).toBe("2026-05-10");
+    expect(upcomingRows[0]).toEqual(expect.objectContaining({
+      key: taskOccurrenceRowKey({ taskId: "once", occurrenceDate: "2026-07-18" }),
+      date: "2026-07-18",
+      occurrenceDate: "2026-07-18"
+    }));
   });
 
-  it("sets row.date to empty string when task has no dueDate", () => {
-    const tasks = [makeTask({ id: "e" })];  // no dueDate
-    const { upcomingRows } = buildInboxRows(tasks);
-    expect(upcomingRows[0].date).toBe("");
-  });
-});
+  it("selects the earliest pending recurring occurrence on or after today", () => {
+    const task = makeTask({ id: "weekly", recurrence: "WEEKLY", mon: true });
+    const countSchedule: TaskScheduleDay[] = [
+      { date: "2026-07-12", tasks: [{ taskId: "weekly", title: task.title, context: task.context, status: "todo" }] },
+      { date: "2026-07-13", tasks: [{ taskId: "weekly", title: task.title, context: task.context, status: "done" }] },
+      { date: "2026-07-20", tasks: [{ taskId: "weekly", title: task.title, context: task.context, status: "todo" }] },
+      { date: "2026-07-27", tasks: [{ taskId: "weekly", title: task.title, context: task.context, status: "todo" }] }
+    ];
+    const scheduleCalendar: ScheduleCalendarDay[] = [{
+      date: "2026-07-20",
+      items: [{
+        scheduleId: 42,
+        taskId: "weekly",
+        title: task.title,
+        context: task.context,
+        status: "todo",
+        occurrenceDate: "2026-07-20",
+        scheduledDate: "2026-07-20",
+        startTime: "09:00"
+      }]
+    }];
 
-// ─── 3. NOT driven by LBS schedule ───────────────────────────────────────────
-
-describe("buildInboxRows — LBS independence", () => {
-  it("displays a task even when it has no LBS occurrence (ONCE, no dueDate)", () => {
-    // This was the regression in commit 84d408e: tasks without an LBS occurrence
-    // were invisible in the Inbox. buildInboxRows must not require LBS data.
-    const tasks = [makeTask({ id: "f", recurrence: "ONCE" })];  // no dueDate → no LBS occurrence
-    const { upcomingRows } = buildInboxRows(tasks);
+    const { upcomingRows } = buildInboxRows([task], { countSchedule, scheduleCalendar, todayKey });
     expect(upcomingRows).toHaveLength(1);
-    expect(upcomingRows[0].taskId).toBe("f");
+    expect(upcomingRows[0]).toEqual(expect.objectContaining({
+      key: taskOccurrenceRowKey({ taskId: "weekly", occurrenceDate: "2026-07-20" }),
+      occurrenceDate: "2026-07-20",
+      scheduleId: 42,
+      startTime: "09:00"
+    }));
   });
 
-  it("displays a recurring task regardless of whether LBS scheduled it today", () => {
-    const tasks = [makeTask({ id: "g", recurrence: "WEEKLY", mon: true })];
-    const { upcomingRows } = buildInboxRows(tasks);
-    expect(upcomingRows).toHaveLength(1);
-  });
-});
-
-// ─── 4. Upcoming sort order ───────────────────────────────────────────────────
-
-describe("buildInboxRows — upcoming sort order", () => {
-  it("sorts overdue tasks before future tasks (ASC by dueDate)", () => {
-    const tasks = [
-      makeTask({ id: "future", dueDate: "2099-12-31" }),
-      makeTask({ id: "overdue", dueDate: "2020-01-01" })
+  it("shows completed occurrence history newest first", () => {
+    const task = makeTask({ id: "daily", recurrence: "DAILY", intervalDays: 1 });
+    const countSchedule: TaskScheduleDay[] = [
+      { date: "2026-07-10", tasks: [{ taskId: "daily", title: task.title, context: task.context, status: "done" }] },
+      { date: "2026-07-12", tasks: [{ taskId: "daily", title: task.title, context: task.context, status: "done" }] },
+      { date: "2026-07-13", tasks: [{ taskId: "daily", title: task.title, context: task.context, status: "todo" }] }
     ];
-    const { upcomingRows } = buildInboxRows(tasks);
-    expect(upcomingRows[0].taskId).toBe("overdue");
-    expect(upcomingRows[1].taskId).toBe("future");
+
+    const { doneRows } = buildInboxRows([task], { countSchedule, todayKey });
+    expect(doneRows.map((row) => row.occurrenceDate)).toEqual(["2026-07-12", "2026-07-10"]);
+    expect(doneRows[0].key).toBe(taskOccurrenceRowKey({ taskId: "daily", occurrenceDate: "2026-07-12" }));
   });
 
-  it("places no-dueDate tasks after all dated tasks", () => {
-    const tasks = [
-      makeTask({ id: "no-date" }),  // no dueDate
-      makeTask({ id: "dated", dueDate: "2026-03-29" })
-    ];
-    const { upcomingRows } = buildInboxRows(tasks);
-    expect(upcomingRows[0].taskId).toBe("dated");
-    expect(upcomingRows[1].taskId).toBe("no-date");
+  it("falls back to a date-less recurring row when no pending occurrence exists in the window", () => {
+    const task = makeTask({ id: "monthly", recurrence: "MONTHLY_DAY", monthDay: 1 });
+    const countSchedule: TaskScheduleDay[] = [{
+      date: "2026-07-13",
+      tasks: [{ taskId: "monthly", title: task.title, context: task.context, status: "skipped" }]
+    }];
+
+    const { upcomingRows } = buildInboxRows([task], { countSchedule, todayKey });
+    expect(upcomingRows).toEqual([expect.objectContaining({
+      key: taskDefinitionRowKey("monthly"),
+      date: ""
+    })]);
+    expect(upcomingRows[0]).not.toHaveProperty("occurrenceDate");
   });
 
-  it("sorts multiple future tasks nearest-first", () => {
-    const tasks = [
-      makeTask({ id: "far", dueDate: "2026-12-01" }),
-      makeTask({ id: "near", dueDate: "2026-04-01" })
-    ];
-    const { upcomingRows } = buildInboxRows(tasks);
-    expect(upcomingRows[0].taskId).toBe("near");
-    expect(upcomingRows[1].taskId).toBe("far");
-  });
-});
-
-// ─── 5. Done sort order ───────────────────────────────────────────────────────
-
-describe("buildInboxRows — done sort order", () => {
-  it("sorts done tasks newest dueDate first (DESC)", () => {
-    const tasks = [
-      makeTask({ id: "older", status: "done", dueDate: "2026-01-01" }),
-      makeTask({ id: "newer", status: "done", dueDate: "2026-03-01" })
-    ];
-    const { doneRows } = buildInboxRows(tasks);
-    expect(doneRows[0].taskId).toBe("newer");
-    expect(doneRows[1].taskId).toBe("older");
-  });
-
-  it("places done tasks with no dueDate at the end", () => {
-    const tasks = [
-      makeTask({ id: "no-date-done", status: "done" }),
-      makeTask({ id: "dated-done", status: "done", dueDate: "2026-02-15" })
-    ];
-    const { doneRows } = buildInboxRows(tasks);
-    expect(doneRows[0].taskId).toBe("dated-done");
-    expect(doneRows[1].taskId).toBe("no-date-done");
-  });
-});
-
-// ─── 6. Row fields ────────────────────────────────────────────────────────────
-
-describe("buildInboxRows — row fields", () => {
-  it("uses contextName over context when available", () => {
-    const tasks = [makeTask({ id: "h", context: "ctx-id", contextName: "My Project" })];
-    const { upcomingRows } = buildInboxRows(tasks);
-    expect(upcomingRows[0].context).toBe("My Project");
-  });
-
-  it("falls back to context when contextName is absent", () => {
-    const tasks = [makeTask({ id: "i", context: "ctx-id" })];
-    const { upcomingRows } = buildInboxRows(tasks);
-    expect(upcomingRows[0].context).toBe("ctx-id");
-  });
-
-  it("generates stable key as inbox::<taskId>", () => {
-    const tasks = [makeTask({ id: "j" })];
-    const { upcomingRows } = buildInboxRows(tasks);
-    expect(upcomingRows[0].key).toBe("inbox::j");
-  });
-
-  it("handles empty task list", () => {
-    const { upcomingRows, doneRows } = buildInboxRows([]);
-    expect(upcomingRows).toHaveLength(0);
-    expect(doneRows).toHaveLength(0);
+  it("keeps a legacy done ONCE task only when it has no occurrence entry", () => {
+    const task = makeTask({ id: "legacy", status: "done" });
+    const { doneRows } = buildInboxRows([task], { todayKey });
+    expect(doneRows).toEqual([expect.objectContaining({ key: taskDefinitionRowKey("legacy"), status: "done" })]);
   });
 });

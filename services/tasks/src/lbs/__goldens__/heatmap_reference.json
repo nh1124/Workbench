@@ -1,0 +1,114 @@
+[
+  {
+    "adjusted_load": 2.63,
+    "cap": 7.25,
+    "cognitive_fatigue": 0,
+    "date": "2026-06-29",
+    "level": "SAFE",
+    "task_count": 1
+  },
+  {
+    "adjusted_load": 7.48,
+    "cap": 6.53,
+    "cognitive_fatigue": 1,
+    "date": "2026-06-30",
+    "level": "CRITICAL",
+    "task_count": 2
+  },
+  {
+    "adjusted_load": 22.63,
+    "cap": 5.8,
+    "cognitive_fatigue": 2,
+    "date": "2026-07-01",
+    "level": "CRITICAL",
+    "task_count": 3
+  },
+  {
+    "adjusted_load": 9.42,
+    "cap": 5.07,
+    "cognitive_fatigue": 3,
+    "date": "2026-07-02",
+    "level": "CRITICAL",
+    "task_count": 2
+  },
+  {
+    "adjusted_load": 10.31,
+    "cap": 4.35,
+    "cognitive_fatigue": 4,
+    "date": "2026-07-03",
+    "level": "CRITICAL",
+    "task_count": 1
+  },
+  {
+    "adjusted_load": 15.27,
+    "cap": 3.62,
+    "cognitive_fatigue": 5,
+    "date": "2026-07-04",
+    "level": "CRITICAL",
+    "task_count": 2
+  },
+  {
+    "adjusted_load": 4.23,
+    "cap": 7.25,
+    "cognitive_fatigue": 0,
+    "date": "2026-07-05",
+    "level": "SAFE",
+    "task_count": 1
+  },
+  {
+    "adjusted_load": 2.63,
+    "cap": 7.25,
+    "cognitive_fatigue": 0,
+    "date": "2026-07-06",
+    "level": "SAFE",
+    "task_count": 1
+  },
+  {
+    "adjusted_load": 5.34,
+    "cap": 7.25,
+    "cognitive_fatigue": 0,
+    "date": "2026-07-07",
+    "level": "WARNING",
+    "task_count": 2
+  },
+  {
+    "adjusted_load": 2.63,
+    "cap": 7.25,
+    "cognitive_fatigue": 0,
+    "date": "2026-07-08",
+    "level": "SAFE",
+    "task_count": 1
+  },
+  {
+    "adjusted_load": 1.93,
+    "cap": 7.25,
+    "cognitive_fatigue": 0,
+    "date": "2026-07-09",
+    "level": "SAFE",
+    "task_count": 1
+  },
+  {
+    "adjusted_load": 6.04,
+    "cap": 7.25,
+    "cognitive_fatigue": 0,
+    "date": "2026-07-10",
+    "level": "DANGER",
+    "task_count": 2
+  },
+  {
+    "adjusted_load": 4.23,
+    "cap": 7.25,
+    "cognitive_fatigue": 0,
+    "date": "2026-07-11",
+    "level": "SAFE",
+    "task_count": 1
+  },
+  {
+    "adjusted_load": 4.23,
+    "cap": 7.25,
+    "cognitive_fatigue": 0,
+    "date": "2026-07-12",
+    "level": "SAFE",
+    "task_count": 1
+  }
+]

@@ -1,0 +1,24 @@
+{
+  "active": true,
+  "base_load_score": 4.5,
+  "context": "focus",
+  "end_time": "11:00:00",
+  "exception": {
+    "end_time": null,
+    "exception_type": "FORCE_DO",
+    "id": 2,
+    "is_locked": false,
+    "notes": "FORCE_DO away from ONCE due_date.",
+    "override_load_value": 5.5,
+    "start_time": null
+  },
+  "has_exception": true,
+  "is_locked": false,
+  "load": 5.5,
+  "rule_type": "ONCE",
+  "start_time": "09:00:00",
+  "status": "todo",
+  "target_date": "2026-07-03",
+  "task_id": "T-ONCE-001",
+  "task_name": "Launch-day deep work"
+}

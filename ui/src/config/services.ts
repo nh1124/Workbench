@@ -88,6 +88,7 @@ let workbenchCoreUrlCache: string | undefined;
 let workbenchLocalDaemonUrlCache: string | undefined;
 let workbenchLocalDaemonTokenCache: string | undefined;
 let workbenchLocalRoutingModeCache: WorkbenchLocalRoutingMode | undefined;
+let workbenchAutoLocalFallbackActive = false;
 
 function isServedByWorkbenchCore(): boolean {
   if (typeof window === "undefined") return false;
@@ -218,6 +219,19 @@ export function getWorkbenchLocalRoutingMode(): WorkbenchLocalRoutingMode {
   return workbenchLocalRoutingModeCache;
 }
 
+export function getWorkbenchAutoLocalFallbackActive(): boolean {
+  return workbenchAutoLocalFallbackActive;
+}
+
+export function setWorkbenchAutoLocalFallbackActive(active: boolean): boolean {
+  if (workbenchAutoLocalFallbackActive === active) return active;
+  workbenchAutoLocalFallbackActive = active;
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(WORKBENCH_LOCAL_MODE_CHANGED_EVENT));
+  }
+  return active;
+}
+
 export function resolveWorkbenchLocalRoutingTarget(
   mode: WorkbenchLocalRoutingMode,
   online: boolean
@@ -257,6 +271,7 @@ export function setWorkbenchLocalDaemonToken(raw: string): string {
 
 export function setWorkbenchLocalRoutingMode(mode: WorkbenchLocalRoutingMode): WorkbenchLocalRoutingMode {
   workbenchLocalRoutingModeCache = mode;
+  workbenchAutoLocalFallbackActive = false;
   persistWorkbenchLocalRoutingMode(mode);
   if (typeof window !== "undefined") {
     window.dispatchEvent(new Event(WORKBENCH_LOCAL_MODE_CHANGED_EVENT));

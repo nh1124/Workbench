@@ -1,0 +1,1357 @@
+[
+  {
+    "date": "2026-06-18",
+    "tasks": [
+      {
+        "context": "team",
+        "end_time": "15:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 1.7,
+        "start_time": "14:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-TUTH",
+        "task_name": "Tuesday Thursday collaboration",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 1.93
+  },
+  {
+    "date": "2026-06-20",
+    "tasks": [
+      {
+        "context": "home",
+        "end_time": "12:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 4.0,
+        "start_time": "10:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-WEEKEND",
+        "task_name": "Weekend maintenance",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 4.23
+  },
+  {
+    "date": "2026-06-21",
+    "tasks": [
+      {
+        "context": "home",
+        "end_time": "12:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 4.0,
+        "start_time": "10:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-WEEKEND",
+        "task_name": "Weekend maintenance",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 4.23
+  },
+  {
+    "date": "2026-06-22",
+    "tasks": [
+      {
+        "context": "admin",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": true,
+        "load": 2.4,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-WEEK-MWF",
+        "task_name": "Monday Wednesday Friday review",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 2.63
+  },
+  {
+    "date": "2026-06-23",
+    "tasks": [
+      {
+        "context": "team",
+        "end_time": "15:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 1.7,
+        "start_time": "14:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-TUTH",
+        "task_name": "Tuesday Thursday collaboration",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 1.93
+  },
+  {
+    "date": "2026-06-24",
+    "tasks": [
+      {
+        "context": "admin",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": true,
+        "load": 2.4,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-WEEK-MWF",
+        "task_name": "Monday Wednesday Friday review",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 2.63
+  },
+  {
+    "date": "2026-06-25",
+    "tasks": [
+      {
+        "context": "team",
+        "end_time": "15:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 1.7,
+        "start_time": "14:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-TUTH",
+        "task_name": "Tuesday Thursday collaboration",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 1.93
+  },
+  {
+    "date": "2026-06-26",
+    "tasks": [
+      {
+        "context": "admin",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": true,
+        "load": 2.4,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-WEEK-MWF",
+        "task_name": "Monday Wednesday Friday review",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 2.63
+  },
+  {
+    "date": "2026-06-27",
+    "tasks": [
+      {
+        "context": "home",
+        "end_time": "12:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 4.0,
+        "start_time": "10:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-WEEKEND",
+        "task_name": "Weekend maintenance",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 4.23
+  },
+  {
+    "date": "2026-06-28",
+    "tasks": [
+      {
+        "context": "home",
+        "end_time": "12:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 4.0,
+        "start_time": "10:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-WEEKEND",
+        "task_name": "Weekend maintenance",
+        "timezone": "UTC"
+      },
+      {
+        "context": "reflection",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": true,
+        "load": 3.3,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-NTH-LAST-SUN",
+        "task_name": "Last Sunday reflection",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 8.74
+  },
+  {
+    "date": "2026-06-29",
+    "tasks": [
+      {
+        "context": "admin",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": true,
+        "load": 2.4,
+        "start_time": null,
+        "status": "done",
+        "task_id": "T-WEEK-MWF",
+        "task_name": "Monday Wednesday Friday review",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 2.63
+  },
+  {
+    "date": "2026-06-30",
+    "tasks": [
+      {
+        "context": "team",
+        "end_time": "15:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 1.7,
+        "start_time": "14:00:00",
+        "status": "done",
+        "task_id": "T-WEEK-TUTH",
+        "task_name": "Tuesday Thursday collaboration",
+        "timezone": "UTC"
+      },
+      {
+        "context": "finance",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 3.1,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-MONTH-31",
+        "task_name": "Month end clamped from day 31",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 7.48
+  },
+  {
+    "date": "2026-07-01",
+    "tasks": [
+      {
+        "context": "focus",
+        "end_time": "11:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 4.5,
+        "start_time": "09:00:00",
+        "status": "done",
+        "task_id": "T-ONCE-001",
+        "task_name": "Launch-day deep work",
+        "timezone": "UTC"
+      },
+      {
+        "context": "admin",
+        "end_time": null,
+        "exception_type": "OVERRIDE_LOAD",
+        "has_exception": true,
+        "is_locked": false,
+        "load": 6.75,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-WEEK-MWF",
+        "task_name": "Monday Wednesday Friday review",
+        "timezone": "UTC"
+      },
+      {
+        "context": "health",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 2.2,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-EVERY-003",
+        "task_name": "Every three days from anchor",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 22.63
+  },
+  {
+    "date": "2026-07-02",
+    "tasks": [
+      {
+        "context": "edge",
+        "end_time": null,
+        "exception_type": "MANUAL_LOCK",
+        "has_exception": true,
+        "is_locked": true,
+        "load": 2.75,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-WEEK-NONE",
+        "task_name": "All weekdays disabled",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 4.77
+  },
+  {
+    "date": "2026-07-03",
+    "tasks": [
+      {
+        "context": "focus",
+        "end_time": "11:00:00",
+        "exception_type": "FORCE_DO",
+        "has_exception": true,
+        "is_locked": false,
+        "load": 5.5,
+        "start_time": "09:00:00",
+        "status": "todo",
+        "task_id": "T-ONCE-001",
+        "task_name": "Launch-day deep work",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 10.31
+  },
+  {
+    "date": "2026-07-04",
+    "tasks": [
+      {
+        "context": "home",
+        "end_time": "18:15:00",
+        "exception_type": "RESCHEDULE",
+        "has_exception": true,
+        "is_locked": true,
+        "load": 4.0,
+        "start_time": "16:30:00",
+        "status": "done",
+        "task_id": "T-WEEK-WEEKEND",
+        "task_name": "Weekend maintenance",
+        "timezone": "UTC"
+      },
+      {
+        "context": "health",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 2.2,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-EVERY-003",
+        "task_name": "Every three days from anchor",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 15.27
+  },
+  {
+    "date": "2026-07-05",
+    "tasks": [
+      {
+        "context": "home",
+        "end_time": "12:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 4.0,
+        "start_time": "10:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-WEEKEND",
+        "task_name": "Weekend maintenance",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 4.23
+  },
+  {
+    "date": "2026-07-06",
+    "tasks": [],
+    "total_load": 0.0
+  },
+  {
+    "date": "2026-07-07",
+    "tasks": [
+      {
+        "context": "team",
+        "end_time": "15:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 1.7,
+        "start_time": "14:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-TUTH",
+        "task_name": "Tuesday Thursday collaboration",
+        "timezone": "UTC"
+      },
+      {
+        "context": "health",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 2.2,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-EVERY-003",
+        "task_name": "Every three days from anchor",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 5.34
+  },
+  {
+    "date": "2026-07-08",
+    "tasks": [
+      {
+        "context": "admin",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": true,
+        "load": 2.4,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-WEEK-MWF",
+        "task_name": "Monday Wednesday Friday review",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 2.63
+  },
+  {
+    "date": "2026-07-09",
+    "tasks": [
+      {
+        "context": "team",
+        "end_time": "15:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 1.7,
+        "start_time": "14:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-TUTH",
+        "task_name": "Tuesday Thursday collaboration",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 1.93
+  },
+  {
+    "date": "2026-07-10",
+    "tasks": [
+      {
+        "context": "admin",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": true,
+        "load": 2.4,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-WEEK-MWF",
+        "task_name": "Monday Wednesday Friday review",
+        "timezone": "UTC"
+      },
+      {
+        "context": "health",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 2.2,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-EVERY-003",
+        "task_name": "Every three days from anchor",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 6.04
+  },
+  {
+    "date": "2026-07-11",
+    "tasks": [
+      {
+        "context": "home",
+        "end_time": "12:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 4.0,
+        "start_time": "10:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-WEEKEND",
+        "task_name": "Weekend maintenance",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 4.23
+  },
+  {
+    "date": "2026-07-12",
+    "tasks": [
+      {
+        "context": "home",
+        "end_time": "12:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 4.0,
+        "start_time": "10:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-WEEKEND",
+        "task_name": "Weekend maintenance",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 4.23
+  },
+  {
+    "date": "2026-07-13",
+    "tasks": [
+      {
+        "context": "admin",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": true,
+        "load": 2.4,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-WEEK-MWF",
+        "task_name": "Monday Wednesday Friday review",
+        "timezone": "UTC"
+      },
+      {
+        "context": "health",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 2.2,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-EVERY-003",
+        "task_name": "Every three days from anchor",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 6.04
+  },
+  {
+    "date": "2026-07-14",
+    "tasks": [
+      {
+        "context": "team",
+        "end_time": "15:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 1.7,
+        "start_time": "14:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-TUTH",
+        "task_name": "Tuesday Thursday collaboration",
+        "timezone": "UTC"
+      },
+      {
+        "context": "planning",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 1.4,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-NTH-SECOND-TUE",
+        "task_name": "Second Tuesday planning",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 4.54
+  },
+  {
+    "date": "2026-07-15",
+    "tasks": [
+      {
+        "context": "admin",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": true,
+        "load": 2.4,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-WEEK-MWF",
+        "task_name": "Monday Wednesday Friday review",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 2.63
+  },
+  {
+    "date": "2026-07-16",
+    "tasks": [
+      {
+        "context": "team",
+        "end_time": "15:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 1.7,
+        "start_time": "14:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-TUTH",
+        "task_name": "Tuesday Thursday collaboration",
+        "timezone": "UTC"
+      },
+      {
+        "context": "health",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 2.2,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-EVERY-003",
+        "task_name": "Every three days from anchor",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 5.34
+  },
+  {
+    "date": "2026-07-17",
+    "tasks": [
+      {
+        "context": "admin",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": true,
+        "load": 2.4,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-WEEK-MWF",
+        "task_name": "Monday Wednesday Friday review",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 2.63
+  },
+  {
+    "date": "2026-07-18",
+    "tasks": [
+      {
+        "context": "home",
+        "end_time": "12:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 4.0,
+        "start_time": "10:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-WEEKEND",
+        "task_name": "Weekend maintenance",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 4.23
+  },
+  {
+    "date": "2026-07-19",
+    "tasks": [
+      {
+        "context": "home",
+        "end_time": "12:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 4.0,
+        "start_time": "10:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-WEEKEND",
+        "task_name": "Weekend maintenance",
+        "timezone": "UTC"
+      },
+      {
+        "context": "health",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 2.2,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-EVERY-003",
+        "task_name": "Every three days from anchor",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 7.64
+  },
+  {
+    "date": "2026-07-20",
+    "tasks": [
+      {
+        "context": "admin",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": true,
+        "load": 2.4,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-WEEK-MWF",
+        "task_name": "Monday Wednesday Friday review",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 2.63
+  },
+  {
+    "date": "2026-07-21",
+    "tasks": [
+      {
+        "context": "team",
+        "end_time": "15:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 1.7,
+        "start_time": "14:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-TUTH",
+        "task_name": "Tuesday Thursday collaboration",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 1.93
+  },
+  {
+    "date": "2026-07-22",
+    "tasks": [
+      {
+        "context": "admin",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": true,
+        "load": 2.4,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-WEEK-MWF",
+        "task_name": "Monday Wednesday Friday review",
+        "timezone": "UTC"
+      },
+      {
+        "context": "health",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 2.2,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-EVERY-003",
+        "task_name": "Every three days from anchor",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 6.04
+  },
+  {
+    "date": "2026-07-23",
+    "tasks": [
+      {
+        "context": "team",
+        "end_time": "15:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 1.7,
+        "start_time": "14:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-TUTH",
+        "task_name": "Tuesday Thursday collaboration",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 1.93
+  },
+  {
+    "date": "2026-07-24",
+    "tasks": [
+      {
+        "context": "admin",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": true,
+        "load": 2.4,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-WEEK-MWF",
+        "task_name": "Monday Wednesday Friday review",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 2.63
+  },
+  {
+    "date": "2026-07-25",
+    "tasks": [
+      {
+        "context": "home",
+        "end_time": "12:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 4.0,
+        "start_time": "10:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-WEEKEND",
+        "task_name": "Weekend maintenance",
+        "timezone": "UTC"
+      },
+      {
+        "context": "health",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 2.2,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-EVERY-003",
+        "task_name": "Every three days from anchor",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 7.64
+  },
+  {
+    "date": "2026-07-26",
+    "tasks": [
+      {
+        "context": "home",
+        "end_time": "12:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 4.0,
+        "start_time": "10:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-WEEKEND",
+        "task_name": "Weekend maintenance",
+        "timezone": "UTC"
+      },
+      {
+        "context": "reflection",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": true,
+        "load": 3.3,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-NTH-LAST-SUN",
+        "task_name": "Last Sunday reflection",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 8.74
+  },
+  {
+    "date": "2026-07-27",
+    "tasks": [
+      {
+        "context": "admin",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": true,
+        "load": 2.4,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-WEEK-MWF",
+        "task_name": "Monday Wednesday Friday review",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 2.63
+  },
+  {
+    "date": "2026-07-28",
+    "tasks": [
+      {
+        "context": "team",
+        "end_time": "15:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 1.7,
+        "start_time": "14:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-TUTH",
+        "task_name": "Tuesday Thursday collaboration",
+        "timezone": "UTC"
+      },
+      {
+        "context": "health",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 2.2,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-EVERY-003",
+        "task_name": "Every three days from anchor",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 5.34
+  },
+  {
+    "date": "2026-07-29",
+    "tasks": [
+      {
+        "context": "admin",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": true,
+        "load": 2.4,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-WEEK-MWF",
+        "task_name": "Monday Wednesday Friday review",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 2.63
+  },
+  {
+    "date": "2026-07-30",
+    "tasks": [
+      {
+        "context": "team",
+        "end_time": "15:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 1.7,
+        "start_time": "14:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-TUTH",
+        "task_name": "Tuesday Thursday collaboration",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 1.93
+  },
+  {
+    "date": "2026-07-31",
+    "tasks": [
+      {
+        "context": "admin",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": true,
+        "load": 2.4,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-WEEK-MWF",
+        "task_name": "Monday Wednesday Friday review",
+        "timezone": "UTC"
+      },
+      {
+        "context": "health",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 2.2,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-EVERY-003",
+        "task_name": "Every three days from anchor",
+        "timezone": "UTC"
+      },
+      {
+        "context": "finance",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 3.1,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-MONTH-31",
+        "task_name": "Month end clamped from day 31",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 10.41
+  },
+  {
+    "date": "2026-08-01",
+    "tasks": [
+      {
+        "context": "home",
+        "end_time": "12:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 4.0,
+        "start_time": "10:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-WEEKEND",
+        "task_name": "Weekend maintenance",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 4.23
+  },
+  {
+    "date": "2026-08-02",
+    "tasks": [
+      {
+        "context": "home",
+        "end_time": "12:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 4.0,
+        "start_time": "10:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-WEEKEND",
+        "task_name": "Weekend maintenance",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 4.23
+  },
+  {
+    "date": "2026-08-03",
+    "tasks": [
+      {
+        "context": "admin",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": true,
+        "load": 2.4,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-WEEK-MWF",
+        "task_name": "Monday Wednesday Friday review",
+        "timezone": "UTC"
+      },
+      {
+        "context": "health",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 2.2,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-EVERY-003",
+        "task_name": "Every three days from anchor",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 6.04
+  },
+  {
+    "date": "2026-08-04",
+    "tasks": [
+      {
+        "context": "team",
+        "end_time": "15:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 1.7,
+        "start_time": "14:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-TUTH",
+        "task_name": "Tuesday Thursday collaboration",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 1.93
+  },
+  {
+    "date": "2026-08-05",
+    "tasks": [
+      {
+        "context": "admin",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": true,
+        "load": 2.4,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-WEEK-MWF",
+        "task_name": "Monday Wednesday Friday review",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 2.63
+  },
+  {
+    "date": "2026-08-06",
+    "tasks": [
+      {
+        "context": "team",
+        "end_time": "15:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 1.7,
+        "start_time": "14:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-TUTH",
+        "task_name": "Tuesday Thursday collaboration",
+        "timezone": "UTC"
+      },
+      {
+        "context": "health",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 2.2,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-EVERY-003",
+        "task_name": "Every three days from anchor",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 5.34
+  },
+  {
+    "date": "2026-08-07",
+    "tasks": [
+      {
+        "context": "admin",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": true,
+        "load": 2.4,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-WEEK-MWF",
+        "task_name": "Monday Wednesday Friday review",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 2.63
+  },
+  {
+    "date": "2026-08-08",
+    "tasks": [
+      {
+        "context": "home",
+        "end_time": "12:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 4.0,
+        "start_time": "10:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-WEEKEND",
+        "task_name": "Weekend maintenance",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 4.23
+  },
+  {
+    "date": "2026-08-09",
+    "tasks": [
+      {
+        "context": "home",
+        "end_time": "12:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 4.0,
+        "start_time": "10:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-WEEKEND",
+        "task_name": "Weekend maintenance",
+        "timezone": "UTC"
+      },
+      {
+        "context": "health",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 2.2,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-EVERY-003",
+        "task_name": "Every three days from anchor",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 7.64
+  },
+  {
+    "date": "2026-08-10",
+    "tasks": [
+      {
+        "context": "admin",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": true,
+        "load": 2.4,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-WEEK-MWF",
+        "task_name": "Monday Wednesday Friday review",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 2.63
+  },
+  {
+    "date": "2026-08-11",
+    "tasks": [
+      {
+        "context": "team",
+        "end_time": "15:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 1.7,
+        "start_time": "14:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-TUTH",
+        "task_name": "Tuesday Thursday collaboration",
+        "timezone": "UTC"
+      },
+      {
+        "context": "planning",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 1.4,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-NTH-SECOND-TUE",
+        "task_name": "Second Tuesday planning",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 4.54
+  },
+  {
+    "date": "2026-08-12",
+    "tasks": [
+      {
+        "context": "health",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 2.2,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-EVERY-003",
+        "task_name": "Every three days from anchor",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 2.43
+  },
+  {
+    "date": "2026-08-13",
+    "tasks": [
+      {
+        "context": "team",
+        "end_time": "15:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 1.7,
+        "start_time": "14:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-TUTH",
+        "task_name": "Tuesday Thursday collaboration",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 1.93
+  },
+  {
+    "date": "2026-08-15",
+    "tasks": [
+      {
+        "context": "home",
+        "end_time": "12:00:00",
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 4.0,
+        "start_time": "10:00:00",
+        "status": "todo",
+        "task_id": "T-WEEK-WEEKEND",
+        "task_name": "Weekend maintenance",
+        "timezone": "UTC"
+      },
+      {
+        "context": "health",
+        "end_time": null,
+        "exception_type": null,
+        "has_exception": false,
+        "is_locked": false,
+        "load": 2.2,
+        "start_time": null,
+        "status": "todo",
+        "task_id": "T-EVERY-003",
+        "task_name": "Every three days from anchor",
+        "timezone": "UTC"
+      }
+    ],
+    "total_load": 7.64
+  }
+]

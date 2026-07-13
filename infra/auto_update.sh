@@ -56,7 +56,7 @@ ensure_clean_worktree() {
 
 # Node-run service ports (4102/artifacts excluded: it may legitimately stay
 # bound by the workbench-artifacts-service container in docker-only mode).
-NODE_SERVICE_PORT_REGEX=':(4100|4101|4103|4104|4105|4106|4107|4108|8100)[[:space:]]'
+NODE_SERVICE_PORT_REGEX=':(4100|4101|4103|4104|4105|4106|4107|4108)[[:space:]]'
 
 artifacts_runs_in_docker() {
     command -v docker >/dev/null 2>&1 \

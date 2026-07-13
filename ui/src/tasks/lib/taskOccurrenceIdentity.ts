@@ -4,8 +4,32 @@ function encodeKeyPart(value: string | number): string {
   return encodeURIComponent(String(value));
 }
 
+export function normalizeDateKey(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(normalized);
+  if (!match) return undefined;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year
+    || date.getUTCMonth() !== month - 1
+    || date.getUTCDate() !== day
+  ) {
+    return undefined;
+  }
+  return normalized;
+}
+
 export function scheduleItemKey(scheduleId: string | number): string {
   return `schedule:${encodeKeyPart(scheduleId)}`;
+}
+
+export function taskDefinitionRowKey(taskId: string): string {
+  return `task:${encodeKeyPart(taskId)}`;
 }
 
 export function occurrenceMembershipKey(
@@ -21,12 +45,16 @@ export function occurrenceMembershipKey(
   ].join(":");
 }
 
-export function rowOccurrenceDate(row: Pick<TaskOccurrenceRow, "date" | "occurrenceDate">): string {
-  return row.occurrenceDate ?? row.date;
+export function rowOccurrenceDate(
+  row: Pick<TaskOccurrenceRow, "date" | "occurrenceDate">
+): string | undefined {
+  return normalizeDateKey(row.occurrenceDate) ?? normalizeDateKey(row.date);
 }
 
-export function rowScheduledDate(row: Pick<TaskOccurrenceRow, "date" | "scheduledDate">): string {
-  return row.scheduledDate ?? row.date;
+export function rowScheduledDate(
+  row: Pick<TaskOccurrenceRow, "date" | "scheduledDate">
+): string | undefined {
+  return normalizeDateKey(row.scheduledDate) ?? normalizeDateKey(row.date);
 }
 
 export function rowTodayMembershipKey(

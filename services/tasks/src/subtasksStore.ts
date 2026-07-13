@@ -90,6 +90,7 @@ export async function createSubtask(
 export async function updateSubtask(
   subtaskId: string,
   taskId: string,
+  occurrenceDate: string,
   ownerCoreUserId: string,
   updates: { title?: string; isDone?: boolean; sortOrder?: number }
 ): Promise<TaskSubtask | undefined> {
@@ -98,8 +99,8 @@ export async function updateSubtask(
   const owner = normalizeOwner(ownerCoreUserId);
 
   const setClauses: string[] = ["updated_at = NOW()"];
-  const values: unknown[] = [subtaskId, taskId, owner];
-  let idx = 4;
+  const values: unknown[] = [subtaskId, taskId, owner, occurrenceDate];
+  let idx = 5;
 
   if (updates.title !== undefined) {
     setClauses.push(`title = $${idx}`);
@@ -121,7 +122,7 @@ export async function updateSubtask(
     `
       UPDATE task_subtasks
       SET ${setClauses.join(", ")}
-      WHERE id = $1 AND task_id = $2 AND owner_username = $3
+      WHERE id = $1 AND task_id = $2 AND owner_username = $3 AND occurrence_date = $4
       RETURNING id, task_id, owner_username, occurrence_date, title, is_done, sort_order, created_at, updated_at
     `,
     values
@@ -134,6 +135,7 @@ export async function updateSubtask(
 export async function deleteSubtask(
   subtaskId: string,
   taskId: string,
+  occurrenceDate: string,
   ownerCoreUserId: string
 ): Promise<boolean> {
   await ensureTasksSchema();
@@ -143,9 +145,9 @@ export async function deleteSubtask(
   const result = await pool.query(
     `
       DELETE FROM task_subtasks
-      WHERE id = $1 AND task_id = $2 AND owner_username = $3
+      WHERE id = $1 AND task_id = $2 AND owner_username = $3 AND occurrence_date = $4
     `,
-    [subtaskId, taskId, owner]
+    [subtaskId, taskId, owner, occurrenceDate]
   );
 
   return (result.rowCount ?? 0) > 0;

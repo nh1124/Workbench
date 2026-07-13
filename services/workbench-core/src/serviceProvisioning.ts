@@ -20,7 +20,7 @@ function optionalEnv(name: string): string | undefined {
   return value && value.length > 0 ? value : undefined;
 }
 
-type ServiceId = "notes" | "artifacts" | "tasks" | "projects" | "images" | "mindmaps" | "wbs" | "insights";
+type ServiceId = "notes" | "artifacts" | "projects" | "images" | "mindmaps" | "wbs" | "insights";
 
 type ServiceTarget = {
   id: ServiceId;
@@ -43,11 +43,6 @@ const serviceTargets: ServiceTarget[] = [
     id: "artifacts",
     baseUrl: requireEnv("ARTIFACTS_SERVICE_URL"),
     apiKey: requireEnv("INTERNAL_API_KEY_ARTIFACTS")
-  },
-  {
-    id: "tasks",
-    baseUrl: requireEnv("TASKS_SERVICE_URL"),
-    apiKey: requireEnv("INTERNAL_API_KEY_TASKS")
   },
   {
     id: "images",

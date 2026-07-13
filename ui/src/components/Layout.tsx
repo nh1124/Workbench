@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { NavLink, Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { WORKBENCH_LOCAL_DAEMON_URL_CHANGED_EVENT, navItems } from "../config/services";
+import {
+  WORKBENCH_LOCAL_DAEMON_URL_CHANGED_EVENT,
+  WORKBENCH_LOCAL_MODE_CHANGED_EVENT,
+  getWorkbenchAutoLocalFallbackActive,
+  navItems
+} from "../config/services";
 import {
   WORKBENCH_KEYBOARD_SHORTCUTS_CHANGED_EVENT,
   isTextEditingTarget,
@@ -135,6 +140,9 @@ export function Layout() {
   const [daemonStatus, setDaemonStatus] = useState<LocalDaemonStatus | undefined>(undefined);
   const [daemonStatusChecked, setDaemonStatusChecked] = useState(false);
   const [daemonStatusError, setDaemonStatusError] = useState(false);
+  const [autoLocalFallbackActive, setAutoLocalFallbackActive] = useState(
+    getWorkbenchAutoLocalFallbackActive
+  );
   const [shortcutBindings, setShortcutBindings] = useState<ShortcutBindings>(() => loadShortcutBindings());
   const [isCompactSidebarMode, setIsCompactSidebarMode] = useState(() =>
     typeof window !== "undefined" ? window.innerWidth <= COMPACT_SIDEBAR_BREAKPOINT : false
@@ -149,6 +157,13 @@ export function Layout() {
   const isNativeRuntime = typeof window !== "undefined" && typeof window.__TAURI_INTERNALS__?.invoke === "function";
 
   const daemonSignal = useMemo(() => {
+    if (autoLocalFallbackActive) {
+      return {
+        className: "syncing",
+        label: "Local (auto)",
+        title: "Auto routing is using the local daemon for reads"
+      };
+    }
     if (!daemonStatusChecked) {
       return {
         className: "checking",
@@ -218,7 +233,15 @@ export function Layout() {
       label: "Synced",
       title: "Local daemon is online and synced"
     };
-  }, [daemonStatus, daemonStatusChecked, daemonStatusError]);
+  }, [autoLocalFallbackActive, daemonStatus, daemonStatusChecked, daemonStatusError]);
+
+  useEffect(() => {
+    const refreshAutoLocalFallback = () => {
+      setAutoLocalFallbackActive(getWorkbenchAutoLocalFallbackActive());
+    };
+    window.addEventListener(WORKBENCH_LOCAL_MODE_CHANGED_EVENT, refreshAutoLocalFallback);
+    return () => window.removeEventListener(WORKBENCH_LOCAL_MODE_CHANGED_EVENT, refreshAutoLocalFallback);
+  }, []);
 
   useEffect(() => {
     setIsUserMenuOpen(false);

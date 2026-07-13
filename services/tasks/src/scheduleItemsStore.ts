@@ -85,7 +85,6 @@ export async function updateItem(
   id: number,
   patch: {
     scheduledDate?: string;
-    occurrenceDate?: string;
     startTime?: string | null;
     endTime?: string | null;
     timezone?: string | null;

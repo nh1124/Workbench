@@ -1,0 +1,40 @@
+{
+  "adjusted_load": 14.54,
+  "base_cap": 7.25,
+  "base_load": 8.95,
+  "cap": 5.8,
+  "cognitive_fatigue": 2,
+  "context_penalty": 0.85,
+  "count_penalty": 0.59,
+  "date": "2026-07-01",
+  "level": "CRITICAL",
+  "raw_adjusted_load": 10.39,
+  "task_count": 2,
+  "tasks": [
+    {
+      "context": "admin",
+      "end_time": null,
+      "exception_type": null,
+      "has_exception": false,
+      "is_locked": true,
+      "load": 6.75,
+      "start_time": null,
+      "status": "todo",
+      "task_id": "T-WEEK-MWF",
+      "task_name": "Monday Wednesday Friday review"
+    },
+    {
+      "context": "health",
+      "end_time": null,
+      "exception_type": null,
+      "has_exception": false,
+      "is_locked": false,
+      "load": 2.2,
+      "start_time": null,
+      "status": "todo",
+      "task_id": "T-EVERY-003",
+      "task_name": "Every three days from anchor"
+    }
+  ],
+  "unique_contexts": 2
+}

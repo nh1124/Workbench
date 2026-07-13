@@ -1,0 +1,16 @@
+{
+  "active": true,
+  "base_load_score": 3.1,
+  "context": "finance",
+  "end_time": null,
+  "exception": null,
+  "has_exception": false,
+  "is_locked": false,
+  "load": 3.1,
+  "rule_type": "MONTHLY_DAY",
+  "start_time": null,
+  "status": "todo",
+  "target_date": "2027-02-28",
+  "task_id": "T-MONTH-31",
+  "task_name": "Month end clamped from day 31"
+}

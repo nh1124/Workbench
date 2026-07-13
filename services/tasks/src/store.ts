@@ -1,9 +1,8 @@
-import { createHash } from "node:crypto";
-import { cacheTasks, listPinnedTaskIds, setTaskPinned, upsertServiceAccount } from "./db.js";
-import type { LbsScheduleDay } from "./lbsClient.js";
+import { cacheTasks, listPinnedTaskIds, setTaskPinned } from "./db.js";
+import { getLbsBackend } from "./lbs/backendFactory.js";
+import type { LbsBackendContext, LbsDataPlane, LbsScheduleDay } from "./lbs/dataPlane.js";
 import {
   applyResolvedStatus,
-  createLbsClient,
   getLbsConfig,
   normalizeResponseTask,
   resolveStatusTargetDate,
@@ -31,6 +30,14 @@ export interface TaskListPage {
   nextCursor?: string;
 }
 
+export interface TaskStoreDependencies {
+  getLbsBackend: (context: LbsBackendContext) => LbsDataPlane;
+  listPinnedTaskIds: typeof listPinnedTaskIds;
+  cacheTasks: typeof cacheTasks;
+}
+
+const defaultDependencies: TaskStoreDependencies = { getLbsBackend, listPinnedTaskIds, cacheTasks };
+
 interface LbsHistoryEntry {
   id?: string | number;
   task_id?: string;
@@ -39,152 +46,12 @@ interface LbsHistoryEntry {
   created_at?: string;
 }
 
-interface LbsAuthTokenResponse {
-  accessToken?: string;
-  access_token?: string;
-  token?: string;
-  jwt?: string;
-  refreshToken?: string;
-  refresh_token?: string;
-}
-
-function resolveLbsAccessToken(payload: LbsAuthTokenResponse): { accessToken: string; refreshToken?: string } {
-  const accessToken = payload.accessToken ?? payload.access_token ?? payload.token ?? payload.jwt;
-  const refreshToken = payload.refreshToken ?? payload.refresh_token;
-  if (!accessToken) {
-    throw new Error("LBS auth response does not contain access token");
-  }
-  return { accessToken, refreshToken };
-}
-
-function lbsAccountIdentity(coreUserId: string): { email: string; name: string } {
-  const compact = coreUserId.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
-  return {
-    email: `wb_${compact}@workbench.local`,
-    name: `Workbench ${compact.slice(0, 12)}`
-  };
-}
-
-function lbsAccountPassword(coreUserId: string): string {
-  const config = getLbsConfig();
-  return createHash("sha256").update(`${coreUserId.trim().toLowerCase()}:${config.accountPasswordSeed}`).digest("hex");
-}
-
-async function authenticateLbsUser(coreUserId: string): Promise<{ accessToken: string; refreshToken?: string }> {
-  const config = getLbsConfig();
-  const identity = lbsAccountIdentity(coreUserId);
-  const password = lbsAccountPassword(coreUserId);
-
-  const login = async (): Promise<{ accessToken: string; refreshToken?: string }> => {
-    const url = `${config.authBaseUrl}${config.authLoginPath}`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username_or_email: identity.email, password })
-    });
-
-    const text = await response.text();
-    if (!response.ok) {
-      throw new Error(text || `LBS login failed (${response.status})`);
-    }
-
-    let payload: LbsAuthTokenResponse = {};
-    if (text.trim()) {
-      payload = JSON.parse(text) as LbsAuthTokenResponse;
-    }
-    return resolveLbsAccessToken(payload);
-  };
-
-  const register = async (): Promise<void> => {
-    const url = `${config.authBaseUrl}${config.authUserCreatePath}`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: identity.email, name: identity.name, password })
-    });
-
-    const text = await response.text();
-    if (response.ok || response.status === 409) {
-      return;
-    }
-    throw new Error(text || `LBS register failed (${response.status})`);
-  };
-
-  try {
-    return await login();
-  } catch (loginError) {
-    try {
-      await register();
-      return await login();
-    } catch (registerError) {
-      const loginMessage = loginError instanceof Error ? loginError.message : "login failed";
-      const registerMessage = registerError instanceof Error ? registerError.message : "register failed";
-      throw new Error(`Failed to provision LBS user (${loginMessage}; ${registerMessage})`);
-    }
-  }
-}
-
-async function authenticateLbsUserLegacy(coreUserId: string): Promise<{ accessToken: string; refreshToken?: string }> {
-  const config = getLbsConfig();
-  const identity = lbsAccountIdentity(coreUserId);
-  const password = lbsAccountPassword(coreUserId);
-
-  const callAuth = async (pathValue: string): Promise<{ accessToken: string; refreshToken?: string }> => {
-    const url = `${config.authBaseUrl}${pathValue}`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: identity.email, password })
-    });
-
-    const text = await response.text();
-    if (!response.ok) {
-      throw new Error(text || `LBS auth failed (${response.status})`);
-    }
-
-    let payload: LbsAuthTokenResponse = {};
-    if (text.trim()) {
-      payload = JSON.parse(text) as LbsAuthTokenResponse;
-    }
-    return resolveLbsAccessToken(payload);
-  };
-
-  try {
-    return await callAuth(config.authLoginPath);
-  } catch (loginError) {
-    try {
-      return await callAuth("/auth/register");
-    } catch (registerError) {
-      const loginMessage = loginError instanceof Error ? loginError.message : "login failed";
-      const registerMessage = registerError instanceof Error ? registerError.message : "register failed";
-      throw new Error(`Failed to provision LBS user (${loginMessage}; ${registerMessage})`);
-    }
-  }
-}
-
-export async function provisionLbsAccount(coreUserId: string, usernameSnapshot: string): Promise<void> {
-  let tokens: { accessToken: string; refreshToken?: string };
-  try {
-    tokens = await authenticateLbsUser(coreUserId);
-  } catch (primaryError) {
-    // Backward-compatible fallback for environments still exposing /auth/register contract.
-    tokens = await authenticateLbsUserLegacy(coreUserId).catch((legacyError) => {
-      const primaryMessage = primaryError instanceof Error ? primaryError.message : "primary auth failed";
-      const legacyMessage = legacyError instanceof Error ? legacyError.message : "legacy auth failed";
-      throw new Error(`LBS provisioning failed (${primaryMessage}; ${legacyMessage})`);
-    });
-  }
-  await upsertServiceAccount(coreUserId, usernameSnapshot, tokens);
-}
-
 async function setTaskCompletion(
   taskId: string,
-  lbsAccessToken: string,
+  client: LbsDataPlane,
   targetDate: string,
   status: TaskStatus = "todo"
 ): Promise<void> {
-  const config = getLbsConfig();
-  const client = createLbsClient(config, lbsAccessToken);
   await client.completeTask(taskId, toDueDateOnly(targetDate) || targetDate, toLbsStatus(status));
 }
 
@@ -230,17 +97,18 @@ function applyTaskCursor(tasks: Task[], cursor: string | undefined): Task[] {
 async function listSortedTasks(
   filters: { projectId?: string; status?: TaskStatus } | undefined,
   ownerUsername: string,
-  lbsAccessToken: string
+  backendContext: LbsBackendContext,
+  dependencies: TaskStoreDependencies
 ): Promise<Task[]> {
   const config = getLbsConfig();
-  const client = createLbsClient(config, lbsAccessToken);
+  const client = dependencies.getLbsBackend(backendContext);
   const tasks = (await client.listTasks(filters?.projectId, config.defaultActive)) as unknown as LbsTask[];
   console.log(`[tasks-service] listTasks  LBS returned ${tasks.length} task(s)`);
   const mapped = tasks.map(normalizeResponseTask);
   const withResolvedStatuses = await Promise.all(
-    mapped.map((task) => applyResolvedStatus(task, lbsAccessToken, config.timezone))
+    mapped.map((task) => applyResolvedStatus(task, client, config.timezone))
   );
-  const pinnedIds = new Set(await listPinnedTaskIds(ownerUsername));
+  const pinnedIds = new Set(await dependencies.listPinnedTaskIds(ownerUsername));
   const withPins = withResolvedStatuses.map((task) => ({ ...task, isPinned: pinnedIds.has(task.id) }));
   const statusFiltered = filters?.status
     ? withPins.filter((task) => task.status === filters.status)
@@ -254,12 +122,14 @@ async function listSortedTasks(
 export async function listTasks(
   filters: { projectId?: string; status?: TaskStatus; limit?: number } | undefined,
   ownerUsername: string,
-  lbsAccessToken: string
+  backendContext: LbsBackendContext,
+  dependencyOverrides: Partial<TaskStoreDependencies> = {}
 ): Promise<Task[]> {
   console.log(`[tasks-service] listTasks  owner=${ownerUsername} filters=${JSON.stringify(filters ?? {})}`);
-  const sorted = await listSortedTasks(filters, ownerUsername, lbsAccessToken);
+  const dependencies = { ...defaultDependencies, ...dependencyOverrides };
+  const sorted = await listSortedTasks(filters, ownerUsername, backendContext, dependencies);
   const result = filters?.limit && filters.limit > 0 ? sorted.slice(0, filters.limit) : sorted;
-  await cacheTasks(result, ownerUsername);
+  await dependencies.cacheTasks(result, ownerUsername);
   console.log(`[tasks-service] listTasks  returning ${result.length} task(s) after filters`);
   return result;
 }
@@ -267,15 +137,17 @@ export async function listTasks(
 export async function listTasksPage(
   filters: { projectId?: string; status?: TaskStatus; limit?: number; cursor?: string } | undefined,
   ownerUsername: string,
-  lbsAccessToken: string
+  backendContext: LbsBackendContext,
+  dependencyOverrides: Partial<TaskStoreDependencies> = {}
 ): Promise<TaskListPage> {
   console.log(`[tasks-service] listTasksPage  owner=${ownerUsername} filters=${JSON.stringify(filters ?? {})}`);
-  const sorted = await listSortedTasks(filters, ownerUsername, lbsAccessToken);
+  const dependencies = { ...defaultDependencies, ...dependencyOverrides };
+  const sorted = await listSortedTasks(filters, ownerUsername, backendContext, dependencies);
   const pageSize = normalizePageLimit(filters?.limit, 100);
   const cursorFiltered = applyTaskCursor(sorted, filters?.cursor);
   const items = cursorFiltered.slice(0, pageSize);
   const hasMore = cursorFiltered.length > pageSize;
-  await cacheTasks(items, ownerUsername);
+  await dependencies.cacheTasks(items, ownerUsername);
   console.log(`[tasks-service] listTasksPage  returning ${items.length} task(s) after cursor`);
   return {
     items,
@@ -283,17 +155,23 @@ export async function listTasksPage(
   };
 }
 
-export async function getTask(id: string, ownerUsername: string, lbsAccessToken: string): Promise<Task | undefined> {
+export async function getTask(
+  id: string,
+  ownerUsername: string,
+  backendContext: LbsBackendContext,
+  dependencyOverrides: Partial<TaskStoreDependencies> = {}
+): Promise<Task | undefined> {
   console.log(`[tasks-service] getTask  id=${id} owner=${ownerUsername}`);
   try {
     const config = getLbsConfig();
-    const client = createLbsClient(config, lbsAccessToken);
+    const dependencies = { ...defaultDependencies, ...dependencyOverrides };
+    const client = dependencies.getLbsBackend(backendContext);
     const task = (await client.getTask(id)) as unknown as LbsTask;
     const normalized = normalizeResponseTask(task);
-    const resolved = await applyResolvedStatus(normalized, lbsAccessToken, config.timezone);
-    const pinnedIds = new Set(await listPinnedTaskIds(ownerUsername));
+    const resolved = await applyResolvedStatus(normalized, client, config.timezone);
+    const pinnedIds = new Set(await dependencies.listPinnedTaskIds(ownerUsername));
     const taskWithPin = { ...resolved, isPinned: pinnedIds.has(resolved.id) };
-    await cacheTasks([taskWithPin], ownerUsername);
+    await dependencies.cacheTasks([taskWithPin], ownerUsername);
     console.log(`[tasks-service] getTask  id=${id} found: title="${taskWithPin.title}"`);
     return taskWithPin;
   } catch (error) {
@@ -313,10 +191,14 @@ export async function getTask(id: string, ownerUsername: string, lbsAccessToken:
   }
 }
 
-export async function getTaskHistory(id: string, lbsAccessToken: string): Promise<TaskHistoryEntry[]> {
+export async function getTaskHistory(
+  id: string,
+  backendContext: LbsBackendContext,
+  dependencyOverrides: Partial<TaskStoreDependencies> = {}
+): Promise<TaskHistoryEntry[]> {
   try {
     const config = getLbsConfig();
-    const client = createLbsClient(config, lbsAccessToken);
+    const client = { ...defaultDependencies, ...dependencyOverrides }.getLbsBackend(backendContext);
     const endDate = todayInTimezone(config.timezone);
     const startBase = new Date();
     startBase.setFullYear(startBase.getFullYear() - 2);
@@ -371,9 +253,15 @@ function buildLbsPayload(input: TaskInput, config: LbsConfig): Record<string, un
   return payload;
 }
 
-export async function createTask(input: TaskInput, ownerUsername: string, lbsAccessToken: string): Promise<Task> {
+export async function createTask(
+  input: TaskInput,
+  ownerUsername: string,
+  backendContext: LbsBackendContext,
+  dependencyOverrides: Partial<TaskStoreDependencies> = {}
+): Promise<Task> {
   const config = getLbsConfig();
-  const client = createLbsClient(config, lbsAccessToken);
+  const dependencies = { ...defaultDependencies, ...dependencyOverrides };
+  const client = dependencies.getLbsBackend(backendContext);
   const payload = buildLbsPayload(input, config);
 
   const created = (await client.createTask(payload)) as unknown as LbsTask;
@@ -386,14 +274,14 @@ export async function createTask(input: TaskInput, ownerUsername: string, lbsAcc
     input.timezone || config.timezone,
     config.timezone
   );
-  await setTaskCompletion(created.task_id, lbsAccessToken, createStatusTargetDate, uiStatus);
+  await setTaskCompletion(created.task_id, client, createStatusTargetDate, uiStatus);
 
   const fresh = (await client.getTask(created.task_id)) as unknown as LbsTask;
   const normalized = normalizeResponseTask(fresh);
-  const resolved = await applyResolvedStatus(normalized, lbsAccessToken, config.timezone);
-  const pinnedIds = new Set(await listPinnedTaskIds(ownerUsername));
+  const resolved = await applyResolvedStatus(normalized, client, config.timezone);
+  const pinnedIds = new Set(await dependencies.listPinnedTaskIds(ownerUsername));
   const taskWithPin = { ...resolved, isPinned: pinnedIds.has(resolved.id) };
-  await cacheTasks([taskWithPin], ownerUsername);
+  await dependencies.cacheTasks([taskWithPin], ownerUsername);
   return taskWithPin;
 }
 
@@ -401,10 +289,12 @@ export async function updateTask(
   id: string,
   updates: Partial<TaskInput>,
   ownerUsername: string,
-  lbsAccessToken: string
+  backendContext: LbsBackendContext,
+  dependencyOverrides: Partial<TaskStoreDependencies> = {}
 ): Promise<Task | undefined> {
   const config = getLbsConfig();
-  const client = createLbsClient(config, lbsAccessToken);
+  const dependencies = { ...defaultDependencies, ...dependencyOverrides };
+  const client = dependencies.getLbsBackend(backendContext);
 
   // Fetch current task first to merge fields
   let current: LbsTask | undefined;
@@ -455,15 +345,15 @@ export async function updateTask(
         merged.timezone || config.timezone,
         config.timezone
       );
-      await setTaskCompletion(id, lbsAccessToken, updateStatusTargetDate, updates.status);
+      await setTaskCompletion(id, client, updateStatusTargetDate, updates.status);
     }
 
     const fresh = (await client.getTask(id)) as unknown as LbsTask;
     const normalized = normalizeResponseTask(fresh);
-    const resolved = await applyResolvedStatus(normalized, lbsAccessToken, config.timezone);
-    const pinnedIds = new Set(await listPinnedTaskIds(ownerUsername));
+    const resolved = await applyResolvedStatus(normalized, client, config.timezone);
+    const pinnedIds = new Set(await dependencies.listPinnedTaskIds(ownerUsername));
     const taskWithPin = { ...resolved, isPinned: pinnedIds.has(resolved.id) };
-    await cacheTasks([taskWithPin], ownerUsername);
+    await dependencies.cacheTasks([taskWithPin], ownerUsername);
     return taskWithPin;
   } catch (error) {
     if (error instanceof Error && error.message.includes("(404)")) {
@@ -473,9 +363,14 @@ export async function updateTask(
   }
 }
 
-export async function deleteTask(id: string, _ownerUsername: string, lbsAccessToken: string): Promise<boolean> {
+export async function deleteTask(
+  id: string,
+  _ownerUsername: string,
+  backendContext: LbsBackendContext,
+  dependencyOverrides: Partial<TaskStoreDependencies> = {}
+): Promise<boolean> {
   const config = getLbsConfig();
-  const client = createLbsClient(config, lbsAccessToken);
+  const client = { ...defaultDependencies, ...dependencyOverrides }.getLbsBackend(backendContext);
   try {
     await client.deleteTask(id, config.forceOverride);
     return true;
@@ -487,13 +382,16 @@ export async function deleteTask(id: string, _ownerUsername: string, lbsAccessTo
   }
 }
 
-export async function exportTasksCsv(lbsAccessToken: string): Promise<string> {
+export async function exportTasksCsv(
+  backendContext: LbsBackendContext,
+  dependencyOverrides: Partial<TaskStoreDependencies> = {}
+): Promise<string> {
   // NOTE: LBS has no export-csv endpoint - GET /tasks/export-csv would match
   // the /tasks/{task_id} route and return {"detail":"Task not found"}.
   // We build the CSV ourselves by fetching all tasks via listTasks().
   console.log(`[tasks-service] exportTasksCsv  fetching all tasks from LBS`);
   const config = getLbsConfig();
-  const client = createLbsClient(config, lbsAccessToken);
+  const client = { ...defaultDependencies, ...dependencyOverrides }.getLbsBackend(backendContext);
   try {
     // Omit the `active` filter to export both active and inactive tasks
     const tasks = (await client.listTasks(undefined, undefined)) as unknown as LbsTask[];
@@ -533,16 +431,23 @@ export async function exportTasksCsv(lbsAccessToken: string): Promise<string> {
   }
 }
 
-export async function importTasksCsv(csvContent: string, lbsAccessToken: string): Promise<{ imported: number }> {
-  const config = getLbsConfig();
-  const client = createLbsClient(config, lbsAccessToken);
+export async function importTasksCsv(
+  csvContent: string,
+  backendContext: LbsBackendContext,
+  dependencyOverrides: Partial<TaskStoreDependencies> = {}
+): Promise<{ imported: number }> {
+  const client = { ...defaultDependencies, ...dependencyOverrides }.getLbsBackend(backendContext);
   const result = await client.uploadTasksCsv(csvContent);
   return { imported: typeof result.imported === "number" ? result.imported : 0 };
 }
 
-export async function listTaskProjects(_ownerUsername: string, lbsAccessToken: string): Promise<TaskProjectSummary[]> {
+export async function listTaskProjects(
+  _ownerUsername: string,
+  backendContext: LbsBackendContext,
+  dependencyOverrides: Partial<TaskStoreDependencies> = {}
+): Promise<TaskProjectSummary[]> {
   const config = getLbsConfig();
-  const client = createLbsClient(config, lbsAccessToken);
+  const client = { ...defaultDependencies, ...dependencyOverrides }.getLbsBackend(backendContext);
   const tasks = ((await client.listTasks(undefined, config.defaultActive)) as unknown as LbsTask[])
     .map(normalizeResponseTask);
   const grouped = new Map<string, TaskProjectSummary>();
@@ -615,10 +520,10 @@ export async function getTaskSchedule(
   endDate: string,
   projectId: string | undefined,
   status: TaskStatus | undefined,
-  lbsAccessToken: string
+  backendContext: LbsBackendContext,
+  dependencyOverrides: Partial<TaskStoreDependencies> = {}
 ): Promise<TaskScheduleDayModel[]> {
-  const config = getLbsConfig();
-  const client = createLbsClient(config, lbsAccessToken);
+  const client = { ...defaultDependencies, ...dependencyOverrides }.getLbsBackend(backendContext);
   const days = await client.getSchedule(startDate, endDate);
   return days
     .map((day) => mapScheduleDay(day, projectId, status))
@@ -629,10 +534,10 @@ export async function completeTaskOccurrence(
   taskId: string,
   targetDate: string,
   status: TaskStatus,
-  lbsAccessToken: string
+  backendContext: LbsBackendContext,
+  dependencyOverrides: Partial<TaskStoreDependencies> = {}
 ): Promise<{ taskId: string; targetDate: string; status: TaskStatus }> {
-  const config = getLbsConfig();
-  const client = createLbsClient(config, lbsAccessToken);
+  const client = { ...defaultDependencies, ...dependencyOverrides }.getLbsBackend(backendContext);
   const normalizedDate = toDueDateOnly(targetDate);
   if (!normalizedDate) {
     throw new Error("targetDate must be in YYYY-MM-DD format");
