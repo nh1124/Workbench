@@ -9,7 +9,14 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { buildTasksByDate, filterScheduleItems } from "../lib/taskCalendarUtils";
+import {
+  buildMonthWindow,
+  buildTasksByDate,
+  calendarMonthKey,
+  extendMonthWindow,
+  filterScheduleItems,
+  monthWindowDirectionForScroll,
+} from "../lib/taskCalendarUtils";
 import type { ScheduleCalendarItem, Task, TaskStatus } from "../../types/models";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -46,6 +53,51 @@ function makeScheduleItem(
     ...overrides,
   };
 }
+
+describe("month window", () => {
+  it("selects an extension edge only when scrolling near it", () => {
+    expect(monthWindowDirectionForScroll({ scrollTop: 100, scrollHeight: 5000, clientHeight: 800 })).toBe("earlier");
+    expect(monthWindowDirectionForScroll({ scrollTop: 4100, scrollHeight: 5000, clientHeight: 800 })).toBe("later");
+    expect(monthWindowDirectionForScroll({ scrollTop: 1800, scrollHeight: 5000, clientHeight: 800 })).toBeNull();
+  });
+
+  it("builds the initial center plus/minus six-month window", () => {
+    const months = buildMonthWindow(new Date(2026, 2, 18));
+    expect(months).toHaveLength(13);
+    expect(calendarMonthKey(months[0])).toBe("2025-09");
+    expect(calendarMonthKey(months[6])).toBe("2026-03");
+    expect(calendarMonthKey(months[12])).toBe("2026-09");
+  });
+
+  it("prepends months and drops the far future edge when capped", () => {
+    const current = buildMonthWindow(new Date(2026, 5, 1), 2, 2);
+    const update = extendMonthWindow(current, "earlier", 2, 5);
+    expect(update.months.map(calendarMonthKey)).toEqual([
+      "2026-02", "2026-03", "2026-04", "2026-05", "2026-06",
+    ]);
+    expect(update.addedMonthKeys).toEqual(["2026-02", "2026-03"]);
+    expect(update.droppedMonthKeys).toEqual(["2026-07", "2026-08"]);
+  });
+
+  it("appends months and drops the far past edge when capped", () => {
+    const current = buildMonthWindow(new Date(2026, 5, 1), 2, 2);
+    const update = extendMonthWindow(current, "later", 2, 5);
+    expect(update.months.map(calendarMonthKey)).toEqual([
+      "2026-06", "2026-07", "2026-08", "2026-09", "2026-10",
+    ]);
+    expect(update.addedMonthKeys).toEqual(["2026-09", "2026-10"]);
+    expect(update.droppedMonthKeys).toEqual(["2026-04", "2026-05"]);
+  });
+
+  it("never grows beyond the configured DOM cap", () => {
+    let months = buildMonthWindow(new Date(2026, 0, 1));
+    for (let index = 0; index < 20; index += 1) {
+      months = extendMonthWindow(months, "later").months;
+    }
+    expect(months).toHaveLength(48);
+    expect(new Set(months.map(calendarMonthKey)).size).toBe(48);
+  });
+});
 
 // ─── buildTasksByDate ─────────────────────────────────────────────────────────
 

@@ -10,7 +10,7 @@
  */
 
 import {
-  useCallback, useEffect, useMemo, useRef, useState,
+  useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
   type DragEvent, type MouseEvent as ReactMouseEvent, type UIEvent
 } from "react";
 import { useLocation } from "react-router-dom";
@@ -31,7 +31,7 @@ import {
 import { taskOccursOnDate } from "../lib/taskRecurrenceUtils";
 import type {
   ScheduleCalendarDay, ScheduleCalendarItem,
-  Task, TaskStatus
+  Task, TaskScheduleDay, TaskStatus
 } from "../types/models";
 
 // ── New architecture imports ────────────────────────────────────────────────
@@ -42,11 +42,15 @@ import { useTaskSelection } from "./hooks/useTaskSelection";
 import { filterAndSortTasks, computeTaskCounters } from "./lib/taskFilterUtils";
 import { sortOccurrenceRows, groupOccurrencesByProject } from "./lib/taskOccurrenceDisplayUtils";
 import { normalizeDateKey, rowOccurrenceDate, rowScheduledDate } from "./lib/taskOccurrenceIdentity";
-import { buildTasksByDate, filterScheduleItems } from "./lib/taskCalendarUtils";
-import { layoutTimedItems } from "./lib/timelineLayoutUtils";
+import {
+  buildMonthWindow, buildTasksByDate, calendarMonthKey, extendMonthWindow, filterScheduleItems,
+  monthWindowDirectionForScroll,
+} from "./lib/taskCalendarUtils";
+import { computeTimelineHourHeight, layoutTimedItems } from "./lib/timelineLayoutUtils";
 import {
   emptyDraft,
-  TIMELINE_END_HOUR, TIMELINE_HOUR_HEIGHT, TIMELINE_START_HOUR,
+  TIMELINE_END_HOUR, TIMELINE_START_HOUR,
+  toTaskStatus,
   weekdays,
   type CalendarMode, type QuickFilter, type SidebarMode, type SortMode,
   type TaskOccurrenceRow,
@@ -54,6 +58,7 @@ import {
 import { OccurrenceContextMenu } from "./components/OccurrenceContextMenu";
 import { FileViewerModal } from "./components/FileViewerModal";
 import { CalendarDayDetailPanel } from "./components/CalendarDayDetailPanel";
+import { CalendarMonthGrid } from "./components/CalendarMonthGrid";
 import { TaskDetailPanel } from "./components/TaskDetailPanel";
 import { TaskListContent } from "./components/TaskListContent";
 import { TaskOccurrenceRowItem } from "./components/TaskOccurrenceRowItem";
@@ -83,6 +88,7 @@ export function TasksPageContainer() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedOccurrenceDate, setSelectedOccurrenceDate] = useState<string | null>(null);
   const [monthCursor, setMonthCursor] = useState(() => startOfMonth(new Date()));
+  const [monthWindow, setMonthWindow] = useState(() => buildMonthWindow(new Date()));
   const [weekCursor, setWeekCursor] = useState(() => startOfWeek(new Date()));
   const [nowMarker, setNowMarker] = useState(() => new Date());
   const [sortMode, setSortMode] = useState<SortMode>("load");
@@ -91,6 +97,8 @@ export function TasksPageContainer() {
   const [dayDetailDate, setDayDetailDate] = useState<Date | null>(null);
   const [scheduleDays, setScheduleDays] = useState<ScheduleCalendarDay[]>([]);
   const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [calendarRangeStatusMap, setCalendarRangeStatusMap] = useState<Map<string, Map<string, TaskStatus>>>(new Map());
+  const [timelineAvailableHeight, setTimelineAvailableHeight] = useState(0);
   const [scheduleRefreshTick, setScheduleRefreshTick] = useState(0);
   const [todaySuggestionHandled, setTodaySuggestionHandled] = useState(false);
   const [todaySuggestionApplying, setTodaySuggestionApplying] = useState(false);
@@ -98,6 +106,18 @@ export function TasksPageContainer() {
   const importRef = useRef<HTMLInputElement>(null);
   const weekTimelineScrollRef = useRef<HTMLDivElement | null>(null);
   const autoScrolledWeekKeyRef = useRef<string>("");
+  const monthScrollRef = useRef<HTMLDivElement | null>(null);
+  const monthElementRefs = useRef(new Map<string, HTMLElement>());
+  const monthScrollAnchorRef = useRef<{ monthKey: string; top: number } | null>(null);
+  const monthScrollTargetRef = useRef<{ monthKey: string; behavior: ScrollBehavior } | null>(null);
+  const monthViewActivationRef = useRef("");
+  const monthWindowExtendingRef = useRef(false);
+  const monthScrollFrameRef = useRef<number | null>(null);
+  const calendarStatusMonthCacheRef = useRef(new Set<string>());
+  const scheduleMonthCacheRef = useRef(new Set<string>());
+  const calendarStatusGenerationRef = useRef(0);
+  const scheduleGenerationRef = useRef(0);
+  const scheduleRequestCountRef = useRef(0);
 
   const todayKey = useMemo(() => toDateKey(startOfDay(nowMarker)), [nowMarker]);
   const today = useMemo(() => {
@@ -485,20 +505,26 @@ export function TasksPageContainer() {
     [occurrenceRowsOrdered, tasks, projectNameMap]
   );
 
-  const monthCells = useMemo(() => buildMonthCells(monthCursor), [monthCursor]);
   const weekDays = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekCursor, i)), [weekCursor]);
 
+  const effectiveCalendarStatusMap = useMemo(() => {
+    const merged = new Map(calendarStatusMap);
+    for (const [dateKey, statuses] of calendarRangeStatusMap) merged.set(dateKey, statuses);
+    return merged;
+  }, [calendarRangeStatusMap, calendarStatusMap]);
+
   const tasksByDate = useMemo(() => {
-    const visibleDates = calendarMode === "month"
-      ? monthCells.map((cell) => startOfDay(cell.date))
-      : weekDays.map((d) => startOfDay(d));
-    return buildTasksByDate(filteredTasks, visibleDates, calendarStatusMap);
-  }, [calendarMode, filteredTasks, monthCells, weekDays, calendarStatusMap]);
+    return buildTasksByDate(filteredTasks, weekDays.map((day) => startOfDay(day)), effectiveCalendarStatusMap);
+  }, [effectiveCalendarStatusMap, filteredTasks, weekDays]);
 
   const hasTasksInVisiblePeriod = useMemo(
-    () => Array.from(tasksByDate.values()).some((items) => items.length > 0),
-    [tasksByDate]
+    () => calendarMode === "month"
+      ? filteredTasks.length > 0
+      : Array.from(tasksByDate.values()).some((items) => items.length > 0),
+    [calendarMode, filteredTasks.length, tasksByDate]
   );
+
+  const tasksById = useMemo(() => new Map(tasks.map((task) => [task.id, task])), [tasks]);
 
   const scheduleItemsByDate = useMemo(() => {
     const map = new Map<string, ScheduleCalendarItem[]>();
@@ -521,7 +547,12 @@ export function TasksPageContainer() {
     () => Array.from({ length: (TIMELINE_END_HOUR - TIMELINE_START_HOUR) + 1 }, (_, i) => TIMELINE_START_HOUR + i),
     []
   );
-  const timelineBodyHeight = useMemo(() => (TIMELINE_END_HOUR - TIMELINE_START_HOUR) * TIMELINE_HOUR_HEIGHT, []);
+  const visibleHourCount = TIMELINE_END_HOUR - TIMELINE_START_HOUR;
+  const timelineHourHeight = useMemo(
+    () => computeTimelineHourHeight(timelineAvailableHeight, visibleHourCount),
+    [timelineAvailableHeight, visibleHourCount]
+  );
+  const timelineBodyHeight = visibleHourCount * timelineHourHeight;
   const nowDay = useMemo(() => startOfDay(nowMarker), [nowMarker]);
   const nowMinuteOfDay = useMemo(() => (nowMarker.getHours() * 60) + nowMarker.getMinutes(), [nowMarker]);
 
@@ -585,33 +616,113 @@ export function TasksPageContainer() {
     }
   }, [todaySuggestionDecisionKey]);
 
-  // Load schedule calendar data when in schedule mode
   useEffect(() => {
-    if (sidebarMode !== "schedule") return;
-    let cancelled = false;
-    setScheduleLoading(true);
-    const fetchData = async () => {
-      try {
-        let startDate: string, endDate: string;
-        if (calendarMode === "month") {
-          const cells = buildMonthCells(monthCursor);
-          startDate = toDateKey(cells[0].date);
-          endDate = toDateKey(cells[cells.length - 1].date);
-        } else {
-          startDate = toDateKey(weekDays[0]);
-          endDate = toDateKey(weekDays[6]);
+    calendarStatusGenerationRef.current += 1;
+    calendarStatusMonthCacheRef.current.clear();
+    setCalendarRangeStatusMap(new Map());
+  }, [contextFilter]);
+
+  useEffect(() => {
+    if (!isLoading) return;
+    calendarStatusGenerationRef.current += 1;
+    calendarStatusMonthCacheRef.current.clear();
+    setCalendarRangeStatusMap(new Map());
+  }, [isLoading]);
+
+  useEffect(() => {
+    scheduleGenerationRef.current += 1;
+    scheduleMonthCacheRef.current.clear();
+    scheduleRequestCountRef.current = 0;
+    setScheduleLoading(false);
+    setScheduleDays([]);
+  }, [scheduleRefreshTick]);
+
+  // Fetch only the centered month and its neighbours (or the visible week),
+  // caching by month so the rendered stack can grow without repeat requests.
+  useEffect(() => {
+    if (sidebarMode !== "calendar" && sidebarMode !== "schedule") return;
+    if (sidebarMode === "calendar" && isLoading) return;
+
+    const timer = window.setTimeout(() => {
+      const requestedMonths = calendarMode === "month"
+      ? [-1, 0, 1].map((offset) => startOfMonth(addMonths(monthCursor, offset)))
+      : Array.from(new Map(weekDays.map((day) => {
+          const month = startOfMonth(day);
+          return [calendarMonthKey(month), month] as const;
+        })).values());
+      const cache = sidebarMode === "calendar" ? calendarStatusMonthCacheRef.current : scheduleMonthCacheRef.current;
+      const missingMonths = requestedMonths.filter((month) => !cache.has(calendarMonthKey(month)));
+      if (missingMonths.length === 0) return;
+      for (const month of missingMonths) cache.add(calendarMonthKey(month));
+
+      const generation = sidebarMode === "calendar"
+        ? calendarStatusGenerationRef.current
+        : scheduleGenerationRef.current;
+      if (sidebarMode === "schedule") {
+        scheduleRequestCountRef.current += 1;
+        setScheduleLoading(true);
+      }
+
+      const fetchMonth = async (month: Date) => {
+        const cells = buildMonthCells(month);
+        const startDate = toDateKey(cells[0].date);
+        const endDate = toDateKey(cells[cells.length - 1].date);
+        if (sidebarMode === "calendar") {
+          const days = await tasksApi.schedule(startDate, endDate, contextFilter || undefined);
+          return { month, startDate, endDate, scheduleDays: days as TaskScheduleDay[] };
         }
         const days = await tasksApi.scheduleCalendar(startDate, endDate);
-        if (!cancelled) setScheduleDays(days);
-      } catch (e) {
-        console.error("[Schedule] Failed to load schedule calendar", e);
-      } finally {
-        if (!cancelled) setScheduleLoading(false);
+        return { month, startDate, endDate, calendarDays: days };
+      };
+
+      void Promise.all(missingMonths.map(fetchMonth)).then((results) => {
+      if (sidebarMode === "calendar") {
+        if (calendarStatusGenerationRef.current !== generation) return;
+        setCalendarRangeStatusMap((previous) => {
+          const next = new Map(previous);
+          for (const result of results) {
+            for (const day of result.scheduleDays ?? []) {
+              const statuses = new Map<string, TaskStatus>();
+              for (const item of day.tasks) statuses.set(item.taskId, toTaskStatus(item.status));
+              next.set(day.date, statuses);
+            }
+          }
+          return next;
+        });
+      } else {
+        if (scheduleGenerationRef.current !== generation) return;
+        setScheduleDays((previous) => {
+          const byDate = new Map(previous.map((day) => [day.date, day]));
+          for (const result of results) {
+            for (const day of result.calendarDays ?? []) byDate.set(day.date, day);
+          }
+          return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
+        });
       }
-    };
-    void fetchData();
-    return () => { cancelled = true; };
-  }, [sidebarMode, calendarMode, monthCursor, weekDays, scheduleRefreshTick]);
+    }).catch((reason: unknown) => {
+      for (const month of missingMonths) cache.delete(calendarMonthKey(month));
+      console.error(`[${sidebarMode === "calendar" ? "Due Calendar" : "Schedule"}] Failed to load calendar range`, reason);
+      }).finally(() => {
+      if (sidebarMode === "schedule" && scheduleGenerationRef.current === generation) {
+        scheduleRequestCountRef.current = Math.max(0, scheduleRequestCountRef.current - 1);
+        setScheduleLoading(scheduleRequestCountRef.current > 0);
+      }
+      });
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [calendarMode, contextFilter, isLoading, monthCursor, scheduleRefreshTick, sidebarMode, weekDays]);
+
+  useLayoutEffect(() => {
+    if ((sidebarMode !== "calendar" && sidebarMode !== "schedule") || calendarMode !== "week") return;
+    const scrollElement = weekTimelineScrollRef.current;
+    if (!scrollElement) return;
+    const updateHeight = () => setTimelineAvailableHeight(scrollElement.clientHeight);
+    updateHeight();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(scrollElement);
+    return () => observer.disconnect();
+  }, [calendarMode, sidebarMode]);
 
   // Reset auto-scroll tracking when leaving week view
   useEffect(() => {
@@ -629,11 +740,11 @@ export function TasksPageContainer() {
     const startMinutes = TIMELINE_START_HOUR * 60;
     const endMinutes = TIMELINE_END_HOUR * 60;
     if (nowMinuteOfDay < startMinutes || nowMinuteOfDay > endMinutes) return;
-    const markerTop = ((nowMinuteOfDay - startMinutes) / 60) * TIMELINE_HOUR_HEIGHT;
+    const markerTop = ((nowMinuteOfDay - startMinutes) / 60) * timelineHourHeight;
     const target = Math.max(0, markerTop - (scrollElement.clientHeight * 0.35));
     scrollElement.scrollTop = target;
     autoScrolledWeekKeyRef.current = visibleWeekKey;
-  }, [calendarMode, nowMinuteOfDay, sidebarMode, visibleWeekKey]);
+  }, [calendarMode, nowMinuteOfDay, sidebarMode, timelineHourHeight, visibleWeekKey]);
 
   // Handle navigation from other pages with a task to open
   const openTaskIdHandledRef = useRef<string | null>(null);
@@ -652,18 +763,132 @@ export function TasksPageContainer() {
 
   // ── Navigation helpers ────────────────────────────────────────────────────
 
+  const setMonthElement = useCallback((key: string, element: HTMLElement | null) => {
+    if (element) monthElementRefs.current.set(key, element);
+    else monthElementRefs.current.delete(key);
+  }, []);
+
+  const updateCenteredMonth = useCallback(() => {
+    const container = monthScrollRef.current;
+    if (!container) return;
+    const containerRect = container.getBoundingClientRect();
+    const centerY = containerRect.top + (container.clientHeight / 2);
+    let closest: { element: HTMLElement; distance: number } | null = null;
+    for (const element of monthElementRefs.current.values()) {
+      const rect = element.getBoundingClientRect();
+      const distance = centerY < rect.top
+        ? rect.top - centerY
+        : centerY > rect.bottom
+          ? centerY - rect.bottom
+          : 0;
+      if (!closest || distance < closest.distance) closest = { element, distance };
+    }
+    const key = closest?.element.dataset.monthKey;
+    if (!key || key === calendarMonthKey(monthCursor)) return;
+    const [year, month] = key.split("-").map(Number);
+    setMonthCursor(new Date(year, month - 1, 1));
+  }, [monthCursor]);
+
+  const preserveMonthScrollAnchor = useCallback(() => {
+    const container = monthScrollRef.current;
+    if (!container) return;
+    const containerRect = container.getBoundingClientRect();
+    const centerY = containerRect.top + (container.clientHeight / 2);
+    let anchor: HTMLElement | null = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const element of monthElementRefs.current.values()) {
+      const rect = element.getBoundingClientRect();
+      const distance = Math.abs((rect.top + rect.bottom) / 2 - centerY);
+      if (distance < bestDistance) {
+        anchor = element;
+        bestDistance = distance;
+      }
+    }
+    const key = anchor?.dataset.monthKey;
+    if (anchor && key) monthScrollAnchorRef.current = { monthKey: key, top: anchor.getBoundingClientRect().top };
+  }, []);
+
+  const extendVisibleMonthWindow = useCallback((direction: "earlier" | "later") => {
+    if (monthWindowExtendingRef.current) return;
+    monthWindowExtendingRef.current = true;
+    preserveMonthScrollAnchor();
+    setMonthWindow((current) => extendMonthWindow(current, direction).months);
+  }, [preserveMonthScrollAnchor]);
+
+  const handleMonthScroll = useCallback(() => {
+    const container = monthScrollRef.current;
+    if (!container) return;
+    if (monthScrollFrameRef.current !== null) window.cancelAnimationFrame(monthScrollFrameRef.current);
+    monthScrollFrameRef.current = window.requestAnimationFrame(() => {
+      monthScrollFrameRef.current = null;
+      updateCenteredMonth();
+      const direction = monthWindowDirectionForScroll(container);
+      if (direction) extendVisibleMonthWindow(direction);
+    });
+  }, [extendVisibleMonthWindow, updateCenteredMonth]);
+
+  useLayoutEffect(() => {
+    if ((sidebarMode !== "calendar" && sidebarMode !== "schedule") || calendarMode !== "month") {
+      monthViewActivationRef.current = "";
+      return;
+    }
+    const container = monthScrollRef.current;
+    if (!container) return;
+
+    const anchor = monthScrollAnchorRef.current;
+    if (anchor) {
+      const element = monthElementRefs.current.get(anchor.monthKey);
+      if (element) container.scrollTop += element.getBoundingClientRect().top - anchor.top;
+      monthScrollAnchorRef.current = null;
+      monthWindowExtendingRef.current = false;
+      updateCenteredMonth();
+      return;
+    }
+
+    const pendingTarget = monthScrollTargetRef.current;
+    const activationKey = `${sidebarMode}:month`;
+    const targetKey = pendingTarget?.monthKey ?? calendarMonthKey(monthCursor);
+    if (pendingTarget || monthViewActivationRef.current !== activationKey) {
+      const element = monthElementRefs.current.get(targetKey);
+      if (element) {
+        container.scrollTo({ top: element.offsetTop, behavior: pendingTarget?.behavior ?? "auto" });
+        monthScrollTargetRef.current = null;
+        monthViewActivationRef.current = activationKey;
+      }
+    }
+  }, [calendarMode, monthCursor, monthWindow, sidebarMode, updateCenteredMonth]);
+
+  useEffect(() => () => {
+    if (monthScrollFrameRef.current !== null) window.cancelAnimationFrame(monthScrollFrameRef.current);
+  }, []);
+
+  const scrollToMonth = (target: Date, behavior: ScrollBehavior) => {
+    const normalizedTarget = startOfMonth(target);
+    const key = calendarMonthKey(normalizedTarget);
+    setMonthCursor(normalizedTarget);
+    const element = monthElementRefs.current.get(key);
+    const container = monthScrollRef.current;
+    if (element && container) {
+      container.scrollTo({ top: element.offsetTop, behavior });
+      return;
+    }
+    monthScrollTargetRef.current = { monthKey: key, behavior };
+    setMonthWindow(buildMonthWindow(normalizedTarget));
+  };
+
   const jumpToday = () => {
-    setMonthCursor(startOfMonth(new Date()));
+    if (calendarMode === "month") scrollToMonth(new Date(), "smooth");
+    else setMonthCursor(startOfMonth(new Date()));
     setWeekCursor(startOfWeek(new Date()));
   };
 
   const movePrevPeriod = () => {
-    if (calendarMode === "month") setMonthCursor((p) => addMonths(p, -1));
+    if (calendarMode === "month") scrollToMonth(addMonths(monthCursor, -1), "smooth");
     else setWeekCursor((p) => addDays(p, -7));
   };
 
   const moveNextPeriod = () => {
-    if (calendarMode === "month") setMonthCursor((p) => addMonths(p, 1));
+    if (calendarMode === "month") scrollToMonth(addMonths(monthCursor, 1), "smooth");
     else setWeekCursor((p) => addDays(p, 7));
   };
 
@@ -716,7 +941,10 @@ export function TasksPageContainer() {
       />
 
       {/* ── Center column ─────────────────────────────── */}
-      <div className="tasks-center" onScroll={handleCenterScroll}>
+      <div
+        className={sidebarMode === "calendar" || sidebarMode === "schedule" ? "tasks-center tasks-center-calendar" : "tasks-center"}
+        onScroll={handleCenterScroll}
+      >
         {/* Header */}
         <TasksCenterHeader
           sidebarMode={sidebarMode}
@@ -825,29 +1053,24 @@ export function TasksPageContainer() {
           /* ── Due Calendar ── */
           <section className="task-calendar-shell">
             {calendarMode === "month" ? (
-              <>
-                <div className="calendar-weekdays">{weekdays.map((d) => <span key={d}>{d}</span>)}</div>
-                <div className="calendar-month-grid">
-                  {monthCells.map((cell) => {
-                    const key = `${cell.date.getFullYear()}-${cell.date.getMonth()}-${cell.date.getDate()}`;
-                    const dayTasks = tasksByDate.get(key) || [];
-                    const isToday = isSameDay(cell.date, today);
-                    return (
-                      <div key={cell.key}
-                        className={["calendar-cell", !cell.inCurrentMonth ? "muted" : "", isToday ? "is-today" : ""].filter(Boolean).join(" ")}
-                        onClick={() => setDayDetailDate(cell.date)} style={{ cursor: "pointer" }}>
-                        <strong>{cell.date.getDate()}</strong>
-                        {dayTasks.slice(0, 3).map((t) => (
-                          <button key={t.id} type="button"
-                            className={`calendar-task-pill${t.status === "done" ? " done" : ""}`}
-                            onClick={(e) => { e.stopPropagation(); selectTask(t, t.status, toDateKey(cell.date)); }}>{t.title}</button>
-                        ))}
-                        {dayTasks.length > 3 && <small style={{ color: "#6b7280", fontSize: "0.62rem" }}>+{dayTasks.length - 3}</small>}
-                      </div>
-                    );
-                  })}
-                </div>
-              </>
+              <div ref={monthScrollRef} className="calendar-month-scroll" onScroll={handleMonthScroll}>
+                {monthWindow.map((month) => (
+                  <CalendarMonthGrid
+                    key={calendarMonthKey(month)}
+                    monthCursor={month}
+                    mode="due"
+                    today={today}
+                    filteredTasks={filteredTasks}
+                    calendarStatusMap={effectiveCalendarStatusMap}
+                    scheduleItemsByDate={filteredScheduleItemsByDate}
+                    tasksById={tasksById}
+                    setMonthElement={setMonthElement}
+                    onOpenDayDetail={setDayDetailDate}
+                    onSelectDueTask={(task, date) => selectTask(task, task.status, toDateKey(date))}
+                    onSelectScheduleItem={() => undefined}
+                  />
+                ))}
+              </div>
             ) : (
               /* Week timeline */
               <div className="calendar-week-timeline">
@@ -881,20 +1104,20 @@ export function TasksPageContainer() {
                   <div className="calendar-week-grid">
                     <div className="calendar-week-time-axis" style={{ height: timelineBodyHeight }}>
                       {timelineHours.map((hour) => (
-                        <span key={`time-${hour}`} className="calendar-week-time-label" style={{ top: (hour - TIMELINE_START_HOUR) * TIMELINE_HOUR_HEIGHT }}>{hourLabel(hour)}</span>
+                        <span key={`time-${hour}`} className="calendar-week-time-label" style={{ top: (hour - TIMELINE_START_HOUR) * timelineHourHeight }}>{hourLabel(hour)}</span>
                       ))}
                     </div>
                     {weekDays.map((day) => {
                       const key = `${day.getFullYear()}-${day.getMonth()}-${day.getDate()}`;
                       const timedTasks = (tasksByDate.get(key) || []).filter((t) => t.startTime || t.endTime);
-                      const laidOut = layoutTimedItems(timedTasks.map((t) => ({ ...t, task: t })));
+                      const laidOut = layoutTimedItems(timedTasks.map((t) => ({ ...t, task: t })), timelineHourHeight);
                       const isCurrentDay = isSameDay(day, nowDay);
                       const showNowLine = isCurrentDay && nowMinuteOfDay >= TIMELINE_START_HOUR * 60 && nowMinuteOfDay <= TIMELINE_END_HOUR * 60;
-                      const nowLineTop = ((nowMinuteOfDay - TIMELINE_START_HOUR * 60) / 60) * TIMELINE_HOUR_HEIGHT;
+                      const nowLineTop = ((nowMinuteOfDay - TIMELINE_START_HOUR * 60) / 60) * timelineHourHeight;
                       return (
                         <div key={`col-${day.toISOString()}`} className="calendar-week-day-column" style={{ height: timelineBodyHeight }}>
                           {timelineHours.map((hour) => (
-                            <span key={`line-${hour}`} className="calendar-week-hour-line" style={{ top: (hour - TIMELINE_START_HOUR) * TIMELINE_HOUR_HEIGHT }} />
+                            <span key={`line-${hour}`} className="calendar-week-hour-line" style={{ top: (hour - TIMELINE_START_HOUR) * timelineHourHeight }} />
                           ))}
                           {showNowLine && <span className="calendar-week-now-line" style={{ top: nowLineTop }} />}
                           {laidOut.map((event, idx) => {
@@ -927,36 +1150,26 @@ export function TasksPageContainer() {
           /* ── Schedule view ── */
           <section className="task-calendar-shell">
             {scheduleLoading && <div className="calendar-empty-hint"><p>Loading schedule…</p></div>}
-            {!scheduleLoading && calendarMode === "month" ? (
-              <>
-                <div className="calendar-weekdays">{weekdays.map((d) => <span key={d}>{d}</span>)}</div>
-                <div className="calendar-month-grid">
-                  {monthCells.map((cell) => {
-                    const dateKey = toDateKey(cell.date);
-                    const dayItems = filteredScheduleItemsByDate.get(dateKey) || [];
-                    const isTodayCell = isSameDay(cell.date, today);
-                    return (
-                      <div key={cell.key} className={["calendar-cell", !cell.inCurrentMonth ? "muted" : "", isTodayCell ? "is-today" : ""].filter(Boolean).join(" ")}>
-                        <strong>{cell.date.getDate()}</strong>
-                        {dayItems.slice(0, 3).map((item) => {
-                          const fullTask = tasks.find((t) => t.id === item.taskId);
-                          return (
-                            <button key={`${item.scheduleId ?? "auto"}::${item.occurrenceDate}::${item.taskId}`} type="button"
-                              className={`calendar-task-pill${item.status === "done" ? " done" : ""}`}
-                              onClick={() => { if (fullTask) selectTask(fullTask, item.status as TaskStatus, item.occurrenceDate, item.scheduleId, item.scheduledDate); }}
-                              title={item.startTime ? `${item.startTime}${item.endTime ? `–${item.endTime}` : ""} ${item.title}` : item.title}>
-                              {item.startTime ? <span className="schedule-pill-time">{item.startTime}</span> : null}
-                              {item.title}
-                            </button>
-                          );
-                        })}
-                        {dayItems.length > 3 && <small style={{ color: "#6b7280", fontSize: "0.62rem" }}>+{dayItems.length - 3}</small>}
-                      </div>
-                    );
-                  })}
-                </div>
-              </>
-            ) : !scheduleLoading ? (
+            {calendarMode === "month" ? (
+              <div ref={monthScrollRef} className="calendar-month-scroll" onScroll={handleMonthScroll}>
+                {monthWindow.map((month) => (
+                  <CalendarMonthGrid
+                    key={calendarMonthKey(month)}
+                    monthCursor={month}
+                    mode="schedule"
+                    today={today}
+                    filteredTasks={filteredTasks}
+                    calendarStatusMap={effectiveCalendarStatusMap}
+                    scheduleItemsByDate={filteredScheduleItemsByDate}
+                    tasksById={tasksById}
+                    setMonthElement={setMonthElement}
+                    onOpenDayDetail={() => undefined}
+                    onSelectDueTask={() => undefined}
+                    onSelectScheduleItem={(item, task) => selectTask(task, item.status as TaskStatus, item.occurrenceDate, item.scheduleId, item.scheduledDate)}
+                  />
+                ))}
+              </div>
+            ) : (
               /* Schedule week timeline */
               <div className="calendar-week-timeline">
                 <div className="calendar-week-timeline-head">
@@ -972,21 +1185,21 @@ export function TasksPageContainer() {
                   <div className="calendar-week-grid">
                     <div className="calendar-week-time-axis" style={{ height: timelineBodyHeight }}>
                       {timelineHours.map((hour) => (
-                        <span key={`sched-time-${hour}`} className="calendar-week-time-label" style={{ top: (hour - TIMELINE_START_HOUR) * TIMELINE_HOUR_HEIGHT }}>{hourLabel(hour)}</span>
+                        <span key={`sched-time-${hour}`} className="calendar-week-time-label" style={{ top: (hour - TIMELINE_START_HOUR) * timelineHourHeight }}>{hourLabel(hour)}</span>
                       ))}
                     </div>
                     {weekDays.map((day) => {
                       const dateKey = toDateKey(day);
                       const dayItems = filteredScheduleItemsByDate.get(dateKey) || [];
                       const timedItems = dayItems.filter((i) => i.startTime || i.endTime);
-                      const laidOut = layoutTimedItems(timedItems);
+                      const laidOut = layoutTimedItems(timedItems, timelineHourHeight);
                       const isCurrentDay = isSameDay(day, nowDay);
                       const showNowLine = isCurrentDay && nowMinuteOfDay >= TIMELINE_START_HOUR * 60 && nowMinuteOfDay <= TIMELINE_END_HOUR * 60;
-                      const nowLineTop = ((nowMinuteOfDay - TIMELINE_START_HOUR * 60) / 60) * TIMELINE_HOUR_HEIGHT;
+                      const nowLineTop = ((nowMinuteOfDay - TIMELINE_START_HOUR * 60) / 60) * timelineHourHeight;
                       return (
                         <div key={`sched-col-${day.toISOString()}`} className="calendar-week-day-column" style={{ height: timelineBodyHeight }}>
                           {timelineHours.map((hour) => (
-                            <span key={`sched-line-${hour}`} className="calendar-week-hour-line" style={{ top: (hour - TIMELINE_START_HOUR) * TIMELINE_HOUR_HEIGHT }} />
+                            <span key={`sched-line-${hour}`} className="calendar-week-hour-line" style={{ top: (hour - TIMELINE_START_HOUR) * timelineHourHeight }} />
                           ))}
                           {showNowLine && <span className="calendar-week-now-line" style={{ top: nowLineTop }} />}
                           {laidOut.map((event, idx) => {
@@ -1011,7 +1224,7 @@ export function TasksPageContainer() {
                   </div>
                 </div>
               </div>
-            ) : null}
+            )}
           </section>
         )}
 
