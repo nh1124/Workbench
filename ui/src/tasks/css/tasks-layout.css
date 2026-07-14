@@ -153,6 +153,10 @@
 .tasks-center-head-calendar { border-bottom: 1px solid var(--line); padding-bottom: 0.55rem; margin-bottom: 0.55rem; }
 
 .tasks-head-actions { display: flex; align-items: center; gap: 0.35rem; }
+.tasks-head-actions.standalone { flex: 1 1 auto; min-width: 0; }
+.tasks-head-actions.standalone .calendar-kind-toggle { margin-left: auto; flex-shrink: 0; }
+.tasks-center-head-day .calendar-nav-cluster { min-width: 0; }
+.tasks-center-head-day .calendar-nav-cluster strong { white-space: nowrap; }
 .tasks-head-actions .icon-button {
   border: 0;
   background: transparent;

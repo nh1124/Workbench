@@ -1,12 +1,14 @@
-import { toDateKey } from "../../lib/taskDateUtils";
+import { addDays, parseDateOnly, startOfDay, toDateKey } from "../../lib/taskDateUtils";
 import { normalizeDateKey } from "./taskOccurrenceIdentity";
 
-export type StandaloneCalendarKind = "today" | "due" | "schedule";
+export type StandaloneCalendarKind = "day" | "due" | "schedule";
+export type StandaloneCalendarKindInput = StandaloneCalendarKind | "today";
 export type StandaloneCalendarView = "month" | "week";
 
 export interface StandaloneCalendarOptions {
   calendar: StandaloneCalendarKind;
   view: StandaloneCalendarView;
+  date: string;
 }
 
 export interface TimelineDragRange {
@@ -25,26 +27,41 @@ export interface MonthCellContextPayload {
 }
 
 export function buildStandaloneCalendarUrl(
-  calendar?: StandaloneCalendarKind,
-  view: StandaloneCalendarView = "month"
+  calendar?: StandaloneCalendarKindInput,
+  view: StandaloneCalendarView = "month",
+  date?: string
 ): string {
   if (!calendar) return "/tasks/calendar";
-  if (calendar === "today") return "/tasks/calendar?calendar=today";
+  if (calendar === "day" || calendar === "today") {
+    const params = new URLSearchParams({ calendar: "day" });
+    const normalizedDate = normalizeDateKey(date);
+    if (normalizedDate) params.set("date", normalizedDate);
+    return `/tasks/calendar?${params.toString()}`;
+  }
   const params = new URLSearchParams({ calendar, view });
   return `/tasks/calendar?${params.toString()}`;
 }
 
 export function resolveStandaloneCalendarOptions(
-  params: URLSearchParams
+  params: URLSearchParams,
+  now = new Date()
 ): StandaloneCalendarOptions {
   const calendarParam = params.get("calendar");
   const calendar: StandaloneCalendarKind = calendarParam === "due" || calendarParam === "schedule"
     ? calendarParam
-    : "today";
-  const view: StandaloneCalendarView = calendar !== "today" && params.get("view") === "week"
+    : "day";
+  const view: StandaloneCalendarView = calendar !== "day" && params.get("view") === "week"
     ? "week"
     : "month";
-  return { calendar, view };
+  const date = normalizeDateKey(params.get("date")) ?? toDateKey(startOfDay(now));
+  return { calendar, view, date };
+}
+
+export function moveStandaloneDayDate(dateKey: string, offsetDays: number): string {
+  const normalizedDate = normalizeDateKey(dateKey);
+  const date = normalizedDate ? parseDateOnly(normalizedDate) : null;
+  if (!date) throw new Error("Standalone day date must be a valid date key");
+  return toDateKey(addDays(date, offsetDays));
 }
 
 export function buildMonthCellContextPayload(

@@ -7,7 +7,7 @@ import type { CalendarMode, SidebarMode } from "../tasks/types";
 export function TasksCalendarWindowPage() {
   const [searchParams] = useSearchParams();
   const options = resolveStandaloneCalendarOptions(searchParams);
-  const initialSidebarMode: SidebarMode = options.calendar === "today"
+  const initialSidebarMode: SidebarMode = options.calendar === "day"
     ? "list"
     : options.calendar === "due" ? "calendar" : "schedule";
   const initialCalendarMode: CalendarMode = options.view;
@@ -25,6 +25,7 @@ export function TasksCalendarWindowPage() {
       standalone
       initialSidebarMode={initialSidebarMode}
       initialCalendarMode={initialCalendarMode}
+      initialDayDate={options.date}
     />
   );
 }

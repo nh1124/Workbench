@@ -20,6 +20,24 @@ function makeTask(overrides: Partial<Task> & { id: string }): Task {
 }
 
 describe("buildTodayRows", () => {
+  it("uses the requested Day key for generated rows instead of the current date", () => {
+    const displayedDate = "2026-08-03";
+    const recurring = makeTask({ id: "recurring", recurrence: "WEEKLY" });
+    const schedule: TaskScheduleDay[] = [{
+      date: displayedDate,
+      tasks: [{ taskId: recurring.id, title: recurring.title, context: recurring.context, status: "todo" }]
+    }];
+
+    const result = buildTodayRows([recurring], [], schedule, displayedDate);
+
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]).toMatchObject({
+      date: displayedDate,
+      occurrenceDate: displayedDate,
+      scheduledDate: displayedDate,
+    });
+  });
+
   it("merges explicit and generated occurrences, deduping by task and occurrence date", () => {
     const todayKey = "2026-07-13";
     const explicit = {

@@ -32,13 +32,14 @@ describe("TasksCalendarWindowPage standalone mode", () => {
     cleanup();
   });
 
-  it("defaults the bare route to the Today list", () => {
+  it("defaults the bare route to the Day list", () => {
     renderStandaloneRoute("/tasks/calendar");
 
     expect(containerProps).toHaveBeenLastCalledWith({
       standalone: true,
       initialSidebarMode: "list",
       initialCalendarMode: "month",
+      initialDayDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
     });
     expect(document.title).toBe("Workbench Tasks");
   });
@@ -52,6 +53,16 @@ describe("TasksCalendarWindowPage standalone mode", () => {
     }));
   });
 
+  it("passes an explicit Day date to the container", () => {
+    renderStandaloneRoute("/tasks/calendar?calendar=day&date=2026-07-18");
+
+    expect(containerProps).toHaveBeenLastCalledWith(expect.objectContaining({
+      initialSidebarMode: "list",
+      initialCalendarMode: "month",
+      initialDayDate: "2026-07-18",
+    }));
+  });
+
   it("resolves an explicit Schedule month calendar", () => {
     renderStandaloneRoute("/tasks/calendar?calendar=schedule&view=month");
 
@@ -61,12 +72,13 @@ describe("TasksCalendarWindowPage standalone mode", () => {
     }));
   });
 
-  it("ignores view for an explicit Today route", () => {
-    renderStandaloneRoute("/tasks/calendar?calendar=today&view=week");
+  it("accepts Today as a Day alias and ignores its view", () => {
+    renderStandaloneRoute("/tasks/calendar?calendar=today&view=week&date=2026-07-19");
 
     expect(containerProps).toHaveBeenLastCalledWith(expect.objectContaining({
       initialSidebarMode: "list",
       initialCalendarMode: "month",
+      initialDayDate: "2026-07-19",
     }));
   });
 });
