@@ -37,6 +37,8 @@ Last updated: 2026-07-13（ユーザー確認済みの決定を反映）
 1. **楽観的更新**: occurrence 系 mutation は即時 UI 反映・失敗時ロールバック（実装済み）。
 2. **SSE**: core に `GET /api/sync/events`（Server-Sent Events, JWT 認証）を追加。既存の `recordSyncEventBestEffort` の書き込みをストリーム配信する。UI は接続し、`tasks` ドメインのイベント受信で該当データを**デバウンス付き差分 refetch**（全 load ではなく tasks/today/schedule の必要部分）。切断時は指数バックオフで再接続、フォールバックは 60s ポーリング。
 3. **操作後リロード**: mutation 成功後の reconcile は維持（SSE 到達とどちらか早い方。二重 refetch はデバウンスで吸収）。
+4. **サイレント更新（2026-07-14 追加）**: 明示的な loading 表示は初回ロードとフィルタ/コンテキスト変更時のみ。reconcile・SSE 起因の再取得は**サイレント**（既存表示を維持したままデータ差し替え）で行い、連続 mutation の reconcile は単一のトレーリング・スケジューラに統合する（N 回連続 done でもリロードは末尾 1 回）。
+5. **完了時の即時除去（2026-07-14 追加）**: Overdue / Planned ビューでは done 化した行は楽観的更新の時点で即座にリストから消える（描画時フィルタ）。リロードを待たない。
 
 ## 5. ルーティング規律（split-brain 防止）
 

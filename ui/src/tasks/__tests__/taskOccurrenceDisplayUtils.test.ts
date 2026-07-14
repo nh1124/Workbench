@@ -10,6 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  filterOccurrenceRowsForQuickFilter,
   groupOccurrencesByProject,
   sortOccurrenceRows,
 } from "../lib/taskOccurrenceDisplayUtils";
@@ -45,6 +46,22 @@ function makeTask(overrides: Partial<Task> & { id: string }): Task {
     ...overrides,
   };
 }
+
+describe("filterOccurrenceRowsForQuickFilter", () => {
+  const rows = [
+    makeRow({ key: "todo", taskId: "todo", status: "todo" }),
+    makeRow({ key: "done", taskId: "done", status: "done" }),
+    makeRow({ key: "skipped", taskId: "skipped", status: "skipped" }),
+  ];
+
+  it.each(["planned", "overdue"] as const)("immediately excludes terminal rows from %s", (filter) => {
+    expect(filterOccurrenceRowsForQuickFilter(rows, filter).map((row) => row.key)).toEqual(["todo"]);
+  });
+
+  it.each(["today", "myday", "inbox"] as const)("keeps existing grouping rows for %s", (filter) => {
+    expect(filterOccurrenceRowsForQuickFilter(rows, filter)).toBe(rows);
+  });
+});
 
 // ─── sortOccurrenceRows ───────────────────────────────────────────────────────
 

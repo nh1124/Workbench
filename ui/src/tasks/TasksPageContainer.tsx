@@ -16,7 +16,7 @@ import {
 import { useLocation } from "react-router-dom";
 import { openCalendarWindow, readWorkbenchSession, tasksApi } from "../lib/api";
 import { pushErrorNotification } from "../lib/notificationService";
-import { createDebouncedCallback, subscribeSyncEvents } from "../lib/syncEvents";
+import { subscribeSyncEvents } from "../lib/syncEvents";
 import {
   buildMonthCells,
   contextColor,
@@ -40,7 +40,11 @@ import { useTaskDataLoader } from "./hooks/useTaskDataLoader";
 import { useTaskMutations } from "./hooks/useTaskMutations";
 import { useTaskSelection } from "./hooks/useTaskSelection";
 import { filterAndSortTasks, computeTaskCounters } from "./lib/taskFilterUtils";
-import { sortOccurrenceRows, groupOccurrencesByProject } from "./lib/taskOccurrenceDisplayUtils";
+import {
+  filterOccurrenceRowsForQuickFilter,
+  sortOccurrenceRows,
+  groupOccurrencesByProject
+} from "./lib/taskOccurrenceDisplayUtils";
 import { normalizeDateKey, rowOccurrenceDate, rowScheduledDate } from "./lib/taskOccurrenceIdentity";
 import {
   buildMonthCellContextPayload,
@@ -177,7 +181,7 @@ export function TasksPageContainer({
     plannedCount, overdueCount,
     calendarStatusMap,
     isLoading, error,
-    load,
+    load, isLoadInFlight,
     setTasks, setProjectOptions,
     setTodayRows, setTodayMembershipKeys,
     setInboxUpcomingRows, setInboxDoneRows,
@@ -185,8 +189,6 @@ export function TasksPageContainer({
     setSelectedTaskId(null);
     setSelectedOccurrenceDate(null);
   });
-  const syncLoadRef = useRef(load);
-  const syncLoadPendingRef = useRef(isLoading);
 
   // ── Occurrence paging hook ────────────────────────────────────────────────
   const {
@@ -194,12 +196,11 @@ export function TasksPageContainer({
     occurrenceLoading,
     occurrenceHasMore,
     occurrenceRowsOrdered,
-    occurrenceDateGroups,
-    occurrenceOrderedKeys,
-    loadOccurrencePage,
+    loadOccurrencePage, isOccurrenceLoadInFlight,
     resetOccurrences,
     setOccurrenceRows,
   } = useOccurrencePaging(contextFilter);
+  const backgroundRefreshActionRef = useRef<() => Promise<void>>(async () => {});
 
   // Reload occurrence page when quick filter switches to planned/overdue
   useEffect(() => {
@@ -237,15 +238,9 @@ export function TasksPageContainer({
       onSelectTask: (task, occurrenceStatus, occurrenceDate) => {
         selectTask(task, occurrenceStatus, occurrenceDate);
       },
-      onReload: load,
-      onReloadOccurrences: async (filter) => {
-        if (filter === "planned" || filter === "overdue") {
-          resetOccurrences();
-          await loadOccurrencePage(filter, true);
-        } else {
-          await load();
-        }
-      },
+      onReload: async () => { await load({ silent: true }); },
+      onBackgroundRefresh: () => backgroundRefreshActionRef.current(),
+      isBackgroundRefreshBlocked: () => isLoadInFlight() || isOccurrenceLoadInFlight(),
       quickFilter,
       projectOptions,
       contextFilter,
@@ -312,7 +307,26 @@ export function TasksPageContainer({
     loadAttachments,
     loadSubtasks,
     loadScheduleItem,
+    scheduleBackgroundRefresh,
+    hasOccurrenceMutationsInFlight,
   } = mutations;
+
+  backgroundRefreshActionRef.current = async () => {
+    const shouldApply = () => !hasOccurrenceMutationsInFlight();
+    const primaryApplied = await load({ silent: true, shouldApply });
+    if (!primaryApplied) {
+      if (hasOccurrenceMutationsInFlight() || isLoadInFlight()) scheduleBackgroundRefresh();
+      return;
+    }
+    if (quickFilter !== "planned" && quickFilter !== "overdue") return;
+    const occurrencesApplied = await loadOccurrencePage(quickFilter, true, {
+      silent: true,
+      shouldApply,
+    });
+    if (!occurrencesApplied && (hasOccurrenceMutationsInFlight() || isOccurrenceLoadInFlight())) {
+      scheduleBackgroundRefresh();
+    }
+  };
 
   // Keep draftRef current every render (avoids stale closures in applyAndSave)
   draftRef.current = draft;
@@ -376,7 +390,7 @@ export function TasksPageContainer({
   // ── Wrapper closures for multi-arg hook functions ─────────────────────────
 
   const handleOccurrenceClick = (event: ReactMouseEvent<HTMLButtonElement>, row: TaskOccurrenceRow) => {
-    _handleOccClick(event, row, occurrenceOrderedKeys, (r) => {
+    _handleOccClick(event, row, activeOccurrenceRows.map((item) => item.key), (r) => {
       const task = tasks.find((t) => t.id === r.taskId);
       if (task) selectTask(task, r.status, rowOccurrenceDate(r), r.scheduleId, rowScheduledDate(r));
     });
@@ -414,7 +428,7 @@ export function TasksPageContainer({
 
   const handleSkipSelectedTasks = async () => {
     const rows = getSelectedOccurrenceRows(activeOccurrenceRows);
-    await _handleSkipSelected(rows, closeMenu);
+    await _handleSkipSelected(rows, occurrenceCollections, occurrenceCollectionSetters, closeMenu);
   };
 
   const handleConfirmMoveDate = async () => {
@@ -461,7 +475,7 @@ export function TasksPageContainer({
     try {
       const uniqueTaskIds = Array.from(new Set(dueTodayOutsideTodayTasks.map((task) => task.id)));
       await Promise.all(uniqueTaskIds.map((taskId) => tasksApi.addToToday(taskId, todayKey, todayKey)));
-      await load();
+      await load({ silent: true });
     } catch {
       pushErrorNotification("Failed to add due-today tasks to Today.");
     } finally {
@@ -534,13 +548,21 @@ export function TasksPageContainer({
     if (quickFilter === "today") return todayOccurrenceRowsOrdered;
     if (quickFilter === "myday") return mydayOccurrenceRowsOrdered;
     if (quickFilter === "inbox") return [...inboxUpcomingRows, ...inboxDoneRows];
-    return occurrenceRowsOrdered;
+    return filterOccurrenceRowsForQuickFilter(occurrenceRowsOrdered, quickFilter);
   }, [quickFilter, todayOccurrenceRowsOrdered, mydayOccurrenceRowsOrdered, occurrenceRowsOrdered, inboxUpcomingRows, inboxDoneRows]);
 
   const occurrenceProjectGroups = useMemo(
-    () => groupOccurrencesByProject(occurrenceRowsOrdered, tasks, projectNameMap),
-    [occurrenceRowsOrdered, tasks, projectNameMap]
+    () => groupOccurrencesByProject(activeOccurrenceRows, tasks, projectNameMap),
+    [activeOccurrenceRows, tasks, projectNameMap]
   );
+
+  const activeOccurrenceDateGroups = useMemo(() => {
+    const groups = new Map<string, TaskOccurrenceRow[]>();
+    for (const row of activeOccurrenceRows) {
+      groups.set(row.date, [...(groups.get(row.date) ?? []), row]);
+    }
+    return Array.from(groups.entries()).map(([date, rows]) => ({ date, rows }));
+  }, [activeOccurrenceRows]);
 
   const weekDays = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekCursor, i)), [weekCursor]);
 
@@ -616,24 +638,8 @@ export function TasksPageContainer({
   // ── Effects ───────────────────────────────────────────────────────────────
 
   useEffect(() => {
-    syncLoadRef.current = load;
-    syncLoadPendingRef.current = isLoading;
-  }, [isLoading, load]);
-
-  useEffect(() => {
-    const debouncedReload = createDebouncedCallback(() => {
-      if (syncLoadPendingRef.current) {
-        debouncedReload.schedule();
-        return;
-      }
-      void syncLoadRef.current();
-    }, 500);
-    const unsubscribe = subscribeSyncEvents(["tasks"], () => debouncedReload.schedule());
-    return () => {
-      unsubscribe();
-      debouncedReload.cancel();
-    };
-  }, []);
+    return subscribeSyncEvents(["tasks"], scheduleBackgroundRefresh);
+  }, [scheduleBackgroundRefresh]);
 
   // Initial + context-filter reload
   useEffect(() => {
@@ -643,11 +649,7 @@ export function TasksPageContainer({
   useEffect(() => {
     if (dayBoundaryKeyRef.current === todayKey) return;
     dayBoundaryKeyRef.current = todayKey;
-    void load();
-    if (quickFilter === "planned" || quickFilter === "overdue") {
-      resetOccurrences();
-      void loadOccurrencePage(quickFilter, true);
-    }
+    scheduleBackgroundRefresh();
     setScheduleRefreshTick((n) => n + 1);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [todayKey]);
@@ -1154,7 +1156,7 @@ export function TasksPageContainer({
           onJumpToday={jumpToday}
           onMoveNextPeriod={moveNextPeriod}
           onSetCalendarMode={setCalendarMode}
-          onRefreshList={() => { void load(); }}
+          onRefreshList={() => { void load({ silent: true }); }}
           onRefreshSchedule={() => setScheduleRefreshTick((n) => n + 1)}
           sortMode={sortMode}
           onSetSortMode={setSortMode}
@@ -1212,7 +1214,7 @@ export function TasksPageContainer({
               todayCompletedOpen={todayCompletedOpen}
               setTodayCompletedOpen={setTodayCompletedOpen}
               occurrenceProjectGroups={occurrenceProjectGroups}
-              occurrenceDateGroups={occurrenceDateGroups}
+              occurrenceDateGroups={activeOccurrenceDateGroups}
               occurrenceLoading={occurrenceLoading}
               resolveContextDisplayName={resolveContextDisplayName}
               renderOccurrenceRow={renderOccurrenceRow}
@@ -1348,7 +1350,7 @@ export function TasksPageContainer({
                 </div>
               </div>
             )}
-            {isAuthError && <div className="calendar-state-card"><h4>Sign in required</h4><p>Sign in to view your tasks calendar.</p><button type="button" onClick={() => void load()}>Retry</button></div>}
+            {isAuthError && <div className="calendar-state-card"><h4>Sign in required</h4><p>Sign in to view your tasks calendar.</p><button type="button" onClick={() => void load({ silent: true })}>Retry</button></div>}
             {!isLoading && !isAuthError && !hasTasksInVisiblePeriod && <div className="calendar-empty-hint"><p>No tasks scheduled for this period.</p></div>}
           </section>
 

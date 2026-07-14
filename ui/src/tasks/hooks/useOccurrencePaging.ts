@@ -5,7 +5,7 @@
  * logic that lived in TasksPage.tsx.
  */
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { tasksApi } from "../../lib/api";
 import { addDays, startOfDay, toDateKey } from "../../lib/taskDateUtils";
 import type { TaskOccurrenceRow } from "../types";
@@ -108,10 +108,18 @@ export interface OccurrencePagingState {
 export interface OccurrencePagingActions {
   loadOccurrencePage: (
     mode: "planned" | "overdue",
-    reset?: boolean
-  ) => Promise<void>;
+    reset?: boolean,
+    options?: OccurrencePageLoadOptions
+  ) => Promise<boolean>;
+  isOccurrenceLoadInFlight: () => boolean;
   resetOccurrences: () => void;
   setOccurrenceRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>;
+}
+
+export interface OccurrencePageLoadOptions {
+  silent?: boolean;
+  /** Rechecked immediately before a silent response is committed. */
+  shouldApply?: () => boolean;
 }
 
 export function useOccurrencePaging(
@@ -121,6 +129,9 @@ export function useOccurrencePaging(
   const [occurrenceCursorDate, setOccurrenceCursorDate] = useState<Date | null>(null);
   const [occurrenceLoading, setOccurrenceLoading] = useState(false);
   const [occurrenceHasMore, setOccurrenceHasMore] = useState(true);
+  const occurrenceLoadInFlightCountRef = useRef(0);
+  const visibleOccurrenceLoadCountRef = useRef(0);
+  const occurrenceLoadSequenceRef = useRef(0);
 
   const resetOccurrences = () => {
     setOccurrenceRows([]);
@@ -130,11 +141,18 @@ export function useOccurrencePaging(
 
   const loadOccurrencePage = async (
     mode: "planned" | "overdue",
-    reset = false
+    reset = false,
+    options: OccurrencePageLoadOptions = {}
   ) => {
-    if (occurrenceLoading) return;
-    if (!reset && !occurrenceHasMore) return;
-    setOccurrenceLoading(true);
+    if (!reset && occurrenceLoadInFlightCountRef.current > 0) return false;
+    if (!reset && !occurrenceHasMore) return false;
+    const silent = options.silent === true;
+    const requestId = ++occurrenceLoadSequenceRef.current;
+    occurrenceLoadInFlightCountRef.current += 1;
+    if (!silent) {
+      visibleOccurrenceLoadCountRef.current += 1;
+      setOccurrenceLoading(true);
+    }
     try {
       const todayDate = startOfDay(new Date());
       const todayKey = toDateKey(todayDate);
@@ -175,6 +193,9 @@ export function useOccurrencePaging(
           : addDays(startDate, -1);
       const withinHorizon = computeOccurrenceHasMore(mode, todayDate, nextCursor);
 
+      if (requestId !== occurrenceLoadSequenceRef.current) return false;
+      if (silent && options.shouldApply && !options.shouldApply()) return false;
+
       if (reset) {
         setOccurrenceRows(rows);
       } else {
@@ -194,10 +215,18 @@ export function useOccurrencePaging(
       // Keep paging even when a window has no rows.
       // Planned/Overdue can be sparse, so an empty page is not the end signal.
       setOccurrenceHasMore(withinHorizon);
+      return true;
     } catch {
-      setOccurrenceHasMore(false);
+      if (requestId === occurrenceLoadSequenceRef.current && !silent) {
+        setOccurrenceHasMore(false);
+      }
+      return false;
     } finally {
-      setOccurrenceLoading(false);
+      occurrenceLoadInFlightCountRef.current = Math.max(0, occurrenceLoadInFlightCountRef.current - 1);
+      if (!silent) {
+        visibleOccurrenceLoadCountRef.current = Math.max(0, visibleOccurrenceLoadCountRef.current - 1);
+        if (visibleOccurrenceLoadCountRef.current === 0) setOccurrenceLoading(false);
+      }
     }
   };
 
@@ -237,6 +266,7 @@ export function useOccurrencePaging(
     occurrenceDateGroups,
     occurrenceOrderedKeys,
     loadOccurrencePage,
+    isOccurrenceLoadInFlight: () => occurrenceLoadInFlightCountRef.current > 0,
     resetOccurrences,
     setOccurrenceRows
   };

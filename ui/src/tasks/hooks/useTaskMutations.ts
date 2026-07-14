@@ -7,7 +7,7 @@
  * Behavior is identical to the handlers that lived in TasksPage.tsx.
  */
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { formatApiErrorMessage, projectsApi, taskAttachmentsApi, taskSubtasksApi, tasksApi } from "../../lib/api";
 import { pushErrorNotification } from "../../lib/notificationService";
 import { startOfDay, toDateKey } from "../../lib/taskDateUtils";
@@ -26,6 +26,10 @@ import {
   type TaskOccurrenceCollections,
   type TaskOccurrenceCollectionSetters
 } from "../lib/taskOccurrenceStatusMutation";
+import {
+  createBackgroundRefreshScheduler,
+  type BackgroundRefreshScheduler
+} from "../lib/backgroundRefreshScheduler";
 import {
   emptyDraft,
   taskToDraft,
@@ -60,8 +64,10 @@ export interface TaskMutationsProps {
   onSelectTask: (task: Task, occurrenceStatus?: import("../../types/models").TaskStatus, occurrenceDate?: string) => void;
   /** Called after any mutation that needs a full data reload. */
   onReload: () => Promise<void>;
-  /** Called when planned/overdue paging should be reset after a mutation. */
-  onReloadOccurrences: (filter: QuickFilter) => Promise<void>;
+  /** Runs the shared silent primary + occurrence reconciliation. */
+  onBackgroundRefresh: () => Promise<void>;
+  /** Prevents background work from overlapping another loader. */
+  isBackgroundRefreshBlocked: () => boolean;
   /** Currently active quick filter (used to decide if occurrence paging refresh needed). */
   quickFilter: QuickFilter;
   /** Current list of project options (used in add-task context resolution). */
@@ -140,6 +146,8 @@ export interface TaskMutationsActions {
   ) => Promise<void>;
   handleSkipSelectedTasks: (
     selectedRows: TaskOccurrenceRow[],
+    current: TaskOccurrenceCollections,
+    setters: TaskOccurrenceCollectionSetters,
     closeMenu: () => void
   ) => Promise<void>;
   handleConfirmMoveDate: (
@@ -201,6 +209,8 @@ export interface TaskMutationsActions {
   /** Ref for attachment file input. */
   attachmentInputRef: React.RefObject<HTMLInputElement | null>;
   updateProjectOptions: (newOption: ProjectOption) => void;
+  scheduleBackgroundRefresh: () => void;
+  hasOccurrenceMutationsInFlight: () => boolean;
 }
 
 export function useTaskMutations(
@@ -214,7 +224,8 @@ export function useTaskMutations(
     selectedOccurrenceDate,
     onSelectTask,
     onReload,
-    onReloadOccurrences,
+    onBackgroundRefresh,
+    isBackgroundRefreshBlocked,
     quickFilter,
     projectOptions,
     contextFilter,
@@ -251,6 +262,49 @@ export function useTaskMutations(
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const occurrenceMutationSequenceRef = useRef(0);
   const occurrenceMutationVersionsRef = useRef(new Map<string, number>());
+  const onBackgroundRefreshRef = useRef(onBackgroundRefresh);
+  const isBackgroundRefreshBlockedRef = useRef(isBackgroundRefreshBlocked);
+  const backgroundRefreshSchedulerRef = useRef<BackgroundRefreshScheduler | null>(null);
+  onBackgroundRefreshRef.current = onBackgroundRefresh;
+  isBackgroundRefreshBlockedRef.current = isBackgroundRefreshBlocked;
+
+  const scheduleBackgroundRefresh = useCallback(() => {
+    if (!backgroundRefreshSchedulerRef.current) {
+      backgroundRefreshSchedulerRef.current = createBackgroundRefreshScheduler({
+        refresh: () => onBackgroundRefreshRef.current(),
+        isBlocked: () => (
+          occurrenceMutationVersionsRef.current.size > 0
+          || isBackgroundRefreshBlockedRef.current()
+        ),
+      });
+    }
+    backgroundRefreshSchedulerRef.current.schedule();
+  }, []);
+
+  useEffect(() => () => {
+    backgroundRefreshSchedulerRef.current?.cancel();
+    backgroundRefreshSchedulerRef.current = null;
+  }, []);
+
+  const beginOccurrenceMutation = (rows: TaskOccurrenceRow[]) => {
+    const version = ++occurrenceMutationSequenceRef.current;
+    rows.forEach((row) => occurrenceMutationVersionsRef.current.set(row.key, version));
+    return version;
+  };
+
+  const finishOccurrenceMutation = (
+    rows: TaskOccurrenceRow[],
+    version: number,
+    scheduleRefresh: boolean
+  ) => {
+    let settledCurrentMutation = false;
+    rows.forEach((row) => {
+      if (occurrenceMutationVersionsRef.current.get(row.key) !== version) return;
+      occurrenceMutationVersionsRef.current.delete(row.key);
+      settledCurrentMutation = true;
+    });
+    if (scheduleRefresh && settledCurrentMutation) scheduleBackgroundRefresh();
+  };
 
   // ── Derived ────────────────────────────────────────────────────────────────
 
@@ -570,6 +624,8 @@ export function useTaskMutations(
       setDraft((prev) => ({ ...prev, status: newStatus }));
       taskStatusBaselineRef.current = { taskId: task.id, status: newStatus };
     }
+    const occurrenceRows = occurrenceContext ? [occurrenceContext.row] : [];
+    const mutationVersion = occurrenceContext ? beginOccurrenceMutation(occurrenceRows) : null;
     try {
       if (occurrenceContext) {
         await runOptimisticOccurrenceMutation({
@@ -577,12 +633,14 @@ export function useTaskMutations(
           selectedRows: [occurrenceContext.row],
           status: newStatus,
           setters: occurrenceContext.setters,
-          mutate: () => tasksApi.update(task.id, { status: newStatus })
+          mutate: () => tasksApi.update(task.id, { status: newStatus }),
+          shouldRollback: (key) => occurrenceMutationVersionsRef.current.get(key) === mutationVersion
         });
       } else {
         await tasksApi.update(task.id, { status: newStatus });
       }
-      await onReload();
+      if (mutationVersion == null) await onReload();
+      else finishOccurrenceMutation(occurrenceRows, mutationVersion, true);
     } catch (error) {
       setTasks((prev) =>
         prev.map((item) => (item.id === task.id ? { ...item, status: previousStatus } : item))
@@ -591,6 +649,7 @@ export function useTaskMutations(
         setDraft((prev) => ({ ...prev, status: previousStatus }));
         taskStatusBaselineRef.current = { taskId: task.id, status: previousStatus };
       }
+      if (mutationVersion != null) finishOccurrenceMutation(occurrenceRows, mutationVersion, true);
       reportMutationError("Failed to update task status", error);
     }
   };
@@ -611,13 +670,6 @@ export function useTaskMutations(
     }
   };
 
-  const refreshAfterOccurrenceMutation = async () => {
-    await onReload();
-    if (quickFilter === "planned" || quickFilter === "overdue") {
-      await onReloadOccurrences(quickFilter);
-    }
-  };
-
   const handleToggleOccurrenceDone = async (
     row: TaskOccurrenceRow,
     current: TaskOccurrenceCollections,
@@ -631,8 +683,7 @@ export function useTaskMutations(
       return;
     }
     const nextStatus = (row.status === "done" ? "todo" : "done") as import("../../types/models").TaskStatus;
-    const mutationVersion = ++occurrenceMutationSequenceRef.current;
-    occurrenceMutationVersionsRef.current.set(row.key, mutationVersion);
+    const mutationVersion = beginOccurrenceMutation([row]);
     try {
       await runOptimisticOccurrenceMutation({
         current,
@@ -642,17 +693,9 @@ export function useTaskMutations(
         mutate: () => tasksApi.completeOccurrence(row.taskId, occurrenceDate, nextStatus),
         shouldRollback: (key) => occurrenceMutationVersionsRef.current.get(key) === mutationVersion
       });
-      const shouldReconcile = occurrenceMutationVersionsRef.current.get(row.key) === mutationVersion;
-      if (shouldReconcile) {
-        occurrenceMutationVersionsRef.current.delete(row.key);
-        setTimeout(() => { void refreshAfterOccurrenceMutation(); }, 800);
-      }
+      finishOccurrenceMutation([row], mutationVersion, true);
     } catch (error) {
-      const shouldReconcile = occurrenceMutationVersionsRef.current.get(row.key) === mutationVersion;
-      if (shouldReconcile) {
-        occurrenceMutationVersionsRef.current.delete(row.key);
-        setTimeout(() => { void refreshAfterOccurrenceMutation(); }, 800);
-      }
+      finishOccurrenceMutation([row], mutationVersion, true);
       reportMutationError("Failed to update occurrence", error);
     }
   };
@@ -665,8 +708,7 @@ export function useTaskMutations(
     closeMenu: () => void
   ) => {
     if (selectedRows.length === 0) return;
-    const mutationVersion = ++occurrenceMutationSequenceRef.current;
-    selectedRows.forEach((row) => occurrenceMutationVersionsRef.current.set(row.key, mutationVersion));
+    const mutationVersion = beginOccurrenceMutation(selectedRows);
     try {
       await runOptimisticOccurrenceMutation({
         current,
@@ -683,51 +725,42 @@ export function useTaskMutations(
         ),
         shouldRollback: (key) => occurrenceMutationVersionsRef.current.get(key) === mutationVersion
       });
-      const shouldReconcile = selectedRows.every(
-        (row) => occurrenceMutationVersionsRef.current.get(row.key) === mutationVersion
-      );
-      selectedRows.forEach((row) => {
-        if (occurrenceMutationVersionsRef.current.get(row.key) === mutationVersion) {
-          occurrenceMutationVersionsRef.current.delete(row.key);
-        }
-      });
       closeMenu();
-      if (shouldReconcile) {
-        setTimeout(() => { void refreshAfterOccurrenceMutation(); }, 800);
-      }
+      finishOccurrenceMutation(selectedRows, mutationVersion, true);
     } catch (error) {
-      const shouldReconcile = selectedRows.every(
-        (row) => occurrenceMutationVersionsRef.current.get(row.key) === mutationVersion
-      );
-      selectedRows.forEach((row) => {
-        if (occurrenceMutationVersionsRef.current.get(row.key) === mutationVersion) {
-          occurrenceMutationVersionsRef.current.delete(row.key);
-        }
-      });
-      if (shouldReconcile) {
-        setTimeout(() => { void refreshAfterOccurrenceMutation(); }, 800);
-      }
+      finishOccurrenceMutation(selectedRows, mutationVersion, true);
       reportMutationError("Failed to update selected occurrences", error);
     }
   };
 
   const handleSkipSelectedTasks = async (
     selectedRows: TaskOccurrenceRow[],
+    current: TaskOccurrenceCollections,
+    setters: TaskOccurrenceCollectionSetters,
     closeMenu: () => void
   ) => {
     if (selectedRows.length === 0) return;
+    const mutationVersion = beginOccurrenceMutation(selectedRows);
     try {
-      await Promise.all(
-        selectedRows.map((row) => {
-          const occurrenceDate = rowOccurrenceDate(row);
-          return occurrenceDate
-            ? tasksApi.completeOccurrence(row.taskId, occurrenceDate, "skipped")
-            : tasksApi.update(row.taskId, { status: "skipped" });
-        })
-      );
+      await runOptimisticOccurrenceMutation({
+        current,
+        selectedRows,
+        status: "skipped",
+        setters,
+        mutate: () => Promise.all(
+          selectedRows.map((row) => {
+            const occurrenceDate = rowOccurrenceDate(row);
+            return occurrenceDate
+              ? tasksApi.completeOccurrence(row.taskId, occurrenceDate, "skipped")
+              : tasksApi.update(row.taskId, { status: "skipped" });
+          })
+        ),
+        shouldRollback: (key) => occurrenceMutationVersionsRef.current.get(key) === mutationVersion
+      });
       closeMenu();
-      await refreshAfterOccurrenceMutation();
+      finishOccurrenceMutation(selectedRows, mutationVersion, true);
     } catch (error) {
+      finishOccurrenceMutation(selectedRows, mutationVersion, true);
       reportMutationError("Failed to skip selected occurrences", error);
     }
   };
@@ -749,6 +782,7 @@ export function useTaskMutations(
       pushErrorNotification("Invalid date format.");
       return;
     }
+    const mutationVersion = beginOccurrenceMutation(selectedRows);
     try {
       await Promise.all(
         selectedRows.map((row) => {
@@ -767,8 +801,9 @@ export function useTaskMutations(
       setShowMoveDateInput(false);
       setMoveDateInput("");
       closeMenu();
-      setTimeout(() => { void refreshAfterOccurrenceMutation(); }, 800);
+      finishOccurrenceMutation(selectedRows, mutationVersion, true);
     } catch (error) {
+      finishOccurrenceMutation(selectedRows, mutationVersion, false);
       reportMutationError("Failed to move selected occurrences", error);
     }
   };
@@ -782,6 +817,7 @@ export function useTaskMutations(
     if (selectedRows.length === 0 || !projectId.trim()) return;
     const uniqueTaskIds = Array.from(new Set(selectedRows.map((row) => row.taskId)));
     const project = projectOptions.find((option) => option.projectId === projectId);
+    const mutationVersion = beginOccurrenceMutation(selectedRows);
     try {
       await Promise.all(
         uniqueTaskIds.map((taskId) =>
@@ -793,8 +829,9 @@ export function useTaskMutations(
       );
       closeMenu();
       resetProjectInput();
-      await refreshAfterOccurrenceMutation();
+      finishOccurrenceMutation(selectedRows, mutationVersion, true);
     } catch {
+      finishOccurrenceMutation(selectedRows, mutationVersion, false);
       pushErrorNotification("Failed to move selected tasks to project.");
     }
   };
@@ -813,6 +850,7 @@ export function useTaskMutations(
       `Remove ${selectedRows.length} occurrence(s) from schedule?`
     );
     if (!confirmed) return;
+    const mutationVersion = beginOccurrenceMutation(selectedRows);
     try {
       await Promise.all(
         selectedRows.map((row) => {
@@ -829,8 +867,9 @@ export function useTaskMutations(
       setInboxDoneRows((prev) => prev.filter((r) => !removedKeys.has(r.key)));
       clearSelection();
       closeMenu();
-      setTimeout(() => { void refreshAfterOccurrenceMutation(); }, 800);
+      finishOccurrenceMutation(selectedRows, mutationVersion, true);
     } catch (error) {
+      finishOccurrenceMutation(selectedRows, mutationVersion, false);
       reportMutationError("Failed to remove selected occurrences", error);
     }
   };
@@ -857,6 +896,7 @@ export function useTaskMutations(
         ])
       ).values()
     );
+    const mutationVersion = beginOccurrenceMutation(selectedRows);
     try {
       if (isToday) {
         const createdItems = await Promise.all(
@@ -953,7 +993,9 @@ export function useTaskMutations(
         }
       }
       closeMenu();
+      finishOccurrenceMutation(selectedRows, mutationVersion, true);
     } catch (error) {
+      finishOccurrenceMutation(selectedRows, mutationVersion, false);
       reportMutationError("Failed to update Today", error);
     }
   };
@@ -1159,6 +1201,7 @@ export function useTaskMutations(
     handleSaveScheduleItem, handleRemoveScheduleItem,
     handleHistoryToggle, handleExport, handleImport,
     loadAttachments, loadSubtasks, loadScheduleItem,
-    updateProjectOptions
+    updateProjectOptions, scheduleBackgroundRefresh,
+    hasOccurrenceMutationsInFlight: () => occurrenceMutationVersionsRef.current.size > 0
   };
 }
