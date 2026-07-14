@@ -1,8 +1,13 @@
 import { toDateKey } from "../../lib/taskDateUtils";
 import { normalizeDateKey } from "./taskOccurrenceIdentity";
 
-export type StandaloneCalendarKind = "due" | "schedule";
+export type StandaloneCalendarKind = "today" | "due" | "schedule";
 export type StandaloneCalendarView = "month" | "week";
+
+export interface StandaloneCalendarOptions {
+  calendar: StandaloneCalendarKind;
+  view: StandaloneCalendarView;
+}
 
 export interface TimelineDragRange {
   startMinutes: number;
@@ -20,11 +25,26 @@ export interface MonthCellContextPayload {
 }
 
 export function buildStandaloneCalendarUrl(
-  calendar: StandaloneCalendarKind = "due",
+  calendar?: StandaloneCalendarKind,
   view: StandaloneCalendarView = "month"
 ): string {
+  if (!calendar) return "/tasks/calendar";
+  if (calendar === "today") return "/tasks/calendar?calendar=today";
   const params = new URLSearchParams({ calendar, view });
   return `/tasks/calendar?${params.toString()}`;
+}
+
+export function resolveStandaloneCalendarOptions(
+  params: URLSearchParams
+): StandaloneCalendarOptions {
+  const calendarParam = params.get("calendar");
+  const calendar: StandaloneCalendarKind = calendarParam === "due" || calendarParam === "schedule"
+    ? calendarParam
+    : "today";
+  const view: StandaloneCalendarView = calendar !== "today" && params.get("view") === "week"
+    ? "week"
+    : "month";
+  return { calendar, view };
 }
 
 export function buildMonthCellContextPayload(

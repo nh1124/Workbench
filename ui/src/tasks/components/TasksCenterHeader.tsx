@@ -19,7 +19,23 @@ interface TasksCenterHeaderProps {
   importRef: RefObject<HTMLInputElement | null>;
   onOpenAddPanel: () => void;
   standalone?: boolean;
-  onSetCalendarKind?: (mode: "calendar" | "schedule") => void;
+  onSetStandaloneView?: (mode: SidebarMode) => void;
+}
+
+function StandaloneViewToggle({
+  sidebarMode,
+  onSetStandaloneView,
+}: {
+  sidebarMode: SidebarMode;
+  onSetStandaloneView?: (mode: SidebarMode) => void;
+}) {
+  return (
+    <div className="calendar-kind-toggle" aria-label="Task view">
+      <button type="button" className={sidebarMode === "list" ? "active" : ""} onClick={() => onSetStandaloneView?.("list")}>Today</button>
+      <button type="button" className={sidebarMode === "calendar" ? "active" : ""} onClick={() => onSetStandaloneView?.("calendar")}>Due</button>
+      <button type="button" className={sidebarMode === "schedule" ? "active" : ""} onClick={() => onSetStandaloneView?.("schedule")}>Schedule</button>
+    </div>
+  );
 }
 
 export function TasksCenterHeader({
@@ -39,7 +55,7 @@ export function TasksCenterHeader({
   importRef,
   onOpenAddPanel,
   standalone = false,
-  onSetCalendarKind,
+  onSetStandaloneView,
 }: TasksCenterHeaderProps) {
   if (sidebarMode === "calendar" || sidebarMode === "schedule") {
     return (
@@ -52,10 +68,7 @@ export function TasksCenterHeader({
         </div>
         <div className="tasks-head-actions calendar-head-actions">
           {standalone && (
-            <div className="calendar-kind-toggle" aria-label="Calendar kind">
-              <button type="button" className={sidebarMode === "calendar" ? "active" : ""} onClick={() => onSetCalendarKind?.("calendar")}>Due</button>
-              <button type="button" className={sidebarMode === "schedule" ? "active" : ""} onClick={() => onSetCalendarKind?.("schedule")}>Schedule</button>
-            </div>
+            <StandaloneViewToggle sidebarMode={sidebarMode} onSetStandaloneView={onSetStandaloneView} />
           )}
           <div className="calendar-view-toggle">
             <button type="button" className={calendarMode === "month" ? "active" : ""} onClick={() => onSetCalendarMode("month")} aria-label="Month view" title="Month view"><IcoCal /></button>
@@ -76,6 +89,9 @@ export function TasksCenterHeader({
         <p>{new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</p>
       </div>
       <div className="tasks-head-actions">
+        {standalone && (
+          <StandaloneViewToggle sidebarMode={sidebarMode} onSetStandaloneView={onSetStandaloneView} />
+        )}
         <select className="sort-select" value={sortMode} onChange={(e) => onSetSortMode(e.target.value as SortMode)} aria-label="Sort task list">
           <option value="load">Sort: Load</option>
           <option value="due">Sort: Due Date</option>

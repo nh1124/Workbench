@@ -1165,7 +1165,10 @@ export function TasksPageContainer({
           importRef={importRef}
           onOpenAddPanel={openAddPanel}
           standalone={standalone}
-          onSetCalendarKind={setSidebarMode}
+          onSetStandaloneView={(mode) => {
+            if (mode === "list") setQuickFilter("today");
+            setSidebarMode(mode);
+          }}
         />
 
         {displayError && <p className="error" style={{ margin: "0 0 0.5rem", fontSize: "0.8rem" }}>{displayError}</p>}
