@@ -42,7 +42,7 @@ export const OCCURRENCE_PAGE_DAYS = 30;
 
 export const TIMELINE_START_HOUR = 0;
 export const TIMELINE_END_HOUR = 24;
-export const TIMELINE_HOUR_HEIGHT = 44;
+export const MIN_TIMELINE_HOUR_HEIGHT = 32;
 
 // ── TaskDraft ─────────────────────────────────────────────────────────────────
 

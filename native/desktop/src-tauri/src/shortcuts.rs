@@ -37,6 +37,10 @@ fn default_global_shortcuts() -> Vec<GlobalShortcutRegistration> {
       action_id: "quick_note_alt".to_string(),
       accelerator: "Ctrl+Alt+KeyN".to_string(),
     },
+    GlobalShortcutRegistration {
+      action_id: "open_calendar_window".to_string(),
+      accelerator: "Ctrl+Alt+KeyC".to_string(),
+    },
   ]
 }
 
@@ -45,6 +49,10 @@ fn handle_shortcut_action(app: &tauri::AppHandle, action_id: &str) -> Result<(),
   match action_id {
     "new_window" => window::open_new_main_window(app),
     "quick_note" | "quick_note_alt" => window::open_new_quick_note_window(app),
+    "open_calendar_window" => window::open_calendar_window(
+      app,
+      "/tasks/calendar?calendar=due&view=month",
+    ),
     _ => Ok(()),
   }
 }

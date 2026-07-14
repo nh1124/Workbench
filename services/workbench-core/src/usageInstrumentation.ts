@@ -1,4 +1,5 @@
 import { projectsClient } from "./internalClients.js";
+import { logger } from "./logger.js";
 import { recordUsageEventBestEffort } from "./usageEventsStore.js";
 
 type JsonRecord = Record<string, unknown>;
@@ -124,6 +125,6 @@ export function recordResourceReadUsageBestEffort(input: ResourceReadInput): voi
     marks: [{ sourceService, resourceId }]
   }).catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
-    console.warn("[usage] failed to mark index entry read", { sourceService, resourceId, message });
+    logger.warn("[usage] failed to mark index entry read", { sourceService, resourceId, message });
   });
 }

@@ -1,5 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { installProcessHandlers } from "@workbench/logging";
+import { logger } from "./logger.js";
 import { registerArtifactsTools } from "./mcp/registerArtifactsTools.js";
 import { registerAuthTools } from "./mcp/registerAuthTools.js";
 import { registerDeepResearchTools } from "./mcp/registerDeepResearchTools.js";
@@ -10,6 +12,8 @@ import { registerNotesTools } from "./mcp/registerNotesTools.js";
 import { registerProjectsTools } from "./mcp/registerProjectsTools.js";
 import { registerProjectContextTools } from "./mcp/registerProjectContextTools.js";
 import { registerTasksTools } from "./mcp/registerTasksTools.js";
+
+installProcessHandlers(logger);
 
 const server = new McpServer({
   name: "workbench-core-mcp",

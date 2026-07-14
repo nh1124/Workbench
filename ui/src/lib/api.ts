@@ -189,6 +189,17 @@ export async function openQuickNoteWindow(): Promise<boolean> {
   return true;
 }
 
+export async function openCalendarWindow(url: string): Promise<boolean> {
+  if (isTauriNativeRuntime()) {
+    await invokeNative<void>("open_calendar_window", { url });
+    return true;
+  }
+  if (typeof window === "undefined") return false;
+  const calendarWindow = window.open(url, "workbench-calendar", "width=1100,height=800");
+  calendarWindow?.focus();
+  return calendarWindow !== null;
+}
+
 export async function openMainWindow(): Promise<boolean> {
   if (!isTauriNativeRuntime()) {
     return false;

@@ -1,4 +1,5 @@
 import cors from "cors";
+import { createLogger, installProcessHandlers, requestLogger } from "@workbench/logging";
 import { config as loadEnv } from "dotenv";
 import express from "express";
 import path from "node:path";
@@ -87,9 +88,12 @@ function requireCoreMutationOriginMiddleware(
   next();
 }
 
+const logger = createLogger("notes");
+
 export const app = express();
 app.use(cors());
 app.use(express.json());
+app.use(requestLogger(logger));
 
 const noteInputSchema = z.object({
   title: z.string().min(1),
@@ -349,9 +353,10 @@ if (!Number.isFinite(port)) {
 
 const isDirectExecution = process.argv[1] ? path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url)) : false;
 if (isDirectExecution) {
+  installProcessHandlers(logger);
   void ensureNotesSchema().then(() => {
     app.listen(port, host, () => {
-      console.log(`Notes service HTTP listening on ${host}:${port}`);
+      logger.info(`Notes service HTTP listening on ${host}:${port}`);
     });
   });
 }

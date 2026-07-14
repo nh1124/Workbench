@@ -1149,6 +1149,11 @@ pub fn open_quick_note_window(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn open_calendar_window(app: tauri::AppHandle, url: String) -> Result<(), String> {
+  window::open_calendar_window(&app, &url)
+}
+
+#[tauri::command]
 pub fn open_app_window(
   app: tauri::AppHandle,
   current_window: tauri::WebviewWindow,

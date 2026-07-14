@@ -27,6 +27,17 @@
   grid-template-columns: clamp(210px, 21vw, 270px) minmax(0, 1fr);
 }
 
+.tasks-shell.tasks-shell-standalone {
+  grid-template-columns: minmax(0, 1fr);
+  width: 100vw;
+  height: 100vh;
+  border-top: 0;
+}
+
+.tasks-shell.tasks-shell-standalone.has-detail {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 /* ── Left sidebar ──────────────────────────────────────────────────────────── */
 .tasks-secondary {
   border-right: 1px solid var(--line);
@@ -84,6 +95,21 @@
   padding: 0.9rem 0.95rem 1.4rem;
   overflow-y: auto;
   overflow-x: hidden;
+}
+
+.tasks-center.tasks-center-calendar {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.tasks-center-calendar .tasks-center-head {
+  flex: 0 0 auto;
+}
+
+.tasks-center-calendar .task-calendar-shell {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .tasks-shell.has-detail .tasks-center { border-right: 1px solid var(--line); }
@@ -159,6 +185,7 @@
 .tasks-secondary,
 .tasks-center,
 .tasks-detail-body,
+.calendar-month-scroll,
 .calendar-week-scroll,
 .day-tasks-body {
   scrollbar-width: thin;
@@ -168,6 +195,7 @@
 .tasks-secondary::-webkit-scrollbar,
 .tasks-center::-webkit-scrollbar,
 .tasks-detail-body::-webkit-scrollbar,
+.calendar-month-scroll::-webkit-scrollbar,
 .calendar-week-scroll::-webkit-scrollbar,
 .day-tasks-body::-webkit-scrollbar {
   width: 10px;
@@ -177,6 +205,7 @@
 .tasks-secondary::-webkit-scrollbar-track,
 .tasks-center::-webkit-scrollbar-track,
 .tasks-detail-body::-webkit-scrollbar-track,
+.calendar-month-scroll::-webkit-scrollbar-track,
 .calendar-week-scroll::-webkit-scrollbar-track,
 .day-tasks-body::-webkit-scrollbar-track {
   background: rgba(8, 16, 35, 0.78);
@@ -186,6 +215,7 @@
 .tasks-secondary::-webkit-scrollbar-thumb,
 .tasks-center::-webkit-scrollbar-thumb,
 .tasks-detail-body::-webkit-scrollbar-thumb,
+.calendar-month-scroll::-webkit-scrollbar-thumb,
 .calendar-week-scroll::-webkit-scrollbar-thumb,
 .day-tasks-body::-webkit-scrollbar-thumb {
   border-radius: 999px;
@@ -196,6 +226,7 @@
 .tasks-secondary::-webkit-scrollbar-button,
 .tasks-center::-webkit-scrollbar-button,
 .tasks-detail-body::-webkit-scrollbar-button,
+.calendar-month-scroll::-webkit-scrollbar-button,
 .calendar-week-scroll::-webkit-scrollbar-button,
 .day-tasks-body::-webkit-scrollbar-button {
   display: none;

@@ -10,6 +10,7 @@
     "test": "tsx --test src/__tests__/**/*.test.ts"
   },
   "dependencies": {
+    "@workbench/logging": "*",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
     "express": "^4.21.2",

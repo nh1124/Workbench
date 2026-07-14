@@ -16,6 +16,7 @@ import { RegisterPage } from "./pages/RegisterPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { ShortcutsPage } from "./pages/ShortcutsPage";
 import { TasksPage } from "./pages/TasksPage";
+import { TasksCalendarWindowPage } from "./pages/TasksCalendarWindowPage";
 import { WbsPage } from "./pages/WbsPage";
 
 function resolveStartPage(): string {
@@ -56,6 +57,7 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
+        <Route path="/tasks/calendar" element={<TasksCalendarWindowPage />} />
 
         <Route path="/" element={<Layout />}>
           <Route index element={startPage === "/" ? <HomePage /> : <Navigate to={startPage} replace />} />

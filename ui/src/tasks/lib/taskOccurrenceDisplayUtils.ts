@@ -11,7 +11,16 @@
  */
 
 import type { Task } from "../../types/models";
-import type { TaskOccurrenceRow } from "../types";
+import type { QuickFilter, TaskOccurrenceRow } from "../types";
+
+/** Hide terminal rows from views that only represent outstanding work. */
+export function filterOccurrenceRowsForQuickFilter(
+  rows: TaskOccurrenceRow[],
+  quickFilter: QuickFilter
+): TaskOccurrenceRow[] {
+  if (quickFilter !== "planned" && quickFilter !== "overdue") return rows;
+  return rows.filter((row) => row.status !== "done" && row.status !== "skipped");
+}
 
 // ── Sorting ───────────────────────────────────────────────────────────────────
 

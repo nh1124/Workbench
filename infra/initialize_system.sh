@@ -36,4 +36,8 @@ ensure_env "${PROJECT_ROOT}/native/desktop/.env" "${PROJECT_ROOT}/native/desktop
 
 node "${SCRIPT_DIR}/scripts/workbench-env.mjs" sync
 
+# Create logs/ before docker compose runs so the bind mount does not end up
+# root-owned (host services must be able to write their own log files).
+mkdir -p "${PROJECT_ROOT}/logs"
+
 echo "Environment files are ready."

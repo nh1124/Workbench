@@ -1,4 +1,5 @@
 import cors from "cors";
+import { createLogger, installProcessHandlers, requestLogger } from "@workbench/logging";
 import { config as loadEnv } from "dotenv";
 import express from "express";
 import multer from "multer";
@@ -36,9 +37,13 @@ function requireEnv(name: string): string {
   return value;
 }
 
+const logger = createLogger("images");
+installProcessHandlers(logger);
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "25mb" }));
+app.use(requestLogger(logger));
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -332,6 +337,6 @@ if (!Number.isFinite(port)) {
 
 void ensureImagesSchema().then(() => {
   app.listen(port, host, () => {
-    console.log(`Images service HTTP listening on ${host}:${port}`);
+    logger.info(`Images service HTTP listening on ${host}:${port}`);
   });
 });

@@ -1,7 +1,7 @@
 import { hourLabel, parseTimeToMinutes } from "../../lib/taskDisplayUtils";
 import {
   TIMELINE_END_HOUR,
-  TIMELINE_HOUR_HEIGHT,
+  MIN_TIMELINE_HOUR_HEIGHT,
   TIMELINE_START_HOUR,
 } from "../types";
 
@@ -15,11 +15,23 @@ export type TimedEventLayout<T> = T & {
   laneCount: number;
 };
 
+export function computeTimelineHourHeight(
+  availableHeight: number,
+  visibleHourCount: number,
+  minHourHeight = MIN_TIMELINE_HOUR_HEIGHT
+): number {
+  if (!Number.isFinite(availableHeight) || !Number.isFinite(visibleHourCount) || visibleHourCount <= 0) {
+    return minHourHeight;
+  }
+  return Math.max(minHourHeight, availableHeight / visibleHourCount);
+}
+
 /**
  * Build visual placement information for timeline events with overlap lanes.
  */
 export function layoutTimedItems<T extends { startTime?: string; endTime?: string }>(
-  items: T[]
+  items: T[],
+  hourHeight = MIN_TIMELINE_HOUR_HEIGHT
 ): TimedEventLayout<T>[] {
   const sorted = items
     .map((item) => {
@@ -33,8 +45,8 @@ export function layoutTimedItems<T extends { startTime?: string; endTime?: strin
       const boundedEnd = Math.max(clippedStart + 30, rawEnd);
       const clippedEnd = Math.min(TIMELINE_END_HOUR * 60, boundedEnd);
       if (clippedStart >= TIMELINE_END_HOUR * 60 || clippedEnd <= TIMELINE_START_HOUR * 60) return null;
-      const top = ((clippedStart - TIMELINE_START_HOUR * 60) / 60) * TIMELINE_HOUR_HEIGHT;
-      const height = Math.max(22, ((clippedEnd - clippedStart) / 60) * TIMELINE_HOUR_HEIGHT);
+      const top = ((clippedStart - TIMELINE_START_HOUR * 60) / 60) * hourHeight;
+      const height = Math.max(22, ((clippedEnd - clippedStart) / 60) * hourHeight);
       const timeLabel = item.startTime
         ? `${item.startTime}${item.endTime ? ` - ${item.endTime}` : ""}`
         : hourLabel(Math.floor(clippedStart / 60));

@@ -9,11 +9,12 @@ process.env.CORE_DB_USER ||= "workbench-test-unused";
 process.env.CORE_DB_PASSWORD ||= "workbench-test-unused";
 
 const { recordUsageEventBestEffort, summarizeUsageWithPool } = await import("../usageEventsStore.js");
+const { logger } = await import("../logger.js");
 
 test("usage recording failures are swallowed", async () => {
   const warnings: unknown[] = [];
-  const originalWarn = console.warn;
-  console.warn = (...args: unknown[]) => {
+  const originalWarn = logger.warn;
+  logger.warn = (...args: unknown[]) => {
     warnings.push(args);
   };
   try {
@@ -27,7 +28,7 @@ test("usage recording failures are swallowed", async () => {
     });
     await waitImmediate();
   } finally {
-    console.warn = originalWarn;
+    logger.warn = originalWarn;
   }
   assert.equal(warnings.length, 1);
 });

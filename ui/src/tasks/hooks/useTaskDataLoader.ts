@@ -45,13 +45,20 @@ export interface TaskDataState {
 }
 
 export interface TaskDataLoaderActions {
-  load: () => Promise<void>;
+  load: (options?: TaskDataLoadOptions) => Promise<boolean>;
+  isLoadInFlight: () => boolean;
   setTasks: React.Dispatch<React.SetStateAction<Task[]>>;
   setProjectOptions: React.Dispatch<React.SetStateAction<ProjectOption[]>>;
   setTodayRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>;
   setTodayMembershipKeys: React.Dispatch<React.SetStateAction<Set<string>>>;
   setInboxUpcomingRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>;
   setInboxDoneRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>;
+}
+
+export interface TaskDataLoadOptions {
+  silent?: boolean;
+  /** Rechecked immediately before a silent response is committed. */
+  shouldApply?: () => boolean;
 }
 
 /**
@@ -79,6 +86,9 @@ export function useTaskDataLoader(
   const [error, setError] = useState<string | null>(null);
   const selectedTaskIdRef = useRef<string | null>(selectedTaskId);
   const onTaskGoneRef = useRef(onTaskGone);
+  const loadInFlightCountRef = useRef(0);
+  const visibleLoadCountRef = useRef(0);
+  const loadRequestSequenceRef = useRef(0);
 
   useEffect(() => {
     selectedTaskIdRef.current = selectedTaskId;
@@ -88,9 +98,15 @@ export function useTaskDataLoader(
     onTaskGoneRef.current = onTaskGone;
   }, [onTaskGone]);
 
-  const load = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
+  const load = useCallback(async (options: TaskDataLoadOptions = {}) => {
+    const silent = options.silent === true;
+    const requestId = ++loadRequestSequenceRef.current;
+    loadInFlightCountRef.current += 1;
+    if (!silent) {
+      visibleLoadCountRef.current += 1;
+      setIsLoading(true);
+      setError(null);
+    }
     try {
       const todayDate = startOfDay(new Date());
       const todayKey = toDateKey(todayDate);
@@ -137,10 +153,8 @@ export function useTaskDataLoader(
         rows: builtTodayRows,
         membershipKeys: todayMemberships
       } = buildTodayRows(taskList, myDayTasks, todaySchedule, todayKey);
-      setTodayRows(builtTodayRows);
-
-      setPlannedCount(countDistinctPlannedTasks(countScheduleCalendar, todayKey, contextFilter));
-      setOverdueCount(countDistinctOverdueTasks(countSchedule, todayKey, contextFilter));
+      const nextPlannedCount = countDistinctPlannedTasks(countScheduleCalendar, todayKey, contextFilter);
+      const nextOverdueCount = countDistinctOverdueTasks(countSchedule, todayKey, contextFilter);
 
       const { upcomingRows: builtInboxUpcoming, doneRows: builtInboxDone } =
         buildInboxRows(taskList, {
@@ -148,8 +162,6 @@ export function useTaskDataLoader(
           scheduleCalendar: countScheduleCalendar,
           todayKey
         });
-      setInboxUpcomingRows(builtInboxUpcoming);
-      setInboxDoneRows(builtInboxDone);
 
       // Build per-date execution status map for calendar display
       const csMap = new Map<string, Map<string, TaskStatus>>();
@@ -159,8 +171,6 @@ export function useTaskDataLoader(
           csMap.get(day.date)!.set(item.taskId, toTaskStatus(item.status));
         }
       }
-      setCalendarStatusMap(csMap);
-
       // Merge live today-status into the task list
       const mergedTasks = taskList.map((task) => {
         const status = todayStatusMap.get(task.id);
@@ -178,7 +188,17 @@ export function useTaskDataLoader(
         projectName: p.projectName
       }));
 
+      if (requestId !== loadRequestSequenceRef.current) return false;
+      if (silent && options.shouldApply && !options.shouldApply()) return false;
+
+      setError(null);
       setTasks(mergedTasks);
+      setTodayRows(builtTodayRows);
+      setPlannedCount(nextPlannedCount);
+      setOverdueCount(nextOverdueCount);
+      setInboxUpcomingRows(builtInboxUpcoming);
+      setInboxDoneRows(builtInboxDone);
+      setCalendarStatusMap(csMap);
       setTodayTaskIds(todayIds);
       setTodayScheduleOccurrenceStatuses(todayOccurrenceStatuses);
       setTodayMembershipKeys(todayMemberships);
@@ -195,18 +215,27 @@ export function useTaskDataLoader(
       if (currentSelectedTaskId && !mergedTasks.find((t) => t.id === currentSelectedTaskId)) {
         onTaskGoneRef.current();
       }
+      return true;
     } catch (e) {
+      if (requestId !== loadRequestSequenceRef.current) return false;
       const message = e instanceof Error ? e.message : "Failed to load tasks.";
-      setTodayTaskIds(new Set());
-      setTodayScheduleOccurrenceStatuses(new Map());
-      setTodayMembershipKeys(new Set());
+      if (!silent) {
+        setTodayTaskIds(new Set());
+        setTodayScheduleOccurrenceStatuses(new Map());
+        setTodayMembershipKeys(new Set());
+      }
       if (isAuthErrorMessage(message)) {
         setError(message);
       } else {
         pushErrorNotification(message, "Failed to load tasks");
       }
+      return false;
     } finally {
-      setIsLoading(false);
+      loadInFlightCountRef.current = Math.max(0, loadInFlightCountRef.current - 1);
+      if (!silent) {
+        visibleLoadCountRef.current = Math.max(0, visibleLoadCountRef.current - 1);
+        if (visibleLoadCountRef.current === 0) setIsLoading(false);
+      }
     }
   }, [contextFilter]);
 
@@ -225,6 +254,7 @@ export function useTaskDataLoader(
     isLoading,
     error,
     load,
+    isLoadInFlight: () => loadInFlightCountRef.current > 0,
     setTasks,
     setProjectOptions,
     setTodayRows,

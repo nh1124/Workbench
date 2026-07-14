@@ -5,7 +5,9 @@ import multer from "multer";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { installProcessHandlers, requestLogger } from "@workbench/logging";
 import { requireUserAuth } from "./auth.js";
+import { logger } from "./logger.js";
 import {
   createAttachment,
   deleteAttachment,
@@ -119,6 +121,7 @@ function requireCoreMutationOriginMiddleware(
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
+app.use(requestLogger(logger));
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -127,7 +130,7 @@ const upload = multer({
 
 function handleError(res: express.Response, error: unknown): express.Response {
   const message = error instanceof Error ? error.message : "Unexpected server error";
-  console.error("[tasks-service] request error:", message);
+  logger.error("[tasks-service] request error", { err: error });
 
   return res.status(502).json({ code: "UPSTREAM_ERROR", message });
 }
@@ -297,12 +300,12 @@ const scheduleItemUpdateSchema = z.object({
 app.get("/tasks/today", requireUserAuth, async (req, res) => {
   const owner = req.authUser?.coreUserId;
   const date = typeof req.query.date === "string" ? req.query.date : undefined;
-  console.log(`[tasks-service] GET /tasks/today  owner=${owner ?? "?"} date=${date ?? "?"}`);
+  logger.debug(`[tasks-service] GET /tasks/today  owner=${owner ?? "?"} date=${date ?? "?"}`);
   try {
     if (!owner) return res.status(401).json({ message: "Missing auth context" });
     if (!date) return res.status(400).json({ message: "date query parameter is required (YYYY-MM-DD)" });
     const tasks = await listTaskToday(owner, date, { ownerCoreUserId: owner });
-    console.log(`[tasks-service] GET /tasks/today  returned ${tasks.length} TodayTask(s) for ${date}`);
+    logger.debug(`[tasks-service] GET /tasks/today  returned ${tasks.length} TodayTask(s) for ${date}`);
     return res.json(tasks);
   } catch (error) {
     return handleError(res, error);
@@ -315,14 +318,14 @@ app.get("/tasks/today", requireUserAuth, async (req, res) => {
 // occurrenceDate = LBS execution date (may differ for Overdue/Planned tasks)
 app.post("/tasks/today", requireUserAuth, async (req, res) => {
   const owner = req.authUser?.coreUserId;
-  console.log(`[tasks-service] POST /tasks/today  owner=${owner ?? "?"} body=${JSON.stringify(req.body)}`);
+  logger.debug(`[tasks-service] POST /tasks/today  owner=${owner ?? "?"} body=${JSON.stringify(req.body)}`);
   try {
     const parsed = taskTodayAddSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
     if (!owner) return res.status(401).json({ message: "Missing auth context" });
     const { taskId, scheduledDate, occurrenceDate, startTime, endTime, timezone } = parsed.data;
     const result = await addTaskToToday(owner, taskId, scheduledDate, occurrenceDate, { startTime, endTime, timezone });
-    console.log(`[tasks-service] POST /tasks/today  created scheduleId=${result.id} taskId=${taskId}`);
+    logger.debug(`[tasks-service] POST /tasks/today  created scheduleId=${result.id} taskId=${taskId}`);
     return res.status(201).json(result);
   } catch (error) {
     return handleError(res, error);
@@ -337,14 +340,14 @@ app.delete("/tasks/today/:taskId", requireUserAuth, async (req, res) => {
   const taskId = String(req.params.taskId);
   const scheduledDate = typeof req.query.scheduledDate === "string" ? req.query.scheduledDate : undefined;
   const occurrenceDate = typeof req.query.occurrenceDate === "string" ? req.query.occurrenceDate : undefined;
-  console.log(
+  logger.debug(
     `[tasks-service] DELETE /tasks/today/${taskId}  owner=${owner ?? "?"} scheduledDate=${scheduledDate ?? "?"} occurrenceDate=${occurrenceDate ?? "?"}`
   );
   try {
     if (!owner) return res.status(401).json({ message: "Missing auth context" });
     if (!scheduledDate) return res.status(400).json({ message: "scheduledDate query parameter is required (YYYY-MM-DD)" });
     const result = await removeTaskFromToday(owner, taskId, scheduledDate, occurrenceDate);
-    console.log(`[tasks-service] DELETE /tasks/today/${taskId}  removed ${result.removed} item(s)`);
+    logger.debug(`[tasks-service] DELETE /tasks/today/${taskId}  removed ${result.removed} item(s)`);
     return res.json(result);
   } catch (error) {
     return handleError(res, error);
@@ -357,7 +360,7 @@ app.get("/tasks/schedule-calendar", requireUserAuth, async (req, res) => {
   const owner = req.authUser?.coreUserId;
   const startDate = typeof req.query.startDate === "string" ? req.query.startDate : undefined;
   const endDate = typeof req.query.endDate === "string" ? req.query.endDate : undefined;
-  console.log(`[tasks-service] GET /tasks/schedule-calendar  owner=${owner ?? "?"} ${startDate}→${endDate}`);
+  logger.debug(`[tasks-service] GET /tasks/schedule-calendar  owner=${owner ?? "?"} ${startDate}→${endDate}`);
   try {
     if (!owner) return res.status(401).json({ message: "Missing auth context" });
     if (!startDate || !endDate) return res.status(400).json({ message: "startDate and endDate query parameters are required" });
@@ -372,12 +375,12 @@ app.get("/tasks/schedule-calendar", requireUserAuth, async (req, res) => {
 app.put("/tasks/schedule-items/:id", requireUserAuth, async (req, res) => {
   const owner = req.authUser?.coreUserId;
   const scheduleId = parseInt(String(req.params.id), 10);
-  console.log(`[tasks-service] PUT /tasks/schedule-items/${scheduleId}  owner=${owner ?? "?"} body=${JSON.stringify(req.body)}`);
+  logger.debug(`[tasks-service] PUT /tasks/schedule-items/${scheduleId}  owner=${owner ?? "?"} body=${JSON.stringify(req.body)}`);
   try {
     if (!owner) return res.status(401).json({ message: "Missing auth context" });
     if (isNaN(scheduleId)) return res.status(400).json({ message: "id must be a number" });
     if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "occurrenceDate")) {
-      console.warn(
+      logger.warn(
         `[tasks-service] PUT /tasks/schedule-items/${scheduleId} ignored immutable occurrenceDate; use the occurrence move route`
       );
     }
@@ -792,8 +795,10 @@ if (!Number.isFinite(port)) {
   throw new Error(`Invalid TASKS_SERVICE_PORT value: ${process.env.TASKS_SERVICE_PORT}`);
 }
 
+installProcessHandlers(logger);
+
 void ensureTasksSchema().then(() => {
   app.listen(port, host, () => {
-    console.log(`Tasks service HTTP listening on ${host}:${port}`);
+    logger.info(`Tasks service HTTP listening on ${host}:${port}`);
   });
 });

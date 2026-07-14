@@ -176,6 +176,52 @@ pub fn open_new_quick_note_window(app: &tauri::AppHandle) -> Result<(), String> 
   Err("quick note window is not supported on this platform".to_string())
 }
 
+/// Opens or focuses the dedicated calendar window at a Workbench-local URL.
+pub fn open_calendar_window(app: &tauri::AppHandle, url: &str) -> Result<(), String> {
+  #[cfg(desktop)]
+  {
+    let current_url = app
+      .webview_windows()
+      .values()
+      .next()
+      .ok_or_else(|| "no Workbench window is available".to_string())?
+      .url()
+      .map_err(|error| format!("failed to read current app window URL: {error}"))?;
+    let target_url = validate_app_window_url(&current_url, url)?;
+
+    if let Some(calendar_window) = app.get_webview_window("calendar") {
+      calendar_window
+        .navigate(target_url)
+        .map_err(|error| format!("failed to navigate calendar window: {error}"))?;
+      let _ = calendar_window.unminimize();
+      let _ = calendar_window.show();
+      let _ = calendar_window.set_focus();
+      return Ok(());
+    }
+
+    let webview_url = match target_url.scheme() {
+      "http" | "https" => WebviewUrl::External(target_url),
+      _ => WebviewUrl::CustomProtocol(target_url),
+    };
+    WebviewWindowBuilder::new(app, "calendar", webview_url)
+      .title("Workbench Calendar")
+      .inner_size(1100.0, 800.0)
+      .resizable(true)
+      .focused(true)
+      .disable_drag_drop_handler()
+      .build()
+      .and_then(|window| {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+        Ok(())
+      })
+      .map_err(|error| format!("failed to open calendar window: {error}"))
+  }
+  #[cfg(not(desktop))]
+  Err("calendar window is not supported on this platform".to_string())
+}
+
 /// Opens a new app window at a URL within the current Workbench UI origin.
 ///
 /// This accepts relative app paths from the frontend and rejects any URL that

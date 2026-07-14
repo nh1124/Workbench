@@ -1,4 +1,5 @@
 import cors from "cors";
+import { createLogger, installProcessHandlers, requestLogger } from "@workbench/logging";
 import { config as loadEnv } from "dotenv";
 import express from "express";
 import path from "node:path";
@@ -40,9 +41,13 @@ function requireEnv(name: string): string {
   return value;
 }
 
+const logger = createLogger("wbs");
+installProcessHandlers(logger);
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "5mb" }));
+app.use(requestLogger(logger));
 
 const internalAccountSchema = z.object({
   coreUserId: z.string().min(1),
@@ -462,6 +467,6 @@ const host = requireEnv("WBS_SERVICE_HOST");
 
 void ensureWbsSchema().then(() => {
   app.listen(port, host, () => {
-    console.log(`[wbs] HTTP service listening on http://${host}:${port}`);
+    logger.info(`[wbs] HTTP service listening on http://${host}:${port}`);
   });
 });

@@ -1,4 +1,5 @@
 import { ensureCoreSchema, getCorePool } from "./db.js";
+import { logger } from "./logger.js";
 
 export const USAGE_EVENT_TYPES = ["context_truncation", "index_search", "resource_read"] as const;
 export type UsageEventType = (typeof USAGE_EVENT_TYPES)[number];
@@ -104,7 +105,7 @@ export function recordUsageEventBestEffort(
 ): void {
   void recorder(input).catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
-    console.warn("[usage] failed to record event", { eventType: input.eventType, message });
+    logger.warn("[usage] failed to record event", { eventType: input.eventType, message });
   });
 }
 

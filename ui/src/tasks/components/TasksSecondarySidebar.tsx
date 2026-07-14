@@ -1,6 +1,7 @@
+import { useEffect, useState } from "react";
 import { contextColor } from "../../lib/taskDisplayUtils";
 import type { ProjectOption } from "../../lib/taskDisplayUtils";
-import type { CalendarStatusFilter, QuickFilter, SidebarMode } from "../types";
+import type { CalendarMode, CalendarStatusFilter, QuickFilter, SidebarMode } from "../types";
 import type { TaskCounters } from "../lib/taskFilterUtils";
 import {
   IcoCal,
@@ -25,6 +26,8 @@ interface TasksSecondarySidebarProps {
   projectOptions: ProjectOption[];
   calendarStatusFilter: CalendarStatusFilter;
   setCalendarStatusFilter: (value: CalendarStatusFilter) => void;
+  calendarMode: CalendarMode;
+  onOpenCalendarWindow: (calendar: "due" | "schedule", view: CalendarMode) => void;
 }
 
 export function TasksSecondarySidebar({
@@ -38,7 +41,38 @@ export function TasksSecondarySidebar({
   projectOptions,
   calendarStatusFilter,
   setCalendarStatusFilter,
+  calendarMode,
+  onOpenCalendarWindow,
 }: TasksSecondarySidebarProps) {
+  const [calendarMenu, setCalendarMenu] = useState<{
+    calendar: "due" | "schedule";
+    x: number;
+    y: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!calendarMenu) return;
+    const close = () => setCalendarMenu(null);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [calendarMenu]);
+
+  const openContextMenu = (
+    event: React.MouseEvent<HTMLButtonElement>,
+    calendar: "due" | "schedule"
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setCalendarMenu({ calendar, x: event.clientX, y: event.clientY });
+  };
+
   return (
     <aside className="tasks-secondary">
       <header className="tasks-secondary-head">
@@ -46,8 +80,8 @@ export function TasksSecondarySidebar({
       </header>
       <div className="tasks-secondary-group" style={{ borderTop: 0, paddingTop: 0 }}>
         <button type="button" className={sidebarMode === "list" ? "sidebar-tab active" : "sidebar-tab"} onClick={() => setSidebarMode("list")}><IcoList /> Task List</button>
-        <button type="button" className={sidebarMode === "calendar" ? "sidebar-tab active" : "sidebar-tab"} onClick={() => setSidebarMode("calendar")}><IcoCal /> Due Calendar</button>
-        <button type="button" className={sidebarMode === "schedule" ? "sidebar-tab active" : "sidebar-tab"} onClick={() => setSidebarMode("schedule")}><IcoCal /> Schedule</button>
+        <button type="button" className={sidebarMode === "calendar" ? "sidebar-tab active" : "sidebar-tab"} onClick={() => setSidebarMode("calendar")} onContextMenu={(event) => openContextMenu(event, "due")}><IcoCal /> Due Calendar</button>
+        <button type="button" className={sidebarMode === "schedule" ? "sidebar-tab active" : "sidebar-tab"} onClick={() => setSidebarMode("schedule")} onContextMenu={(event) => openContextMenu(event, "schedule")}><IcoCal /> Schedule</button>
       </div>
 
       {sidebarMode === "list" && (
@@ -126,6 +160,24 @@ export function TasksSecondarySidebar({
             ))}
           </div>
         </>
+      )}
+      {calendarMenu && (
+        <div
+          className="task-occurrence-menu"
+          style={{ left: calendarMenu.x, top: calendarMenu.y }}
+          onMouseDown={(event) => event.stopPropagation()}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              onOpenCalendarWindow(calendarMenu.calendar, calendarMode);
+              setCalendarMenu(null);
+            }}
+          >
+            別ウィンドウで開く
+          </button>
+        </div>
       )}
     </aside>
   );

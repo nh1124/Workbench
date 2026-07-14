@@ -4,6 +4,7 @@ export type ShortcutActionId =
   | "new_window_taskbar"
   | "quick_note"
   | "quick_note_alt"
+  | "open_calendar_window"
   | "undo_delete"
   | "send_message"
   | "new_line"
@@ -82,6 +83,15 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
     section: "Notes",
     label: "Quick Note (Alt)",
     defaultBinding: { key: "N", ctrl: true, alt: true },
+    editable: true,
+    handledGlobally: true,
+    nativeGlobal: true
+  },
+  {
+    id: "open_calendar_window",
+    section: "Tasks",
+    label: "Open Calendar Window",
+    defaultBinding: { key: "C", ctrl: true, alt: true },
     editable: true,
     handledGlobally: true,
     nativeGlobal: true
