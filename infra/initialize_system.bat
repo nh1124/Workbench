@@ -31,6 +31,8 @@ if errorlevel 1 exit /b 1
 node "%SCRIPT_DIR%\scripts\workbench-env.mjs" sync
 if errorlevel 1 exit /b 1
 
+if not exist "%PROJECT_ROOT%\logs" mkdir "%PROJECT_ROOT%\logs"
+
 echo Environment files are ready.
 exit /b 0
 

@@ -1,4 +1,5 @@
 import { listPinnedTaskIds } from "./db.js";
+import { logger } from "./logger.js";
 import {
   type ScheduleItemRow,
   addScheduleItem,
@@ -66,7 +67,7 @@ export async function listTaskToday(
   backendContext: LbsBackendContext,
   dependencyOverrides: Partial<TaskScheduleStoreDependencies> = {}
 ): Promise<TodayTask[]> {
-  console.log(`[tasks-service] listTaskToday owner=${ownerUsername} date=${date}`);
+  logger.debug(`[tasks-service] listTaskToday owner=${ownerUsername} date=${date}`);
 
   const config = getLbsConfig();
   const dependencies = { ...defaultDependencies, ...dependencyOverrides };
@@ -74,7 +75,7 @@ export async function listTaskToday(
   const pinnedIds = new Set(await dependencies.listPinnedTaskIds(ownerUsername));
 
   const scheduleItems = await dependencies.listItemsByScheduledDate(ownerUsername, date);
-  console.log(`[tasks-service] listTaskToday explicit schedule items=${scheduleItems.length} date=${date}`);
+  logger.debug(`[tasks-service] listTaskToday explicit schedule items=${scheduleItems.length} date=${date}`);
 
   if (scheduleItems.length === 0) return [];
 
@@ -83,7 +84,7 @@ export async function listTaskToday(
   const maxOccurrenceDate = occurrenceDates[occurrenceDates.length - 1];
   const [rawTasks, lbsSchedule] = await Promise.all([
     (client.listTasks(undefined, config.defaultActive) as unknown as Promise<LbsTask[]>).catch((error) => {
-      console.warn(
+      logger.warn(
         `[tasks-service] listTaskToday definition batch failed; using per-item fallback: ${
           error instanceof Error ? error.message : String(error)
         }`
@@ -91,7 +92,7 @@ export async function listTaskToday(
       return [];
     }),
     client.getSchedule(minOccurrenceDate, maxOccurrenceDate).catch((error) => {
-      console.warn(
+      logger.warn(
         `[tasks-service] listTaskToday status batch failed; using per-item fallback: ${
           error instanceof Error ? error.message : String(error)
         }`
@@ -130,7 +131,7 @@ export async function listTaskToday(
         timezone: scheduleItem?.timezone
       };
     } catch (error) {
-      console.warn(
+      logger.warn(
         `[tasks-service] listTaskToday skipping ${taskId}@${occurrenceDate}: ${
           error instanceof Error ? error.message : String(error)
         }`
@@ -146,7 +147,7 @@ export async function listTaskToday(
   const result = explicitTasks.filter(
     (task): task is TodayTask => task !== null
   );
-  console.log(`[tasks-service] listTaskToday returning=${result.length} date=${date}`);
+  logger.debug(`[tasks-service] listTaskToday returning=${result.length} date=${date}`);
   return result;
 }
 
@@ -164,7 +165,7 @@ export async function addTaskToToday(
     scheduledDate,
     occurrenceDate
   );
-  console.log(
+  logger.debug(
     `[tasks-service] addTaskToToday owner=${ownerUsername} taskId=${taskId} scheduledDate=${scheduledDate} occurrenceDate=${effectiveOccurrenceDate}`
   );
   const result = await addScheduleItem(
@@ -174,7 +175,7 @@ export async function addTaskToToday(
     scheduledDate,
     opts
   );
-  console.log(`[tasks-service] addTaskToToday created scheduleId=${result.id}`);
+  logger.debug(`[tasks-service] addTaskToToday created scheduleId=${result.id}`);
   return result;
 }
 
@@ -191,7 +192,7 @@ export async function updateTaskScheduleItem(
     timezone?: string | null;
   }
 ): Promise<ScheduleItemRow | undefined> {
-  console.log(
+  logger.debug(
     `[tasks-service] updateTaskScheduleItem owner=${ownerUsername} scheduleId=${scheduleId}`
   );
   return updateScheduleItemInStore(ownerUsername, scheduleId, patch);
@@ -223,7 +224,7 @@ export async function removeTaskFromToday(
   const exactOccurrenceDate = hasExactScheduleOccurrenceDate(occurrenceDate)
     ? occurrenceDate.trim()
     : undefined;
-  console.log(
+  logger.debug(
     `[tasks-service] removeTaskFromToday owner=${ownerUsername} taskId=${taskId} scheduledDate=${scheduledDate} occurrenceDate=${exactOccurrenceDate ?? "compat-broad"}`
   );
   const removed = exactOccurrenceDate
@@ -238,7 +239,7 @@ export async function removeTaskFromToday(
         taskId,
         scheduledDate
       );
-  console.log(`[tasks-service] removeTaskFromToday removed=${removed}`);
+  logger.debug(`[tasks-service] removeTaskFromToday removed=${removed}`);
   return { taskId, scheduledDate, occurrenceDate: exactOccurrenceDate, removed };
 }
 
@@ -252,7 +253,7 @@ export async function listTaskScheduleCalendar(
   backendContext: LbsBackendContext,
   dependencyOverrides: Partial<TaskScheduleStoreDependencies> = {}
 ): Promise<ScheduleCalendarDay[]> {
-  console.log(
+  logger.debug(
     `[tasks-service] listTaskScheduleCalendar owner=${ownerUsername} ${startDate}->${endDate}`
   );
 
@@ -298,7 +299,7 @@ export async function listTaskScheduleCalendar(
           isLocked: mappedStatus?.isLocked ?? withStatus.isLocked
         };
       } catch (error) {
-        console.warn(
+        logger.warn(
           `[tasks-service] listTaskScheduleCalendar skipping ${item.taskId}@${item.occurrenceDate}: ${
             error instanceof Error ? error.message : String(error)
           }`
@@ -353,7 +354,7 @@ export async function listTaskScheduleCalendar(
     });
     days.push({ date, items: dateItems });
   }
-  console.log(`[tasks-service] listTaskScheduleCalendar returning days=${days.length}`);
+  logger.debug(`[tasks-service] listTaskScheduleCalendar returning days=${days.length}`);
   return days;
 }
 

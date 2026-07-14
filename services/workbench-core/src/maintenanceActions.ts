@@ -1,4 +1,5 @@
 import { notesClient, projectsClient } from "./internalClients.js";
+import { logger } from "./logger.js";
 import {
   projectIdFromMutationResult,
   recordProjectContextInvalidationsBestEffort,
@@ -67,7 +68,7 @@ async function recordNoteMutationBestEffort(
       resource: asRecord(result)
     });
   } catch (error) {
-    console.warn("[sync] failed to record maintenance note event", {
+    logger.warn("[sync] failed to record maintenance note event", {
       noteId,
       operation,
       message: error instanceof Error ? error.message : String(error)
@@ -99,7 +100,7 @@ async function recordMemoryInvalidationBestEffort(
       }
     });
   } catch (error) {
-    console.warn("[sync] failed to record maintenance memory invalidation", {
+    logger.warn("[sync] failed to record maintenance memory invalidation", {
       memoryId,
       projectId,
       operation,

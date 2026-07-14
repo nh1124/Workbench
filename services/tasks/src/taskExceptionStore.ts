@@ -1,6 +1,7 @@
 import { getLbsBackend } from "./lbs/backendFactory.js";
 import type { LbsBackendContext, LbsDataPlane } from "./lbs/dataPlane.js";
 import { toDueDateOnly } from "./lbsTaskService.js";
+import { logger } from "./logger.js";
 
 function extractExceptionId(record: Record<string, unknown>): number | undefined {
   const id = record.id;
@@ -165,10 +166,9 @@ export async function moveTaskOccurrence(
         sourceExceptionId
       );
     } catch (compensationError) {
-      console.error(
-        `[tasks-service] failed to compensate occurrence move ${taskId}@${normalizedSource}: ${
-          compensationError instanceof Error ? compensationError.message : String(compensationError)
-        }`
+      logger.error(
+        `[tasks-service] failed to compensate occurrence move ${taskId}@${normalizedSource}`,
+        { err: compensationError }
       );
     }
     throw error;

@@ -12,7 +12,9 @@ import { lookup as dnsLookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { installProcessHandlers, requestLogger } from "@workbench/logging";
 import { issueTokenBundle, verifyAccessToken, verifyRefreshToken } from "./auth.js";
+import { logger } from "./logger.js";
 import { ensureCoreSchema } from "./db.js";
 import { getIntegrationManifests } from "./integrations/index.js";
 import { registerArtifactsTools } from "./mcp/registerArtifactsTools.js";
@@ -758,7 +760,7 @@ async function resolveOAuthClient(clientId: string, redirectUri: string): Promis
   } else {
     const dynamicallyRegisteredClient = await resolveClientFromDynamicRegistration(clientId);
     if (!dynamicallyRegisteredClient) {
-      console.warn("[oauth] client resolution failed for non-URL client_id", {
+      logger.warn("[oauth] client resolution failed for non-URL client_id", {
         client_id: clientId,
         redirect_uri: redirectUri
       });
@@ -768,7 +770,7 @@ async function resolveOAuthClient(clientId: string, redirectUri: string): Promis
         message: "client is not recognized"
       };
     }
-    console.info("[oauth] resolved dynamically registered client", {
+    logger.debug("[oauth] resolved dynamically registered client", {
       client_id: dynamicallyRegisteredClient.clientId,
       redirect_uri: redirectUri
     });
@@ -901,6 +903,7 @@ function renderAuthorizeLoginForm(params: AuthorizeRequestParams, errorMessage?:
 export const app = express();
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
+app.use(requestLogger(logger));
 
 const accountSchema = z.object({
   username: z.string().min(1),
@@ -1271,7 +1274,7 @@ async function requireLocalClientCapability(
         path: req.path
       }).catch((auditError) => {
         const message = auditError instanceof Error ? auditError.message : String(auditError);
-        console.warn("[local-client] failed to record capability denial", {
+        logger.warn("[local-client] failed to record capability denial", {
           localClientId: localContext.client.id,
           capability,
           message
@@ -1445,7 +1448,7 @@ function recordSyncEventBestEffort(
     })
     .catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
-      console.warn("[sync] failed to record event", { domain, resourceId, action, message });
+      logger.warn("[sync] failed to record event", { domain, resourceId, action, message });
     });
 }
 
@@ -2625,7 +2628,7 @@ app.get("/health", (_req, res) => {
 });
 
 function logAuthorizeRequest(params: AuthorizeRequestParams): void {
-  console.info("[oauth] authorize request", {
+  logger.debug("[oauth] authorize request", {
     client_id: params.clientId,
     redirect_uri: params.redirectUri,
     resource: params.resource,
@@ -2644,7 +2647,7 @@ function logTokenFailure(
     | "unsupported_grant_type",
   details: Record<string, string | number | boolean | undefined> = {}
 ): void {
-  console.warn("[oauth] token exchange failure", { reason, ...details });
+  logger.warn("[oauth] token exchange failure", { reason, ...details });
 }
 
 app.get("/.well-known/oauth-protected-resource", (req, res) => {
@@ -2659,7 +2662,7 @@ app.get("/.well-known/oauth-protected-resource", (req, res) => {
 
 app.get("/.well-known/oauth-authorization-server", (req, res) => {
   const issuer = buildOAuthIssuer(req);
-  console.info("[oauth] authorization server metadata requested", {
+  logger.debug("[oauth] authorization server metadata requested", {
     user_agent: req.header("user-agent") || "(missing)",
     issuer
   });
@@ -2681,7 +2684,7 @@ app.post(DYNAMIC_CLIENT_REGISTRATION_PATH, async (req, res) => {
   const redirectUrisCount = Array.isArray(payload?.redirect_uris)
     ? payload.redirect_uris.filter((value): value is string => typeof value === "string").length
     : 0;
-  console.info("[oauth] dynamic client registration request received", {
+  logger.debug("[oauth] dynamic client registration request received", {
     user_agent: req.header("user-agent") || "(missing)",
     content_type: req.header("content-type") || "(missing)",
     has_client_name: typeof payload?.client_name === "string" && payload.client_name.trim().length > 0,
@@ -2694,7 +2697,7 @@ app.post(DYNAMIC_CLIENT_REGISTRATION_PATH, async (req, res) => {
 
   const parsed = parseDynamicClientRegistrationPayload(req.body);
   if (!parsed.ok) {
-    console.warn("[oauth] dynamic client registration rejected", {
+    logger.warn("[oauth] dynamic client registration rejected", {
       reason: parsed.reason,
       error: parsed.error,
       ...parsed.details
@@ -2714,7 +2717,7 @@ app.post(DYNAMIC_CLIENT_REGISTRATION_PATH, async (req, res) => {
       grantTypes: parsed.grantTypes,
       responseTypes: parsed.responseTypes
     });
-    console.info("[oauth] dynamic client registration succeeded", {
+    logger.debug("[oauth] dynamic client registration succeeded", {
       client_id: registeredClient.clientId,
       client_name: registeredClient.clientName,
       redirect_uris_count: registeredClient.redirectUris.length
@@ -2811,7 +2814,7 @@ app.post("/authorize", express.urlencoded({ extended: false }), async (req, res)
 
 app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => {
   const grantType = typeof req.body?.grant_type === "string" ? req.body.grant_type.trim() : "";
-  console.info("[oauth] token request received", {
+  logger.debug("[oauth] token request received", {
     grant_type: grantType || "(missing)",
     client_id: typeof req.body?.client_id === "string" ? req.body.client_id : "(missing)",
     redirect_uri: typeof req.body?.redirect_uri === "string" ? req.body.redirect_uri : "(missing)",
@@ -2846,13 +2849,13 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
     const record = authorizationCodeStore.get(code);
     if (!record) {
       logTokenFailure("invalid_code", { grant_type: "authorization_code", client_id: clientId });
-      console.warn("[oauth] auth code not found or expired", { client_id: clientId, store_size: authorizationCodeStore.size });
+      logger.warn("[oauth] auth code not found or expired", { client_id: clientId, store_size: authorizationCodeStore.size });
       return res.status(400).json({
         error: "invalid_grant"
       });
     }
 
-    console.info("[oauth] auth code record found", {
+    logger.debug("[oauth] auth code record found", {
       record_client_id: record.clientId,
       request_client_id: clientId,
       record_redirect_uri: record.redirectUri,
@@ -2899,7 +2902,7 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
 
     const usedStoredResourceFallback = !tokenRequestResourcePresent;
     const effectiveResource = usedStoredResourceFallback ? record.resource : tokenRequestResource;
-    console.info("[oauth] authorization_code resource resolution", {
+    logger.debug("[oauth] authorization_code resource resolution", {
       client_id: clientId,
       token_request_resource_present: tokenRequestResourcePresent,
       used_stored_resource_fallback: usedStoredResourceFallback
@@ -2907,7 +2910,7 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
 
     // Validate that the effective resource matches this server's canonical MCP resource.
     const canonicalResource = buildCanonicalMcpResource(req);
-    console.info("[oauth] resource check", {
+    logger.debug("[oauth] resource check", {
       effective_resource: effectiveResource,
       canonical_resource: canonicalResource,
       match: effectiveResource === canonicalResource
@@ -2926,7 +2929,7 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
     }
 
     const computedChallenge = base64UrlSha256(codeVerifier);
-    console.info("[oauth] PKCE check", {
+    logger.debug("[oauth] PKCE check", {
       match: computedChallenge === record.codeChallenge
     });
     if (record.codeChallengeMethod !== "S256" || computedChallenge !== record.codeChallenge) {
@@ -2939,7 +2942,7 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
 
     authorizationCodeStore.delete(code);
     const issuedResource = record.resource;
-    console.info("[oauth] token issuance result", {
+    logger.debug("[oauth] token issuance result", {
       client_id: clientId,
       token_request_resource_present: tokenRequestResourcePresent,
       used_stored_resource_fallback: usedStoredResourceFallback,
@@ -2958,7 +2961,7 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
         : undefined;
 
     if (record.allowRefreshTokenGrant) {
-      console.info("[oauth] refresh token issued", {
+      logger.debug("[oauth] refresh token issued", {
         client_id: clientId,
         grant_type: "authorization_code",
         scope: record.scope
@@ -3072,7 +3075,7 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
     refreshRecord.replacedByTokenHash = rotated.record.tokenHash;
     oauthRefreshTokenStore.set(refreshTokenHash, refreshRecord);
 
-    console.info("[oauth] refresh token grant succeeded", {
+    logger.debug("[oauth] refresh token grant succeeded", {
       client_id: clientId,
       scope: effectiveScope
     });
@@ -6210,7 +6213,7 @@ app.get("/api/tasks/today", async (req, res) => {
   const authContext = await requireAuthenticatedContext(req, res);
   if (!authContext) return;
   const date = typeof req.query.date === "string" ? req.query.date : undefined;
-  console.log(`[workbench-core] GET /api/tasks/today  date=${date ?? "?"}`);
+  logger.debug(`[workbench-core] GET /api/tasks/today  date=${date ?? "?"}`);
   if (!date) return res.status(400).json({ message: "date query parameter is required (YYYY-MM-DD)" });
   try {
     const result = await tasksClient.today(authContext.accessToken, date);
@@ -6229,7 +6232,7 @@ app.get("/api/tasks/schedule-calendar", async (req, res) => {
   if (!authContext) return;
   const startDate = typeof req.query.startDate === "string" ? req.query.startDate : undefined;
   const endDate = typeof req.query.endDate === "string" ? req.query.endDate : undefined;
-  console.log(`[workbench-core] GET /api/tasks/schedule-calendar  ${startDate}→${endDate}`);
+  logger.debug(`[workbench-core] GET /api/tasks/schedule-calendar  ${startDate}→${endDate}`);
   if (!startDate || !endDate) return res.status(400).json({ message: "startDate and endDate query parameters are required" });
   try {
     const result = await tasksClient.scheduleCalendar(authContext.accessToken, startDate, endDate);
@@ -6589,7 +6592,7 @@ app.delete("/api/tasks/:id/occurrences/:date/subtasks/:subtaskId", async (req, r
 app.post("/api/tasks/today", async (req, res) => {
   const authContext = await requireAuthenticatedContext(req, res);
   if (!authContext) return;
-  console.log(`[workbench-core] POST /api/tasks/today  body=${JSON.stringify(req.body)}`);
+  logger.debug(`[workbench-core] POST /api/tasks/today  body=${JSON.stringify(req.body)}`);
   try {
     const { taskId, scheduledDate, occurrenceDate, startTime, endTime, timezone } = req.body as {
       taskId?: unknown; scheduledDate?: unknown; occurrenceDate?: unknown;
@@ -6638,7 +6641,7 @@ app.delete("/api/tasks/today/:taskId", async (req, res) => {
   const taskId = String(req.params.taskId);
   const scheduledDate = typeof req.query.scheduledDate === "string" ? req.query.scheduledDate : undefined;
   const occurrenceDate = typeof req.query.occurrenceDate === "string" ? req.query.occurrenceDate : undefined;
-  console.log(`[workbench-core] DELETE /api/tasks/today/${taskId}  scheduledDate=${scheduledDate ?? "?"} occurrenceDate=${occurrenceDate ?? "?"}`);
+  logger.debug(`[workbench-core] DELETE /api/tasks/today/${taskId}  scheduledDate=${scheduledDate ?? "?"} occurrenceDate=${occurrenceDate ?? "?"}`);
   if (!scheduledDate) return res.status(400).json({ message: "scheduledDate query parameter is required (YYYY-MM-DD)" });
   try {
     const result = await tasksClient.removeFromToday(authContext.accessToken, taskId, scheduledDate, occurrenceDate);
@@ -6662,7 +6665,7 @@ app.put("/api/tasks/schedule-items/:id", async (req, res) => {
   const authContext = await requireAuthenticatedContext(req, res);
   if (!authContext) return;
   const scheduleId = parseInt(req.params.id, 10);
-  console.log(`[workbench-core] PUT /api/tasks/schedule-items/${scheduleId}  body=${JSON.stringify(req.body)}`);
+  logger.debug(`[workbench-core] PUT /api/tasks/schedule-items/${scheduleId}  body=${JSON.stringify(req.body)}`);
   if (isNaN(scheduleId)) return res.status(400).json({ message: "id must be a number" });
   try {
     const patch = req.body as { scheduledDate?: string; occurrenceDate?: string; startTime?: string | null; endTime?: string | null; timezone?: string | null };
@@ -6814,7 +6817,7 @@ app.post("/mcp", async (req, res) => {
 
   const bundle = issueTokenBundle({ userId: user.id, username: user.username });
   injectedContext = { accessToken: bundle.accessToken };
-  console.info("[mcp] user context injected", { username: user.username });
+  logger.info("[mcp] user context injected", { username: user.username });
 
   const server = createMcpServerInstance(injectedContext);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
@@ -6899,14 +6902,15 @@ export async function startHttpServer(): Promise<void> {
 
   await ensureCoreSchema();
   app.listen(port, host, () => {
-    console.log(`Workbench Core HTTP listening on ${host}:${port}`);
-    console.log(`MCP HTTP endpoint available at POST http://${host}:${port}/mcp`);
+    logger.info(`Workbench Core HTTP listening on ${host}:${port}`);
+    logger.info(`MCP HTTP endpoint available at POST http://${host}:${port}/mcp`);
     if (canonicalBaseConfig) {
-      console.log(`Canonical external OAuth base configured as ${canonicalBaseConfig.issuer}`);
+      logger.info(`Canonical external OAuth base configured as ${canonicalBaseConfig.issuer}`);
     }
   });
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
+  installProcessHandlers(logger);
   void startHttpServer();
 }

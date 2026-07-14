@@ -3,6 +3,7 @@ FROM node:20-bookworm-slim AS builder
 WORKDIR /app
 
 COPY package.json package-lock.json tsconfig.base.json ./
+COPY services/logging services/logging
 COPY services/artifacts/package.json services/artifacts/package.json
 COPY services/artifacts/tsconfig.json services/artifacts/tsconfig.json
 COPY services/artifacts/src services/artifacts/src
@@ -28,6 +29,7 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./
+COPY services/logging services/logging
 COPY services/artifacts/package.json services/artifacts/package.json
 RUN npm ci --omit=dev --workspace services/artifacts --include-workspace-root=false
 

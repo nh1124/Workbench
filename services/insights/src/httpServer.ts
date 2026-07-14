@@ -1,4 +1,5 @@
 import cors from "cors";
+import { createLogger, installProcessHandlers, requestLogger } from "@workbench/logging";
 import { config as loadEnv } from "dotenv";
 import express from "express";
 import path from "node:path";
@@ -15,7 +16,9 @@ loadEnv({ path: path.resolve(__dirname, "../.env") });
 function requireEnv(name: string): string {
   const value = process.env[name]?.trim(); if (!value) throw new Error(`Missing required environment variable: ${name}`); return value;
 }
-const app = express(); app.use(cors()); app.use(express.json({ limit: "5mb" }));
+const logger = createLogger("insights");
+installProcessHandlers(logger);
+const app = express(); app.use(cors()); app.use(express.json({ limit: "5mb" })); app.use(requestLogger(logger));
 type AsyncRouteHandler = (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<unknown>;
 function asyncRoute(handler: AsyncRouteHandler): express.RequestHandler { return (req, res, next) => { void handler(req, res, next).catch(next); }; }
 function ownerFromRequest(req: express.Request, res: express.Response): string | undefined {
@@ -83,4 +86,4 @@ app.use((error: unknown, _req: express.Request, res: express.Response, next: exp
   if (res.headersSent) { next(error); return; } respondError(res, error);
 });
 const port = Number(requireEnv("INSIGHTS_SERVICE_PORT")); const host = requireEnv("INSIGHTS_SERVICE_HOST");
-void ensureInsightsSchema().then(() => app.listen(port, host, () => console.log(`[insights] HTTP service listening on http://${host}:${port}`)));
+void ensureInsightsSchema().then(() => app.listen(port, host, () => logger.info(`[insights] HTTP service listening on http://${host}:${port}`)));

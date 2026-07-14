@@ -8,6 +8,7 @@ import {
   tasksClient,
   wbsClient
 } from "./internalClients.js";
+import { logger } from "./logger.js";
 
 export const SECONDARY_MEMBERSHIP_RELATION = "secondary_membership";
 export const ARTIFACT_TARGET_SERVICE = "artifacts";
@@ -649,7 +650,7 @@ export async function listArtifactProjectIdsBestEffort(token: string, rawItem: u
   try {
     root = parseArtifactItem(rawItem);
   } catch (error) {
-    console.warn("[project-context-sync] failed to identify the Artifact Project", {
+    logger.warn("[project-context-sync] failed to identify the Artifact Project", {
       message: error instanceof Error ? error.message : String(error)
     });
     return [];
@@ -679,7 +680,7 @@ export async function listArtifactProjectIdsBestEffort(token: string, rawItem: u
       for (const link of await listSecondaryLinks(token, item.id)) projectIds.add(link.projectId);
     }
   } catch (error) {
-    console.warn("[project-context-sync] failed to enumerate every Artifact Project", {
+    logger.warn("[project-context-sync] failed to enumerate every Artifact Project", {
       artifactItemId: root.id,
       message: error instanceof Error ? error.message : String(error)
     });
@@ -708,7 +709,7 @@ async function tombstoneArtifactEntry(token: string, projectId: string, item: Ar
 }
 
 function logDerivedFailure(operation: string, itemId: string, error: unknown): void {
-  console.warn("[project-index] derived update failed", {
+  logger.warn("[project-index] derived update failed", {
     operation,
     artifactItemId: itemId,
     message: error instanceof Error ? error.message : String(error)
@@ -744,7 +745,7 @@ export async function maintainArtifactIndexBestEffort(token: string, rawItem: un
 }
 
 function logMindmapDerivedFailure(operation: string, documentId: string, error: unknown): void {
-  console.warn("[project-index] mindmap derived update failed", {
+  logger.warn("[project-index] mindmap derived update failed", {
     operation,
     documentId,
     message: error instanceof Error ? error.message : String(error)
@@ -771,7 +772,7 @@ export function mindmapProjectIdsBestEffort(rawDocument: unknown): string[] {
     const document = parseMindmapDocument(rawDocument);
     return document.projectId ? [document.projectId] : [];
   } catch (error) {
-    console.warn("[project-context-sync] failed to identify the Mindmap Project", {
+    logger.warn("[project-context-sync] failed to identify the Mindmap Project", {
       message: error instanceof Error ? error.message : String(error)
     });
     return [];
@@ -880,7 +881,7 @@ export async function rebuildProjectMindmapIndex(token: string, projectId: strin
 }
 
 function logWbsDerivedFailure(operation: string, planId: string, error: unknown): void {
-  console.warn("[project-index] wbs derived update failed", {
+  logger.warn("[project-index] wbs derived update failed", {
     operation,
     planId,
     message: error instanceof Error ? error.message : String(error)
@@ -924,7 +925,7 @@ export function wbsProjectIdsBestEffort(rawPlan: unknown): string[] {
     const plan = parseWbsPlan(rawPlan);
     return plan.projectId ? [plan.projectId] : [];
   } catch (error) {
-    console.warn("[project-context-sync] failed to identify the WBS Project", {
+    logger.warn("[project-context-sync] failed to identify the WBS Project", {
       message: error instanceof Error ? error.message : String(error)
     });
     return [];
@@ -1571,7 +1572,7 @@ export async function rebuildProjectArtifactIndex(token: string, projectId: stri
       if (error instanceof InternalServiceError && error.service === "artifacts" && error.status === 404) {
         await projectsClient.removeLink(token, link.id);
         staleLinksRemoved += 1;
-        console.warn("[project-index] removed stale secondary membership during rebuild", {
+        logger.warn("[project-index] removed stale secondary membership during rebuild", {
           projectId,
           linkId: link.id,
           message: error.message
@@ -1646,7 +1647,7 @@ export async function rebuildProjectIndex(token: string, projectId: string): Pro
     mindmaps = await rebuildProjectMindmapIndex(token, projectId);
   } catch (error) {
     mindmaps = optionalServiceRebuildFailure(MINDMAP_TARGET_SERVICE, error);
-    console.warn("[project-index] mindmap rebuild failed; preserving artifact rebuild result", {
+    logger.warn("[project-index] mindmap rebuild failed; preserving artifact rebuild result", {
       projectId,
       mindmaps
     });
@@ -1656,7 +1657,7 @@ export async function rebuildProjectIndex(token: string, projectId: string): Pro
     wbs = await rebuildProjectWbsIndex(token, projectId);
   } catch (error) {
     wbs = optionalServiceRebuildFailure(WBS_TARGET_SERVICE, error);
-    console.warn("[project-index] wbs rebuild failed; preserving other rebuild results", {
+    logger.warn("[project-index] wbs rebuild failed; preserving other rebuild results", {
       projectId,
       wbs
     });

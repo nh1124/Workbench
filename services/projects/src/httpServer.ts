@@ -1,4 +1,5 @@
 import cors from "cors";
+import { createLogger, installProcessHandlers, requestLogger } from "@workbench/logging";
 import { config as loadEnv } from "dotenv";
 import express from "express";
 import path from "node:path";
@@ -173,9 +174,12 @@ function respondInvalidCursor(res: express.Response, error: unknown): boolean {
   return true;
 }
 
+const logger = createLogger("projects");
+
 export const app = express();
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
+app.use(requestLogger(logger));
 
 const projectInputSchema = z.object({
   name: z.string().min(1),
@@ -1007,9 +1011,10 @@ if (!Number.isFinite(port)) {
 
 const isDirectExecution = process.argv[1] ? path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url)) : false;
 if (isDirectExecution) {
+  installProcessHandlers(logger);
   void ensureProjectsSchema().then(() => {
     app.listen(port, host, () => {
-      console.log(`Projects service HTTP listening on ${host}:${port}`);
+      logger.info(`Projects service HTTP listening on ${host}:${port}`);
     });
   });
 }

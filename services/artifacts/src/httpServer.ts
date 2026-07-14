@@ -1,4 +1,5 @@
 ﻿import cors from "cors";
+import { createLogger, installProcessHandlers, requestLogger } from "@workbench/logging";
 import { config as loadEnv } from "dotenv";
 import express from "express";
 import multer from "multer";
@@ -45,9 +46,13 @@ function requireEnv(name: string): string {
   return value;
 }
 
+const logger = createLogger("artifacts");
+installProcessHandlers(logger);
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "25mb" }));
+app.use(requestLogger(logger));
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -429,7 +434,7 @@ function scheduleWordPreviewGeneration(itemId: string, owner: string): void {
     void generateWordPreviewPdf(itemId, owner)
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
-        console.warn(`[artifacts] word preview generation failed for ${itemId}: ${message}`);
+        logger.warn(`[artifacts] word preview generation failed for ${itemId}: ${message}`);
       })
       .finally(() => {
         wordPreviewGenerationInFlight.delete(key);
@@ -882,6 +887,6 @@ if (!Number.isFinite(port)) {
 
 void ensureArtifactsSchema().then(() => {
   app.listen(port, host, () => {
-    console.log(`Artifacts service HTTP listening on ${host}:${port}`);
+    logger.info(`Artifacts service HTTP listening on ${host}:${port}`);
   });
 });

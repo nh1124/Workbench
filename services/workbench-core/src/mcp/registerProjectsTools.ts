@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { projectsClient } from "../internalClients.js";
+import { logger } from "../logger.js";
 import { deleteProjectWithGuard } from "../projectContext.js";
 import { recordProjectContextInvalidationsBestEffort } from "../projectContextSync.js";
 import { recordSyncEvent, type SyncAction } from "../syncStore.js";
@@ -41,7 +42,7 @@ async function recordBaseProjectEventFromMcp(
   try {
     await recordSyncEvent(userId, "projects", projectId, action, payload);
   } catch (error) {
-    console.warn("[sync] failed to record MCP Project event", {
+    logger.warn("[sync] failed to record MCP Project event", {
       projectId,
       action,
       message: error instanceof Error ? error.message : String(error)

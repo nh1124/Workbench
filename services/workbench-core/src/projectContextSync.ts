@@ -1,3 +1,4 @@
+import { logger } from "./logger.js";
 import { recordSyncEvent, type SyncAction, type SyncDomain, type SyncEvent } from "./syncStore.js";
 
 type JsonRecord = Record<string, unknown>;
@@ -103,7 +104,7 @@ export async function recordProjectContextInvalidationsBestEffort(
     try {
       await recordProjectContextInvalidation(userId, { ...input, projectId }, recorder);
     } catch (error) {
-      console.warn("[sync] failed to record Project context invalidation", {
+      logger.warn("[sync] failed to record Project context invalidation", {
         projectId,
         changed: input.changed,
         entityType: input.entityType,

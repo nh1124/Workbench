@@ -59,10 +59,17 @@ services:
       INTERNAL_API_KEY: workbench-internal-artifacts
       # Optional override (already defaulted in Dockerfile)
       ARTIFACTS_OFFICE_CONVERTER_CMD: /usr/bin/soffice
+      WORKBENCH_LOG_DIR: /app/logs
     ports:
       - "4102:4102"
     volumes:
       - artifacts_storage:/app/services/artifacts/storage
+      - ./logs:/app/logs
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   tasks-db:
     image: postgres:16-alpine

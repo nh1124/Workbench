@@ -1,4 +1,5 @@
 import { cacheTasks, listPinnedTaskIds, setTaskPinned } from "./db.js";
+import { logger } from "./logger.js";
 import { getLbsBackend } from "./lbs/backendFactory.js";
 import type { LbsBackendContext, LbsDataPlane, LbsScheduleDay } from "./lbs/dataPlane.js";
 import {
@@ -103,7 +104,7 @@ async function listSortedTasks(
   const config = getLbsConfig();
   const client = dependencies.getLbsBackend(backendContext);
   const tasks = (await client.listTasks(filters?.projectId, config.defaultActive)) as unknown as LbsTask[];
-  console.log(`[tasks-service] listTasks  LBS returned ${tasks.length} task(s)`);
+  logger.debug(`[tasks-service] listTasks  LBS returned ${tasks.length} task(s)`);
   const mapped = tasks.map(normalizeResponseTask);
   const withResolvedStatuses = await Promise.all(
     mapped.map((task) => applyResolvedStatus(task, client, config.timezone))
@@ -125,12 +126,12 @@ export async function listTasks(
   backendContext: LbsBackendContext,
   dependencyOverrides: Partial<TaskStoreDependencies> = {}
 ): Promise<Task[]> {
-  console.log(`[tasks-service] listTasks  owner=${ownerUsername} filters=${JSON.stringify(filters ?? {})}`);
+  logger.debug(`[tasks-service] listTasks  owner=${ownerUsername} filters=${JSON.stringify(filters ?? {})}`);
   const dependencies = { ...defaultDependencies, ...dependencyOverrides };
   const sorted = await listSortedTasks(filters, ownerUsername, backendContext, dependencies);
   const result = filters?.limit && filters.limit > 0 ? sorted.slice(0, filters.limit) : sorted;
   await dependencies.cacheTasks(result, ownerUsername);
-  console.log(`[tasks-service] listTasks  returning ${result.length} task(s) after filters`);
+  logger.debug(`[tasks-service] listTasks  returning ${result.length} task(s) after filters`);
   return result;
 }
 
@@ -140,7 +141,7 @@ export async function listTasksPage(
   backendContext: LbsBackendContext,
   dependencyOverrides: Partial<TaskStoreDependencies> = {}
 ): Promise<TaskListPage> {
-  console.log(`[tasks-service] listTasksPage  owner=${ownerUsername} filters=${JSON.stringify(filters ?? {})}`);
+  logger.debug(`[tasks-service] listTasksPage  owner=${ownerUsername} filters=${JSON.stringify(filters ?? {})}`);
   const dependencies = { ...defaultDependencies, ...dependencyOverrides };
   const sorted = await listSortedTasks(filters, ownerUsername, backendContext, dependencies);
   const pageSize = normalizePageLimit(filters?.limit, 100);
@@ -148,7 +149,7 @@ export async function listTasksPage(
   const items = cursorFiltered.slice(0, pageSize);
   const hasMore = cursorFiltered.length > pageSize;
   await dependencies.cacheTasks(items, ownerUsername);
-  console.log(`[tasks-service] listTasksPage  returning ${items.length} task(s) after cursor`);
+  logger.debug(`[tasks-service] listTasksPage  returning ${items.length} task(s) after cursor`);
   return {
     items,
     nextCursor: hasMore && items.length > 0 ? encodeTaskCursor(items[items.length - 1]) : undefined
@@ -161,7 +162,7 @@ export async function getTask(
   backendContext: LbsBackendContext,
   dependencyOverrides: Partial<TaskStoreDependencies> = {}
 ): Promise<Task | undefined> {
-  console.log(`[tasks-service] getTask  id=${id} owner=${ownerUsername}`);
+  logger.debug(`[tasks-service] getTask  id=${id} owner=${ownerUsername}`);
   try {
     const config = getLbsConfig();
     const dependencies = { ...defaultDependencies, ...dependencyOverrides };
@@ -172,7 +173,7 @@ export async function getTask(
     const pinnedIds = new Set(await dependencies.listPinnedTaskIds(ownerUsername));
     const taskWithPin = { ...resolved, isPinned: pinnedIds.has(resolved.id) };
     await dependencies.cacheTasks([taskWithPin], ownerUsername);
-    console.log(`[tasks-service] getTask  id=${id} found: title="${taskWithPin.title}"`);
+    logger.debug(`[tasks-service] getTask  id=${id} found: title="${taskWithPin.title}"`);
     return taskWithPin;
   } catch (error) {
     // LBS returns {"detail":"Task not found"} for missing tasks.
@@ -183,10 +184,10 @@ export async function getTask(
       error.message.includes("Task not found") ||
       error.message.includes('"detail"')
     )) {
-      console.warn(`[tasks-service] getTask(${id}): task not found in LBS, returning undefined`);
+      logger.warn(`[tasks-service] getTask(${id}): task not found in LBS, returning undefined`);
       return undefined;
     }
-    console.error(`[tasks-service] getTask(${id}) unexpected error:`, error instanceof Error ? error.message : String(error));
+    logger.error(`[tasks-service] getTask(${id}) unexpected error`, { err: error });
     throw error;
   }
 }
@@ -389,13 +390,13 @@ export async function exportTasksCsv(
   // NOTE: LBS has no export-csv endpoint - GET /tasks/export-csv would match
   // the /tasks/{task_id} route and return {"detail":"Task not found"}.
   // We build the CSV ourselves by fetching all tasks via listTasks().
-  console.log(`[tasks-service] exportTasksCsv  fetching all tasks from LBS`);
+  logger.debug(`[tasks-service] exportTasksCsv  fetching all tasks from LBS`);
   const config = getLbsConfig();
   const client = { ...defaultDependencies, ...dependencyOverrides }.getLbsBackend(backendContext);
   try {
     // Omit the `active` filter to export both active and inactive tasks
     const tasks = (await client.listTasks(undefined, undefined)) as unknown as LbsTask[];
-    console.log(`[tasks-service] exportTasksCsv  received ${tasks.length} task(s) from LBS`);
+    logger.debug(`[tasks-service] exportTasksCsv  received ${tasks.length} task(s) from LBS`);
 
     const headers = [
       "task_name", "context", "base_load_score", "active", "rule_type",
@@ -423,10 +424,10 @@ export async function exportTasksCsv(
     );
 
     const csv = [headers.join(","), ...rows].join("\n");
-    console.log(`[tasks-service] exportTasksCsv  built ${rows.length} row(s), ${csv.length} char(s)`);
+    logger.debug(`[tasks-service] exportTasksCsv  built ${rows.length} row(s), ${csv.length} char(s)`);
     return csv;
   } catch (error) {
-    console.error(`[tasks-service] exportTasksCsv  error:`, error instanceof Error ? error.message : String(error));
+    logger.error(`[tasks-service] exportTasksCsv  error`, { err: error });
     throw error;
   }
 }
