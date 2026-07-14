@@ -21,7 +21,8 @@ shift
 
 LINES=50
 LEVEL=""
-DATE="$(date +%F)"
+# Log files are stamped with the UTC date (logger uses ISO-8601 UTC timestamps).
+DATE="$(date -u +%F)"
 FOLLOW=0
 
 while [[ $# -gt 0 ]]; do
