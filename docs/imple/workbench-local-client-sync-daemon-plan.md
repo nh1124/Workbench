@@ -417,6 +417,8 @@ npm run build
   - `Local` mode always uses the daemon.
   - `Auto` mode uses Core while the browser reports online and uses the daemon while offline.
   - `Auto` also falls back to the daemon on Core connection failures, but not on normal Core HTTP/API errors.
+  - Offline and fallback routing covers reads plus a strict allowlist of daemon-backed writes; unsupported mutations remain Core-only.
+  - A successful allowlisted local write keeps `Auto` on the daemon for read-your-writes until Core succeeds again.
 - `[implemented]` Add Settings UI display/actions for daemon status and open conflicts.
 - `[implemented]` Add offline/sync/conflict status display in the main app shell.
 

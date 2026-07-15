@@ -10,7 +10,7 @@ import {
   getNativeGlobalShortcutRegistrations,
   type ShortcutBindings
 } from "./keyboardShortcuts";
-import { pushErrorNotification } from "./notificationService";
+import { pushErrorNotification, pushNotification } from "./notificationService";
 import { buildProjectIndexQuery, buildProjectMemoryQuery } from "../projects/projectContextQueries";
 import { normalizeDateKey } from "../tasks/lib/taskOccurrenceIdentity";
 import type {
@@ -117,6 +117,7 @@ import type {
 
 const SESSION_KEY = "workbench-session";
 const LOCAL_DAEMON_REQUEST_TIMEOUT_MS = 2500;
+const OFFLINE_SAVE_NOTIFICATION_DEDUPE_MS = 10000;
 const NATIVE_LOCAL_DAEMON_URL = "http://127.0.0.1:35780";
 const NATIVE_SESSION_COMMANDS = {
   save: "secure_session_save",
@@ -662,30 +663,84 @@ function isReadRequest(options?: RequestInit): boolean {
   return method === "GET" || method === "HEAD";
 }
 
+const LOCAL_DAEMON_WRITE_ROUTES: ReadonlyArray<{ method: string; path: RegExp }> = [
+  { method: "POST", path: /^\/api\/notes$/ },
+  { method: "PATCH", path: /^\/api\/notes\/[^/]+$/ },
+  { method: "DELETE", path: /^\/api\/notes\/[^/]+$/ },
+  { method: "POST", path: /^\/api\/artifacts\/(folders|notes|upload)$/ },
+  { method: "PATCH", path: /^\/api\/artifacts\/items\/[^/]+$/ },
+  { method: "DELETE", path: /^\/api\/artifacts\/items\/[^/]+$/ },
+  { method: "POST", path: /^\/api\/projects$/ },
+  { method: "PATCH", path: /^\/api\/projects\/[^/]+$/ },
+  { method: "DELETE", path: /^\/api\/projects\/[^/]+$/ },
+  { method: "PUT", path: /^\/api\/projects\/default$/ },
+  { method: "POST", path: /^\/api\/tasks$/ },
+  { method: "PATCH", path: /^\/api\/tasks\/[^/]+$/ },
+  { method: "DELETE", path: /^\/api\/tasks\/[^/]+$/ },
+  { method: "PUT", path: /^\/api\/tasks\/[^/]+\/pin$/ },
+  { method: "POST", path: /^\/api\/tasks\/today$/ },
+  { method: "DELETE", path: /^\/api\/tasks\/today\/[^/]+$/ },
+  { method: "PUT", path: /^\/api\/tasks\/schedule-items\/[^/]+$/ },
+  { method: "DELETE", path: /^\/api\/tasks\/schedule-items\/[^/]+$/ },
+  { method: "POST", path: /^\/api\/tasks\/[^/]+\/occurrences\/(complete|move|skip-exception)$/ },
+  { method: "POST", path: /^\/api\/tasks\/import$/ },
+  { method: "POST", path: /^\/api\/tasks\/[^/]+\/attachments$/ },
+  { method: "PUT", path: /^\/api\/tasks\/[^/]+\/attachments\/[^/]+$/ },
+  { method: "DELETE", path: /^\/api\/tasks\/[^/]+\/attachments\/[^/]+$/ },
+  { method: "POST", path: /^\/api\/tasks\/[^/]+\/occurrences\/[^/]+\/subtasks$/ },
+  { method: "PATCH", path: /^\/api\/tasks\/[^/]+\/occurrences\/[^/]+\/subtasks\/[^/]+$/ },
+  { method: "DELETE", path: /^\/api\/tasks\/[^/]+\/occurrences\/[^/]+\/subtasks\/[^/]+$/ }
+];
+
+export function localDaemonSupportsWriteRequest(path: string, options?: RequestInit): boolean {
+  const pathname = path.split("?", 1)[0];
+  const method = requestMethod(options);
+  return LOCAL_DAEMON_WRITE_ROUTES.some((route) => route.method === method && route.path.test(pathname));
+}
+
+function requestCanUseLocalDaemon(path: string, options?: RequestInit): boolean {
+  return isReadRequest(options) || localDaemonSupportsWriteRequest(path, options);
+}
+
 function browserReportsOnline(): boolean {
   if (typeof navigator === "undefined" || typeof navigator.onLine !== "boolean") return true;
   return navigator.onLine;
 }
 
-export function autoRoutingCanFallbackToLocal(error: unknown, options?: RequestInit): boolean {
+export function autoRoutingCanFallbackToLocal(error: unknown, path: string, options?: RequestInit): boolean {
   if (getWorkbenchLocalRoutingMode() !== "auto") return false;
-  if (!isReadRequest(options)) return false;
+  if (!requestCanUseLocalDaemon(path, options)) return false;
   if (options?.signal?.aborted) return false;
   return error instanceof ApiError && error.backend === "core" && error.networkFailure;
 }
 
-function facadeRoutesToLocal(options?: RequestInit): boolean {
+function facadeRoutesToLocal(path: string, options?: RequestInit): boolean {
   const mode = getWorkbenchLocalRoutingMode();
   if (mode === "local") return true;
   return mode === "auto"
-    && isReadRequest(options)
+    && requestCanUseLocalDaemon(path, options)
     && (getWorkbenchAutoLocalFallbackActive() || !browserReportsOnline());
 }
 
-function markSuccessfulLocalRead(options?: RequestInit): void {
-  if (getWorkbenchLocalRoutingMode() === "auto" && isReadRequest(options)) {
+let lastOfflineSaveNotificationAt: number | undefined;
+
+function markSuccessfulLocalRequest(options?: RequestInit): void {
+  const mode = getWorkbenchLocalRoutingMode();
+  if (mode === "auto") {
     setWorkbenchAutoLocalFallbackActive(true);
   }
+  if (isReadRequest(options)) return;
+  if (mode !== "auto" && mode !== "local") return;
+
+  const now = Date.now();
+  const elapsed = lastOfflineSaveNotificationAt === undefined ? undefined : now - lastOfflineSaveNotificationAt;
+  if (elapsed !== undefined && elapsed >= 0 && elapsed < OFFLINE_SAVE_NOTIFICATION_DEDUPE_MS) return;
+  lastOfflineSaveNotificationAt = now;
+  pushNotification({
+    title: "Offline Save",
+    message: "Saved locally. Changes will sync when the server is reachable.",
+    level: "info"
+  });
 }
 
 function markSuccessfulCoreRequest(): void {
@@ -694,20 +749,20 @@ function markSuccessfulCoreRequest(): void {
   }
 }
 
-function artifactsFacadeEnabled(options?: RequestInit): boolean {
-  return facadeRoutesToLocal(options);
+function artifactsFacadeEnabled(path: string, options?: RequestInit): boolean {
+  return facadeRoutesToLocal(path, options);
 }
 
-function notesFacadeEnabled(options?: RequestInit): boolean {
-  return facadeRoutesToLocal(options);
+function notesFacadeEnabled(path: string, options?: RequestInit): boolean {
+  return facadeRoutesToLocal(path, options);
 }
 
-function projectsFacadeEnabled(options?: RequestInit): boolean {
-  return facadeRoutesToLocal(options);
+function projectsFacadeEnabled(path: string, options?: RequestInit): boolean {
+  return facadeRoutesToLocal(path, options);
 }
 
-function tasksFacadeEnabled(options?: RequestInit): boolean {
-  return facadeRoutesToLocal(options);
+function tasksFacadeEnabled(path: string, options?: RequestInit): boolean {
+  return facadeRoutesToLocal(path, options);
 }
 
 function coreArtifactPath(path: string): string {
@@ -723,12 +778,12 @@ async function requestFacade(
   options: RequestInit | undefined,
   corePath: (path: string) => string
 ): Promise<Response> {
-  if (facadeRoutesToLocal(options)) {
+  if (facadeRoutesToLocal(path, options)) {
     const response = await requestLocalDaemon(path, options);
     if (!response.ok) {
       throw await responseApiError("local", `${localDaemonBaseUrl()}${path}`, options, response);
     }
-    markSuccessfulLocalRead(options);
+    markSuccessfulLocalRequest(options);
     return response;
   }
   try {
@@ -738,12 +793,12 @@ async function requestFacade(
     markSuccessfulCoreRequest();
     return response;
   } catch (error) {
-    if (autoRoutingCanFallbackToLocal(error, options)) {
+    if (autoRoutingCanFallbackToLocal(error, path, options)) {
       const response = await requestLocalDaemon(path, options);
       if (!response.ok) {
         throw await responseApiError("local", `${localDaemonBaseUrl()}${path}`, options, response);
       }
-      markSuccessfulLocalRead(options);
+      markSuccessfulLocalRequest(options);
       return response;
     }
     throw error;
@@ -768,9 +823,9 @@ async function fetchFacadeJson<T>(
   options: RequestInit | undefined,
   corePath: (path: string) => string
 ): Promise<T> {
-  if (facadeRoutesToLocal(options)) {
+  if (facadeRoutesToLocal(path, options)) {
     const result = await requestLocalDaemonJson<T>(path, options);
-    markSuccessfulLocalRead(options);
+    markSuccessfulLocalRequest(options);
     return result;
   }
   try {
@@ -780,9 +835,9 @@ async function fetchFacadeJson<T>(
     markSuccessfulCoreRequest();
     return result;
   } catch (error) {
-    if (autoRoutingCanFallbackToLocal(error, options)) {
+    if (autoRoutingCanFallbackToLocal(error, path, options)) {
       const result = await requestLocalDaemonJson<T>(path, options);
-      markSuccessfulLocalRead(options);
+      markSuccessfulLocalRequest(options);
       return result;
     }
     throw error;
@@ -1592,9 +1647,10 @@ export const taskAttachmentsApi = {
     fetchTasksFacadeJson<TaskAttachment[]>(`/api/tasks/${encodeURIComponent(taskId)}/attachments`),
 
   upload: async (taskId: string, file: File): Promise<TaskAttachment> => {
+    const path = `/api/tasks/${encodeURIComponent(taskId)}/attachments`;
     const uploadOptions: RequestInit = { method: "POST" };
-    if (tasksFacadeEnabled(uploadOptions)) {
-      return fetchTasksFacadeJson<TaskAttachment>(`/api/tasks/${encodeURIComponent(taskId)}/attachments`, {
+    const uploadToLocal = async (): Promise<TaskAttachment> => {
+      const result = await requestLocalDaemonJson<TaskAttachment>(path, {
         method: "POST",
         body: JSON.stringify({
           filename: file.name,
@@ -1602,6 +1658,12 @@ export const taskAttachmentsApi = {
           contentBase64: await fileToBase64(file)
         })
       });
+      markSuccessfulLocalRequest(uploadOptions);
+      return result;
+    };
+
+    if (tasksFacadeEnabled(path, uploadOptions)) {
+      return uploadToLocal();
     }
 
     const formData = new FormData();
@@ -1609,23 +1671,17 @@ export const taskAttachmentsApi = {
 
     let response: Response;
     try {
-      response = await fetchWithSessionAuth(`${coreBaseUrl()}/api/tasks/${encodeURIComponent(taskId)}/attachments`, {
+      response = await fetchWithSessionAuth(`${coreBaseUrl()}${path}`, {
         method: "POST",
         body: formData
       }, { suppressConnectionError: getWorkbenchLocalRoutingMode() === "auto" });
     } catch (error) {
-      if (autoRoutingCanFallbackToLocal(error, uploadOptions)) {
-        return fetchTasksFacadeJson<TaskAttachment>(`/api/tasks/${encodeURIComponent(taskId)}/attachments`, {
-          method: "POST",
-          body: JSON.stringify({
-            filename: file.name,
-            mimeType: file.type || "application/octet-stream",
-            contentBase64: await fileToBase64(file)
-          })
-        });
+      if (autoRoutingCanFallbackToLocal(error, path, uploadOptions)) {
+        return uploadToLocal();
       }
       throw error;
     }
+    markSuccessfulCoreRequest();
 
     if (!response.ok) {
       const text = await response.text();

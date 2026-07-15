@@ -3,10 +3,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
+  artifactsApi,
   formatApiErrorMessage,
+  localDaemonSupportsWriteRequest,
+  projectsApi,
   taskSubtasksApi,
   tasksApi
 } from "../api";
+import {
+  clearNotifications,
+  getNotifications
+} from "../notificationService";
 import {
   getWorkbenchAutoLocalFallbackActive,
   setWorkbenchAutoLocalFallbackActive,
@@ -29,6 +36,7 @@ describe("API error detail and auto routing", () => {
     setWorkbenchLocalDaemonUrl("http://127.0.0.1:35780");
     setWorkbenchLocalRoutingMode("auto");
     setWorkbenchAutoLocalFallbackActive(false);
+    clearNotifications();
     vi.spyOn(console, "error").mockImplementation(() => undefined);
   });
 
@@ -80,16 +88,109 @@ describe("API error detail and auto routing", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("never falls back to local for mutations", async () => {
+  it("matches daemon-supported writes by method and pathname only", () => {
+    expect(localDaemonSupportsWriteRequest("/api/notes?projectId=project-1", { method: "POST" })).toBe(true);
+    expect(localDaemonSupportsWriteRequest("/api/artifacts/items/item-1?version=2", { method: "PATCH" })).toBe(true);
+    expect(localDaemonSupportsWriteRequest("/api/tasks/today/task-1?scheduledDate=2026-07-13", { method: "DELETE" })).toBe(true);
+    expect(localDaemonSupportsWriteRequest("/api/tasks/task-1/attachments", { method: "POST" })).toBe(true);
+    expect(localDaemonSupportsWriteRequest("/api/tasks/task-1/attachments/attachment-1", { method: "PUT" })).toBe(true);
+    expect(localDaemonSupportsWriteRequest("/api/artifacts/items/item-1/content-patch", { method: "PATCH" })).toBe(false);
+    expect(localDaemonSupportsWriteRequest("/api/artifacts/items/item-1/projects", { method: "POST" })).toBe(false);
+    expect(localDaemonSupportsWriteRequest("/api/artifacts/items/item-1/projects/project-1", { method: "DELETE" })).toBe(false);
+    expect(localDaemonSupportsWriteRequest("/api/projects/project-1/brief", { method: "PUT" })).toBe(false);
+  });
+
+  it("routes allowlisted mutations directly to local while offline and dedupes save notifications", async () => {
+    vi.spyOn(window.navigator, "onLine", "get").mockReturnValue(false);
+    let now = 4_000_000_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse({
+      taskId: "task-1",
+      targetDate: "2026-07-13",
+      status: "done"
+    })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await tasksApi.completeOccurrence("task-1", "2026-07-13", "done");
+    now += 6_000;
+    await tasksApi.completeOccurrence("task-1", "2026-07-14", "done");
+
+    expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
+      "http://127.0.0.1:35780/api/tasks/task-1/occurrences/complete",
+      "http://127.0.0.1:35780/api/tasks/task-1/occurrences/complete"
+    ]);
+    expect(getWorkbenchAutoLocalFallbackActive()).toBe(true);
+    expect(getNotifications()).toMatchObject([{
+      title: "Offline Save",
+      message: "Saved locally. Changes will sync when the server is reachable.",
+      level: "info"
+    }]);
+  });
+
+  it("shows an info notification for writes accepted in explicit local mode", async () => {
+    setWorkbenchLocalRoutingMode("local");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({
+      taskId: "task-1",
+      targetDate: "2026-07-13",
+      status: "done"
+    })));
+
+    await tasksApi.completeOccurrence("task-1", "2026-07-13", "done");
+
+    expect(getNotifications()).toMatchObject([{
+      title: "Offline Save",
+      message: "Saved locally. Changes will sync when the server is reachable.",
+      level: "info"
+    }]);
+  });
+
+  it("falls back to local for an allowlisted mutation after a Core network failure", async () => {
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new TypeError("core offline"))
+      .mockResolvedValueOnce(jsonResponse({ taskId: "task-1", targetDate: "2026-07-13", status: "done" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await tasksApi.completeOccurrence("task-1", "2026-07-13", "done");
+
+    expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
+      "http://127.0.0.1:3000/api/tasks/task-1/occurrences/complete",
+      "http://127.0.0.1:35780/api/tasks/task-1/occurrences/complete"
+    ]);
+    expect(getWorkbenchAutoLocalFallbackActive()).toBe(true);
+  });
+
+  it("keeps allowlist-excluded mutations on Core while offline", async () => {
+    vi.spyOn(window.navigator, "onLine", "get").mockReturnValue(false);
     const fetchMock = vi.fn().mockRejectedValue(new TypeError("core offline"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await projectsApi.addRelation("project-1", {
+      targetProjectId: "project-2",
+      relationType: "related",
+      directionality: "bidirectional"
+    })
+      .catch((caught: unknown) => caught);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      "http://127.0.0.1:3000/api/projects/project-1/relations"
+    );
+    expect(error).toMatchObject({ backend: "core", method: "POST", networkFailure: true });
+    expect(getWorkbenchAutoLocalFallbackActive()).toBe(false);
+  });
+
+  it("does not fall back for an allowlisted mutation when Core returns 500", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ message: "Core failed" }, 500));
     vi.stubGlobal("fetch", fetchMock);
 
     const error = await tasksApi.completeOccurrence("task-1", "2026-07-13", "done")
       .catch((caught: unknown) => caught);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(String(fetchMock.mock.calls[0][0])).toBe("http://127.0.0.1:3000/api/tasks/task-1/occurrences/complete");
-    expect(error).toMatchObject({ backend: "core", method: "POST", networkFailure: true });
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      "http://127.0.0.1:3000/api/tasks/task-1/occurrences/complete"
+    );
+    expect(error).toMatchObject({ backend: "core", method: "POST", status: 500, networkFailure: false });
     expect(getWorkbenchAutoLocalFallbackActive()).toBe(false);
   });
 
@@ -140,19 +241,38 @@ describe("API error detail and auto routing", () => {
     ]);
   });
 
-  it("clears sticky auto fallback after a successful Core mutation", async () => {
-    setWorkbenchAutoLocalFallbackActive(true);
+  it("makes a successful local mutation sticky for later reads after the browser is online", async () => {
+    let online = false;
+    vi.spyOn(window.navigator, "onLine", "get").mockImplementation(() => online);
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ taskId: "task-1", targetDate: "2026-07-13", status: "done" }))
       .mockResolvedValueOnce(jsonResponse([]));
     vi.stubGlobal("fetch", fetchMock);
 
     await tasksApi.completeOccurrence("task-1", "2026-07-13", "done");
+    expect(getWorkbenchAutoLocalFallbackActive()).toBe(true);
+    online = true;
+    await tasksApi.list();
+
+    expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
+      "http://127.0.0.1:35780/api/tasks/task-1/occurrences/complete",
+      "http://127.0.0.1:35780/api/tasks"
+    ]);
+  });
+
+  it("clears sticky auto fallback after a successful Core-only mutation", async () => {
+    setWorkbenchAutoLocalFallbackActive(true);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ itemId: "item-1", projects: [] }))
+      .mockResolvedValueOnce(jsonResponse([]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await artifactsApi.linkProject("item-1", { projectId: "project-1" });
     expect(getWorkbenchAutoLocalFallbackActive()).toBe(false);
     await tasksApi.list();
 
     expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
-      "http://127.0.0.1:3000/api/tasks/task-1/occurrences/complete",
+      "http://127.0.0.1:3000/api/artifacts/items/item-1/projects",
       "http://127.0.0.1:3000/api/tasks"
     ]);
   });
