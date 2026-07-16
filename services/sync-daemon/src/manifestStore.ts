@@ -241,7 +241,11 @@ function toResource(row: ResourceRow): ManifestResource {
 }
 
 function toRemoteResource(row: RemoteResourceRow): RemoteResource {
-  const domain = row.domain === "projects" || row.domain === "notes" || row.domain === "tasks" || row.domain === "artifacts"
+  const domain = row.domain === "projects"
+    || row.domain === "notes"
+    || row.domain === "tasks"
+    || row.domain === "artifacts"
+    || row.domain === "project_context"
     ? row.domain
     : "artifacts";
   return {
@@ -256,7 +260,9 @@ function toRemoteResource(row: RemoteResourceRow): RemoteResource {
 }
 
 function toRemoteResourceDomain(value: string): RemoteResourceDomain {
-  return value === "projects" || value === "notes" || value === "tasks" ? value : "artifacts";
+  return value === "projects" || value === "notes" || value === "tasks" || value === "project_context"
+    ? value
+    : "artifacts";
 }
 
 function toSyncErrorCategory(value: string | null | undefined): SyncErrorCategory | undefined {

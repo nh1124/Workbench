@@ -34,6 +34,11 @@ export type ProjectContextSnapshot = {
   };
 };
 
+export type CachedProjectContextItem = {
+  projectId: string;
+  item: JsonRecord;
+};
+
 export type LocalProjectContextFreshness = {
   source: "local-daemon";
   snapshotComplete: true;
@@ -181,6 +186,207 @@ export function removeStaleProjectContextRows(store: ManifestStore, activeProjec
 function currentProjectRecord(store: ManifestStore, projectId: string): JsonRecord | undefined {
   const resource = getRemoteResource(store, "projects", projectId);
   return resource && !resource.deleted ? resource.payload : undefined;
+}
+
+function writableProjectContext(
+  store: ManifestStore,
+  projectId: string
+): { resource: RemoteResource; snapshot: ProjectContextSnapshot } {
+  const resource = getRemoteResource(store, PROJECT_CONTEXT_DOMAIN, projectId);
+  const snapshot = resource && !resource.deleted ? parseProjectContextSnapshot(resource.payload) : undefined;
+  if (!resource || resource.deleted || !snapshot) {
+    throw new LocalProjectContextError(
+      503,
+      "LOCAL_PROJECT_CONTEXT_READ_ONLY",
+      "Project context mutations require a complete local Project context snapshot."
+    );
+  }
+  return { resource, snapshot };
+}
+
+function storeOptimisticProjectContext(
+  store: ManifestStore,
+  resource: RemoteResource,
+  snapshot: ProjectContextSnapshot
+): void {
+  const normalized: ProjectContextSnapshot = {
+    ...snapshot,
+    counts: {
+      memories: snapshot.context.memories.length,
+      relations: snapshot.context.relations.length
+    }
+  };
+  upsertRemoteResource(store, {
+    ...resource,
+    payload: {
+      ...(normalized as unknown as JsonRecord),
+      pendingLocalOps: true
+    }
+  });
+}
+
+function mutateOptimisticProjectContext(
+  store: ManifestStore,
+  projectId: string,
+  mutation: (snapshot: ProjectContextSnapshot) => void
+): ProjectContextSnapshot {
+  const { resource, snapshot } = writableProjectContext(store, projectId);
+  const next: ProjectContextSnapshot = {
+    ...snapshot,
+    counts: { ...snapshot.counts },
+    context: {
+      ...snapshot.context,
+      project: { ...snapshot.context.project },
+      brief: snapshot.context.brief ? { ...snapshot.context.brief } : undefined,
+      memories: snapshot.context.memories.map((memory) => ({ ...memory })),
+      relations: snapshot.context.relations.map((relation) => ({ ...relation }))
+    }
+  };
+  mutation(next);
+  storeOptimisticProjectContext(store, resource, next);
+  return next;
+}
+
+function findCachedContextItems(
+  store: ManifestStore,
+  section: "memories" | "relations",
+  id: string
+): CachedProjectContextItem[] {
+  const matches: CachedProjectContextItem[] = [];
+  for (const resource of listAllRemoteResourcesForDomain(store, PROJECT_CONTEXT_DOMAIN)) {
+    const snapshot = parseProjectContextSnapshot(resource.payload);
+    const item = snapshot?.context[section].find((candidate) => nonEmptyString(candidate.id) === id);
+    if (item) matches.push({ projectId: resource.resourceId, item });
+  }
+  return matches;
+}
+
+export function requireWritableProjectContext(store: ManifestStore, projectId: string): ProjectContextSnapshot {
+  return writableProjectContext(store, projectId).snapshot;
+}
+
+export function echoLocalProjectBrief(
+  store: ManifestStore,
+  projectId: string,
+  brief: JsonRecord
+): JsonRecord {
+  mutateOptimisticProjectContext(store, projectId, (snapshot) => {
+    snapshot.context.brief = { ...brief };
+  });
+  return getLocalProjectBrief(store, projectId);
+}
+
+export function echoLocalProjectMemoryCreate(
+  store: ManifestStore,
+  projectId: string,
+  memory: JsonRecord
+): JsonRecord {
+  mutateOptimisticProjectContext(store, projectId, (snapshot) => {
+    snapshot.context.memories.push({ ...memory });
+  });
+  return memory;
+}
+
+export function findLocalProjectMemory(store: ManifestStore, memoryId: string): CachedProjectContextItem | undefined {
+  return findCachedContextItems(store, "memories", memoryId)[0];
+}
+
+export function echoLocalProjectMemoryPatch(
+  store: ManifestStore,
+  projectId: string,
+  memoryId: string,
+  patch: JsonRecord,
+  updatedAt: string
+): JsonRecord {
+  let updated: JsonRecord | undefined;
+  mutateOptimisticProjectContext(store, projectId, (snapshot) => {
+    const index = snapshot.context.memories.findIndex((memory) => nonEmptyString(memory.id) === memoryId);
+    if (index < 0) {
+      throw new LocalProjectContextError(404, "PROJECT_MEMORY_NOT_FOUND", "Project memory not found in the local cache.");
+    }
+    updated = { ...snapshot.context.memories[index], ...patch, id: memoryId, projectId, updatedAt };
+    if (updated.status === "active") {
+      snapshot.context.memories[index] = updated;
+    } else {
+      snapshot.context.memories.splice(index, 1);
+    }
+  });
+  return updated!;
+}
+
+export function findLocalProjectRelation(store: ManifestStore, relationId: string): CachedProjectContextItem | undefined {
+  const matches = findCachedContextItems(store, "relations", relationId);
+  if (matches.length === 0) return undefined;
+  const sourceProjectId = nonEmptyString(matches[0].item.sourceProjectId);
+  return matches.find((match) => match.projectId === sourceProjectId) ?? matches[0];
+}
+
+function cachedRelationEndpointIds(store: ManifestStore, relation: JsonRecord): string[] {
+  const ids = new Set<string>();
+  for (const value of [relation.sourceProjectId, relation.targetProjectId]) {
+    const projectId = nonEmptyString(value);
+    if (!projectId) continue;
+    const resource = getRemoteResource(store, PROJECT_CONTEXT_DOMAIN, projectId);
+    if (resource && !resource.deleted && parseProjectContextSnapshot(resource.payload)) ids.add(projectId);
+  }
+  return [...ids];
+}
+
+export function echoLocalProjectRelationCreate(
+  store: ManifestStore,
+  projectId: string,
+  relation: JsonRecord
+): JsonRecord {
+  requireWritableProjectContext(store, projectId);
+  const endpointIds = cachedRelationEndpointIds(store, relation);
+  if (!endpointIds.includes(projectId)) endpointIds.unshift(projectId);
+  for (const endpointId of endpointIds) {
+    mutateOptimisticProjectContext(store, endpointId, (snapshot) => {
+      if (!snapshot.context.relations.some((candidate) => candidate.id === relation.id)) {
+        snapshot.context.relations.push({ ...relation });
+      }
+    });
+  }
+  return relation;
+}
+
+export function echoLocalProjectRelationPatch(
+  store: ManifestStore,
+  relationId: string,
+  patch: JsonRecord,
+  updatedAt: string
+): { projectId: string; relation: JsonRecord } {
+  const found = findLocalProjectRelation(store, relationId);
+  if (!found) {
+    throw new LocalProjectContextError(404, "PROJECT_RELATION_NOT_FOUND", "Project relation not found in the local cache.");
+  }
+  const relation = { ...found.item, ...patch, id: relationId, updatedAt };
+  const endpointIds = cachedRelationEndpointIds(store, relation);
+  for (const endpointId of endpointIds) {
+    mutateOptimisticProjectContext(store, endpointId, (snapshot) => {
+      const index = snapshot.context.relations.findIndex((candidate) => candidate.id === relationId);
+      if (index >= 0) snapshot.context.relations[index] = { ...relation };
+      else snapshot.context.relations.push({ ...relation });
+    });
+  }
+  return { projectId: found.projectId, relation };
+}
+
+export function echoLocalProjectRelationDelete(
+  store: ManifestStore,
+  relationId: string
+): { projectId: string; relation: JsonRecord } {
+  const found = findLocalProjectRelation(store, relationId);
+  if (!found) {
+    throw new LocalProjectContextError(404, "PROJECT_RELATION_NOT_FOUND", "Project relation not found in the local cache.");
+  }
+  const endpointIds = cachedRelationEndpointIds(store, found.item);
+  for (const endpointId of endpointIds) {
+    mutateOptimisticProjectContext(store, endpointId, (snapshot) => {
+      snapshot.context.relations = snapshot.context.relations.filter((candidate) => candidate.id !== relationId);
+    });
+  }
+  return { projectId: found.projectId, relation: found.item };
 }
 
 function freshness(resource: RemoteResource, snapshot: ProjectContextSnapshot): LocalProjectContextFreshness {

@@ -8,6 +8,7 @@ import {
   LOOPBACK_CORS_ERROR_MESSAGE,
   isLoopbackOriginAllowed,
   isLocalProjectContextMutation,
+  isSupportedLocalProjectContextWrite,
   loopbackAuthBypassed,
   parseLoopbackAllowedOrigins,
   requestHasValidLoopbackToken
@@ -62,13 +63,8 @@ describe("loopback API token auth", () => {
     assert.equal(LOOPBACK_AUTH_ERROR_MESSAGE, "Local daemon API token is required.");
   });
 
-  it("classifies every cached Project-context write as read-only", () => {
+  it("keeps unsupported Project-context writes read-only and allows the E2 routes", () => {
     for (const [method, pathname] of [
-      ["PUT", "/api/projects/project-1/brief"],
-      ["POST", "/api/projects/project-1/memories"],
-      ["PATCH", "/api/project-memories/memory-1"],
-      ["POST", "/api/projects/project-1/relations"],
-      ["DELETE", "/api/project-relations/relation-1"],
       ["POST", "/api/projects/project-1/links"],
       ["DELETE", "/api/project-links/link-1"],
       ["POST", "/api/projects/project-1/index/rebuild"],
@@ -77,6 +73,17 @@ describe("loopback API token auth", () => {
       ["DELETE", "/api/artifacts/items/item-1/projects/project-2"]
     ]) {
       assert.equal(isLocalProjectContextMutation(pathname, method), true, `${method} ${pathname}`);
+    }
+    for (const [method, pathname] of [
+      ["PUT", "/api/projects/project-1/brief"],
+      ["POST", "/api/projects/project-1/memories"],
+      ["PATCH", "/api/project-memories/memory-1"],
+      ["POST", "/api/projects/project-1/relations"],
+      ["PATCH", "/api/project-relations/relation-1"],
+      ["DELETE", "/api/project-relations/relation-1"]
+    ]) {
+      assert.equal(isSupportedLocalProjectContextWrite(pathname, method), true, `${method} ${pathname}`);
+      assert.equal(isLocalProjectContextMutation(pathname, method), false, `${method} ${pathname}`);
     }
     assert.equal(isLocalProjectContextMutation("/api/projects/project-1/context", "GET"), false);
     assert.equal(isLocalProjectContextMutation("/api/projects/project-1", "PATCH"), false);

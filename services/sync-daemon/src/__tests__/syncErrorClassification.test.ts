@@ -44,6 +44,21 @@ describe("sync error classification", () => {
       retryable: false
     });
 
+    assert.equal(classifySyncError({
+      code: "VERSION_CONFLICT",
+      message: "Brief version conflict: expected 4, current 5."
+    }).errorCategory, "version_conflict");
+
+    assert.equal(classifySyncError({
+      code: "SYNC_PROJECT_CONTEXT_PAYLOAD_INVALID",
+      message: "Project context sync push payload is invalid."
+    }).errorCategory, "validation");
+
+    assert.equal(classifySyncError({
+      code: "PROJECT_RELATION_NOT_FOUND",
+      message: "Project relation not found."
+    }).errorCategory, "validation");
+
     const network = classifySyncError(new Error("fetch failed: ECONNREFUSED"));
     assert.equal(network.errorCategory, "network");
     assert.equal(network.retryable, true);

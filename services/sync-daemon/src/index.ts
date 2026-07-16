@@ -62,6 +62,14 @@ import {
 } from "./manifestStore.js";
 import {
   cacheProjectContextSnapshot,
+  echoLocalProjectBrief,
+  echoLocalProjectMemoryCreate,
+  echoLocalProjectMemoryPatch,
+  echoLocalProjectRelationCreate,
+  echoLocalProjectRelationDelete,
+  echoLocalProjectRelationPatch,
+  findLocalProjectMemory,
+  findLocalProjectRelation,
   getLocalProjectBrief,
   getLocalProjectContext,
   listLocalProjectMemories,
@@ -73,6 +81,7 @@ import {
   PROJECT_CONTEXT_SCHEMA_VERSION,
   PROJECT_CONTEXT_SNAPSHOT_COMPLETE_META_KEY,
   PROJECT_CONTEXT_SUPPORTED_META_KEY,
+  requireWritableProjectContext,
   removeStaleProjectContextRows
 } from "./projectContextCache.js";
 import {
@@ -1268,6 +1277,269 @@ export async function setLocalDefaultProject(state: DaemonState, projectId: stri
   await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
   await refreshManifestStats(state);
   return localProjectDefaultSelection(selected);
+}
+
+const LOCAL_CONTEXT_ID_PREFIX = "local-";
+const PROJECT_MEMORY_KINDS = new Set(["decision", "fact", "preference", "pitfall", "observation"]);
+const PROJECT_MEMORY_STATUSES = new Set(["active", "archived", "superseded"]);
+const PROJECT_RELATION_TYPES = new Set(["related", "depends_on", "supports", "informs", "overlaps"]);
+const PROJECT_RELATION_DIRECTIONS = new Set(["directed", "bidirectional"]);
+
+function projectContextOutboxPath(projectId: string, relation: string, itemId?: string): string {
+  return `project_context/${projectId}/${relation}${itemId ? `/${itemId}` : ""}`;
+}
+
+function invalidLocalProjectContextWrite(message: string): LocalProjectContextError {
+  return new LocalProjectContextError(400, "INVALID_ARGUMENT", message);
+}
+
+function pendingLocalProjectContextResource(id: string): never {
+  throw new LocalProjectContextError(
+    409,
+    "LOCAL_PENDING_RESOURCE",
+    `${id} was created offline and cannot be mutated until it has synced.`
+  );
+}
+
+async function finishLocalProjectContextWrite(state: DaemonState): Promise<void> {
+  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
+  await refreshManifestStats(state);
+}
+
+export async function updateLocalProjectBrief(
+  state: DaemonState,
+  projectId: string,
+  input: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  const snapshot = requireWritableProjectContext(state.manifestStore, projectId);
+  if (
+    typeof input.contentMarkdown !== "string"
+    || typeof input.expectedVersion !== "number"
+    || !Number.isInteger(input.expectedVersion)
+    || input.expectedVersion < 0
+  ) {
+    throw invalidLocalProjectContextWrite("contentMarkdown and a non-negative expectedVersion are required.");
+  }
+  const now = new Date().toISOString();
+  enqueueManifestOutbox(state.manifestStore, {
+    relativePath: projectContextOutboxPath(projectId, "brief"),
+    domain: PROJECT_CONTEXT_DOMAIN,
+    action: "update",
+    resourceId: projectId,
+    payload: {
+      relation: "brief",
+      contentMarkdown: input.contentMarkdown,
+      expectedVersion: input.expectedVersion
+    }
+  });
+  const brief = echoLocalProjectBrief(state.manifestStore, projectId, {
+    ...(snapshot.context.brief ?? {}),
+    projectId,
+    contentMarkdown: input.contentMarkdown,
+    version: input.expectedVersion + 1,
+    updatedByKind: "user",
+    updatedAt: now
+  });
+  await finishLocalProjectContextWrite(state);
+  return brief;
+}
+
+export async function createLocalProjectMemory(
+  state: DaemonState,
+  projectId: string,
+  input: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  requireWritableProjectContext(state.manifestStore, projectId);
+  if (!PROJECT_MEMORY_KINDS.has(asString(input.kind) ?? "") || !asString(input.bodyMarkdown)) {
+    throw invalidLocalProjectContextWrite("A valid memory kind and non-empty bodyMarkdown are required.");
+  }
+  const now = new Date().toISOString();
+  const id = `${LOCAL_CONTEXT_ID_PREFIX}${randomUUID()}`;
+  const memory: Record<string, unknown> = {
+    ...input,
+    id,
+    projectId,
+    authority: asString(input.authority) ?? "user_confirmed",
+    status: "active",
+    lifecycleState: asString(input.lifecycleState) ?? "triaged",
+    reviewAfter: input.reviewAfter ?? null,
+    lastConfirmedAt: input.lastConfirmedAt ?? null,
+    reviewReason: input.reviewReason ?? null,
+    createdByKind: "user",
+    createdAt: now,
+    updatedAt: now
+  };
+  enqueueManifestOutbox(state.manifestStore, {
+    relativePath: projectContextOutboxPath(projectId, "memories", id),
+    domain: PROJECT_CONTEXT_DOMAIN,
+    action: "create",
+    resourceId: projectId,
+    payload: { ...input, relation: "memory" }
+  });
+  echoLocalProjectMemoryCreate(state.manifestStore, projectId, memory);
+  await finishLocalProjectContextWrite(state);
+  return memory;
+}
+
+export async function updateLocalProjectMemory(
+  state: DaemonState,
+  memoryId: string,
+  input: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  if (memoryId.startsWith(LOCAL_CONTEXT_ID_PREFIX)) pendingLocalProjectContextResource(memoryId);
+  const found = findLocalProjectMemory(state.manifestStore, memoryId);
+  if (!found) {
+    throw new LocalProjectContextError(404, "PROJECT_MEMORY_NOT_FOUND", "Project memory not found in the local cache.");
+  }
+  const patch: Record<string, unknown> = {};
+  if (input.bodyMarkdown !== undefined) {
+    if (!asString(input.bodyMarkdown)) throw invalidLocalProjectContextWrite("bodyMarkdown must be non-empty when provided.");
+    patch.bodyMarkdown = input.bodyMarkdown;
+  }
+  if (input.status !== undefined) {
+    if (!PROJECT_MEMORY_STATUSES.has(asString(input.status) ?? "")) {
+      throw invalidLocalProjectContextWrite("status must be active, archived, or superseded.");
+    }
+    patch.status = input.status;
+  }
+  if (Object.keys(patch).length === 0) {
+    throw invalidLocalProjectContextWrite("A memory bodyMarkdown or status patch is required.");
+  }
+  enqueueManifestOutbox(state.manifestStore, {
+    relativePath: projectContextOutboxPath(found.projectId, "memories", memoryId),
+    domain: PROJECT_CONTEXT_DOMAIN,
+    action: "update",
+    resourceId: found.projectId,
+    payload: { relation: "memory", memoryId, patch: { ...input } }
+  });
+  const memory = echoLocalProjectMemoryPatch(
+    state.manifestStore,
+    found.projectId,
+    memoryId,
+    patch,
+    new Date().toISOString()
+  );
+  await finishLocalProjectContextWrite(state);
+  return memory;
+}
+
+export async function createLocalProjectRelation(
+  state: DaemonState,
+  projectId: string,
+  input: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  requireWritableProjectContext(state.manifestStore, projectId);
+  const targetProjectId = asString(input.targetProjectId);
+  if (!targetProjectId || targetProjectId === projectId || !PROJECT_RELATION_TYPES.has(asString(input.relationType) ?? "")) {
+    throw invalidLocalProjectContextWrite("A distinct targetProjectId and valid relationType are required.");
+  }
+  if (input.directionality !== undefined && !PROJECT_RELATION_DIRECTIONS.has(asString(input.directionality) ?? "")) {
+    throw invalidLocalProjectContextWrite("directionality must be directed or bidirectional.");
+  }
+  const now = new Date().toISOString();
+  const id = `${LOCAL_CONTEXT_ID_PREFIX}${randomUUID()}`;
+  const relation: Record<string, unknown> = {
+    ...input,
+    id,
+    sourceProjectId: projectId,
+    targetProjectId,
+    directionality: asString(input.directionality) ?? "directed",
+    note: typeof input.note === "string" ? input.note : "",
+    origin: "manual",
+    createdByKind: "user",
+    createdAt: now,
+    updatedAt: now
+  };
+  enqueueManifestOutbox(state.manifestStore, {
+    relativePath: projectContextOutboxPath(projectId, "relations", id),
+    domain: PROJECT_CONTEXT_DOMAIN,
+    action: "create",
+    resourceId: projectId,
+    payload: { ...input, relation: "relation" }
+  });
+  echoLocalProjectRelationCreate(state.manifestStore, projectId, relation);
+  await finishLocalProjectContextWrite(state);
+  return relation;
+}
+
+function localRelationPatch(input: Record<string, unknown>): Record<string, unknown> {
+  if (
+    typeof input.expectedVersion !== "number"
+    || !Number.isInteger(input.expectedVersion)
+    || input.expectedVersion <= 0
+  ) {
+    throw invalidLocalProjectContextWrite("A positive expectedVersion is required.");
+  }
+  const patch: Record<string, unknown> = {};
+  if (input.relationType !== undefined) {
+    if (!PROJECT_RELATION_TYPES.has(asString(input.relationType) ?? "")) {
+      throw invalidLocalProjectContextWrite("Invalid relationType.");
+    }
+    patch.relationType = input.relationType;
+  }
+  if (input.directionality !== undefined) {
+    if (!PROJECT_RELATION_DIRECTIONS.has(asString(input.directionality) ?? "")) {
+      throw invalidLocalProjectContextWrite("Invalid directionality.");
+    }
+    patch.directionality = input.directionality;
+  }
+  if (input.note !== undefined) {
+    if (typeof input.note !== "string") throw invalidLocalProjectContextWrite("note must be a string.");
+    patch.note = input.note;
+  }
+  if (input.strength !== undefined) {
+    if (input.strength !== null && (typeof input.strength !== "number" || input.strength < 0 || input.strength > 1)) {
+      throw invalidLocalProjectContextWrite("strength must be null or a number from 0 to 1.");
+    }
+    patch.strength = input.strength;
+  }
+  if (Object.keys(patch).length === 0) throw invalidLocalProjectContextWrite("A relation patch is required.");
+  return patch;
+}
+
+export async function updateLocalProjectRelation(
+  state: DaemonState,
+  relationId: string,
+  input: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  if (relationId.startsWith(LOCAL_CONTEXT_ID_PREFIX)) pendingLocalProjectContextResource(relationId);
+  const found = findLocalProjectRelation(state.manifestStore, relationId);
+  if (!found) {
+    throw new LocalProjectContextError(404, "PROJECT_RELATION_NOT_FOUND", "Project relation not found in the local cache.");
+  }
+  const patch = localRelationPatch(input);
+  enqueueManifestOutbox(state.manifestStore, {
+    relativePath: projectContextOutboxPath(found.projectId, "relations", relationId),
+    domain: PROJECT_CONTEXT_DOMAIN,
+    action: "update",
+    resourceId: found.projectId,
+    payload: { relation: "relation", relationId, patch: { ...input } }
+  });
+  const result = echoLocalProjectRelationPatch(
+    state.manifestStore,
+    relationId,
+    patch,
+    new Date().toISOString()
+  );
+  await finishLocalProjectContextWrite(state);
+  return result.relation;
+}
+
+export async function deleteLocalProjectRelation(state: DaemonState, relationId: string): Promise<void> {
+  if (relationId.startsWith(LOCAL_CONTEXT_ID_PREFIX)) pendingLocalProjectContextResource(relationId);
+  const found = findLocalProjectRelation(state.manifestStore, relationId);
+  if (!found) {
+    throw new LocalProjectContextError(404, "PROJECT_RELATION_NOT_FOUND", "Project relation not found in the local cache.");
+  }
+  enqueueManifestOutbox(state.manifestStore, {
+    relativePath: projectContextOutboxPath(found.projectId, "relations", relationId),
+    domain: PROJECT_CONTEXT_DOMAIN,
+    action: "delete",
+    resourceId: found.projectId,
+    payload: { relation: "relation", relationId }
+  });
+  echoLocalProjectRelationDelete(state.manifestStore, relationId);
+  await finishLocalProjectContextWrite(state);
 }
 
 const LOCAL_NOTE_ID_PREFIX = "local-note-";
@@ -5674,7 +5946,7 @@ export function classifySyncError(input: unknown): SyncErrorDetails {
   const normalizedCode = errorCode?.toUpperCase() ?? "";
   const normalizedMessage = errorMessage.toLowerCase();
 
-  if (normalizedCode === "SYNC_VERSION_CONFLICT" || status === 409) {
+  if (normalizedCode === "SYNC_VERSION_CONFLICT" || normalizedCode === "VERSION_CONFLICT" || status === 409) {
     return { errorMessage, errorCode, errorCategory: "version_conflict", retryable: false };
   }
   if (normalizedCode.includes("CHECKSUM")) {
@@ -5705,8 +5977,10 @@ export function classifySyncError(input: unknown): SyncErrorDetails {
   if (
     normalizedCode.includes("INVALID")
     || normalizedCode.includes("VALIDATION")
+    || normalizedCode.includes("NOT_FOUND")
     || normalizedCode.includes("BASE64")
     || normalizedMessage.includes("exceeds max sync size")
+    || status === 404
     || status === 400
   ) {
     return { errorMessage, errorCode, errorCategory: "validation", retryable: false };
@@ -5892,6 +6166,11 @@ async function pushOutbox(state: DaemonState): Promise<void> {
     const item = pending[appliedItem.index];
     if (!item) continue;
     markOutboxApplied(state.manifestStore, item.id, now);
+    if (item.domain === PROJECT_CONTEXT_DOMAIN) {
+      // The invalidation emitted by Core will refetch and replace the optimistic context pack.
+      // Applying an op-level result as a remote resource would corrupt the snapshot envelope.
+      continue;
+    }
     const resourceId = appliedItem.resourceId ?? extractResourceId(appliedItem.result);
     if (item.domain !== "artifacts") {
       const domain = item.domain;
@@ -6551,10 +6830,62 @@ function optionalNumberQuery(url: URL, name: string): number | undefined {
 
 export function isLocalProjectContextMutation(pathname: string, method: string | undefined): boolean {
   if (!method || method === "GET" || method === "HEAD" || method === "OPTIONS") return false;
-  return /^\/api\/projects\/[^/]+\/(brief|memories|relations|links|context-summary)(\/refresh)?$/.test(pathname)
+  const cachedContextMutation = /^\/api\/projects\/[^/]+\/(brief|memories|relations|links|context-summary)(\/refresh)?$/.test(pathname)
     || /^\/api\/projects\/[^/]+\/index\/rebuild$/.test(pathname)
     || /^\/api\/project-(memories|relations|links)\/[^/]+$/.test(pathname)
     || /^\/api\/artifacts\/items\/[^/]+\/projects(?:\/[^/]+)?$/.test(pathname);
+  return cachedContextMutation && !isSupportedLocalProjectContextWrite(pathname, method);
+}
+
+export function isSupportedLocalProjectContextWrite(pathname: string, method: string | undefined): boolean {
+  if (method === "PUT" && /^\/api\/projects\/[^/]+\/brief$/.test(pathname)) return true;
+  if (method === "POST" && /^\/api\/projects\/[^/]+\/(memories|relations)$/.test(pathname)) return true;
+  if (method === "PATCH" && /^\/api\/project-(memories|relations)\/[^/]+$/.test(pathname)) return true;
+  return method === "DELETE" && /^\/api\/project-relations\/[^/]+$/.test(pathname);
+}
+
+export async function handleLocalProjectContextWrite(
+  state: DaemonState,
+  pathname: string,
+  method: string,
+  body: Record<string, unknown>
+): Promise<{ statusCode: number; body?: Record<string, unknown> }> {
+  let match = pathname.match(/^\/api\/projects\/([^/]+)\/brief$/);
+  if (match && method === "PUT") {
+    const result = await updateLocalProjectBrief(state, decodeURIComponent(match[1]), body);
+    scheduleTick(state, 0);
+    return { statusCode: 200, body: result };
+  }
+  match = pathname.match(/^\/api\/projects\/([^/]+)\/memories$/);
+  if (match && method === "POST") {
+    const result = await createLocalProjectMemory(state, decodeURIComponent(match[1]), body);
+    scheduleTick(state, 0);
+    return { statusCode: 201, body: result };
+  }
+  match = pathname.match(/^\/api\/project-memories\/([^/]+)$/);
+  if (match && method === "PATCH") {
+    const result = await updateLocalProjectMemory(state, decodeURIComponent(match[1]), body);
+    scheduleTick(state, 0);
+    return { statusCode: 200, body: result };
+  }
+  match = pathname.match(/^\/api\/projects\/([^/]+)\/relations$/);
+  if (match && method === "POST") {
+    const result = await createLocalProjectRelation(state, decodeURIComponent(match[1]), body);
+    scheduleTick(state, 0);
+    return { statusCode: 201, body: result };
+  }
+  match = pathname.match(/^\/api\/project-relations\/([^/]+)$/);
+  if (match && method === "PATCH") {
+    const result = await updateLocalProjectRelation(state, decodeURIComponent(match[1]), body);
+    scheduleTick(state, 0);
+    return { statusCode: 200, body: result };
+  }
+  if (match && method === "DELETE") {
+    await deleteLocalProjectRelation(state, decodeURIComponent(match[1]));
+    scheduleTick(state, 0);
+    return { statusCode: 204 };
+  }
+  throw new LocalProjectContextError(404, "LOCAL_PROJECT_CONTEXT_ROUTE_NOT_FOUND", "Local Project context route not found.");
 }
 
 async function sendLocalArtifactDownload(state: DaemonState, item: LocalArtifactItem, req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -6841,6 +7172,22 @@ function startStatusServer(state: DaemonState): void {
           : [...REMOTE_SYNC_DOMAINS],
         domains
       });
+      return;
+    }
+
+    if (isSupportedLocalProjectContextWrite(url.pathname, req.method)) {
+      try {
+        const body = req.method === "DELETE" ? {} : await readRequestJson(req);
+        const result = await handleLocalProjectContextWrite(state, url.pathname, req.method!, body);
+        if (result.statusCode === 204) {
+          res.statusCode = 204;
+          res.end();
+        } else {
+          writeJson(res, result.body, result.statusCode);
+        }
+      } catch (error) {
+        writeLocalProjectContextError(res, error);
+      }
       return;
     }
 
