@@ -127,7 +127,7 @@ describe("API error detail and auto routing", () => {
     }]);
   });
 
-  it("shows an info notification for writes accepted in explicit local mode", async () => {
+  it("does not show an info notification for writes accepted in explicit local mode", async () => {
     setWorkbenchLocalRoutingMode("local");
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({
       taskId: "task-1",
@@ -137,11 +137,7 @@ describe("API error detail and auto routing", () => {
 
     await tasksApi.completeOccurrence("task-1", "2026-07-13", "done");
 
-    expect(getNotifications()).toMatchObject([{
-      title: "Offline Save",
-      message: "Saved locally. Changes will sync when the server is reachable.",
-      level: "info"
-    }]);
+    expect(getNotifications()).toEqual([]);
   });
 
   it("falls back to local for an allowlisted mutation after a Core network failure", async () => {

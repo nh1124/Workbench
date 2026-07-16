@@ -730,7 +730,7 @@ function markSuccessfulLocalRequest(options?: RequestInit): void {
     setWorkbenchAutoLocalFallbackActive(true);
   }
   if (isReadRequest(options)) return;
-  if (mode !== "auto" && mode !== "local") return;
+  if (mode !== "auto") return;
 
   const now = Date.now();
   const elapsed = lastOfflineSaveNotificationAt === undefined ? undefined : now - lastOfflineSaveNotificationAt;

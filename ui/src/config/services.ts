@@ -181,10 +181,15 @@ function normalizeWorkbenchLocalRoutingMode(value: string | null | undefined): W
   return value === "core" || value === "auto" || value === "local" ? value : undefined;
 }
 
+function isTauriDesktopShell(): boolean {
+  return typeof window !== "undefined" && typeof window.__TAURI_INTERNALS__?.invoke === "function";
+}
+
 function readStoredWorkbenchLocalRoutingMode(): WorkbenchLocalRoutingMode {
   if (typeof window === "undefined") return "core";
   return normalizeWorkbenchLocalRoutingMode(window.localStorage.getItem(LOCAL_ROUTING_MODE_STORAGE_KEY))
-    ?? (readStoredWorkbenchLocalModeEnabled() ? "local" : "core");
+    ?? (readStoredWorkbenchLocalModeEnabled() ? "local" : undefined)
+    ?? (isTauriDesktopShell() ? "auto" : "core");
 }
 
 function persistWorkbenchLocalRoutingMode(mode: WorkbenchLocalRoutingMode): void {
