@@ -427,10 +427,11 @@ npm run build
   - Facade writes send `x-workbench-client-op-id` (one UUID per logical mutation, reused across the Core attempt and any daemon fallback); the daemon threads it into outbox items and answers duplicate writes with the first result instead of double-enqueueing.
 - `[implemented]` Add Settings UI display/actions for daemon status and open conflicts.
 - `[implemented]` Add offline/sync/conflict status display in the main app shell.
-- `[pending]` Extend daemon-backed writes to Artifacts project membership and Projects extended writes.
-  - Routes still Core-only (excluded from the Auto write allowlist): `POST/DELETE /api/artifacts/items/:id/projects...`, `PUT /api/projects/:id/brief`, `POST /api/projects/:id/memories`, `PATCH /api/project-memories/:id`, `POST/PATCH/DELETE` for project relations and links, index rebuild, and context-summary refresh.
-  - Prerequisite: the daemon has no local read model for membership/brief/memory/relation/link state (no GET routes, no cache fed by sync pull). Adding outbox writes without cached reads would break read-your-writes offline, so this needs pull-side cache design first.
-  - Index rebuild and context-summary refresh are server-side recomputations; they should stay Core-only rather than be queued offline.
+- `[implemented]` Daemon-backed offline writes for Project brief, memories, and relations (E2).
+  - Design and progress: `project-context-offline-writes-plan.md`. Core sync push applies `project_context` ops; the daemon queues outbox writes with an optimistic cache echo; the Auto allowlist covers the six routes.
+- `[pending]` Daemon-backed writes for Project links and Artifacts project membership.
+  - The E1 context cache does not hold link/membership read state (D-E1-002), so these stay on the daemon 503 guard until an E3 cache extension; routes remain Core-only in the Auto allowlist.
+  - Index rebuild and context-summary refresh are server-side recomputations; they stay Core-only permanently.
 
 ### Desktop / OS Integration
 

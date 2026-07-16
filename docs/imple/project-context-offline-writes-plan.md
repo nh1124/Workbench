@@ -58,9 +58,9 @@ After enqueueing, the daemon applies the user's own pending write to the cached 
 
 ## 3. Slices / Progress
 
-- `[pending]` S1 Core: `project_context` push apply branch (brief/memory/relation), synchronous invalidation + `clientOpId` ledger guarantee, applied/rejected mapping with stable error codes, tests (apply, replay dedupe, version conflict, unknown relation rejection).
-- `[pending]` S2 Daemon: replace the 503 guard for supported routes with outbox writes + optimistic cache echo, temp-id rules, conflict classification for replay failures, tests (enqueue contract, optimistic read-back, temp-id rejection, guard still 503 for links/membership/index/summary).
-- `[pending]` S3 UI: allowlist additions + routing tests; update this progress board and the pending entry in `workbench-local-client-sync-daemon-plan.md`.
+- `[implemented]` S1 Core: `project_context` push apply branch (brief/memory/relation), synchronous invalidation + `clientOpId` ledger guarantee, applied/rejected mapping with stable error codes, tests (apply, replay dedupe, version conflict, unknown relation rejection). (commit f58b183)
+- `[implemented]` S2 Daemon: outbox writes + optimistic cache echo for the supported routes, temp-id rules, replay conflict classification, narrowed 503 guard; pushOutbox skips remote-resource upserts for applied `project_context` ops. (commit a5e0a7d)
+- `[implemented]` S3 UI: six context-write allowlist entries + routing tests; links/membership/index/summary remain Core-only.
 
 ## 4. Verification
 

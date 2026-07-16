@@ -98,10 +98,19 @@ describe("API error detail and auto routing", () => {
     expect(localDaemonSupportsWriteRequest("/api/tasks/today/task-1?scheduledDate=2026-07-13", { method: "DELETE" })).toBe(true);
     expect(localDaemonSupportsWriteRequest("/api/tasks/task-1/attachments", { method: "POST" })).toBe(true);
     expect(localDaemonSupportsWriteRequest("/api/tasks/task-1/attachments/attachment-1", { method: "PUT" })).toBe(true);
+    expect(localDaemonSupportsWriteRequest("/api/projects/project-1/brief?expectedVersion=1", { method: "PUT" })).toBe(true);
+    expect(localDaemonSupportsWriteRequest("/api/projects/project-1/memories?source=ui", { method: "POST" })).toBe(true);
+    expect(localDaemonSupportsWriteRequest("/api/project-memories/memory-1?status=archived", { method: "PATCH" })).toBe(true);
+    expect(localDaemonSupportsWriteRequest("/api/projects/project-1/relations?source=ui", { method: "POST" })).toBe(true);
+    expect(localDaemonSupportsWriteRequest("/api/project-relations/relation-1?expectedVersion=1", { method: "PATCH" })).toBe(true);
+    expect(localDaemonSupportsWriteRequest("/api/project-relations/relation-1?source=ui", { method: "DELETE" })).toBe(true);
     expect(localDaemonSupportsWriteRequest("/api/artifacts/items/item-1/content-patch", { method: "PATCH" })).toBe(false);
     expect(localDaemonSupportsWriteRequest("/api/artifacts/items/item-1/projects", { method: "POST" })).toBe(false);
     expect(localDaemonSupportsWriteRequest("/api/artifacts/items/item-1/projects/project-1", { method: "DELETE" })).toBe(false);
-    expect(localDaemonSupportsWriteRequest("/api/projects/project-1/brief", { method: "PUT" })).toBe(false);
+    expect(localDaemonSupportsWriteRequest("/api/projects/project-1/links?source=ui", { method: "POST" })).toBe(false);
+    expect(localDaemonSupportsWriteRequest("/api/project-links/link-1?source=ui", { method: "DELETE" })).toBe(false);
+    expect(localDaemonSupportsWriteRequest("/api/projects/project-1/context-summary/refresh?source=ui", { method: "POST" })).toBe(false);
+    expect(localDaemonSupportsWriteRequest("/api/projects/project-1/index/rebuild?source=ui", { method: "POST" })).toBe(false);
   });
 
   it("routes allowlisted mutations directly to local while offline and dedupes save notifications", async () => {
@@ -144,6 +153,26 @@ describe("API error detail and auto routing", () => {
     expect(getNotifications()).toEqual([]);
   });
 
+  it("routes an allowlisted context write directly to local while offline", async () => {
+    vi.spyOn(window.navigator, "onLine", "get").mockReturnValue(false);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      projectId: "project-1",
+      contentMarkdown: "# Updated brief",
+      version: 2
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await projectsApi.updateBrief("project-1", {
+      contentMarkdown: "# Updated brief",
+      expectedVersion: 1
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      "http://127.0.0.1:35780/api/projects/project-1/brief"
+    );
+  });
+
   it("adds a client operation id header to facade writes", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: "task-1" }, 201));
     vi.stubGlobal("fetch", fetchMock);
@@ -178,16 +207,16 @@ describe("API error detail and auto routing", () => {
     const fetchMock = vi.fn().mockRejectedValue(new TypeError("core offline"));
     vi.stubGlobal("fetch", fetchMock);
 
-    const error = await projectsApi.addRelation("project-1", {
-      targetProjectId: "project-2",
-      relationType: "related",
-      directionality: "bidirectional"
+    const error = await projectsApi.addLink("project-1", {
+      targetService: "notes",
+      targetResourceType: "note",
+      targetResourceId: "note-1"
     })
       .catch((caught: unknown) => caught);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(String(fetchMock.mock.calls[0][0])).toBe(
-      "http://127.0.0.1:3000/api/projects/project-1/relations"
+      "http://127.0.0.1:3000/api/projects/project-1/links"
     );
     expect(error).toMatchObject({ backend: "core", method: "POST", networkFailure: true });
     expect(getWorkbenchAutoLocalFallbackActive()).toBe(false);
