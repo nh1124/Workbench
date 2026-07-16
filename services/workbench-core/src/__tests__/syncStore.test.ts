@@ -8,6 +8,7 @@ process.env.CORE_DB_USER ||= "workbench-test-unused";
 process.env.CORE_DB_PASSWORD ||= "workbench-test-unused";
 
 const {
+  getAppliedClientOpWithPool,
   getLatestSyncCursorWithPool,
   listSyncEventsWithPool,
   recordSyncEventWithPool
@@ -109,6 +110,76 @@ describe("sync event transactions", () => {
     assert.equal(event.cursor, "42");
     assert.equal(event.version, 7);
     assert.deepEqual(event.payload, { source: "test" });
+  });
+
+  it("records and resolves client operation ids in the event transaction", async () => {
+    const calls: QueryCall[] = [];
+    const createdAt = "2026-07-16T01:02:03.000Z";
+    const client = {
+      async query<Row>(text: string, values?: unknown[]): Promise<{ rows: Row[] }> {
+        calls.push({ text: normalizedSql(text), values });
+        if (text === "BEGIN" || text === "COMMIT") return { rows: [] };
+        if (text.includes("INSERT INTO sync_resource_versions")) {
+          return { rows: [{ version: 1, deleted_at: null } as Row] };
+        }
+        if (text.includes("INSERT INTO sync_events")) {
+          return { rows: [{
+            id: "51",
+            user_id: "user-1",
+            domain: "notes",
+            resource_id: "note-1",
+            action: "create",
+            version: 1,
+            payload_json: { clientOpId: "op-1" },
+            created_at: createdAt
+          } as Row] };
+        }
+        if (text.includes("INSERT INTO sync_applied_client_ops")) return { rows: [] };
+        throw new Error(`Unexpected query: ${text}`);
+      },
+      release(): void {}
+    };
+
+    await recordSyncEventWithPool(
+      { async connect() { return client; } },
+      "user-1",
+      "notes",
+      "note-1",
+      "create",
+      { clientOpId: "op-1" }
+    );
+
+    const ledgerCall = calls.find((call) => call.text.includes("INSERT INTO sync_applied_client_ops"));
+    assert.ok(ledgerCall);
+    assert.deepEqual(ledgerCall.values, ["user-1", "op-1", "notes", "create", "note-1", 1, "51", createdAt]);
+    assert.match(ledgerCall.text, /ON CONFLICT \(user_id, client_op_id\) DO NOTHING/);
+
+    const applied = await getAppliedClientOpWithPool({
+      async query<Row>(text: string, values?: unknown[]): Promise<{ rows: Row[] }> {
+        assert.match(text, /FROM sync_applied_client_ops/);
+        assert.deepEqual(values, ["user-1", "op-1"]);
+        return { rows: [{
+          user_id: "user-1",
+          client_op_id: "op-1",
+          domain: "notes",
+          action: "create",
+          resource_id: "note-1",
+          version: 1,
+          cursor: "51",
+          created_at: createdAt
+        } as Row] };
+      }
+    }, "user-1", "op-1");
+    assert.deepEqual(applied, {
+      userId: "user-1",
+      clientOpId: "op-1",
+      domain: "notes",
+      action: "create",
+      resourceId: "note-1",
+      version: 1,
+      cursor: "51",
+      createdAt
+    });
   });
 
   it("rolls back on the same client and preserves the original error", async () => {

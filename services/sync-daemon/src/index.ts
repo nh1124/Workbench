@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { hostname, homedir, platform } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
@@ -19,8 +20,9 @@ export { readIdentity } from "./identityStorage.js";
 export type { ClientIdentity, SecureIdentityMode } from "./identityStorage.js";
 
 import {
-  enqueueOutbox as enqueueManifestOutbox,
+  enqueueOutbox as enqueueManifestOutboxRaw,
   getMeta,
+  getOutboxByClientOpId,
   getRemoteResource,
   getResource,
   hasOpenOutboxForPath,
@@ -88,6 +90,20 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 loadEnv({ path: resolve(__dirname, "../.env") });
+
+const CLIENT_OP_ID_HEADER = "x-workbench-client-op-id";
+const localWriteContext = new AsyncLocalStorage<{ clientOpId?: string }>();
+
+type EnqueueManifestOutboxInput = Parameters<typeof enqueueManifestOutboxRaw>[1];
+
+function enqueueManifestOutbox(store: ManifestStore, item: EnqueueManifestOutboxInput): OutboxItem {
+  return enqueueManifestOutboxRaw(store, item, localWriteContext.getStore()?.clientOpId);
+}
+
+export function runWithClientOpId<T>(clientOpId: string | undefined, operation: () => T): T {
+  const normalized = clientOpId?.trim() || undefined;
+  return localWriteContext.run({ clientOpId: normalized }, operation);
+}
 
 export type LocalJob = {
   id: string;
@@ -5615,6 +5631,7 @@ type SyncPushResponse = {
     action?: "create" | "update" | "delete";
     resourceId?: string;
     version?: number;
+    deduplicated?: boolean;
     result?: unknown;
   }>;
   rejected?: Array<{
@@ -6374,7 +6391,10 @@ function setLoopbackCorsHeaders(config: DaemonConfig, req: IncomingMessage, res:
   const origin = requestOrigin(req);
   res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, x-workbench-daemon-token");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization, x-workbench-daemon-token, x-workbench-client-op-id"
+  );
   res.setHeader("Access-Control-Max-Age", "600");
   if (!origin) {
     return true;
@@ -6465,6 +6485,26 @@ function writeJson(res: ServerResponse, value: unknown, statusCode = 200): void 
   res.end(JSON.stringify(value, null, 2));
 }
 
+function requestClientOpId(req: IncomingMessage): string | undefined {
+  const value = req.headers[CLIENT_OP_ID_HEADER];
+  const raw = Array.isArray(value) ? value[0] : value;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+}
+
+export function existingClientOpWriteResult(
+  state: Pick<DaemonState, "manifestStore">,
+  clientOpId: string
+): { item: OutboxItem; result: Record<string, unknown> } | undefined {
+  const item = getOutboxByClientOpId(state.manifestStore, clientOpId);
+  if (!item) return undefined;
+  const remote = item.resourceId
+    ? getRemoteResource(state.manifestStore, item.domain, item.resourceId)
+    : undefined;
+  const resolved = remote?.payload ?? item.payload;
+  const { contentBase64: _contentBase64, ...result } = resolved;
+  return { item, result };
+}
+
 function writeCaptureError(res: ServerResponse, error: unknown): void {
   if (error instanceof CaptureError) {
     writeJson(res, { code: error.code, message: error.message }, error.status);
@@ -6542,7 +6582,7 @@ async function sendLocalArtifactDownload(state: DaemonState, item: LocalArtifact
 
 function startStatusServer(state: DaemonState): void {
   if (state.config.httpPort === 0) return;
-  const server = createServer(async (req, res) => {
+  const server = createServer((req, res) => runWithClientOpId(requestClientOpId(req), async () => {
     if (!setLoopbackCorsHeaders(state.config, req, res)) {
       writeJson(res, {
         code: LOOPBACK_CORS_ERROR_CODE,
@@ -6558,6 +6598,14 @@ function startStatusServer(state: DaemonState): void {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     if (!requireLoopbackAuth(state, req, res, url.pathname)) {
       return;
+    }
+    const clientOpId = requestClientOpId(req);
+    if (clientOpId && req.method && !["GET", "HEAD", "OPTIONS"].includes(req.method)) {
+      const existingWrite = existingClientOpWriteResult(state, clientOpId);
+      if (existingWrite) {
+        writeJson(res, existingWrite.result);
+        return;
+      }
     }
     if (url.pathname === "/health") {
       writeJson(res, { status: "ok" });
@@ -7689,7 +7737,7 @@ function startStatusServer(state: DaemonState): void {
 
     res.statusCode = 404;
     res.end("not found");
-  });
+  }));
   server.listen(state.config.httpPort, "127.0.0.1", () => {
     console.log(`[sync-daemon] status listening on http://127.0.0.1:${state.config.httpPort}/status`);
   });

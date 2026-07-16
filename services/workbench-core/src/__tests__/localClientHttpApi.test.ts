@@ -811,7 +811,8 @@ describe("local client HTTP APIs", () => {
           : {};
         if (url.pathname === "/notes" && method === "POST") {
           noteRequests.push({ method, pathname: url.pathname, body });
-          return new Response(JSON.stringify({ ...body, id: "note-created-raw" }), {
+          const id = body.title === "Created through REST" ? "note-created-rest" : "note-created-raw";
+          return new Response(JSON.stringify({ ...body, id }), {
             status: 200,
             headers: { "Content-Type": "application/json" }
           });
@@ -862,6 +863,69 @@ describe("local client HTTP APIs", () => {
           tags: ["workbench-capture"]
         }
       });
+
+      const repeatedCreateResponse = await requestJson(server.baseUrl, "POST", "/api/sync/push", {
+        headers: daemonHeaders,
+        body: {
+          ops: [{
+            clientOpId: "note-create-raw",
+            domain: "notes",
+            action: "create",
+            payload: {
+              title: "Capture Daily Summary 2026-07-07",
+              content: "Captured activity",
+              lifecycleState: "raw",
+              reviewAfter: "2026-07-08T00:00:00.000Z",
+              tags: ["workbench-capture"]
+            }
+          }]
+        }
+      });
+      assert.equal(repeatedCreateResponse.status, 202);
+      const repeatedApplied = repeatedCreateResponse.body.applied as Array<Record<string, unknown>>;
+      assert.equal(repeatedApplied.length, 1);
+      assert.equal(repeatedApplied[0].resourceId, "note-created-raw");
+      assert.equal(repeatedApplied[0].deduplicated, true);
+      assert.equal(noteRequests.length, 1);
+
+      noteRequests.length = 0;
+      const restClientOpId = randomUUID();
+      const restCreateResponse = await requestJson(server.baseUrl, "POST", "/api/notes", {
+        headers: {
+          ...bearerHeaders(accessToken),
+          "x-workbench-client-op-id": restClientOpId
+        },
+        body: {
+          title: "Created through REST",
+          content: "Core may have applied this before the network failed",
+          lifecycleState: "raw"
+        }
+      });
+      assert.equal(restCreateResponse.status, 201);
+      assert.equal(restCreateResponse.body.id, "note-created-rest");
+      assert.equal(noteRequests.length, 1);
+
+      const replayAfterRestResponse = await requestJson(server.baseUrl, "POST", "/api/sync/push", {
+        headers: daemonHeaders,
+        body: {
+          ops: [{
+            clientOpId: restClientOpId,
+            domain: "notes",
+            action: "create",
+            payload: {
+              title: "Created through REST",
+              content: "Core may have applied this before the network failed",
+              lifecycleState: "raw"
+            }
+          }]
+        }
+      });
+      assert.equal(replayAfterRestResponse.status, 202);
+      const replayApplied = replayAfterRestResponse.body.applied as Array<Record<string, unknown>>;
+      assert.equal(replayApplied.length, 1);
+      assert.equal(replayApplied[0].resourceId, "note-created-rest");
+      assert.equal(replayApplied[0].deduplicated, true);
+      assert.equal(noteRequests.length, 1);
 
       noteRequests.length = 0;
       const mixedResponse = await requestJson(server.baseUrl, "POST", "/api/sync/push", {

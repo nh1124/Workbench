@@ -31,6 +31,7 @@ import {
   deleteLocalArtifactItem,
   deleteLocalTask,
   exportLocalTasksCsv,
+  existingClientOpWriteResult,
   getLocalArtifactItemById,
   importLocalTasksCsv,
   listLocalArtifactItems,
@@ -43,6 +44,7 @@ import {
   setLocalDefaultProject,
   setLocalTaskPin,
   recordLocalTaskOccurrence,
+  runWithClientOpId,
   removeLocalTaskFromToday,
   removeLocalTaskScheduleItem,
   updateLocalTaskScheduleItem,
@@ -206,6 +208,32 @@ describe("sync folder recovery", () => {
         "create:superseded",
         "create:superseded"
       ]);
+    } finally {
+      closeManifestStore(store);
+    }
+  });
+
+  it("threads a UI client operation id into the outbox and reuses the first POST result", async () => {
+    const { store, state } = await createState();
+    try {
+      const clientOpId = "2fd4016a-8dff-4c3b-a7c8-d475cb038840";
+      const created = await runWithClientOpId(clientOpId, () => createLocalNote(state, {
+        title: "One logical write",
+        content: "Created once"
+      }));
+
+      let manifest = readManifestFromStore(store);
+      assert.equal(manifest.outbox?.length, 1);
+      assert.equal(manifest.outbox?.[0].clientOpId, clientOpId);
+
+      // This is the same lookup the HTTP route performs before invoking a local mutation again.
+      const duplicate = existingClientOpWriteResult(state, clientOpId);
+      assert.ok(duplicate);
+      assert.deepEqual(duplicate.result, created);
+
+      manifest = readManifestFromStore(store);
+      assert.equal(manifest.outbox?.length, 1);
+      assert.equal(manifest.remoteResources?.filter((item) => item.domain === "notes").length, 1);
     } finally {
       closeManifestStore(store);
     }

@@ -5,6 +5,7 @@ import jwt from "jsonwebtoken";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { existsSync } from "node:fs";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
@@ -109,7 +110,7 @@ import {
   type LocalJobStatus,
   type LocalJobTarget
 } from "./localClientsStore.js";
-import { getLatestSyncCursor, getSyncResourceVersion, listSyncEvents, recordSyncEvent, type SyncAction, type SyncDomain } from "./syncStore.js";
+import { getAppliedClientOp, getLatestSyncCursor, getSyncResourceVersion, listSyncEvents, recordSyncEvent, type SyncAction, type SyncDomain } from "./syncStore.js";
 import {
   buildProjectContextSyncItem,
   parseProjectContextBaselineCursor,
@@ -178,6 +179,9 @@ const supportedMcpScopes = ["mcp:tools"] as const;
 const supportedMcpScopeSet = new Set<string>(supportedMcpScopes);
 const clientMetadataCacheTtlMs = 5 * 60 * 1000;
 const clientMetadataFetchTimeoutMs = 5000;
+const CLIENT_OP_ID_HEADER = "x-workbench-client-op-id";
+const facadeSyncDomains = new Set<SyncDomain>(["projects", "notes", "artifacts", "tasks"]);
+const syncRequestContext = new AsyncLocalStorage<{ clientOpId?: string }>();
 const clientMetadataMaxResponseBytes = 64 * 1024;
 const externalBaseUrlRaw = optionalEnv("CORE_EXTERNAL_BASE_URL");
 const clientMetadataHostAllowlist = new Set(
@@ -903,6 +907,10 @@ function renderAuthorizeLoginForm(params: AuthorizeRequestParams, errorMessage?:
 export const app = express();
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
+app.use((req, _res, next) => {
+  const clientOpId = asNonEmptyString(req.header(CLIENT_OP_ID_HEADER));
+  syncRequestContext.run({ clientOpId }, next);
+});
 app.use(requestLogger(logger));
 
 const accountSchema = z.object({
@@ -1429,15 +1437,19 @@ export const syncEventBroadcaster = {
   }
 };
 
-function recordSyncEventBestEffort(
+async function recordSyncEventBestEffort(
   userId: string,
   domain: SyncDomain,
   resourceId: string | undefined,
   action: SyncAction,
   payload: Record<string, unknown> = {}
-): void {
+): Promise<void> {
   if (!resourceId) return;
-  void recordSyncEvent(userId, domain, resourceId, action, payload)
+  const clientOpId = facadeSyncDomains.has(domain) ? syncRequestContext.getStore()?.clientOpId : undefined;
+  const pending = recordSyncEvent(userId, domain, resourceId, action, {
+    ...payload,
+    ...(clientOpId ? { clientOpId } : {})
+  })
     .then((event) => {
       syncEventBroadcaster.publish(userId, {
         domain: event.domain,
@@ -1450,6 +1462,11 @@ function recordSyncEventBestEffort(
       const message = error instanceof Error ? error.message : String(error);
       logger.warn("[sync] failed to record event", { domain, resourceId, action, message });
     });
+  if (clientOpId) {
+    await pending;
+  } else {
+    void pending;
+  }
 }
 
 async function invalidateProjectContextFromApi(
@@ -1755,6 +1772,7 @@ type SyncPushApplied = {
   resourceId: string;
   version: number;
   cursor: string;
+  deduplicated?: true;
   result?: unknown;
 };
 
@@ -1963,6 +1981,22 @@ async function applySyncPushOperation(
   }
   if (!action || !["create", "update", "delete", "upsert"].includes(action)) {
     throw new LocalClientStoreError(400, "SYNC_ACTION_NOT_SUPPORTED", "Unsupported sync push action.");
+  }
+
+  if (clientOpId) {
+    const existing = await getAppliedClientOp(authContext.userId, clientOpId);
+    if (existing) {
+      return {
+        index,
+        clientOpId,
+        domain: existing.domain,
+        action: existing.action,
+        resourceId: existing.resourceId,
+        version: existing.version,
+        cursor: existing.cursor,
+        deduplicated: true
+      };
+    }
   }
 
   const relation = asNonEmptyString(op.relation) ?? asNonEmptyString(payload.relation);
@@ -4889,7 +4923,7 @@ app.post("/api/sync/push", async (req, res) => {
   return res.status(rejected.length > 0 && applied.length === 0 ? 409 : 202).json({
     applied,
     rejected,
-    serverCursor: applied.length > 0 ? applied[applied.length - 1].cursor : undefined
+    serverCursor: applied.length > 0 ? await getLatestSyncCursor(authContext.userId) : undefined
   });
 });
 
@@ -4978,7 +5012,7 @@ app.post("/api/projects", async (req, res) => {
   try {
     const result = await projectsClient.create(authContext.accessToken, req.body);
     const projectId = objectId(result);
-    recordSyncEventBestEffort(authContext.userId, "projects", projectId, "create", {
+    await recordSyncEventBestEffort(authContext.userId, "projects", projectId, "create", {
       source: "core-api",
       resource: result as Record<string, unknown>
     });
@@ -5011,7 +5045,7 @@ app.put("/api/projects/default", async (req, res) => {
     const result = await projectsClient.setDefault(authContext.accessToken, req.body);
     const body = asJsonRecord(req.body);
     const projectId = asNonEmptyString(body.projectId) ?? objectId(result);
-    recordSyncEventBestEffort(authContext.userId, "projects", projectId, "update", {
+    await recordSyncEventBestEffort(authContext.userId, "projects", projectId, "update", {
       source: "core-api",
       relation: "default",
       projectId,
@@ -5429,7 +5463,7 @@ app.patch("/api/projects/:projectId", async (req, res) => {
 
   try {
     const result = await projectsClient.update(authContext.accessToken, String(req.params.projectId), req.body);
-    recordSyncEventBestEffort(authContext.userId, "projects", String(req.params.projectId), "update", {
+    await recordSyncEventBestEffort(authContext.userId, "projects", String(req.params.projectId), "update", {
       source: "core-api",
       patch: req.body as Record<string, unknown>,
       resource: result as Record<string, unknown>
@@ -5453,7 +5487,7 @@ app.delete("/api/projects/:projectId", async (req, res) => {
 
   try {
     await deleteProjectWithGuard(authContext.accessToken, String(req.params.projectId));
-    recordSyncEventBestEffort(authContext.userId, "projects", String(req.params.projectId), "delete", {
+    await recordSyncEventBestEffort(authContext.userId, "projects", String(req.params.projectId), "delete", {
       source: "core-api",
       deleted: true
     });
@@ -5517,7 +5551,7 @@ app.post("/api/notes", async (req, res) => {
 
   try {
     const result = await notesClient.create(authContext.accessToken, req.body);
-    recordSyncEventBestEffort(authContext.userId, "notes", objectId(result), "create", {
+    await recordSyncEventBestEffort(authContext.userId, "notes", objectId(result), "create", {
       source: "core-api",
       resource: result as Record<string, unknown>
     });
@@ -5533,7 +5567,7 @@ app.patch("/api/notes/:id", async (req, res) => {
 
   try {
     const result = await notesClient.update(authContext.accessToken, String(req.params.id), req.body);
-    recordSyncEventBestEffort(authContext.userId, "notes", String(req.params.id), "update", {
+    await recordSyncEventBestEffort(authContext.userId, "notes", String(req.params.id), "update", {
       source: "core-api",
       patch: req.body as Record<string, unknown>,
       resource: result as Record<string, unknown>
@@ -5586,7 +5620,7 @@ app.delete("/api/notes/:id", async (req, res) => {
 
   try {
     await notesClient.remove(authContext.accessToken, String(req.params.id));
-    recordSyncEventBestEffort(authContext.userId, "notes", String(req.params.id), "delete", {
+    await recordSyncEventBestEffort(authContext.userId, "notes", String(req.params.id), "delete", {
       source: "core-api",
       deleted: true
     });
@@ -5701,7 +5735,7 @@ app.post("/api/artifacts/items/:artifactItemId/projects", async (req, res) => {
       expectedArtifactVersion:
         typeof body.expectedArtifactVersion === "number" ? body.expectedArtifactVersion : undefined
     });
-    recordSyncEventBestEffort(authContext.userId, "artifacts", String(req.params.artifactItemId), "update", {
+    await recordSyncEventBestEffort(authContext.userId, "artifacts", String(req.params.artifactItemId), "update", {
       source: "core-api",
       relation: "project-membership",
       action: "link",
@@ -5729,7 +5763,7 @@ app.delete("/api/artifacts/items/:artifactItemId/projects/:projectId", async (re
       String(req.params.artifactItemId),
       String(req.params.projectId)
     );
-    recordSyncEventBestEffort(authContext.userId, "artifacts", String(req.params.artifactItemId), "update", {
+    await recordSyncEventBestEffort(authContext.userId, "artifacts", String(req.params.artifactItemId), "update", {
       source: "core-api",
       relation: "project-membership",
       action: "unlink",
@@ -5756,7 +5790,7 @@ app.post("/api/artifacts/folders", async (req, res) => {
     const result = await artifactsClient.createFolder(authContext.accessToken, req.body);
     await maintainArtifactIndexBestEffort(authContext.accessToken, result);
     const projectIds = await listArtifactProjectIdsBestEffort(authContext.accessToken, result);
-    recordSyncEventBestEffort(authContext.userId, "artifacts", objectId(result), "create", {
+    await recordSyncEventBestEffort(authContext.userId, "artifacts", objectId(result), "create", {
       source: "core-api",
       resource: result as Record<string, unknown>
     });
@@ -5774,7 +5808,7 @@ app.post("/api/artifacts/notes", async (req, res) => {
   try {
     const result = await createArtifactNoteWithIndex(authContext.accessToken, req.body);
     const projectIds = await listArtifactProjectIdsBestEffort(authContext.accessToken, result);
-    recordSyncEventBestEffort(authContext.userId, "artifacts", objectId(result), "create", {
+    await recordSyncEventBestEffort(authContext.userId, "artifacts", objectId(result), "create", {
       source: "core-api",
       resource: result as Record<string, unknown>
     });
@@ -5873,7 +5907,7 @@ app.patch("/api/artifacts/items/:id", async (req, res) => {
       await maintainArtifactIndexBestEffort(authContext.accessToken, result);
     }
     projectIds.push(...await listArtifactProjectIdsBestEffort(authContext.accessToken, result));
-    recordSyncEventBestEffort(authContext.userId, "artifacts", String(req.params.id), "update", {
+    await recordSyncEventBestEffort(authContext.userId, "artifacts", String(req.params.id), "update", {
       source: "core-api",
       patch: req.body as Record<string, unknown>,
       resource: result as Record<string, unknown>
@@ -5891,7 +5925,7 @@ app.delete("/api/artifacts/items/:id", async (req, res) => {
 
   try {
     const snapshot = await removeArtifactItemWithProjectCleanup(authContext.accessToken, String(req.params.id));
-    recordSyncEventBestEffort(authContext.userId, "artifacts", String(req.params.id), "delete", {
+    await recordSyncEventBestEffort(authContext.userId, "artifacts", String(req.params.id), "delete", {
       source: "core-api",
       deleted: true
     });
@@ -5989,7 +6023,7 @@ app.post("/api/artifacts", async (req, res) => {
 
   try {
     const result = await artifactsClient.create(authContext.accessToken, req.body);
-    recordSyncEventBestEffort(authContext.userId, "artifacts", objectId(result), "create", {
+    await recordSyncEventBestEffort(authContext.userId, "artifacts", objectId(result), "create", {
       source: "core-api",
       resource: result as Record<string, unknown>
     });
@@ -6005,7 +6039,7 @@ app.patch("/api/artifacts/:id", async (req, res) => {
 
   try {
     const result = await artifactsClient.update(authContext.accessToken, String(req.params.id), req.body);
-    recordSyncEventBestEffort(authContext.userId, "artifacts", String(req.params.id), "update", {
+    await recordSyncEventBestEffort(authContext.userId, "artifacts", String(req.params.id), "update", {
       source: "core-api",
       patch: req.body as Record<string, unknown>,
       resource: result as Record<string, unknown>
@@ -6022,7 +6056,7 @@ app.delete("/api/artifacts/:id", async (req, res) => {
 
   try {
     await artifactsClient.remove(authContext.accessToken, String(req.params.id));
-    recordSyncEventBestEffort(authContext.userId, "artifacts", String(req.params.id), "delete", {
+    await recordSyncEventBestEffort(authContext.userId, "artifacts", String(req.params.id), "delete", {
       source: "core-api",
       deleted: true
     });
@@ -6072,7 +6106,7 @@ app.put("/api/tasks/:id/pin", async (req, res) => {
 
   try {
     const result = await tasksClient.setPin(authContext.accessToken, String(req.params.id), pinned);
-    recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
+    await recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
       source: "core-api",
       relation: "pin",
       pinned,
@@ -6117,7 +6151,7 @@ app.post("/api/tasks/:id/occurrences/complete", async (req, res) => {
 
   try {
     const result = await tasksClient.completeOccurrence(authContext.accessToken, String(req.params.id), targetDate, status);
-    recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
+    await recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
       source: "core-api",
       relation: "occurrence",
       targetDate,
@@ -6142,7 +6176,7 @@ app.post("/api/tasks/:id/occurrences/move", async (req, res) => {
 
   try {
     const result = await tasksClient.moveOccurrence(authContext.accessToken, String(req.params.id), sourceDate, targetDate);
-    recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
+    await recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
       source: "core-api",
       relation: "occurrence",
       operation: "move",
@@ -6167,7 +6201,7 @@ app.post("/api/tasks/:id/occurrences/skip-exception", async (req, res) => {
 
   try {
     const result = await tasksClient.skipOccurrenceException(authContext.accessToken, String(req.params.id), targetDate);
-    recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
+    await recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
       source: "core-api",
       relation: "occurrence",
       operation: "skipException",
@@ -6284,7 +6318,7 @@ app.post("/api/tasks", async (req, res) => {
 
   try {
     const result = await tasksClient.create(authContext.accessToken, req.body);
-    recordSyncEventBestEffort(authContext.userId, "tasks", objectId(result), "create", {
+    await recordSyncEventBestEffort(authContext.userId, "tasks", objectId(result), "create", {
       source: "core-api",
       resource: result as Record<string, unknown>
     });
@@ -6300,7 +6334,7 @@ app.patch("/api/tasks/:id", async (req, res) => {
 
   try {
     const result = await tasksClient.update(authContext.accessToken, String(req.params.id), req.body);
-    recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
+    await recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
       source: "core-api",
       patch: req.body as Record<string, unknown>,
       resource: result as Record<string, unknown>
@@ -6317,7 +6351,7 @@ app.delete("/api/tasks/:id", async (req, res) => {
 
   try {
     await tasksClient.remove(authContext.accessToken, String(req.params.id));
-    recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "delete", {
+    await recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "delete", {
       source: "core-api",
       deleted: true
     });
@@ -6388,7 +6422,7 @@ app.post("/api/tasks/:id/attachments", async (req, res) => {
       const attachment = responseContentType?.includes("application/json")
         ? jsonRecordFromBuffer(buffer)
         : {};
-      recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
+      await recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
         source: "core-api",
         relation: "attachment",
         action: "create",
@@ -6429,7 +6463,7 @@ app.put("/api/tasks/:id/attachments/:attachmentId", async (req, res) => {
       const attachment = responseContentType?.includes("application/json")
         ? jsonRecordFromBuffer(buffer)
         : {};
-      recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
+      await recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
         source: "core-api",
         relation: "attachment",
         action: "update",
@@ -6481,7 +6515,7 @@ app.delete("/api/tasks/:id/attachments/:attachmentId", async (req, res) => {
   if (!authContext) return;
   try {
     await tasksClient.deleteAttachment(authContext.accessToken, String(req.params.id), String(req.params.attachmentId));
-    recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
+    await recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
       source: "core-api",
       relation: "attachment",
       action: "delete",
@@ -6517,7 +6551,7 @@ app.post("/api/tasks/:id/occurrences/:date/subtasks", async (req, res) => {
       String(req.params.date),
       req.body?.title
     );
-    recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
+    await recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
       source: "core-api",
       relation: "subtask",
       action: "create",
@@ -6542,7 +6576,7 @@ app.patch("/api/tasks/:id/occurrences/:date/subtasks/:subtaskId", async (req, re
       String(req.params.subtaskId),
       req.body
     );
-    recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
+    await recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
       source: "core-api",
       relation: "subtask",
       action: "update",
@@ -6567,7 +6601,7 @@ app.delete("/api/tasks/:id/occurrences/:date/subtasks/:subtaskId", async (req, r
       String(req.params.date),
       String(req.params.subtaskId)
     );
-    recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
+    await recordSyncEventBestEffort(authContext.userId, "tasks", String(req.params.id), "update", {
       source: "core-api",
       relation: "subtask",
       action: "delete",
@@ -6617,7 +6651,7 @@ app.post("/api/tasks/today", async (req, res) => {
     const effectiveOccurrenceDate = typeof resultRecord.occurrenceDate === "string"
       ? resultRecord.occurrenceDate
       : requestedOccurrenceDate || scheduledDate;
-    recordSyncEventBestEffort(authContext.userId, "tasks", taskId, "update", {
+    await recordSyncEventBestEffort(authContext.userId, "tasks", taskId, "update", {
       source: "core-api",
       relation: "today",
       action: "create",
@@ -6645,7 +6679,7 @@ app.delete("/api/tasks/today/:taskId", async (req, res) => {
   if (!scheduledDate) return res.status(400).json({ message: "scheduledDate query parameter is required (YYYY-MM-DD)" });
   try {
     const result = await tasksClient.removeFromToday(authContext.accessToken, taskId, scheduledDate, occurrenceDate);
-    recordSyncEventBestEffort(authContext.userId, "tasks", taskId, "update", {
+    await recordSyncEventBestEffort(authContext.userId, "tasks", taskId, "update", {
       source: "core-api",
       relation: "today",
       action: "delete",
@@ -6671,7 +6705,7 @@ app.put("/api/tasks/schedule-items/:id", async (req, res) => {
     const patch = req.body as { scheduledDate?: string; occurrenceDate?: string; startTime?: string | null; endTime?: string | null; timezone?: string | null };
     const result = await tasksClient.updateScheduleItem(authContext.accessToken, scheduleId, patch);
     if (!result) return res.status(404).json({ message: "Schedule item not found" });
-    recordSyncEventBestEffort(authContext.userId, "tasks", result.taskId, "update", {
+    await recordSyncEventBestEffort(authContext.userId, "tasks", result.taskId, "update", {
       source: "core-api",
       relation: "scheduleItem",
       action: "update",
@@ -6696,7 +6730,7 @@ app.delete("/api/tasks/schedule-items/:id", async (req, res) => {
     const scheduledDate = asNonEmptyString(body.scheduledDate) ?? (typeof req.query.scheduledDate === "string" ? req.query.scheduledDate.trim() : undefined);
     const occurrenceDate = asNonEmptyString(body.occurrenceDate) ?? (typeof req.query.occurrenceDate === "string" ? req.query.occurrenceDate.trim() : undefined);
     await tasksClient.deleteScheduleItem(authContext.accessToken, scheduleId);
-    recordSyncEventBestEffort(authContext.userId, "tasks", taskId, "update", {
+    await recordSyncEventBestEffort(authContext.userId, "tasks", taskId, "update", {
       source: "core-api",
       relation: "scheduleItem",
       action: "delete",

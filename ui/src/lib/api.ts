@@ -345,10 +345,11 @@ function localDaemonBaseUrl(): string {
 
 export function sessionAuthHeaders(extra?: HeadersInit): HeadersInit {
   const session = readStoredSession();
-  return {
-    ...(session ? { Authorization: `Bearer ${session.accessToken}` } : {}),
-    ...(extra ?? {})
-  };
+  const headers = new Headers(extra);
+  if (session && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${session.accessToken}`);
+  }
+  return headers;
 }
 
 function localDaemonHeaders(extra?: HeadersInit): HeadersInit {
@@ -516,12 +517,13 @@ async function requestJson<T>(
 ): Promise<T> {
   let response: Response;
   try {
+    const headers = new Headers(withSessionAuth ? sessionAuthHeaders(options?.headers) : options?.headers);
+    if (!headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json");
+    }
     response = await fetch(url, {
       ...options,
-      headers: {
-        "Content-Type": "application/json",
-        ...(withSessionAuth ? sessionAuthHeaders(options?.headers) : (options?.headers ?? {}))
-      }
+      headers
     });
   } catch (error) {
     const detail = error instanceof Error ? error.message : "network error";
@@ -626,12 +628,13 @@ async function requestLocalDaemon(path: string, options?: RequestInit): Promise<
 }
 
 async function requestLocalDaemonJson<T>(path: string, options?: RequestInit): Promise<T> {
+  const headers = new Headers(options?.headers);
+  if (!headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
   const response = await requestLocalDaemon(path, {
     ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(options?.headers ?? {})
-    }
+    headers
   });
   if (!response.ok) {
     throw await responseApiError("local", `${localDaemonBaseUrl()}${path}`, options, response);
@@ -661,6 +664,15 @@ async function requestLocalDaemonJson<T>(path: string, options?: RequestInit): P
 function isReadRequest(options?: RequestInit): boolean {
   const method = requestMethod(options);
   return method === "GET" || method === "HEAD";
+}
+
+const CLIENT_OP_ID_HEADER = "x-workbench-client-op-id";
+
+function withFacadeClientOpId(options?: RequestInit): RequestInit | undefined {
+  if (isReadRequest(options)) return options;
+  const headers = new Headers(options?.headers);
+  headers.set(CLIENT_OP_ID_HEADER, crypto.randomUUID());
+  return { ...options, headers };
 }
 
 const LOCAL_DAEMON_WRITE_ROUTES: ReadonlyArray<{ method: string; path: RegExp }> = [
@@ -778,27 +790,28 @@ async function requestFacade(
   options: RequestInit | undefined,
   corePath: (path: string) => string
 ): Promise<Response> {
-  if (facadeRoutesToLocal(path, options)) {
-    const response = await requestLocalDaemon(path, options);
+  const requestOptions = withFacadeClientOpId(options);
+  if (facadeRoutesToLocal(path, requestOptions)) {
+    const response = await requestLocalDaemon(path, requestOptions);
     if (!response.ok) {
-      throw await responseApiError("local", `${localDaemonBaseUrl()}${path}`, options, response);
+      throw await responseApiError("local", `${localDaemonBaseUrl()}${path}`, requestOptions, response);
     }
-    markSuccessfulLocalRequest(options);
+    markSuccessfulLocalRequest(requestOptions);
     return response;
   }
   try {
-    const response = await fetchWithSessionAuth(corePath(path), options, {
+    const response = await fetchWithSessionAuth(corePath(path), requestOptions, {
       suppressConnectionError: getWorkbenchLocalRoutingMode() === "auto"
     });
     markSuccessfulCoreRequest();
     return response;
   } catch (error) {
-    if (autoRoutingCanFallbackToLocal(error, path, options)) {
-      const response = await requestLocalDaemon(path, options);
+    if (autoRoutingCanFallbackToLocal(error, path, requestOptions)) {
+      const response = await requestLocalDaemon(path, requestOptions);
       if (!response.ok) {
-        throw await responseApiError("local", `${localDaemonBaseUrl()}${path}`, options, response);
+        throw await responseApiError("local", `${localDaemonBaseUrl()}${path}`, requestOptions, response);
       }
-      markSuccessfulLocalRequest(options);
+      markSuccessfulLocalRequest(requestOptions);
       return response;
     }
     throw error;
@@ -823,21 +836,22 @@ async function fetchFacadeJson<T>(
   options: RequestInit | undefined,
   corePath: (path: string) => string
 ): Promise<T> {
-  if (facadeRoutesToLocal(path, options)) {
-    const result = await requestLocalDaemonJson<T>(path, options);
-    markSuccessfulLocalRequest(options);
+  const requestOptions = withFacadeClientOpId(options);
+  if (facadeRoutesToLocal(path, requestOptions)) {
+    const result = await requestLocalDaemonJson<T>(path, requestOptions);
+    markSuccessfulLocalRequest(requestOptions);
     return result;
   }
   try {
-    const result = await fetchJson<T>(corePath(path), options, {
+    const result = await fetchJson<T>(corePath(path), requestOptions, {
       suppressConnectionError: getWorkbenchLocalRoutingMode() === "auto"
     });
     markSuccessfulCoreRequest();
     return result;
   } catch (error) {
-    if (autoRoutingCanFallbackToLocal(error, path, options)) {
-      const result = await requestLocalDaemonJson<T>(path, options);
-      markSuccessfulLocalRequest(options);
+    if (autoRoutingCanFallbackToLocal(error, path, requestOptions)) {
+      const result = await requestLocalDaemonJson<T>(path, requestOptions);
+      markSuccessfulLocalRequest(requestOptions);
       return result;
     }
     throw error;
@@ -1648,10 +1662,15 @@ export const taskAttachmentsApi = {
 
   upload: async (taskId: string, file: File): Promise<TaskAttachment> => {
     const path = `/api/tasks/${encodeURIComponent(taskId)}/attachments`;
-    const uploadOptions: RequestInit = { method: "POST" };
+    const clientOpId = crypto.randomUUID();
+    const uploadOptions: RequestInit = {
+      method: "POST",
+      headers: { [CLIENT_OP_ID_HEADER]: clientOpId }
+    };
     const uploadToLocal = async (): Promise<TaskAttachment> => {
       const result = await requestLocalDaemonJson<TaskAttachment>(path, {
         method: "POST",
+        headers: { [CLIENT_OP_ID_HEADER]: clientOpId },
         body: JSON.stringify({
           filename: file.name,
           mimeType: file.type || "application/octet-stream",
@@ -1673,6 +1692,7 @@ export const taskAttachmentsApi = {
     try {
       response = await fetchWithSessionAuth(`${coreBaseUrl()}${path}`, {
         method: "POST",
+        headers: { [CLIENT_OP_ID_HEADER]: clientOpId },
         body: formData
       }, { suppressConnectionError: getWorkbenchLocalRoutingMode() === "auto" });
     } catch (error) {

@@ -24,6 +24,17 @@ export interface SyncResourceVersion {
   deletedAt?: string;
 }
 
+export interface SyncAppliedClientOp {
+  userId: string;
+  clientOpId: string;
+  domain: SyncDomain;
+  action: SyncAction;
+  resourceId: string;
+  version: number;
+  cursor: string;
+  createdAt: string;
+}
+
 type SyncEventRow = {
   id: string | number;
   user_id: string;
@@ -43,6 +54,17 @@ type SyncResourceVersionRow = {
   version: number;
   updated_at: string;
   deleted_at: string | null;
+};
+
+type SyncAppliedClientOpRow = {
+  user_id: string;
+  client_op_id: string;
+  domain: string;
+  action: string;
+  resource_id: string;
+  version: number;
+  cursor: string | number;
+  created_at: string;
 };
 
 type SyncEventQueryResult<Row> = {
@@ -100,6 +122,19 @@ function toResourceVersion(row: SyncResourceVersionRow): SyncResourceVersion {
     version: Number(row.version),
     updatedAt: new Date(row.updated_at).toISOString(),
     deletedAt: row.deleted_at ? new Date(row.deleted_at).toISOString() : undefined
+  };
+}
+
+function toAppliedClientOp(row: SyncAppliedClientOpRow): SyncAppliedClientOp {
+  return {
+    userId: row.user_id,
+    clientOpId: row.client_op_id,
+    domain: row.domain as SyncDomain,
+    action: row.action as SyncAction,
+    resourceId: row.resource_id,
+    version: Number(row.version),
+    cursor: String(row.cursor),
+    createdAt: new Date(row.created_at).toISOString()
   };
 }
 
@@ -162,8 +197,24 @@ export async function recordSyncEventWithPool(
       `,
       [userId, domain, resourceId, action, version, JSON.stringify(eventPayload)]
     );
+    const eventRow = eventResult.rows[0];
+    const clientOpId = typeof eventPayload.clientOpId === "string" && eventPayload.clientOpId.trim()
+      ? eventPayload.clientOpId.trim()
+      : undefined;
+    if (clientOpId) {
+      await client.query(
+        `
+          INSERT INTO sync_applied_client_ops (
+            user_id, client_op_id, domain, action, resource_id, version, cursor, created_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          ON CONFLICT (user_id, client_op_id) DO NOTHING
+        `,
+        [userId, clientOpId, domain, action, resourceId, version, eventRow.id, eventRow.created_at]
+      );
+    }
     await client.query("COMMIT");
-    return toEvent(eventResult.rows[0]);
+    return toEvent(eventRow);
   } catch (error) {
     try {
       await client.query("ROLLBACK");
@@ -174,6 +225,33 @@ export async function recordSyncEventWithPool(
   } finally {
     client.release();
   }
+}
+
+export async function getAppliedClientOp(
+  userId: string,
+  clientOpId: string
+): Promise<SyncAppliedClientOp | undefined> {
+  await ensureCoreSchema();
+  return getAppliedClientOpWithPool(getCorePool(), userId, clientOpId);
+}
+
+/** @internal Exported so owner-scoped idempotency lookup can be tested without a live database. */
+export async function getAppliedClientOpWithPool(
+  pool: SyncCursorQueryPool,
+  userId: string,
+  clientOpId: string
+): Promise<SyncAppliedClientOp | undefined> {
+  const result = await pool.query<SyncAppliedClientOpRow>(
+    `
+      SELECT user_id, client_op_id, domain, action, resource_id, version, cursor, created_at
+      FROM sync_applied_client_ops
+      WHERE user_id = $1 AND client_op_id = $2
+      LIMIT 1
+    `,
+    [userId, clientOpId]
+  );
+  const row = result.rows[0];
+  return row ? toAppliedClientOp(row) : undefined;
 }
 
 export async function getSyncResourceVersion(

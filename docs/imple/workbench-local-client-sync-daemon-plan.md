@@ -342,6 +342,9 @@ npm run build
   - Core sync-push rejections include `code` and `message`.
   - Daemon maps rejection codes and runtime failures into `network`, `version_conflict`, `path_rejection`, `validation`, `checksum`, `unsupported`, `local_conflict`, `auth`, `capability`, `server`, or `unknown`.
   - Settings displays local conflict category/code/retryability.
+- `[implemented]` Server-side clientOpId idempotency for sync push replays.
+  - Sync events carrying a `clientOpId` record it in `sync_applied_client_ops` inside the same transaction (covers both sync-push applies and Core REST mutations sending `x-workbench-client-op-id`).
+  - `POST /api/sync/push` skips ops whose `clientOpId` was already applied and returns them in `applied` with `deduplicated: true`; `serverCursor` uses the owner's latest cursor so deduplicated entries cannot rewind the daemon.
 - `[implemented]` Server-side tombstone event metadata exists in the Core sync event/version store.
   - Underlying domain services may still hard-delete their own records; sync tombstone retention is handled by `sync_events` and `sync_resource_versions`.
 - `[implemented]` Core facade mutations now cover the main Projects, Notes, Artifacts, and Tasks paths, including task relation changes.
@@ -419,6 +422,9 @@ npm run build
   - `Auto` also falls back to the daemon on Core connection failures, but not on normal Core HTTP/API errors.
   - Offline and fallback routing covers reads plus a strict allowlist of daemon-backed writes; unsupported mutations remain Core-only.
   - A successful allowlisted local write keeps `Auto` on the daemon for read-your-writes until Core succeeds again.
+  - The offline-save notice ("Saved locally...") is shown only in `Auto` mode; explicit `Local` mode stays silent.
+  - The Tauri desktop shell defaults to `Auto` routing when no mode is stored; the web build keeps `Core` (stored mode > legacy local flag > platform default).
+  - Facade writes send `x-workbench-client-op-id` (one UUID per logical mutation, reused across the Core attempt and any daemon fallback); the daemon threads it into outbox items and answers duplicate writes with the first result instead of double-enqueueing.
 - `[implemented]` Add Settings UI display/actions for daemon status and open conflicts.
 - `[implemented]` Add offline/sync/conflict status display in the main app shell.
 

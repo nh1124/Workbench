@@ -322,6 +322,20 @@ export async function ensureCoreSchema(): Promise<void> {
         `);
 
         await pool.query(`
+          CREATE TABLE IF NOT EXISTS sync_applied_client_ops (
+            user_id TEXT NOT NULL REFERENCES workbench_users(id) ON DELETE CASCADE,
+            client_op_id TEXT NOT NULL,
+            domain TEXT NOT NULL,
+            action TEXT NOT NULL,
+            resource_id TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            cursor BIGINT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (user_id, client_op_id)
+          );
+        `);
+
+        await pool.query(`
           CREATE TABLE IF NOT EXISTS sync_consumer_cursors (
             user_id TEXT NOT NULL REFERENCES workbench_users(id) ON DELETE CASCADE,
             consumer_id TEXT NOT NULL,

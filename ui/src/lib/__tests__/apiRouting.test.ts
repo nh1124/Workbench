@@ -29,6 +29,10 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+function clientOpIdFromFetchCall(call: unknown[]): string | null {
+  return new Headers((call[1] as RequestInit | undefined)?.headers).get("x-workbench-client-op-id");
+}
+
 describe("API error detail and auto routing", () => {
   beforeEach(() => {
     window.localStorage.clear();
@@ -140,6 +144,16 @@ describe("API error detail and auto routing", () => {
     expect(getNotifications()).toEqual([]);
   });
 
+  it("adds a client operation id header to facade writes", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: "task-1" }, 201));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await projectsApi.create({ name: "Idempotent write" });
+
+    const clientOpId = clientOpIdFromFetchCall(fetchMock.mock.calls[0]);
+    expect(clientOpId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  });
+
   it("falls back to local for an allowlisted mutation after a Core network failure", async () => {
     const fetchMock = vi.fn()
       .mockRejectedValueOnce(new TypeError("core offline"))
@@ -152,6 +166,10 @@ describe("API error detail and auto routing", () => {
       "http://127.0.0.1:3000/api/tasks/task-1/occurrences/complete",
       "http://127.0.0.1:35780/api/tasks/task-1/occurrences/complete"
     ]);
+    const coreClientOpId = clientOpIdFromFetchCall(fetchMock.mock.calls[0]);
+    const daemonClientOpId = clientOpIdFromFetchCall(fetchMock.mock.calls[1]);
+    expect(coreClientOpId).toBeTruthy();
+    expect(daemonClientOpId).toBe(coreClientOpId);
     expect(getWorkbenchAutoLocalFallbackActive()).toBe(true);
   });
 

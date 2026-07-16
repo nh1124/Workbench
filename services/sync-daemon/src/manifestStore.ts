@@ -847,16 +847,34 @@ export function listOpenOutboxUnderPath(store: ManifestStore, relativePath: stri
   `).all(relativePath, prefix) as OutboxRow[]).map(toOutbox);
 }
 
+export function getOutboxByClientOpId(store: ManifestStore, clientOpId: string): OutboxItem | undefined {
+  const row = store.db.prepare(`
+    SELECT id, client_op_id, relative_path, domain, action, resource_id, payload_json,
+           status, attempts, last_error, error_code, error_category, retryable,
+           created_at, updated_at, applied_at
+    FROM outbox
+    WHERE client_op_id = ?
+    LIMIT 1
+  `).get(clientOpId) as OutboxRow | undefined;
+  return row ? toOutbox(row) : undefined;
+}
+
 export function enqueueOutbox(
   store: ManifestStore,
-  item: Omit<OutboxItem, "id" | "clientOpId" | "status" | "attempts" | "createdAt" | "updatedAt">
+  item: Omit<OutboxItem, "id" | "clientOpId" | "status" | "attempts" | "createdAt" | "updatedAt">,
+  clientOpId?: string
 ): OutboxItem {
+  const normalizedClientOpId = clientOpId?.trim();
+  if (normalizedClientOpId) {
+    const existing = getOutboxByClientOpId(store, normalizedClientOpId);
+    if (existing) return existing;
+  }
   const now = new Date().toISOString();
   const id = randomUUID();
   const outboxItem: OutboxItem = {
     ...item,
     id,
-    clientOpId: `daemon-${id}`,
+    clientOpId: normalizedClientOpId ?? `daemon-${id}`,
     status: "pending",
     attempts: 0,
     createdAt: now,

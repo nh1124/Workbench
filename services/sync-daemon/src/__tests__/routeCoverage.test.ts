@@ -34,11 +34,11 @@ describe("local mode route coverage", () => {
     assertIncludes(uiServicesSource, "export type WorkbenchLocalRoutingMode = \"core\" | \"auto\" | \"local\";", "Local routing modes");
     assertIncludes(uiServicesSource, "export function resolveWorkbenchLocalRoutingTarget", "Local routing target resolver");
     assertIncludes(uiServicesSource, "if (mode === \"auto\" && !online) return \"local\";", "Auto offline routing rule");
-    assertIncludes(uiApiSource, "function tasksFacadeEnabled(options?: RequestInit): boolean", "Tasks local routing gate");
+    assertIncludes(uiApiSource, "function tasksFacadeEnabled(path: string, options?: RequestInit): boolean", "Tasks local routing gate");
     assertIncludes(uiApiSource, "async function fetchTasksFacadeJson<T>", "Tasks facade fetch helper");
-    assertIncludes(uiApiSource, "requestLocalDaemonJson<T>(path, options)", "Tasks daemon JSON fetch path");
-    assertIncludes(uiApiSource, "fetchJson<T>(corePath(path), options, {", "Shared Core fallback fetch path");
-    assertIncludes(uiApiSource, "if (autoRoutingCanFallbackToLocal(error, options))", "Tasks Auto connection fallback path");
+    assertIncludes(uiApiSource, "requestLocalDaemonJson<T>(path, requestOptions)", "Tasks daemon JSON fetch path");
+    assertIncludes(uiApiSource, "fetchJson<T>(corePath(path), requestOptions, {", "Shared Core fallback fetch path");
+    assertIncludes(uiApiSource, "if (autoRoutingCanFallbackToLocal(error, path, requestOptions))", "Tasks Auto connection fallback path");
 
     const sharedDomainListRoute = "const remoteDomainListMatch = url.pathname.match(/^\\/api\\/(projects|notes|tasks)$/);";
     const sharedDomainItemRoute = "const remoteDomainItemMatch = url.pathname.match(/^\\/api\\/(projects|notes|tasks)\\/([^/]+)$/);";
