@@ -117,6 +117,7 @@ import {
   projectContextSnapshotPage,
   projectIdFromMutationResult,
   ProjectContextSyncError,
+  recordProjectContextInvalidation,
   recordProjectContextInvalidationsBestEffort,
   requireProjectContextEndpoints,
   SYNC_SUPPORTED_DOMAINS,
@@ -1784,6 +1785,76 @@ type SyncPushRejected = {
   message: string;
 };
 
+async function recordSyncPushProjectContextInvalidations(
+  authContext: SyncAccessContext,
+  primaryProjectId: string,
+  additionalProjectIds: Array<string | undefined>,
+  changed: ProjectContextChanged,
+  entityId: string,
+  clientOpId: string | undefined
+) {
+  const projectIds = [
+    primaryProjectId,
+    ...additionalProjectIds.filter((projectId): projectId is string => Boolean(projectId?.trim()))
+  ].filter((projectId, index, values) => values.indexOf(projectId) === index);
+  const event = await recordProjectContextInvalidation(authContext.userId, {
+    projectId: primaryProjectId,
+    changed: [changed],
+    entityType: changed,
+    entityId,
+    source: "sync-push",
+    extraPayload: {
+      ...(clientOpId ? { clientOpId } : {}),
+      ...(authContext.localClient?.id ? { localClientId: authContext.localClient.id } : {})
+    }
+  });
+
+  for (const projectId of projectIds.slice(1)) {
+    await recordProjectContextInvalidation(authContext.userId, {
+      projectId,
+      changed: [changed],
+      entityType: changed,
+      entityId,
+      source: "sync-push",
+      extraPayload: authContext.localClient?.id ? { localClientId: authContext.localClient.id } : undefined
+    });
+  }
+
+  return event;
+}
+
+function requireProjectContextPatch(payload: Record<string, unknown>): Record<string, unknown> {
+  if (!payload.patch || typeof payload.patch !== "object" || Array.isArray(payload.patch)) {
+    throw new LocalClientStoreError(
+      400,
+      "SYNC_PROJECT_CONTEXT_PAYLOAD_INVALID",
+      "Project context update requires payload.patch to be an object."
+    );
+  }
+  return payload.patch as Record<string, unknown>;
+}
+
+function syncPushRejectionDetails(error: unknown): { code: string; message: string } {
+  if (error instanceof LocalClientStoreError) {
+    return { code: error.code, message: error.message };
+  }
+  if (error instanceof InternalServiceError && error.status >= 400 && error.status < 500) {
+    try {
+      const body = asJsonRecord(JSON.parse(error.body));
+      return {
+        code: asNonEmptyString(body.code) ?? "SYNC_PUSH_OPERATION_FAILED",
+        message: asNonEmptyString(body.message) ?? error.message
+      };
+    } catch {
+      return { code: "SYNC_PUSH_OPERATION_FAILED", message: error.body || error.message };
+    }
+  }
+  return {
+    code: "SYNC_PUSH_OPERATION_FAILED",
+    message: error instanceof Error ? error.message : "Sync push operation failed"
+  };
+}
+
 async function assertSyncBaseVersion(
   authContext: SyncAccessContext,
   domain: SyncDomain,
@@ -1976,8 +2047,8 @@ async function applySyncPushOperation(
   const payload = asJsonRecord(op.payload);
   const resourceId = asNonEmptyString(op.resourceId) ?? asNonEmptyString(payload.id);
 
-  if (!domain || !["projects", "notes", "artifacts", "tasks"].includes(domain)) {
-    throw new LocalClientStoreError(400, "SYNC_DOMAIN_NOT_SUPPORTED", "Only projects, notes, artifacts, and tasks sync push operations are supported in this phase.");
+  if (!domain || !["projects", "notes", "artifacts", "tasks", "project_context"].includes(domain)) {
+    throw new LocalClientStoreError(400, "SYNC_DOMAIN_NOT_SUPPORTED", "Only projects, notes, artifacts, tasks, and project_context sync push operations are supported in this phase.");
   }
   if (!action || !["create", "update", "delete", "upsert"].includes(action)) {
     throw new LocalClientStoreError(400, "SYNC_ACTION_NOT_SUPPORTED", "Unsupported sync push action.");
@@ -2116,6 +2187,197 @@ async function applySyncPushOperation(
       domain: "projects",
       action: event.action,
       resourceId: nextResourceId,
+      version: event.version,
+      cursor: event.cursor,
+      result
+    };
+  }
+
+  if (domain === "project_context") {
+    if (!relation || !["brief", "memory", "relation"].includes(relation)) {
+      throw new LocalClientStoreError(
+        400,
+        "SYNC_PROJECT_CONTEXT_RELATION_NOT_SUPPORTED",
+        "Supported project context sync push relations are brief, memory, and relation."
+      );
+    }
+
+    const projectId = asNonEmptyString(op.resourceId);
+    if (!projectId) {
+      throw new LocalClientStoreError(
+        400,
+        "SYNC_PROJECT_CONTEXT_PAYLOAD_INVALID",
+        "Project context sync push requires resourceId to be the Project id."
+      );
+    }
+
+    let result: unknown;
+    let event;
+    if (relation === "brief") {
+      if (action !== "update" && action !== "upsert") {
+        throw new LocalClientStoreError(
+          400,
+          "SYNC_PROJECT_CONTEXT_ACTION_NOT_SUPPORTED",
+          "Project brief sync push requires update or upsert action."
+        );
+      }
+      if (
+        typeof payload.contentMarkdown !== "string"
+        || typeof payload.expectedVersion !== "number"
+        || !Number.isInteger(payload.expectedVersion)
+        || payload.expectedVersion < 0
+      ) {
+        throw new LocalClientStoreError(
+          400,
+          "SYNC_PROJECT_CONTEXT_PAYLOAD_INVALID",
+          "Project brief sync push requires contentMarkdown and a non-negative expectedVersion."
+        );
+      }
+      result = await projectsClient.updateBrief(authContext.accessToken, projectId, {
+        contentMarkdown: payload.contentMarkdown,
+        expectedVersion: payload.expectedVersion,
+        updatedByKind: "user"
+      });
+      event = await recordSyncPushProjectContextInvalidations(
+        authContext,
+        projectId,
+        [],
+        "brief",
+        projectId,
+        clientOpId
+      );
+    } else if (relation === "memory") {
+      if (action === "delete") {
+        throw new LocalClientStoreError(
+          400,
+          "SYNC_PROJECT_CONTEXT_ACTION_NOT_SUPPORTED",
+          "Project memory delete is not supported; archive it with a memory update."
+        );
+      }
+      if (action === "create") {
+        if (!asNonEmptyString(payload.kind) || !asNonEmptyString(payload.bodyMarkdown)) {
+          throw new LocalClientStoreError(
+            400,
+            "SYNC_PROJECT_CONTEXT_PAYLOAD_INVALID",
+            "Project memory create requires kind and bodyMarkdown."
+          );
+        }
+        const memoryPayload = withoutKeys(payload, ["relation"]);
+        result = await projectsClient.appendMemory(authContext.accessToken, projectId, {
+          ...memoryPayload,
+          authority: asNonEmptyString(memoryPayload.authority) ?? "user_confirmed",
+          createdByKind: "user"
+        });
+        event = await recordSyncPushProjectContextInvalidations(
+          authContext,
+          projectId,
+          [],
+          "memory",
+          objectId(result) ?? projectId,
+          clientOpId
+        );
+      } else if (action === "update") {
+        const memoryId = asNonEmptyString(payload.memoryId);
+        if (!memoryId) {
+          throw new LocalClientStoreError(
+            400,
+            "SYNC_PROJECT_CONTEXT_PAYLOAD_INVALID",
+            "Project memory update requires memoryId."
+          );
+        }
+        result = await projectsClient.updateMemory(authContext.accessToken, memoryId, requireProjectContextPatch(payload));
+        event = await recordSyncPushProjectContextInvalidations(
+          authContext,
+          projectId,
+          [],
+          "memory",
+          memoryId,
+          clientOpId
+        );
+      } else {
+        throw new LocalClientStoreError(
+          400,
+          "SYNC_PROJECT_CONTEXT_ACTION_NOT_SUPPORTED",
+          "Project memory sync push requires create or update action."
+        );
+      }
+    } else {
+      if (action === "create") {
+        if (!asNonEmptyString(payload.targetProjectId) || !asNonEmptyString(payload.relationType)) {
+          throw new LocalClientStoreError(
+            400,
+            "SYNC_PROJECT_CONTEXT_PAYLOAD_INVALID",
+            "Project relation create requires targetProjectId and relationType."
+          );
+        }
+        result = await projectsClient.createRelation(authContext.accessToken, projectId, {
+          ...withoutKeys(payload, ["relation"]),
+          createdByKind: "user"
+        });
+        const endpoints = requireProjectContextEndpoints(result);
+        event = await recordSyncPushProjectContextInvalidations(
+          authContext,
+          projectId,
+          [endpoints.sourceProjectId, endpoints.targetProjectId],
+          "relation",
+          endpoints.id,
+          clientOpId
+        );
+      } else if (action === "update") {
+        const relationId = asNonEmptyString(payload.relationId);
+        if (!relationId) {
+          throw new LocalClientStoreError(
+            400,
+            "SYNC_PROJECT_CONTEXT_PAYLOAD_INVALID",
+            "Project relation update requires relationId."
+          );
+        }
+        result = await projectsClient.updateRelation(authContext.accessToken, relationId, requireProjectContextPatch(payload));
+        const endpoints = requireProjectContextEndpoints(result);
+        event = await recordSyncPushProjectContextInvalidations(
+          authContext,
+          projectId,
+          [endpoints.sourceProjectId, endpoints.targetProjectId],
+          "relation",
+          endpoints.id,
+          clientOpId
+        );
+      } else if (action === "delete") {
+        const relationId = asNonEmptyString(payload.relationId);
+        if (!relationId) {
+          throw new LocalClientStoreError(
+            400,
+            "SYNC_PROJECT_CONTEXT_PAYLOAD_INVALID",
+            "Project relation delete requires relationId."
+          );
+        }
+        const relationResult = await projectsClient.getRelation(authContext.accessToken, relationId);
+        const endpoints = requireProjectContextEndpoints(relationResult);
+        await projectsClient.removeRelation(authContext.accessToken, relationId);
+        result = { id: relationId, deleted: true };
+        event = await recordSyncPushProjectContextInvalidations(
+          authContext,
+          projectId,
+          [endpoints.sourceProjectId, endpoints.targetProjectId],
+          "relation",
+          endpoints.id,
+          clientOpId
+        );
+      } else {
+        throw new LocalClientStoreError(
+          400,
+          "SYNC_PROJECT_CONTEXT_ACTION_NOT_SUPPORTED",
+          "Project relation sync push requires create, update, or delete action."
+        );
+      }
+    }
+
+    return {
+      index,
+      clientOpId,
+      domain: "project_context",
+      action: event.action,
+      resourceId: projectId,
       version: event.version,
       cursor: event.cursor,
       result
@@ -4909,12 +5171,12 @@ app.post("/api/sync/push", async (req, res) => {
     try {
       applied.push(await applySyncPushOperation(authContext, op, index));
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Sync push operation failed";
+      const { code, message } = syncPushRejectionDetails(error);
       rejected.push({
         index,
         clientOpId,
         op,
-        code: error instanceof LocalClientStoreError ? error.code : "SYNC_PUSH_OPERATION_FAILED",
+        code,
         message
       });
     }

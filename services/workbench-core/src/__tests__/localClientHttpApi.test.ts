@@ -771,6 +771,245 @@ describe("local client HTTP APIs", () => {
     }
   });
 
+  it("applies and deduplicates project context sync pushes with strict invalidation recording", async (t) => {
+    const harness = await requireHarness(t);
+    if (!harness) return;
+
+    const pool = harness.db.getCorePool();
+    const { userId, username } = await createTestUser(pool, "sync-project-context");
+    const { accessToken } = harness.auth.issueTokenBundle({ userId, username });
+    const server = await startTestServer(harness);
+    const originalFetch = globalThis.fetch;
+    const coreOrigin = new URL(server.baseUrl).origin;
+    const projectRequests: Array<{ method: string; pathname: string; body: Record<string, unknown> }> = [];
+
+    try {
+      const registerResponse = await requestJson(server.baseUrl, "POST", "/api/local-clients/register", {
+        headers: bearerHeaders(accessToken),
+        body: {
+          deviceId: "device-sync-project-context",
+          clientName: "Project Context Sync Daemon",
+          platform: "linux",
+          syncRootId: "project-context",
+          syncRootLabel: "Project Context Sync"
+        }
+      });
+      assert.equal(registerResponse.status, 201);
+      const registeredClient = registerResponse.body.client as Record<string, unknown>;
+      const daemonHeaders = localClientHeaders(
+        String(registeredClient.id),
+        String(registerResponse.body.clientToken)
+      );
+
+      globalThis.fetch = async (input, init) => {
+        const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+        if (url.origin === coreOrigin) return originalFetch(input, init);
+
+        const method = (init?.method ?? "GET").toUpperCase();
+        const body = typeof init?.body === "string"
+          ? JSON.parse(init.body) as Record<string, unknown>
+          : {};
+        projectRequests.push({ method, pathname: url.pathname, body });
+
+        if (url.pathname === "/projects/project-context-brief/brief" && method === "PUT") {
+          return new Response(JSON.stringify({
+            projectId: "project-context-brief",
+            contentMarkdown: body.contentMarkdown,
+            version: 2
+          }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        if (url.pathname === "/projects/project-context-conflict/brief" && method === "PUT") {
+          return new Response(JSON.stringify({
+            code: "VERSION_CONFLICT",
+            message: "Brief version conflict: expected 1, current 2."
+          }), { status: 409, headers: { "Content-Type": "application/json" } });
+        }
+        if (url.pathname === "/projects/project-context-memory/memories" && method === "POST") {
+          return new Response(JSON.stringify({
+            ...body,
+            id: "memory-project-context",
+            projectId: "project-context-memory"
+          }), { status: 201, headers: { "Content-Type": "application/json" } });
+        }
+        if (url.pathname === "/project-relations/relation-project-context" && method === "GET") {
+          return new Response(JSON.stringify({
+            id: "relation-project-context",
+            sourceProjectId: "project-context-source",
+            targetProjectId: "project-context-target"
+          }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        if (url.pathname === "/project-relations/relation-project-context" && method === "DELETE") {
+          return new Response(null, { status: 204 });
+        }
+        throw new Error(`Unexpected upstream request in project context sync push test: ${method} ${url.href}`);
+      };
+
+      const briefOp = {
+        clientOpId: "project-context-brief-op",
+        domain: "project_context",
+        action: "update",
+        relation: "brief",
+        resourceId: "project-context-brief",
+        payload: { contentMarkdown: "# Updated brief", expectedVersion: 1 }
+      };
+      const briefResponse = await requestJson(server.baseUrl, "POST", "/api/sync/push", {
+        headers: daemonHeaders,
+        body: { ops: [briefOp] }
+      });
+      assert.equal(briefResponse.status, 202);
+      assert.deepEqual(briefResponse.body.rejected, []);
+      const briefApplied = briefResponse.body.applied as Array<Record<string, unknown>>;
+      assert.equal(briefApplied.length, 1);
+      assert.equal(briefApplied[0].domain, "project_context");
+      assert.equal(briefApplied[0].resourceId, "project-context-brief");
+      assert.equal(typeof briefApplied[0].version, "number");
+      assert.equal(typeof briefApplied[0].cursor, "string");
+      assert.deepEqual(projectRequests[0], {
+        method: "PUT",
+        pathname: "/projects/project-context-brief/brief",
+        body: { contentMarkdown: "# Updated brief", expectedVersion: 1, updatedByKind: "user" }
+      });
+      const briefLedger = await harness.syncStore.getAppliedClientOp(userId, "project-context-brief-op");
+      assert.equal(briefLedger?.domain, "project_context");
+      assert.equal(briefLedger?.resourceId, "project-context-brief");
+      assert.equal(briefLedger?.version, briefApplied[0].version);
+      assert.equal(briefLedger?.cursor, briefApplied[0].cursor);
+
+      const briefReplay = await requestJson(server.baseUrl, "POST", "/api/sync/push", {
+        headers: daemonHeaders,
+        body: { ops: [briefOp] }
+      });
+      assert.equal(briefReplay.status, 202);
+      const briefReplayApplied = briefReplay.body.applied as Array<Record<string, unknown>>;
+      assert.equal(briefReplayApplied[0].deduplicated, true);
+      assert.equal(projectRequests.filter((request) => request.pathname === "/projects/project-context-brief/brief").length, 1);
+
+      const memoryOp = {
+        clientOpId: "project-context-memory-op",
+        domain: "project_context",
+        action: "create",
+        relation: "memory",
+        resourceId: "project-context-memory",
+        payload: {
+          relation: "memory",
+          kind: "decision",
+          bodyMarkdown: "Use synchronous context invalidations."
+        }
+      };
+      const memoryResponse = await requestJson(server.baseUrl, "POST", "/api/sync/push", {
+        headers: daemonHeaders,
+        body: { ops: [memoryOp] }
+      });
+      assert.equal(memoryResponse.status, 202);
+      const memoryApplied = memoryResponse.body.applied as Array<Record<string, unknown>>;
+      assert.equal(memoryApplied.length, 1);
+      const memoryRequest = projectRequests.find((request) => request.pathname === "/projects/project-context-memory/memories");
+      assert.deepEqual(memoryRequest, {
+        method: "POST",
+        pathname: "/projects/project-context-memory/memories",
+        body: {
+          kind: "decision",
+          bodyMarkdown: "Use synchronous context invalidations.",
+          authority: "user_confirmed",
+          createdByKind: "user"
+        }
+      });
+      assert.ok(await harness.syncStore.getAppliedClientOp(userId, "project-context-memory-op"));
+
+      const memoryReplay = await requestJson(server.baseUrl, "POST", "/api/sync/push", {
+        headers: daemonHeaders,
+        body: { ops: [memoryOp] }
+      });
+      assert.equal(memoryReplay.status, 202);
+      const memoryReplayApplied = memoryReplay.body.applied as Array<Record<string, unknown>>;
+      assert.equal(memoryReplayApplied[0].deduplicated, true);
+      assert.equal(projectRequests.filter((request) => request.pathname === "/projects/project-context-memory/memories").length, 1);
+
+      const relationBaselineCursor = await harness.syncStore.getLatestSyncCursor(userId);
+      const relationResponse = await requestJson(server.baseUrl, "POST", "/api/sync/push", {
+        headers: daemonHeaders,
+        body: {
+          ops: [{
+            clientOpId: "project-context-relation-delete-op",
+            domain: "project_context",
+            action: "delete",
+            relation: "relation",
+            resourceId: "project-context-source",
+            payload: { relationId: "relation-project-context" }
+          }]
+        }
+      });
+      assert.equal(relationResponse.status, 202);
+      const relationApplied = relationResponse.body.applied as Array<Record<string, unknown>>;
+      assert.equal(relationApplied.length, 1);
+      const relationRequests = projectRequests.filter((request) => request.pathname === "/project-relations/relation-project-context");
+      assert.deepEqual(relationRequests.map((request) => request.method), ["GET", "DELETE"]);
+      const relationEvents = await harness.syncStore.listSyncEvents(
+        userId,
+        relationBaselineCursor,
+        10,
+        ["project_context"]
+      );
+      assert.deepEqual(relationEvents.events.map((event) => event.resourceId), [
+        "project-context-source",
+        "project-context-target"
+      ]);
+      assert.equal(relationEvents.events[0].cursor, relationApplied[0].cursor);
+      assert.equal(relationEvents.events[0].payload.clientOpId, "project-context-relation-delete-op");
+      assert.equal(relationEvents.events[1].payload.clientOpId, undefined);
+
+      const conflictOp = {
+        clientOpId: "project-context-brief-conflict-op",
+        domain: "project_context",
+        action: "update",
+        relation: "brief",
+        resourceId: "project-context-conflict",
+        payload: { contentMarkdown: "# Stale brief", expectedVersion: 1 }
+      };
+      const conflictResponse = await requestJson(server.baseUrl, "POST", "/api/sync/push", {
+        headers: daemonHeaders,
+        body: { ops: [conflictOp] }
+      });
+      assert.equal(conflictResponse.status, 409);
+      assert.deepEqual(conflictResponse.body.applied, []);
+      const conflictRejected = conflictResponse.body.rejected as Array<Record<string, unknown>>;
+      assert.equal(conflictRejected[0].code, "VERSION_CONFLICT");
+      assert.equal(conflictRejected[0].message, "Brief version conflict: expected 1, current 2.");
+      assert.equal(await harness.syncStore.getAppliedClientOp(userId, "project-context-brief-conflict-op"), undefined);
+
+      const conflictRetry = await requestJson(server.baseUrl, "POST", "/api/sync/push", {
+        headers: daemonHeaders,
+        body: { ops: [conflictOp] }
+      });
+      assert.equal(conflictRetry.status, 409);
+      assert.equal(projectRequests.filter((request) => request.pathname === "/projects/project-context-conflict/brief").length, 2);
+      assert.equal(await harness.syncStore.getAppliedClientOp(userId, "project-context-brief-conflict-op"), undefined);
+
+      const requestCountBeforeUnknownRelation = projectRequests.length;
+      const unknownRelationResponse = await requestJson(server.baseUrl, "POST", "/api/sync/push", {
+        headers: daemonHeaders,
+        body: {
+          ops: [{
+            clientOpId: "project-context-unknown-relation-op",
+            domain: "project_context",
+            action: "update",
+            relation: "link",
+            resourceId: "project-context-brief",
+            payload: {}
+          }]
+        }
+      });
+      assert.equal(unknownRelationResponse.status, 409);
+      const unknownRejected = unknownRelationResponse.body.rejected as Array<Record<string, unknown>>;
+      assert.equal(unknownRejected[0].code, "SYNC_PROJECT_CONTEXT_RELATION_NOT_SUPPORTED");
+      assert.equal(projectRequests.length, requestCountBeforeUnknownRelation);
+    } finally {
+      globalThis.fetch = originalFetch;
+      await server.close();
+      await cleanupTestUser(pool, userId);
+    }
+  });
+
   it("validates and forwards note lifecycle metadata during sync push", async (t) => {
     const harness = await requireHarness(t);
     if (!harness) return;
