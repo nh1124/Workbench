@@ -117,6 +117,86 @@
   justify-content: flex-end;
 }
 
+.va-toolbar-icon-btn {
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid rgba(77, 97, 128, 0.9);
+  border-radius: 9px;
+  background: rgba(13, 23, 40, 0.92);
+  color: #9db7d9;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+}
+
+.va-toolbar-icon-btn:hover {
+  border-color: rgba(111, 168, 224, 0.95);
+  background: rgba(30, 52, 82, 0.92);
+  color: #d8ebff;
+}
+
+.va-toolbar-icon-btn svg,
+.va-search-box svg {
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
+.va-search-box {
+  width: min(280px, 34vw);
+  height: 2rem;
+  display: grid;
+  grid-template-columns: 1rem minmax(0, 1fr) 1.65rem;
+  align-items: center;
+  gap: 0.34rem;
+  border: 1px solid rgba(88, 125, 170, 0.9);
+  border-radius: 9px;
+  background: #101a2d;
+  padding: 0 0.18rem 0 0.55rem;
+}
+
+.va-search-box:focus-within {
+  border-color: rgba(109, 208, 245, 0.9);
+  box-shadow: 0 0 0 2px rgba(55, 157, 204, 0.14);
+}
+
+.va-search-box-icon {
+  color: #8eacd2;
+  display: inline-grid;
+  place-items: center;
+}
+
+.va-search-box input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #dbeafe;
+  font-size: 0.74rem;
+  padding: 0;
+}
+
+.va-search-box input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.va-search-box button {
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #7894b8;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+}
+
+.va-search-box button:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #d8ebff;
+}
+
 .va-project-select-wrap {
   display: flex;
   align-items: center;
@@ -259,6 +339,179 @@
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 0.38rem;
   align-content: start;
+}
+
+.va-project-card-grid {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  align-content: start;
+  gap: 0.58rem;
+  padding: 0.9rem;
+}
+
+.va-project-card {
+  min-width: 0;
+  min-height: 104px;
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr);
+  align-items: start;
+  gap: 0.7rem;
+  border: 1px solid rgba(55, 75, 105, 0.68);
+  border-radius: 12px;
+  background: linear-gradient(145deg, rgba(15, 27, 49, 0.92), rgba(9, 18, 35, 0.9));
+  color: #c9dcf5;
+  padding: 0.82rem;
+  text-align: left;
+}
+
+.va-project-card:hover {
+  border-color: rgba(102, 143, 194, 0.9);
+  background: linear-gradient(145deg, rgba(25, 44, 73, 0.94), rgba(14, 29, 52, 0.92));
+  transform: translateY(-1px);
+}
+
+.va-project-card.all-projects {
+  border-color: rgba(74, 153, 196, 0.7);
+  background: linear-gradient(145deg, rgba(18, 61, 82, 0.78), rgba(10, 34, 56, 0.9));
+}
+
+.va-project-card-icon {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 9px;
+  background: rgba(55, 112, 167, 0.2);
+  color: #83b9ed;
+  display: inline-grid;
+  place-items: center;
+}
+
+.va-project-card-icon svg {
+  width: 1.08rem;
+  height: 1.08rem;
+}
+
+.va-project-card-content {
+  min-width: 0;
+  display: grid;
+  gap: 0.28rem;
+}
+
+.va-project-card-content strong {
+  overflow: hidden;
+  color: #e3efff;
+  font-size: 0.84rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.va-project-card-content span {
+  color: #9ab2d2;
+  font-size: 0.7rem;
+}
+
+.va-project-card-content small {
+  color: #6f89ad;
+  font-size: 0.64rem;
+}
+
+.va-search-results {
+  min-height: 0;
+  overflow: auto;
+  padding: 0.5rem 0.75rem 0.9rem;
+}
+
+.va-search-results-header {
+  min-height: 2.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border-bottom: 1px solid rgba(55, 75, 105, 0.58);
+  padding: 0 0.55rem;
+}
+
+.va-search-results-header strong {
+  color: #dceaff;
+  font-size: 0.76rem;
+}
+
+.va-search-results-header span {
+  color: #7894b8;
+  font-size: 0.66rem;
+}
+
+.va-search-results ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.va-search-result {
+  width: 100%;
+  min-height: 3.1rem;
+  display: grid;
+  grid-template-columns: 1rem minmax(220px, 1fr) minmax(130px, 0.3fr) minmax(130px, 0.26fr);
+  align-items: center;
+  gap: 0.75rem;
+  border: 0;
+  border-bottom: 1px solid rgba(55, 75, 105, 0.46);
+  background: transparent;
+  color: #bfd4ef;
+  padding: 0.45rem 0.55rem;
+  text-align: left;
+}
+
+.va-search-result:hover {
+  background: rgba(24, 41, 68, 0.5);
+}
+
+.va-search-result-icon {
+  width: 1rem;
+  height: 1rem;
+  color: #82b2e8;
+  display: inline-grid;
+  place-items: center;
+}
+
+.va-search-result-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.va-search-result-main {
+  min-width: 0;
+  display: grid;
+  gap: 0.16rem;
+}
+
+.va-search-result-main strong,
+.va-search-result-main small,
+.va-search-result-project,
+.va-search-result-updated {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.va-search-result-main strong {
+  color: #dceaff;
+  font-size: 0.75rem;
+}
+
+.va-search-result-main small,
+.va-search-result-project,
+.va-search-result-updated {
+  color: #8099bb;
+  font-size: 0.66rem;
+}
+
+.va-search-results-more {
+  margin: 0.7rem 0 0;
+  color: #7894b8;
+  font-size: 0.68rem;
+  text-align: center;
 }
 
 .va-directory-pane .va-tree-row {
@@ -1805,6 +2058,20 @@
   .va-toolbar-right {
     width: 100%;
     justify-content: flex-start;
+  }
+
+  .va-search-box {
+    width: min(100%, 360px);
+  }
+
+  .va-search-result {
+    grid-template-columns: 1rem minmax(0, 1fr);
+    gap: 0.35rem 0.65rem;
+  }
+
+  .va-search-result-project,
+  .va-search-result-updated {
+    grid-column: 2;
   }
 
   .va-project-select-wrap {

@@ -3,9 +3,10 @@ import JSZip from "jszip";
 import { Link, useSearchParams } from "react-router-dom";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { TextInputDialog } from "../components/TextInputDialog";
-import { artifactsApi, projectsApi, isTauriNativeRuntime, openFileWithDefaultApp, saveFileWithDialog } from "../lib/api";
+import { artifactsApi, isTauriNativeRuntime, openFileWithDefaultApp, saveFileWithDialog } from "../lib/api";
 import { formatDateTime, normalizeProjectName } from "../lib/format";
-import type { ArtifactItem, ProjectRecord } from "../types/models";
+import { isTextEditingTarget } from "../lib/keyboardShortcuts";
+import type { ArtifactItem } from "../types/models";
 import type {
   CreateFolderState,
   DeleteConfirmState,
@@ -41,8 +42,7 @@ import {
 import {
   buildTree,
   collectVisibleSelectableItemIds,
-  itemToDraft,
-  uniqueProjectOptions
+  itemToDraft
 } from "../artifacts/utils/tree";
 import {
   clampTableSelectionBounds,
@@ -57,6 +57,14 @@ import {
 import { parseMarkdownOutline, type MarkdownOutlineItem } from "../artifacts/utils/markdownOutline";
 import { insertBelowOutlineEntry, moveOutlineSection } from "../artifacts/utils/markdownOutlineOps";
 import { recordRecentArtifact } from "../artifacts/utils/recents";
+import { writeArtifactsLastLocation } from "../artifacts/utils/lastLocation";
+import {
+  PINNED_ARTIFACTS_CHANGED_EVENT,
+  readPinnedArtifacts,
+  togglePinnedArtifact,
+  type PinnedArtifact
+} from "../artifacts/utils/pins";
+import { useArtifactProjects } from "../artifacts/hooks/useArtifactProjects";
 import { useArtifactsMarkdownEditor } from "../artifacts/hooks/useArtifactsMarkdownEditor";
 import {
   IcoClose,
@@ -70,6 +78,7 @@ import {
   IcoHome,
   IcoListView,
   IcoPanelLeft,
+  IcoSearch,
   IcoSettings,
   IcoTileView,
   IcoTrash,
@@ -77,6 +86,7 @@ import {
 } from "../artifacts/components/ArtifactsIcons";
 import { DirectoryBrowser } from "../artifacts/components/DirectoryBrowser";
 import type { DirectoryViewMode } from "../artifacts/components/DirectoryBrowser";
+import { ProjectCardGrid } from "../artifacts/components/ProjectCardGrid";
 import { ArtifactProjectMemberships } from "../artifacts/components/ArtifactProjectMemberships";
 import { MarkdownOutlinePanel } from "../artifacts/components/MarkdownOutlinePanel";
 import { PdfViewer } from "../artifacts/components/PdfViewer";
@@ -103,22 +113,29 @@ type MoveFolderProjectState = {
 
 export function ArtifactsPage() {
   const ROOT_DROP_PATH = "";
-  const [searchParams] = useSearchParams();
-  const requestedItemId = searchParams.get("item");
-  const [projectOptions, setProjectOptions] = useState<ProjectOption[]>([]);
-  const [defaultProject, setDefaultProject] = useState<ProjectOption | null>(null);
-  const [projectsLoaded, setProjectsLoaded] = useState(false);
-  const [projectFilter, setProjectFilter] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const searchParamsKey = searchParams.toString();
+  const requestedProjectId = searchParams.get("project")?.trim() ?? "";
+  const requestedFolderPath = searchParams.get("folder")
+    ? normalizePath(searchParams.get("folder") ?? "")
+    : null;
+  const requestedItemId = searchParams.get("item") || null;
+  const requestedCreateMode = searchParams.get("new");
+  const { projectOptions, defaultProject, projectsLoaded } = useArtifactProjects();
+  const [projectFilter, setProjectFilter] = useState(requestedProjectId);
   const [items, setItems] = useState<ArtifactItem[]>([]);
-  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
-  const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
-  const [selectionAnchorId, setSelectionAnchorId] = useState<string | null>(null);
-  const [selectedFolderPath, setSelectedFolderPath] = useState<string | null>(null);
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(requestedItemId);
+  const [selectedItemIds, setSelectedItemIds] = useState<string[]>(requestedItemId ? [requestedItemId] : []);
+  const [selectionAnchorId, setSelectionAnchorId] = useState<string | null>(requestedItemId);
+  const [selectedFolderPath, setSelectedFolderPath] = useState<string | null>(requestedFolderPath);
   const [directoryViewMode, setDirectoryViewMode] = useState<DirectoryViewMode>("tile");
   const [collapsedFolders, setCollapsedFolders] = useState<Record<string, true>>({});
   const [draft, setDraft] = useState<ArtifactEditorDraft>(defaultDraft);
   const [mode, setMode] = useState<"view" | "create-note">("view");
   const [tagInput, setTagInput] = useState("");
+  const [searchExpanded, setSearchExpanded] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [pinnedArtifacts, setPinnedArtifacts] = useState<PinnedArtifact[]>(() => readPinnedArtifacts());
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -146,6 +163,7 @@ export function ArtifactsPage() {
   const [outlineBodyHeight, setOutlineBodyHeight] = useState(170);
 
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const draggingItemRef = useRef<ArtifactItem | null>(null);
   const tableSelectionDragRef = useRef<TableSelectionState | null>(null);
   const loadTreeRef = useRef<() => Promise<void>>(async () => {});
@@ -153,8 +171,12 @@ export function ArtifactsPage() {
   const handleSaveRef = useRef<() => Promise<void>>(async () => {});
   const handleArtifactHistoryNavRef = useRef<(direction: -1 | 1) => void>(() => {});
   const shortcutStateRef = useRef({ canSave: false, isSaving: false, markdownEditorVisible: false, pdfViewerVisible: false });
+  const searchShortcutStateRef = useRef({ directoryVisible: true, searchExpanded: false });
   const artifactNavHistoryRef = useRef<{ ids: string[]; index: number }>({ ids: [], index: -1 });
   const suppressArtifactNavPushRef = useRef(false);
+  const lastSearchParamsKeyRef = useRef(searchParamsKey);
+  const syncingStateFromUrlRef = useRef(false);
+  const lastValidatedProjectOptionsRef = useRef(projectOptions);
 
   const treeRoot = useMemo(() => buildTree(items), [items]);
   const visibleSelectableItemIds = useMemo(
@@ -237,6 +259,28 @@ export function ArtifactsPage() {
   const canShowWordPreviewPdf = isWordFileSelected && draft.previewPdfStatus === "ready";
 
   const hasDetailSelection = Boolean(selectedItemId || mode === "create-note");
+  const isProjectCardView =
+    !hasDetailSelection &&
+    !searchParams.has("project") &&
+    !searchParams.has("folder") &&
+    !searchParams.has("item") &&
+    mode !== "create-note" &&
+    searchParams.get("view") !== "all";
+  const searchTerms = useMemo(
+    () => searchQuery.trim().toLowerCase().split(/\s+/).filter(Boolean),
+    [searchQuery]
+  );
+  const matchingSearchItems = useMemo(() => {
+    if (searchTerms.length === 0) return [] as ArtifactItem[];
+    return items.filter((item) => {
+      if (item.kind === "folder") return false;
+      const searchable = `${item.title}\n${item.path}\n${item.tags.join(" ")}`.toLowerCase();
+      return searchTerms.every((term) => searchable.includes(term));
+    });
+  }, [items, searchTerms]);
+  const visibleSearchItems = matchingSearchItems.slice(0, 100);
+  const hasActiveSearchQuery = searchTerms.length > 0;
+  searchShortcutStateRef.current = { directoryVisible: !hasDetailSelection, searchExpanded };
 
   useEffect(() => {
     document.body.classList.toggle("workbench-artifacts-edit-mode", hasDetailSelection);
@@ -244,6 +288,12 @@ export function ArtifactsPage() {
       document.body.classList.remove("workbench-artifacts-edit-mode");
     };
   }, [hasDetailSelection]);
+
+  useEffect(() => {
+    if (searchExpanded && !hasDetailSelection) {
+      searchInputRef.current?.focus();
+    }
+  }, [hasDetailSelection, searchExpanded]);
 
   useEffect(() => {
     setArtifactSettingsOpen(false);
@@ -373,6 +423,23 @@ export function ArtifactsPage() {
     return null;
   }, [contextMenu, items]);
 
+  const contextPinCandidate = useMemo(() => {
+    if (!contextMenu) {
+      return null as ArtifactItem | null;
+    }
+    if (contextMenu.target.type === "item") {
+      return contextMenu.target.item;
+    }
+    if (contextMenu.target.type === "folder") {
+      const folderPath = normalizePath(contextMenu.target.folderPath);
+      return items.find((item) => item.kind === "folder" && normalizePath(item.path) === folderPath) ?? null;
+    }
+    return null;
+  }, [contextMenu, items]);
+  const contextPinCandidateIsPinned = Boolean(
+    contextPinCandidate && pinnedArtifacts.some((entry) => entry.itemId === contextPinCandidate.id)
+  );
+
   const contextMoveFolderProjectOptions = useMemo(() => {
     if (!contextRenameFolderCandidate) {
       return [] as ProjectOption[];
@@ -410,60 +477,6 @@ export function ArtifactsPage() {
     return resolveProjectFromFilter();
   };
 
-  const loadProjects = async () => {
-    setProjectsLoaded(false);
-    const defaultSelection = await projectsApi.getDefault().catch(() => null);
-    const resolvedDefault: ProjectOption | null = defaultSelection && defaultSelection.project.status !== "archived"
-      ? { projectId: defaultSelection.project.id, projectName: defaultSelection.project.name }
-      : null;
-    setDefaultProject(resolvedDefault);
-
-    try {
-      const all: ProjectRecord[] = [];
-      let cursor: string | undefined;
-
-      for (let page = 0; page < 20; page += 1) {
-        const result = await projectsApi.list(undefined, undefined, 100, cursor);
-        all.push(...result.items);
-        if (!result.nextCursor) {
-          break;
-        }
-        cursor = result.nextCursor;
-      }
-
-      const visibleProjects = all.filter((project) => project.status !== "archived");
-      const nextOptions = uniqueProjectOptions(visibleProjects, resolvedDefault);
-      setProjectOptions(nextOptions);
-      setProjectFilter((prev) =>
-        prev && !nextOptions.some((project) => project.projectId === prev) ? "" : prev
-      );
-    } catch {
-      // Fallback only when Projects service is unavailable.
-      try {
-        const fallback = await artifactsApi.projects();
-        const fallbackOptions = fallback
-          .map((project) => ({ projectId: project.projectId, projectName: project.projectName }))
-          .sort((a, b) => (a.projectName || a.projectId).localeCompare(b.projectName || b.projectId));
-        const merged = new Map<string, ProjectOption>();
-        if (resolvedDefault?.projectId) {
-          merged.set(resolvedDefault.projectId, resolvedDefault);
-        }
-        for (const option of fallbackOptions) {
-          merged.set(option.projectId, option);
-        }
-        const nextOptions = [...merged.values()];
-        setProjectOptions(nextOptions);
-        setProjectFilter((prev) =>
-          prev && !nextOptions.some((project) => project.projectId === prev) ? "" : prev
-        );
-      } catch {
-        // Notification is handled globally.
-      }
-    } finally {
-      setProjectsLoaded(true);
-    }
-  };
-
   const loadTree = async () => {
     if (!projectsLoaded) {
       return;
@@ -495,8 +508,101 @@ export function ArtifactsPage() {
   loadTreeRef.current = loadTree;
 
   useEffect(() => {
-    void loadProjects();
+    if (!projectsLoaded || projectOptions === lastValidatedProjectOptionsRef.current) {
+      return;
+    }
+    lastValidatedProjectOptionsRef.current = projectOptions;
+    setProjectFilter((prev) =>
+      prev && !projectOptions.some((project) => project.projectId === prev) ? "" : prev
+    );
+  }, [projectOptions, projectsLoaded]);
+
+  useEffect(() => {
+    const refreshPinnedArtifacts = () => setPinnedArtifacts(readPinnedArtifacts());
+    window.addEventListener(PINNED_ARTIFACTS_CHANGED_EVENT, refreshPinnedArtifacts);
+    window.addEventListener("storage", refreshPinnedArtifacts);
+    return () => {
+      window.removeEventListener(PINNED_ARTIFACTS_CHANGED_EVENT, refreshPinnedArtifacts);
+      window.removeEventListener("storage", refreshPinnedArtifacts);
+    };
   }, []);
+
+  useEffect(() => {
+    const storedSearchParams = new URLSearchParams(searchParams);
+    storedSearchParams.delete("new");
+    const storedSearchParamsKey = storedSearchParams.toString();
+    writeArtifactsLastLocation(`/artifacts${storedSearchParamsKey ? `?${storedSearchParamsKey}` : ""}`);
+  }, [searchParams, searchParamsKey]);
+
+  useEffect(() => {
+    if (searchParamsKey === lastSearchParamsKeyRef.current) {
+      return;
+    }
+
+    lastSearchParamsKeyRef.current = searchParamsKey;
+    let stateChanged = false;
+
+    if (projectFilter !== requestedProjectId) {
+      stateChanged = true;
+      setProjectFilter(requestedProjectId);
+    }
+    if (selectedFolderPath !== requestedFolderPath) {
+      stateChanged = true;
+      setSelectedFolderPath(requestedFolderPath);
+    }
+    if (selectedItemId !== requestedItemId) {
+      stateChanged = true;
+      setSelectedItemId(requestedItemId);
+      setSelectedItemIds(requestedItemId ? [requestedItemId] : []);
+      setSelectionAnchorId(requestedItemId);
+      if (!requestedItemId) {
+        setDraft({ ...defaultDraft });
+        setMode("view");
+      }
+    }
+    if (requestedItemId && mode !== "view") {
+      stateChanged = true;
+      setMode("view");
+    }
+
+    syncingStateFromUrlRef.current = stateChanged;
+  }, [mode, projectFilter, requestedFolderPath, requestedItemId, searchParamsKey, selectedFolderPath, selectedItemId]);
+
+  useEffect(() => {
+    if (syncingStateFromUrlRef.current) {
+      syncingStateFromUrlRef.current = false;
+      return;
+    }
+
+    const nextSearchParams = new URLSearchParams(searchParams);
+    if (projectFilter) {
+      nextSearchParams.set("project", projectFilter);
+    } else {
+      nextSearchParams.delete("project");
+    }
+
+    const normalizedFolderPath = selectedFolderPath ? normalizePath(selectedFolderPath) : "";
+    if (normalizedFolderPath) {
+      nextSearchParams.set("folder", normalizedFolderPath);
+    } else {
+      nextSearchParams.delete("folder");
+    }
+
+    if (mode !== "create-note" && selectedItemId) {
+      nextSearchParams.set("item", selectedItemId);
+    } else {
+      nextSearchParams.delete("item");
+    }
+
+    const nextSearchParamsKey = nextSearchParams.toString();
+    if (nextSearchParamsKey === searchParamsKey) {
+      lastSearchParamsKeyRef.current = searchParamsKey;
+      return;
+    }
+
+    lastSearchParamsKeyRef.current = nextSearchParamsKey;
+    setSearchParams(nextSearchParams, { replace: true });
+  }, [mode, projectFilter, searchParams, searchParamsKey, selectedFolderPath, selectedItemId, setSearchParams]);
 
   useEffect(() => {
     void loadTree();
@@ -508,15 +614,22 @@ export function ArtifactsPage() {
     }
 
     const target = items.find((item) => item.id === requestedItemId);
-    if (!target || selectedItemId === requestedItemId) {
+    if (!target) {
       return;
     }
 
-    setSelectedItemId(target.id);
-    setSelectedItemIds([target.id]);
-    setSelectionAnchorId(target.id);
-    setSelectedFolderPath(parentPath(target.path));
-  }, [items, requestedItemId, selectedItemId]);
+    if (selectedItemId !== requestedItemId) {
+      setSelectedItemId(target.id);
+      setSelectedItemIds([target.id]);
+      setSelectionAnchorId(target.id);
+    }
+    if (requestedFolderPath === null) {
+      const targetFolderPath = parentPath(target.path);
+      if (selectedFolderPath !== targetFolderPath) {
+        setSelectedFolderPath(targetFolderPath);
+      }
+    }
+  }, [items, requestedFolderPath, requestedItemId, selectedFolderPath, selectedItemId]);
 
   useEffect(() => {
     if (!selectedItemId) {
@@ -713,6 +826,26 @@ export function ArtifactsPage() {
     const handler = (e: globalThis.KeyboardEvent) => {
       const { canSave: cs, isSaving: is, markdownEditorVisible: mev } = shortcutStateRef.current;
       const key = e.key.toLowerCase();
+
+      if (e.key === "Escape" && searchShortcutStateRef.current.searchExpanded) {
+        e.preventDefault();
+        setSearchExpanded(false);
+        setSearchQuery("");
+        return;
+      }
+
+      if (
+        e.key === "/" &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        searchShortcutStateRef.current.directoryVisible &&
+        !isTextEditingTarget(e.target)
+      ) {
+        e.preventDefault();
+        setSearchExpanded(true);
+        return;
+      }
 
       if (e.altKey && !e.ctrlKey && !e.metaKey) {
         const isBack = e.key === "ArrowLeft" || e.key === "<" || (e.shiftKey && e.key === ",");
@@ -1482,15 +1615,44 @@ export function ArtifactsPage() {
     setPdfExpanded(false);
   };
 
-  const handleStartCreateNote = () => {
-    const targetProject = resolveProjectFromFilter();
+  const closeSearch = () => {
+    setSearchExpanded(false);
+    setSearchQuery("");
+  };
 
-    const newPath = joinPath(currentFolderPath, "new-note.md") || "new-note.md";
+  const handleDirectoryHome = () => {
+    setSelectedFolderPath("");
+    if (projectFilter) {
+      return;
+    }
+
+    const nextSearchParams = new URLSearchParams(searchParams);
+    nextSearchParams.delete("folder");
+    nextSearchParams.delete("view");
+    const nextSearchParamsKey = nextSearchParams.toString();
+    if (nextSearchParamsKey === searchParamsKey) {
+      return;
+    }
+    lastSearchParamsKeyRef.current = nextSearchParamsKey;
+    setSearchParams(nextSearchParams, { replace: true });
+  };
+
+  const showAllProjectsDirectory = () => {
+    const nextSearchParams = new URLSearchParams(searchParams);
+    nextSearchParams.set("view", "all");
+    const nextSearchParamsKey = nextSearchParams.toString();
+    lastSearchParamsKeyRef.current = nextSearchParamsKey;
+    setSearchParams(nextSearchParams, { replace: true });
+  };
+
+  const startCreateNote = (targetProject: ProjectOption, targetFolderPath: string) => {
+    const newPath = joinPath(targetFolderPath, "new-note.md") || "new-note.md";
     setMobileTreeVisible(false);
     setMode("create-note");
     setSelectedItemId(null);
     setSelectedItemIds([]);
     setSelectionAnchorId(null);
+    setSelectedFolderPath(targetFolderPath);
     setDraft({
       ...defaultDraft,
       kind: "note",
@@ -1505,6 +1667,28 @@ export function ArtifactsPage() {
     setTagInput("");
     setNotePreviewMode("edit");
   };
+
+  const handleStartCreateNote = () => {
+    startCreateNote(resolveProjectFromFilter(), currentFolderPath);
+  };
+
+  useEffect(() => {
+    if (requestedCreateMode !== "note" || !projectsLoaded) {
+      return;
+    }
+
+    const targetProject = requestedProjectId
+      ? projectOptions.find((project) => project.projectId === requestedProjectId) ?? { projectId: requestedProjectId }
+      : defaultProject ?? projectOptions[0] ?? { projectId: "default", projectName: "default" };
+    startCreateNote(targetProject, "");
+
+    const nextSearchParams = new URLSearchParams(searchParams);
+    nextSearchParams.delete("new");
+    nextSearchParams.delete("folder");
+    nextSearchParams.delete("item");
+    lastSearchParamsKeyRef.current = nextSearchParams.toString();
+    setSearchParams(nextSearchParams, { replace: true });
+  }, [defaultProject, projectOptions, projectsLoaded, requestedCreateMode, requestedProjectId, searchParams, setSearchParams]);
 
   const handleCreateFolder = (baseFolderPath = currentFolderPath) => {
     setCreateFolderState({
@@ -2380,16 +2564,50 @@ export function ArtifactsPage() {
               <button
                 type="button"
                 className="va-home-icon-btn"
-                onClick={() => setSelectedFolderPath("")}
+                onClick={handleDirectoryHome}
                 aria-label="Home"
                 title="Root Directory"
               >
                 <span className="va-home-icon" aria-hidden="true"><IcoHome /></span>
               </button>
-              <strong>{currentFolderPath || "root"}</strong>
+              <strong>{currentFolderPath || (isProjectCardView ? "Projects" : "root")}</strong>
             </div>
 
             <div className="va-toolbar-right">
+              {searchExpanded ? (
+                <div className="va-search-box">
+                  <span className="va-search-box-icon" aria-hidden="true"><IcoSearch /></span>
+                  <input
+                    ref={searchInputRef}
+                    type="search"
+                    value={searchQuery}
+                    onChange={(event) => setSearchQuery(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        closeSearch();
+                      }
+                    }}
+                    aria-label="Search artifacts"
+                    placeholder="Search artifacts"
+                    autoFocus
+                  />
+                  <button type="button" onClick={closeSearch} aria-label="Close search" title="Close Search">
+                    <IcoClose />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="va-toolbar-icon-btn"
+                  onClick={() => setSearchExpanded(true)}
+                  aria-label="Search artifacts"
+                  title="Search (/)"
+                >
+                  <IcoSearch />
+                </button>
+              )}
               <label className="va-project-select-wrap">
                 <span>Project</span>
                 <select value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}>
@@ -2402,35 +2620,41 @@ export function ArtifactsPage() {
                 </select>
               </label>
 
-              <button type="button" className="va-action-btn" onClick={handleUploadClick} disabled={isSaving}>
-                <IcoUpload /> Upload
-              </button>
-              <button type="button" className="va-action-btn" onClick={() => void handleCreateFolder()} disabled={isSaving}>
-                <IcoFolder /> New Folder
-              </button>
+              {!isProjectCardView ? (
+                <>
+                  <button type="button" className="va-action-btn" onClick={handleUploadClick} disabled={isSaving}>
+                    <IcoUpload /> Upload
+                  </button>
+                  <button type="button" className="va-action-btn" onClick={() => void handleCreateFolder()} disabled={isSaving}>
+                    <IcoFolder /> New Folder
+                  </button>
+                </>
+              ) : null}
               <button type="button" className="va-action-btn primary" onClick={handleStartCreateNote} disabled={isSaving}>
                 + New Note
               </button>
-              <div className="va-view-toggle" aria-label="Directory view mode">
-                <button
-                  type="button"
-                  className={directoryViewMode === "list" ? "active" : undefined}
-                  onClick={() => setDirectoryViewMode("list")}
-                  aria-label="List view"
-                  title="List view"
-                >
-                  <IcoListView />
-                </button>
-                <button
-                  type="button"
-                  className={directoryViewMode === "tile" ? "active" : undefined}
-                  onClick={() => setDirectoryViewMode("tile")}
-                  aria-label="Tile view"
-                  title="Tile view"
-                >
-                  <IcoTileView />
-                </button>
-              </div>
+              {!isProjectCardView ? (
+                <div className="va-view-toggle" aria-label="Directory view mode">
+                  <button
+                    type="button"
+                    className={directoryViewMode === "list" ? "active" : undefined}
+                    onClick={() => setDirectoryViewMode("list")}
+                    aria-label="List view"
+                    title="List view"
+                  >
+                    <IcoListView />
+                  </button>
+                  <button
+                    type="button"
+                    className={directoryViewMode === "tile" ? "active" : undefined}
+                    onClick={() => setDirectoryViewMode("tile")}
+                    aria-label="Tile view"
+                    title="Tile view"
+                  >
+                    <IcoTileView />
+                  </button>
+                </div>
+              ) : null}
             </div>
           </header>
         ) : null}
@@ -2452,6 +2676,46 @@ export function ArtifactsPage() {
           >
             {isLoading ? (
               <div className="va-empty">Loading...</div>
+            ) : hasActiveSearchQuery ? (
+              <div className="va-search-results">
+                <div className="va-search-results-header">
+                  <strong>Search results</strong>
+                  <span>{matchingSearchItems.length} matches</span>
+                </div>
+                {visibleSearchItems.length > 0 ? (
+                  <ul>
+                    {visibleSearchItems.map((item) => (
+                      <li key={item.id}>
+                        <button type="button" className="va-search-result" onClick={() => selectItem(item)}>
+                          <span className="va-search-result-icon" aria-hidden="true"><IcoFile /></span>
+                          <span className="va-search-result-main">
+                            <strong>{item.title}</strong>
+                            <small>{item.path}</small>
+                          </span>
+                          <span className="va-search-result-project">
+                            {normalizeProjectName(item.projectId, item.projectName)}
+                          </span>
+                          <span className="va-search-result-updated">{formatDateTime(item.updatedAt)}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="va-empty">No matching artifacts.</div>
+                )}
+                {matchingSearchItems.length > visibleSearchItems.length ? (
+                  <p className="va-search-results-more">
+                    {matchingSearchItems.length - visibleSearchItems.length} more matches
+                  </p>
+                ) : null}
+              </div>
+            ) : isProjectCardView ? (
+              <ProjectCardGrid
+                projectOptions={projectOptions}
+                items={items}
+                onSelectAll={showAllProjectsDirectory}
+                onSelectProject={(projectId) => setProjectFilter(projectId)}
+              />
             ) : (
               <DirectoryBrowser
                 currentFolderNode={currentFolderNode}
@@ -2471,7 +2735,7 @@ export function ArtifactsPage() {
                 selectItem={selectItem}
               />
             )}
-            <footer className="va-tree-foot">
+            {!isProjectCardView && !hasActiveSearchQuery ? <footer className="va-tree-foot">
               <span>{selectedItemIds.length} selected</span>
               <button
                 type="button"
@@ -2484,7 +2748,7 @@ export function ArtifactsPage() {
               >
                 Clear
               </button>
-            </footer>
+            </footer> : null}
             </main>
           ) : (
             <div className="va-edit-layout">
@@ -2861,6 +3125,18 @@ export function ArtifactsPage() {
               }
             >
               Open in New Window
+            </button>
+          ) : null}
+          {contextPinCandidate ? (
+            <button
+              type="button"
+              onClick={() =>
+                executeContextAction(() => {
+                  togglePinnedArtifact(contextPinCandidate);
+                })
+              }
+            >
+              {contextPinCandidateIsPinned ? "Unpin" : "Pin"}
             </button>
           ) : null}
           <button

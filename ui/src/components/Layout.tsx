@@ -1,5 +1,17 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { NavLink, Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Link, NavLink, Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { useArtifactProjects } from "../artifacts/hooks/useArtifactProjects";
+import {
+  PINNED_ARTIFACTS_CHANGED_EVENT,
+  readPinnedArtifacts,
+  type PinnedArtifact
+} from "../artifacts/utils/pins";
+import {
+  RECENT_ARTIFACTS_CHANGED_EVENT,
+  readRecentArtifacts,
+  type RecentArtifact
+} from "../artifacts/utils/recents";
+import { readArtifactsLastLocation } from "../artifacts/utils/lastLocation";
 import {
   WORKBENCH_LOCAL_DAEMON_URL_CHANGED_EVENT,
   WORKBENCH_LOCAL_MODE_CHANGED_EVENT,
@@ -25,11 +37,13 @@ import {
 } from "../lib/api";
 import { buildStandaloneCalendarUrl } from "../tasks/lib/calendarInteractionUtils";
 import { useNotifications } from "../lib/notificationService";
+import { normalizeProjectName } from "../lib/format";
 import type { LocalDaemonStatus } from "../types/models";
 import { QuickNoteModal } from "./QuickNoteModal";
 import { ShortcutsModal } from "./ShortcutsModal";
 
 const COMPACT_SIDEBAR_BREAKPOINT = 1100;
+const ARTIFACT_PROJECT_ROW_LIMIT = 8;
 
 const navIconMap: Record<string, ReactNode> = {
   Home: (
@@ -114,6 +128,163 @@ const sidebarNavSections: Array<{ label?: string; items: NavItem[] }> = [
     items: navItems.filter((item) => ["Analyser", "Research", "Images", "Mindmap", "WBS"].includes(item.label))
   }
 ];
+
+function buildArtifactsHref(params: { projectId?: string; folderPath?: string; itemId?: string; newNote?: boolean }) {
+  const query = new URLSearchParams();
+  if (params.projectId) query.set("project", params.projectId);
+  if (params.folderPath) query.set("folder", params.folderPath);
+  if (params.itemId) query.set("item", params.itemId);
+  if (params.newNote) query.set("new", "note");
+  const queryString = query.toString();
+  return queryString ? `/artifacts?${queryString}` : "/artifacts";
+}
+
+function ArtifactSubpanelIcon({ kind }: { kind: "folder" | "file" | "project" }) {
+  return (
+    <span className="nav-subpanel-icon" aria-hidden="true">
+      {kind === "folder" ? (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+          <path d="M3 7h6l2 2h10v11H3z" />
+        </svg>
+      ) : kind === "project" ? (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+          <rect x="4" y="4" width="16" height="16" rx="2.4" />
+          <path d="M8 8h8M8 12h8M8 16h5" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+          <path d="M7 3h8l4 4v14H7z" />
+          <path d="M15 3v4h4" />
+        </svg>
+      )}
+    </span>
+  );
+}
+
+function pinnedArtifactHref(entry: PinnedArtifact) {
+  if (entry.kind === "folder") {
+    return buildArtifactsHref({ projectId: entry.projectId, folderPath: entry.path });
+  }
+  return buildArtifactsHref({ itemId: entry.itemId });
+}
+
+function recentArtifactHref(entry: RecentArtifact) {
+  return buildArtifactsHref({ itemId: entry.itemId });
+}
+
+function ArtifactsSubpanel() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { projectOptions, projectsLoaded } = useArtifactProjects();
+  const [pinnedArtifacts, setPinnedArtifacts] = useState<PinnedArtifact[]>(() => readPinnedArtifacts());
+  const [recentArtifacts, setRecentArtifacts] = useState<RecentArtifact[]>(() => readRecentArtifacts(5));
+  const currentProjectId = useMemo(
+    () => new URLSearchParams(location.search).get("project") ?? "",
+    [location.search]
+  );
+  const visibleProjects = projectOptions.slice(0, ARTIFACT_PROJECT_ROW_LIMIT);
+
+  useEffect(() => {
+    const refreshPinnedArtifacts = () => setPinnedArtifacts(readPinnedArtifacts());
+    window.addEventListener(PINNED_ARTIFACTS_CHANGED_EVENT, refreshPinnedArtifacts);
+    window.addEventListener("storage", refreshPinnedArtifacts);
+    return () => {
+      window.removeEventListener(PINNED_ARTIFACTS_CHANGED_EVENT, refreshPinnedArtifacts);
+      window.removeEventListener("storage", refreshPinnedArtifacts);
+    };
+  }, []);
+
+  useEffect(() => {
+    const refreshRecentArtifacts = () => setRecentArtifacts(readRecentArtifacts(5));
+    window.addEventListener(RECENT_ARTIFACTS_CHANGED_EVENT, refreshRecentArtifacts);
+    window.addEventListener("storage", refreshRecentArtifacts);
+    return () => {
+      window.removeEventListener(RECENT_ARTIFACTS_CHANGED_EVENT, refreshRecentArtifacts);
+      window.removeEventListener("storage", refreshRecentArtifacts);
+    };
+  }, []);
+
+  return (
+    <div className="nav-subpanel" aria-label="Artifacts quick access">
+      <div className="nav-subpanel-header">
+        <span>Quick access</span>
+        <button
+          type="button"
+          className="nav-subpanel-header-action"
+          title="New Note"
+          aria-label="New Note"
+          onClick={() => navigate(buildArtifactsHref({ projectId: currentProjectId || undefined, newNote: true }))}
+        >
+          +
+        </button>
+      </div>
+
+      {pinnedArtifacts.length > 0 ? (
+        <div className="nav-subpanel-group">
+          <div className="nav-subpanel-group-title">Pinned</div>
+          {pinnedArtifacts.map((entry) => (
+            <Link key={entry.itemId} className="nav-subpanel-row" to={pinnedArtifactHref(entry)} title={entry.title}>
+              <ArtifactSubpanelIcon kind={entry.kind === "folder" ? "folder" : "file"} />
+              <span>{entry.title}</span>
+            </Link>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="nav-subpanel-group">
+        <div className="nav-subpanel-group-title">Projects</div>
+        {projectsLoaded
+          ? visibleProjects.map((project) => {
+              const projectName = normalizeProjectName(project.projectId, project.projectName);
+              const isCurrent = project.projectId === currentProjectId;
+              return (
+                <div
+                  key={project.projectId}
+                  className={isCurrent ? "nav-subpanel-project-row active" : "nav-subpanel-project-row"}
+                >
+                  <Link
+                    className="nav-subpanel-row"
+                    to={buildArtifactsHref({ projectId: project.projectId })}
+                    title={projectName}
+                    aria-current={isCurrent ? "page" : undefined}
+                  >
+                    <ArtifactSubpanelIcon kind="project" />
+                    <span>{projectName}</span>
+                  </Link>
+                  <button
+                    type="button"
+                    className="nav-subpanel-new-note"
+                    title="New Note"
+                    aria-label={`New Note in ${projectName}`}
+                    onClick={() => navigate(buildArtifactsHref({ projectId: project.projectId, newNote: true }))}
+                  >
+                    +
+                  </button>
+                </div>
+              );
+            })
+          : null}
+        {projectOptions.length > ARTIFACT_PROJECT_ROW_LIMIT ? (
+          <Link className="nav-subpanel-row nav-subpanel-more" to="/artifacts">
+            <span>More…</span>
+          </Link>
+        ) : null}
+      </div>
+
+      {recentArtifacts.length > 0 ? (
+        <div className="nav-subpanel-group">
+          <div className="nav-subpanel-group-title">Recent</div>
+          {recentArtifacts.map((entry) => (
+            <Link key={entry.itemId} className="nav-subpanel-row" to={recentArtifactHref(entry)} title={entry.title}>
+              <ArtifactSubpanelIcon kind="file" />
+              <span>{entry.title}</span>
+            </Link>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 export function Layout() {
   const navigate = useNavigate();
@@ -404,7 +575,10 @@ export function Layout() {
       const matchedNavigation = navigationShortcuts.find(([actionId]) => matchesShortcut(actionId));
       if (matchedNavigation) {
         event.preventDefault();
-        navigate(matchedNavigation[1]);
+        const target = matchedNavigation[0] === "open_artifacts" && !isArtifactsRoute
+          ? readArtifactsLastLocation() ?? matchedNavigation[1]
+          : matchedNavigation[1];
+        navigate(target);
       }
     };
 
@@ -415,7 +589,7 @@ export function Layout() {
       document.removeEventListener("mousedown", onMouseDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [isNativeRuntime, navigate, shortcutBindings]);
+  }, [isArtifactsRoute, isNativeRuntime, navigate, shortcutBindings]);
 
   const logout = async () => {
     await clearWorkbenchSession();
@@ -469,17 +643,36 @@ export function Layout() {
               {section.label ? <div className="nav-section-label">{section.label}</div> : null}
               <div className="nav-section-links">
                 {section.items.map((item) => (
-                  <NavLink
-                    key={item.path}
-                    to={item.path}
-                    className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
-                    end={item.path === "/"}
-                  >
-                    <span className="nav-icon" aria-hidden="true">
-                      {navIconMap[item.label]}
-                    </span>
-                    <span className="nav-label">{item.label}</span>
-                  </NavLink>
+                  <Fragment key={item.path}>
+                    <NavLink
+                      to={item.path}
+                      className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
+                      end={item.path === "/"}
+                      onClick={(event) => {
+                        if (
+                          item.label !== "Artifacts" ||
+                          isArtifactsRoute ||
+                          event.button !== 0 ||
+                          event.metaKey ||
+                          event.ctrlKey ||
+                          event.shiftKey ||
+                          event.altKey
+                        ) {
+                          return;
+                        }
+                        event.preventDefault();
+                        navigate(readArtifactsLastLocation() ?? "/artifacts");
+                      }}
+                    >
+                      <span className="nav-icon" aria-hidden="true">
+                        {navIconMap[item.label]}
+                      </span>
+                      <span className="nav-label">{item.label}</span>
+                    </NavLink>
+                    {item.label === "Artifacts" && isArtifactsRoute && !isSidebarCollapsed && !isCompactSidebarMode ? (
+                      <ArtifactsSubpanel />
+                    ) : null}
+                  </Fragment>
                 ))}
               </div>
             </section>

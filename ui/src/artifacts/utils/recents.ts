@@ -2,6 +2,7 @@ import type { ArtifactItem } from "../../types/models";
 
 export const RECENT_ARTIFACTS_STORAGE_KEY = "workbench.recentArtifacts";
 export const RECENT_ARTIFACTS_LIMIT = 20;
+export const RECENT_ARTIFACTS_CHANGED_EVENT = "workbench-recent-artifacts-changed";
 
 export interface RecentArtifact {
   itemId: string;
@@ -63,7 +64,7 @@ export function writeRecentArtifacts(entries: RecentArtifact[]): void {
       RECENT_ARTIFACTS_STORAGE_KEY,
       JSON.stringify(normalizeRecentArtifacts(entries))
     );
-    window.dispatchEvent(new Event("workbench-recent-artifacts-changed"));
+    window.dispatchEvent(new Event(RECENT_ARTIFACTS_CHANGED_EVENT));
   } catch {
     // Best effort; recent artifacts should never block opening an item.
   }

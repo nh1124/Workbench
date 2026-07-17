@@ -115,3 +115,10 @@ export const IcoTileView = () => (
     <rect x="14" y="14" width="6" height="6" rx="1" />
   </svg>
 );
+
+export const IcoSearch = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+    <circle cx="11" cy="11" r="6.5" />
+    <path d="M16 16l5 5" />
+  </svg>
+);
