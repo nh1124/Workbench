@@ -102,6 +102,20 @@ Status legend は maintenance-loop-plan §1 と同一。状態更新は root age
 P1 → P2 → P5 → P3 → P4 の順(P2/P5 が P1 に依存。P3/P4 は独立)。
 worker: codex(MCP)。レビュー・commit: root agent。
 
+## F1: D&D アップロード保存先の修正(2026-07-18 Owner 報告)
+
+症状: D&D 保存したファイルが画面に表示されず Recent からしか辿れない。
+原因: 背景ドロップが常に root 直下(`handleRootDrop` → ROOT_DROP_PATH)へ、
+プロジェクト未選択時は default プロジェクトへ保存され、P3 のカード一覧化で
+root が初期表示から隠れたため顕在化。
+
+- F1-1: 背景(フォルダ行以外)への OS ファイルドロップは `currentFolderPath` へ
+  保存(アップロードボタンと対称)。item の move も背景ドロップは現在フォルダへ。
+- F1-2: カード一覧表示中はプロジェクトカードへのドロップでそのプロジェクトの
+  root へ保存。背景へのドロップは受け付けない。
+- F1-3: アップロード完了後、保存先の project / folder を URL・状態に同期し、
+  詳細表示を閉じてもファイルの場所が表示されるようにする。
+
 ## Progress Board
 
 | ID | Status | Scope | Task |
@@ -115,6 +129,9 @@ worker: codex(MCP)。レビュー・commit: root agent。
 | P4-1 | `[implemented]` | ui | 検索アイコン + クライアントフィルタ(title/path/tags、`/` キー) |
 | P5-1 | `[implemented]` | ui | last location 保存 + Artifacts ナビの復元遷移 |
 | P-R | `[implemented]` | root | レビュー・検証・commit |
+| F1-1 | `[implemented]` | ui | 背景ドロップを currentFolderPath へ(upload/move とも) |
+| F1-2 | `[implemented]` | ui | カード一覧: 背景ドロップ無効化 + プロジェクトカードへのドロップ対応 |
+| F1-3 | `[implemented]` | ui | アップロード後に保存先 project/folder を URL・状態へ同期 |
 
 ## 受入
 

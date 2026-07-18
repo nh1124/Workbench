@@ -197,4 +197,95 @@ describe("ArtifactsPage project cards and search", () => {
     expect(screen.queryByRole("searchbox", { name: "Search artifacts" })).toBeNull();
     expect(await screen.findByRole("button", { name: /All Projects/ })).toBeTruthy();
   });
+
+  it("uploads background drops to the current folder and keeps that location in the URL", async () => {
+    const file = new File(["uploaded"], "uploaded.txt", { type: "text/plain" });
+    const uploadedItem = artifactItem({
+      id: "file-uploaded",
+      kind: "file",
+      title: "uploaded.txt",
+      path: "reports/uploaded.txt",
+      parentPath: "reports",
+      contentMarkdown: "",
+      mimeType: "text/plain"
+    });
+    const uploadSpy = vi.spyOn(artifactsApi, "uploadFile").mockResolvedValue(uploadedItem);
+    vi.mocked(artifactsApi.getItem).mockImplementation((id) => {
+      const item = [noteItem, otherItem, uploadedItem].find((entry) => entry.id === id);
+      return item ? Promise.resolve(item) : Promise.reject(new Error("missing"));
+    });
+
+    const { container } = renderPage("/artifacts?project=project-a&folder=reports");
+    await screen.findByRole("button", { name: /Upload/ });
+    const directoryPane = container.querySelector<HTMLElement>(".va-directory-pane");
+    expect(directoryPane).toBeTruthy();
+
+    fireEvent.dragOver(directoryPane!, {
+      dataTransfer: { files: [file], types: ["Files"], dropEffect: "none" }
+    });
+    expect(directoryPane!.classList.contains("drop-target-root")).toBe(true);
+
+    fireEvent.drop(directoryPane!, {
+      dataTransfer: { files: [file], types: ["Files"], dropEffect: "copy" }
+    });
+
+    await waitFor(() => {
+      expect(uploadSpy).toHaveBeenCalledWith(expect.objectContaining({
+        projectId: "project-a",
+        directoryPath: "reports",
+        file
+      }));
+      expect(screen.getByTestId("artifacts-location").textContent).toContain("folder=reports");
+      expect(screen.getByTestId("artifacts-location").textContent).toContain("item=file-uploaded");
+    });
+  });
+
+  it("accepts file drops only on project cards in the project-card view", async () => {
+    const file = new File(["uploaded"], "uploaded.txt", { type: "text/plain" });
+    const uploadedItem = artifactItem({
+      id: "card-uploaded",
+      kind: "file",
+      title: "uploaded.txt",
+      path: "uploaded.txt",
+      contentMarkdown: "",
+      mimeType: "text/plain"
+    });
+    const uploadSpy = vi.spyOn(artifactsApi, "uploadFile").mockResolvedValue(uploadedItem);
+    vi.mocked(artifactsApi.getItem).mockImplementation((id) => {
+      const item = [noteItem, otherItem, uploadedItem].find((entry) => entry.id === id);
+      return item ? Promise.resolve(item) : Promise.reject(new Error("missing"));
+    });
+
+    const { container } = renderPage();
+    const allProjectsCard = await screen.findByRole("button", { name: /All Projects/ });
+    const projectCard = screen.getByRole("button", { name: /Finance.*2 items/ });
+    const directoryPane = container.querySelector<HTMLElement>(".va-directory-pane");
+    expect(directoryPane).toBeTruthy();
+
+    fireEvent.drop(directoryPane!, {
+      dataTransfer: { files: [file], types: ["Files"], dropEffect: "none" }
+    });
+    fireEvent.drop(allProjectsCard, {
+      dataTransfer: { files: [file], types: ["Files"], dropEffect: "none" }
+    });
+    expect(uploadSpy).not.toHaveBeenCalled();
+
+    fireEvent.dragOver(projectCard, {
+      dataTransfer: { files: [file], types: ["Files"], dropEffect: "none" }
+    });
+    expect(projectCard.classList.contains("drop-target")).toBe(true);
+    fireEvent.drop(projectCard, {
+      dataTransfer: { files: [file], types: ["Files"], dropEffect: "copy" }
+    });
+
+    await waitFor(() => {
+      expect(uploadSpy).toHaveBeenCalledWith(expect.objectContaining({
+        projectId: "project-a",
+        directoryPath: undefined,
+        file
+      }));
+      expect(screen.getByTestId("artifacts-location").textContent).toContain("project=project-a");
+      expect(screen.getByTestId("artifacts-location").textContent).toContain("item=card-uploaded");
+    });
+  });
 });

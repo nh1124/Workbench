@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState, type DragEvent } from "react";
 import { formatDateTime, normalizeProjectName } from "../../lib/format";
 import type { ArtifactItem } from "../../types/models";
 import type { ProjectOption } from "../types";
@@ -9,6 +9,7 @@ interface ProjectCardGridProps {
   items: ArtifactItem[];
   onSelectAll: () => void;
   onSelectProject: (projectId: string) => void;
+  onDropFiles?: (projectId: string, files: FileList) => void;
 }
 
 interface ProjectCardSummary {
@@ -31,18 +32,56 @@ function ProjectCard({
   title,
   summary,
   allProjects = false,
-  onClick
+  onClick,
+  projectId,
+  onDropFiles
 }: {
   title: string;
   summary: ProjectCardSummary;
   allProjects?: boolean;
   onClick: () => void;
+  projectId?: string;
+  onDropFiles?: (projectId: string, files: FileList) => void;
 }) {
+  const [isDropTarget, setIsDropTarget] = useState(false);
+  const canDropFiles = Boolean(projectId && onDropFiles);
+
+  const handleDragOver = (event: DragEvent<HTMLButtonElement>) => {
+    if (!canDropFiles || !event.dataTransfer.types.includes("Files")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "copy";
+    setIsDropTarget(true);
+  };
+
+  const handleDragLeave = (event: DragEvent<HTMLButtonElement>) => {
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+    setIsDropTarget(false);
+  };
+
+  const handleDrop = (event: DragEvent<HTMLButtonElement>) => {
+    if (!projectId || !onDropFiles || event.dataTransfer.files.length === 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDropTarget(false);
+    onDropFiles(projectId, event.dataTransfer.files);
+  };
+
   return (
     <button
       type="button"
-      className={allProjects ? "va-project-card all-projects" : "va-project-card"}
+      className={[
+        "va-project-card",
+        allProjects ? "all-projects" : "",
+        isDropTarget ? "drop-target" : ""
+      ]
+        .filter(Boolean)
+        .join(" ")}
       onClick={onClick}
+      onDragEnter={handleDragOver}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
     >
       <span className="va-project-card-icon" aria-hidden="true"><IcoFolder /></span>
       <span className="va-project-card-content">
@@ -54,7 +93,13 @@ function ProjectCard({
   );
 }
 
-export function ProjectCardGrid({ projectOptions, items, onSelectAll, onSelectProject }: ProjectCardGridProps) {
+export function ProjectCardGrid({
+  projectOptions,
+  items,
+  onSelectAll,
+  onSelectProject,
+  onDropFiles
+}: ProjectCardGridProps) {
   const summaries = useMemo(() => {
     const byProject = new Map<string, ArtifactItem[]>();
     for (const item of items) {
@@ -77,6 +122,8 @@ export function ProjectCardGrid({ projectOptions, items, onSelectAll, onSelectPr
           title={normalizeProjectName(project.projectId, project.projectName)}
           summary={summaries.byProject.get(project.projectId) ?? { itemCount: 0 }}
           onClick={() => onSelectProject(project.projectId)}
+          projectId={project.projectId}
+          onDropFiles={onDropFiles}
         />
       ))}
     </div>

@@ -112,7 +112,6 @@ type MoveFolderProjectState = {
 };
 
 export function ArtifactsPage() {
-  const ROOT_DROP_PATH = "";
   const [searchParams, setSearchParams] = useSearchParams();
   const searchParamsKey = searchParams.toString();
   const requestedProjectId = searchParams.get("project")?.trim() ?? "";
@@ -1731,10 +1730,16 @@ export function ArtifactsPage() {
     uploadInputRef.current?.click();
   };
 
-  const handleUploadFiles = async (files: FileList | null, targetPath?: string) => {
+  const handleUploadFiles = async (
+    files: FileList | null,
+    targetPath?: string,
+    explicitProject?: ProjectOption
+  ) => {
     if (!files || files.length === 0) return;
 
-    const activeProject = resolveProjectFromFilter();
+    const activeProject = explicitProject ?? resolveProjectFromFilter();
+    const uploadDirectoryPath = normalizePath(targetPath ?? currentFolderPath);
+    const projectFilterChanged = projectFilter !== activeProject.projectId;
 
     setIsSaving(true);
     setError(null);
@@ -1745,13 +1750,17 @@ export function ArtifactsPage() {
         const uploaded = await artifactsApi.uploadFile({
           projectId: activeProject.projectId,
           projectName: activeProject.projectName,
-          directoryPath: targetPath ?? (currentFolderPath || undefined),
+          directoryPath: uploadDirectoryPath || undefined,
           file
         });
         lastUploadedId = uploaded.id;
       }
 
-      await loadTree();
+      setProjectFilter(activeProject.projectId);
+      setSelectedFolderPath(uploadDirectoryPath);
+      if (!projectFilterChanged) {
+        await loadTree();
+      }
       if (lastUploadedId) {
         setSelectedItemId(lastUploadedId);
         setSelectedItemIds([lastUploadedId]);
@@ -2395,19 +2404,20 @@ export function ArtifactsPage() {
   };
 
   const handleRootDrop = (event: DragEvent<HTMLElement>) => {
+    const targetFolderPath = normalizePath(currentFolderPath);
     if (event.dataTransfer.files && event.dataTransfer.files.length > 0) {
       event.preventDefault();
       event.stopPropagation();
       setDropTargetPath(null);
-      void handleUploadFiles(event.dataTransfer.files, ROOT_DROP_PATH);
+      void handleUploadFiles(event.dataTransfer.files, targetFolderPath);
       return;
     }
     event.preventDefault();
     const dragItem = resolveDraggedItemFromEvent(event);
     if (!dragItem) return;
-    if (isInvalidFolderMove(dragItem, ROOT_DROP_PATH)) return;
+    if (isInvalidFolderMove(dragItem, targetFolderPath)) return;
     setDropTargetPath(null);
-    void moveItemToFolder(dragItem, ROOT_DROP_PATH);
+    void moveItemToFolder(dragItem, targetFolderPath);
   };
 
   const handleFolderDrop = (event: DragEvent<HTMLButtonElement>, targetFolderPath: string) => {
@@ -2431,7 +2441,12 @@ export function ArtifactsPage() {
     event.preventDefault();
     const hasFiles = event.dataTransfer.types.includes("Files");
     event.dataTransfer.dropEffect = hasFiles ? "copy" : "move";
-    setDropTargetPath(ROOT_DROP_PATH);
+    setDropTargetPath(normalizePath(currentFolderPath));
+  };
+
+  const handleProjectCardDropFiles = (projectId: string, files: FileList) => {
+    const targetProject = projectOptions.find((project) => project.projectId === projectId) ?? { projectId };
+    void handleUploadFiles(files, "", targetProject);
   };
 
   const executeContextAction = (action: () => Promise<void> | void) => {
@@ -2666,13 +2681,17 @@ export function ArtifactsPage() {
             <main
             className={[
               "va-directory-pane",
-              dropTargetPath === ROOT_DROP_PATH ? "drop-target-root" : ""
+              !isProjectCardView &&
+              !hasActiveSearchQuery &&
+              dropTargetPath === normalizePath(currentFolderPath)
+                ? "drop-target-root"
+                : ""
             ]
               .filter(Boolean)
               .join(" ")}
-            onDragEnter={handleRootDragOver}
-            onDragOver={handleRootDragOver}
-            onDrop={handleRootDrop}
+            onDragEnter={!isProjectCardView && !hasActiveSearchQuery ? handleRootDragOver : undefined}
+            onDragOver={!isProjectCardView && !hasActiveSearchQuery ? handleRootDragOver : undefined}
+            onDrop={!isProjectCardView && !hasActiveSearchQuery ? handleRootDrop : undefined}
           >
             {isLoading ? (
               <div className="va-empty">Loading...</div>
@@ -2715,6 +2734,7 @@ export function ArtifactsPage() {
                 items={items}
                 onSelectAll={showAllProjectsDirectory}
                 onSelectProject={(projectId) => setProjectFilter(projectId)}
+                onDropFiles={handleProjectCardDropFiles}
               />
             ) : (
               <DirectoryBrowser
