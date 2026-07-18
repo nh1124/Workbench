@@ -61,6 +61,10 @@ Status legend は maintenance-loop-plan §1 と同一。状態更新は root age
 - project 一覧の取得は ArtifactsPage の loadProjects と重複するため、
   取得ロジックを `useArtifactProjects` フックへ抽出して共用する。
 - サイドバー collapsed / compact(モバイル)時はサブパネル非表示(従来リンク動作)。
+- Owner フィードバック(2026-07-18)による変更: 入れ子のサブパネルではなく、
+  サイドバー全体が横スライド(約200ms、reduced-motion 対応)で Artifacts 専用
+  メニュー(戻るボタン + Quick access)に切り替わる方式。戻るボタンは
+  /artifacts に留まったままメインメニューへ戻る。
 
 ### P3: 初期表示を project 一覧に
 

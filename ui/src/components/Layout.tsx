@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, NavLink, Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useArtifactProjects } from "../artifacts/hooks/useArtifactProjects";
 import {
@@ -139,9 +139,9 @@ function buildArtifactsHref(params: { projectId?: string; folderPath?: string; i
   return queryString ? `/artifacts?${queryString}` : "/artifacts";
 }
 
-function ArtifactSubpanelIcon({ kind }: { kind: "folder" | "file" | "project" }) {
+function ArtifactMenuIcon({ kind }: { kind: "folder" | "file" | "project" }) {
   return (
-    <span className="nav-subpanel-icon" aria-hidden="true">
+    <span className="artifacts-menu-icon" aria-hidden="true">
       {kind === "folder" ? (
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
           <path d="M3 7h6l2 2h10v11H3z" />
@@ -172,7 +172,7 @@ function recentArtifactHref(entry: RecentArtifact) {
   return buildArtifactsHref({ itemId: entry.itemId });
 }
 
-function ArtifactsSubpanel() {
+function ArtifactsQuickAccess() {
   const navigate = useNavigate();
   const location = useLocation();
   const { projectOptions, projectsLoaded } = useArtifactProjects();
@@ -205,34 +205,34 @@ function ArtifactsSubpanel() {
   }, []);
 
   return (
-    <div className="nav-subpanel" aria-label="Artifacts quick access">
-      <div className="nav-subpanel-header">
+    <nav className="artifacts-menu" aria-label="Artifacts quick access">
+      <div className="artifacts-menu-header">
         <span>Quick access</span>
         <button
           type="button"
-          className="nav-subpanel-header-action"
+          className="artifacts-menu-header-action"
           title="New Note"
           aria-label="New Note"
           onClick={() => navigate(buildArtifactsHref({ projectId: currentProjectId || undefined, newNote: true }))}
         >
-          +
+          + New Note
         </button>
       </div>
 
       {pinnedArtifacts.length > 0 ? (
-        <div className="nav-subpanel-group">
-          <div className="nav-subpanel-group-title">Pinned</div>
+        <div className="artifacts-menu-group">
+          <div className="artifacts-menu-group-title">Pinned</div>
           {pinnedArtifacts.map((entry) => (
-            <Link key={entry.itemId} className="nav-subpanel-row" to={pinnedArtifactHref(entry)} title={entry.title}>
-              <ArtifactSubpanelIcon kind={entry.kind === "folder" ? "folder" : "file"} />
+            <Link key={entry.itemId} className="artifacts-menu-row" to={pinnedArtifactHref(entry)} title={entry.title}>
+              <ArtifactMenuIcon kind={entry.kind === "folder" ? "folder" : "file"} />
               <span>{entry.title}</span>
             </Link>
           ))}
         </div>
       ) : null}
 
-      <div className="nav-subpanel-group">
-        <div className="nav-subpanel-group-title">Projects</div>
+      <div className="artifacts-menu-group">
+        <div className="artifacts-menu-group-title">Projects</div>
         {projectsLoaded
           ? visibleProjects.map((project) => {
               const projectName = normalizeProjectName(project.projectId, project.projectName);
@@ -240,20 +240,20 @@ function ArtifactsSubpanel() {
               return (
                 <div
                   key={project.projectId}
-                  className={isCurrent ? "nav-subpanel-project-row active" : "nav-subpanel-project-row"}
+                  className={isCurrent ? "artifacts-menu-project-row active" : "artifacts-menu-project-row"}
                 >
                   <Link
-                    className="nav-subpanel-row"
+                    className="artifacts-menu-row"
                     to={buildArtifactsHref({ projectId: project.projectId })}
                     title={projectName}
                     aria-current={isCurrent ? "page" : undefined}
                   >
-                    <ArtifactSubpanelIcon kind="project" />
+                    <ArtifactMenuIcon kind="project" />
                     <span>{projectName}</span>
                   </Link>
                   <button
                     type="button"
-                    className="nav-subpanel-new-note"
+                    className="artifacts-menu-new-note"
                     title="New Note"
                     aria-label={`New Note in ${projectName}`}
                     onClick={() => navigate(buildArtifactsHref({ projectId: project.projectId, newNote: true }))}
@@ -265,24 +265,24 @@ function ArtifactsSubpanel() {
             })
           : null}
         {projectOptions.length > ARTIFACT_PROJECT_ROW_LIMIT ? (
-          <Link className="nav-subpanel-row nav-subpanel-more" to="/artifacts">
+          <Link className="artifacts-menu-row artifacts-menu-more" to="/artifacts">
             <span>More…</span>
           </Link>
         ) : null}
       </div>
 
       {recentArtifacts.length > 0 ? (
-        <div className="nav-subpanel-group">
-          <div className="nav-subpanel-group-title">Recent</div>
+        <div className="artifacts-menu-group">
+          <div className="artifacts-menu-group-title">Recent</div>
           {recentArtifacts.map((entry) => (
-            <Link key={entry.itemId} className="nav-subpanel-row" to={recentArtifactHref(entry)} title={entry.title}>
-              <ArtifactSubpanelIcon kind="file" />
+            <Link key={entry.itemId} className="artifacts-menu-row" to={recentArtifactHref(entry)} title={entry.title}>
+              <ArtifactMenuIcon kind="file" />
               <span>{entry.title}</span>
             </Link>
           ))}
         </div>
       ) : null}
-    </div>
+    </nav>
   );
 }
 
@@ -319,6 +319,9 @@ export function Layout() {
   const [shortcutBindings, setShortcutBindings] = useState<ShortcutBindings>(() => loadShortcutBindings());
   const [isCompactSidebarMode, setIsCompactSidebarMode] = useState(() =>
     typeof window !== "undefined" ? window.innerWidth <= COMPACT_SIDEBAR_BREAKPOINT : false
+  );
+  const [sidebarView, setSidebarView] = useState<"main" | "artifacts">(() =>
+    isArtifactsRoute ? "artifacts" : "main"
   );
   const {
     items: notifications,
@@ -431,6 +434,10 @@ export function Layout() {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
+
+  useEffect(() => {
+    setSidebarView(isArtifactsRoute ? "artifacts" : "main");
+  }, [isArtifactsRoute]);
 
   useEffect(() => {
     let cancelled = false;
@@ -597,6 +604,8 @@ export function Layout() {
     navigate("/login", { replace: true });
   };
 
+  const activeSidebarView = isSidebarCollapsed || isCompactSidebarMode ? "main" : sidebarView;
+
   return (
     <div className={[
       "app-shell",
@@ -612,72 +621,98 @@ export function Layout() {
         />
       )}
       <aside className={isCompactSidebarMode && isMobileMenuOpen ? "sidebar mobile-sidebar-open" : "sidebar"}>
-        <div className="sidebar-top">
-          <button
-            type="button"
-            className="sidebar-toggle"
-            aria-label={
-              isCompactSidebarMode
-                ? "Close navigation menu"
-                : isSidebarCollapsed
-                  ? "Expand sidebar"
-                  : "Collapse sidebar"
-            }
-            onClick={() => {
-              if (isCompactSidebarMode) {
-                setIsMobileMenuOpen(false);
-                return;
-              }
-              setIsSidebarCollapsed((prev) => !prev);
-            }}
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-              <path d="M4 7h16M4 12h16M4 17h16" />
-            </svg>
-          </button>
-        </div>
-
-        <nav className="main-nav" aria-label="Primary">
-          {sidebarNavSections.map((section, index) => (
-            <section className="nav-section" key={section.label ?? `primary-${index}`}>
-              {section.label ? <div className="nav-section-label">{section.label}</div> : null}
-              <div className="nav-section-links">
-                {section.items.map((item) => (
-                  <Fragment key={item.path}>
-                    <NavLink
-                      to={item.path}
-                      className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
-                      end={item.path === "/"}
-                      onClick={(event) => {
-                        if (
-                          item.label !== "Artifacts" ||
-                          isArtifactsRoute ||
-                          event.button !== 0 ||
-                          event.metaKey ||
-                          event.ctrlKey ||
-                          event.shiftKey ||
-                          event.altKey
-                        ) {
-                          return;
-                        }
-                        event.preventDefault();
-                        navigate(readArtifactsLastLocation() ?? "/artifacts");
-                      }}
-                    >
-                      <span className="nav-icon" aria-hidden="true">
-                        {navIconMap[item.label]}
-                      </span>
-                      <span className="nav-label">{item.label}</span>
-                    </NavLink>
-                    {item.label === "Artifacts" && isArtifactsRoute && !isSidebarCollapsed && !isCompactSidebarMode ? (
-                      <ArtifactsSubpanel />
-                    ) : null}
-                  </Fragment>
-                ))}
+        <div className={activeSidebarView === "artifacts" ? "sidebar-views artifacts-active" : "sidebar-views"}>
+          <div className="sidebar-views-track">
+            <div className="sidebar-view sidebar-main-view" aria-hidden={activeSidebarView !== "main"} inert={activeSidebarView !== "main"}>
+              <div className="sidebar-top">
+                <button
+                  type="button"
+                  className="sidebar-toggle"
+                  aria-label={
+                    isCompactSidebarMode
+                      ? "Close navigation menu"
+                      : isSidebarCollapsed
+                        ? "Expand sidebar"
+                        : "Collapse sidebar"
+                  }
+                  onClick={() => {
+                    if (isCompactSidebarMode) {
+                      setIsMobileMenuOpen(false);
+                      return;
+                    }
+                    setIsSidebarCollapsed((prev) => !prev);
+                  }}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                    <path d="M4 7h16M4 12h16M4 17h16" />
+                  </svg>
+                </button>
               </div>
-            </section>
-          ))}
-        </nav>
+
+              <nav className="main-nav" aria-label="Primary">
+                {sidebarNavSections.map((section, index) => (
+                  <section className="nav-section" key={section.label ?? `primary-${index}`}>
+                    {section.label ? <div className="nav-section-label">{section.label}</div> : null}
+                    <div className="nav-section-links">
+                      {section.items.map((item) => (
+                        <NavLink
+                          key={item.path}
+                          to={item.path}
+                          className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
+                          end={item.path === "/"}
+                          onClick={(event) => {
+                            const isPlainPrimaryClick =
+                              event.button === 0 &&
+                              !event.metaKey &&
+                              !event.ctrlKey &&
+                              !event.shiftKey &&
+                              !event.altKey;
+                            if (item.label !== "Artifacts" || !isPlainPrimaryClick) {
+                              return;
+                            }
+                            setSidebarView("artifacts");
+                            if (isArtifactsRoute) {
+                              return;
+                            }
+                            event.preventDefault();
+                            navigate(readArtifactsLastLocation() ?? "/artifacts");
+                          }}
+                        >
+                          <span className="nav-icon" aria-hidden="true">
+                            {navIconMap[item.label]}
+                          </span>
+                          <span className="nav-label">{item.label}</span>
+                        </NavLink>
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              </nav>
+            </div>
+
+            <div
+              className="sidebar-view sidebar-artifacts-view"
+              aria-hidden={activeSidebarView !== "artifacts"}
+              inert={activeSidebarView !== "artifacts"}
+            >
+              <div className="artifacts-sidebar-header">
+                <button
+                  type="button"
+                  className="artifacts-sidebar-back"
+                  aria-label="Back to main menu"
+                  onClick={() => setSidebarView("main")}
+                >
+                  <span aria-hidden="true">←</span>
+                </button>
+                <span className="nav-icon" aria-hidden="true">
+                  {navIconMap.Artifacts}
+                </span>
+                <span>Artifacts</span>
+              </div>
+              <ArtifactsQuickAccess />
+            </div>
+          </div>
+        </div>
 
         <div className="sidebar-footer-wrap" ref={userMenuRef}>
           {isUserMenuOpen ? (
