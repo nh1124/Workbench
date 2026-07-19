@@ -13,7 +13,7 @@ import {
   useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
   type DragEvent, type MouseEvent as ReactMouseEvent, type UIEvent
 } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { openCalendarWindow, readWorkbenchSession, tasksApi } from "../lib/api";
 import { pushErrorNotification } from "../lib/notificationService";
 import { subscribeSyncEvents } from "../lib/syncEvents";
@@ -25,7 +25,7 @@ import {
   normalizeText,
 } from "../lib/taskDisplayUtils";
 import {
-  addDays, addMonths, formatDateHeading, isSameDay, startOfDay, startOfMonth,
+  addDays, addMonths, formatDateHeading, isSameDay, parseDateOnly, startOfDay, startOfMonth,
   startOfWeek, toDateKey
 } from "../lib/taskDateUtils";
 import { taskOccursOnDate } from "../lib/taskRecurrenceUtils";
@@ -49,6 +49,7 @@ import { normalizeDateKey, rowOccurrenceDate, rowScheduledDate } from "./lib/tas
 import {
   buildMonthCellContextPayload,
   buildStandaloneCalendarUrl,
+  moveStandaloneDayDate,
   timelineDragToSnappedRange,
   type MonthCellContextPayload,
   type TimelineDragRange,
@@ -91,6 +92,7 @@ interface TasksPageContainerProps {
   standalone?: boolean;
   initialSidebarMode?: SidebarMode;
   initialCalendarMode?: CalendarMode;
+  initialDayDate?: string;
 }
 
 type TimelineSelection = TimelineDragRange & {
@@ -105,12 +107,17 @@ export function TasksPageContainer({
   standalone = false,
   initialSidebarMode = "list",
   initialCalendarMode = "month",
+  initialDayDate,
 }: TasksPageContainerProps = {}) {
   const location = useLocation();
+  const navigate = useNavigate();
 
   // ── UI-only local state ──────────────────────────────────────────────────
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>(initialSidebarMode);
   const [calendarMode, setCalendarMode] = useState<CalendarMode>(initialCalendarMode);
+  const [dayCursorKey, setDayCursorKey] = useState(() => (
+    normalizeDateKey(initialDayDate) ?? toDateKey(startOfDay(new Date()))
+  ));
   const [quickFilter, setQuickFilter] = useState<QuickFilter>("today");
   const [calendarStatusFilter, setCalendarStatusFilter] = useState<"all" | "open" | "done">("all");
   const [contextFilter, setContextFilter] = useState("");
@@ -165,6 +172,8 @@ export function TasksPageContainer({
     const [year = 1970, month = 1, day = 1] = todayKey.split("-").map(Number);
     return new Date(year, month - 1, day);
   }, [todayKey]);
+  const dayCursor = useMemo(() => parseDateOnly(dayCursorKey) ?? today, [dayCursorKey, today]);
+  const activeListDate = standalone ? dayCursor : today;
   const dayBoundaryKeyRef = useRef(todayKey);
 
   // ── Clock tick (every 30s for now-marker) ──────────────────────────────
@@ -188,7 +197,7 @@ export function TasksPageContainer({
   } = useTaskDataLoader(contextFilter, selectedTaskId, () => {
     setSelectedTaskId(null);
     setSelectedOccurrenceDate(null);
-  });
+  }, standalone ? dayCursorKey : undefined);
 
   // ── Occurrence paging hook ────────────────────────────────────────────────
   const {
@@ -244,7 +253,7 @@ export function TasksPageContainer({
       quickFilter,
       projectOptions,
       contextFilter,
-      today,
+      today: activeListDate,
       todayScheduleOccurrenceStatuses,
     },
     tasks,
@@ -346,7 +355,7 @@ export function TasksPageContainer({
       !scheduledTodayTaskIds.has(task.id)
     ));
   }, [tasks, todayKey, scheduledTodayTaskIds]);
-  const showTodaySuggestion = sidebarMode === "list" &&
+  const showTodaySuggestion = !standalone && sidebarMode === "list" &&
     !todaySuggestionHandled &&
     dueTodayOutsideTodayTasks.length > 0;
 
@@ -604,10 +613,12 @@ export function TasksPageContainer({
   );
 
   const periodLabel = useMemo(() => (
-    calendarMode === "month"
+    standalone && sidebarMode === "list"
+      ? dayCursor.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })
+      : calendarMode === "month"
       ? monthCursor.toLocaleDateString("en-US", { year: "numeric", month: "long" })
       : `${weekDays[0].toLocaleDateString("en-US", { month: "short", day: "numeric" })} - ${weekDays[6].toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
-  ), [calendarMode, monthCursor, weekDays]);
+  ), [calendarMode, dayCursor, monthCursor, sidebarMode, standalone, weekDays]);
 
   const timelineHours = useMemo(
     () => Array.from({ length: (TIMELINE_END_HOUR - TIMELINE_START_HOUR) + 1 }, (_, i) => TIMELINE_START_HOUR + i),
@@ -991,18 +1002,59 @@ export function TasksPageContainer({
     setMonthWindow(buildMonthWindow(normalizedTarget));
   };
 
+  const showStandaloneDay = (dateKey: string) => {
+    setDayCursorKey(dateKey);
+    setQuickFilter("today");
+    setSidebarMode("list");
+    setDayDetailDate(null);
+    navigate(buildStandaloneCalendarUrl("day", "month", dateKey), { replace: true });
+  };
+
+  const openStandaloneDay = (date: Date) => {
+    showStandaloneDay(toDateKey(date));
+  };
+
+  const handleSetStandaloneView = (mode: SidebarMode) => {
+    if (mode === "list") {
+      showStandaloneDay(dayCursorKey);
+      return;
+    }
+    setSidebarMode(mode);
+    setDayDetailDate(null);
+    navigate(buildStandaloneCalendarUrl(mode === "calendar" ? "due" : "schedule", calendarMode), { replace: true });
+  };
+
+  const handleSetCalendarMode = (mode: CalendarMode) => {
+    setCalendarMode(mode);
+    if (standalone && sidebarMode !== "list") {
+      navigate(buildStandaloneCalendarUrl(sidebarMode === "calendar" ? "due" : "schedule", mode), { replace: true });
+    }
+  };
+
   const jumpToday = () => {
+    if (standalone && sidebarMode === "list") {
+      showStandaloneDay(todayKey);
+      return;
+    }
     if (calendarMode === "month") scrollToMonth(new Date(), "smooth");
     else setMonthCursor(startOfMonth(new Date()));
     setWeekCursor(startOfWeek(new Date()));
   };
 
   const movePrevPeriod = () => {
+    if (standalone && sidebarMode === "list") {
+      showStandaloneDay(moveStandaloneDayDate(dayCursorKey, -1));
+      return;
+    }
     if (calendarMode === "month") scrollToMonth(addMonths(monthCursor, -1), "smooth");
     else setWeekCursor((p) => addDays(p, -7));
   };
 
   const moveNextPeriod = () => {
+    if (standalone && sidebarMode === "list") {
+      showStandaloneDay(moveStandaloneDayDate(dayCursorKey, 1));
+      return;
+    }
     if (calendarMode === "month") scrollToMonth(addMonths(monthCursor, 1), "smooth");
     else setWeekCursor((p) => addDays(p, 7));
   };
@@ -1037,6 +1089,16 @@ export function TasksPageContainer({
     event.stopPropagation();
     setTimelineSelection(null);
     setCalendarCreateMenu(buildMonthCellContextPayload(date, event.clientX, event.clientY));
+  };
+
+  const handleDayListContextMenu = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (!standalone || sidebarMode !== "list") return;
+    if ((event.target as HTMLElement).closest(".task-list-item")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setOccurrenceMenu((current) => ({ ...current, visible: false }));
+    setTimelineSelection(null);
+    setCalendarCreateMenu(buildMonthCellContextPayload(dayCursor, event.clientX, event.clientY));
   };
 
   const handleTimelineMouseDown = (event: ReactMouseEvent<HTMLDivElement>, day: Date) => {
@@ -1155,7 +1217,7 @@ export function TasksPageContainer({
           onMovePrevPeriod={movePrevPeriod}
           onJumpToday={jumpToday}
           onMoveNextPeriod={moveNextPeriod}
-          onSetCalendarMode={setCalendarMode}
+          onSetCalendarMode={handleSetCalendarMode}
           onRefreshList={() => { void load({ silent: true }); }}
           onRefreshSchedule={() => setScheduleRefreshTick((n) => n + 1)}
           sortMode={sortMode}
@@ -1165,7 +1227,7 @@ export function TasksPageContainer({
           importRef={importRef}
           onOpenAddPanel={openAddPanel}
           standalone={standalone}
-          onSetCalendarKind={setSidebarMode}
+          onSetStandaloneView={handleSetStandaloneView}
         />
 
         {displayError && <p className="error" style={{ margin: "0 0 0.5rem", fontSize: "0.8rem" }}>{displayError}</p>}
@@ -1201,24 +1263,29 @@ export function TasksPageContainer({
 
         {sidebarMode === "list" ? (
           <>
-            <TaskListContent
-              quickFilter={quickFilter}
-              sortMode={sortMode}
-              isLoading={isLoading}
-              activeOccurrenceRows={activeOccurrenceRows}
-              tasks={tasks}
-              inboxUpcomingRows={inboxUpcomingRows}
-              inboxDoneRows={inboxDoneRows}
-              inboxCompletedOpen={inboxCompletedOpen}
-              setInboxCompletedOpen={setInboxCompletedOpen}
-              todayCompletedOpen={todayCompletedOpen}
-              setTodayCompletedOpen={setTodayCompletedOpen}
-              occurrenceProjectGroups={occurrenceProjectGroups}
-              occurrenceDateGroups={activeOccurrenceDateGroups}
-              occurrenceLoading={occurrenceLoading}
-              resolveContextDisplayName={resolveContextDisplayName}
-              renderOccurrenceRow={renderOccurrenceRow}
-            />
+            <div
+              className={standalone ? "standalone-day-list-surface" : undefined}
+              onContextMenu={handleDayListContextMenu}
+            >
+              <TaskListContent
+                quickFilter={quickFilter}
+                sortMode={sortMode}
+                isLoading={isLoading}
+                activeOccurrenceRows={activeOccurrenceRows}
+                tasks={tasks}
+                inboxUpcomingRows={inboxUpcomingRows}
+                inboxDoneRows={inboxDoneRows}
+                inboxCompletedOpen={inboxCompletedOpen}
+                setInboxCompletedOpen={setInboxCompletedOpen}
+                todayCompletedOpen={todayCompletedOpen}
+                setTodayCompletedOpen={setTodayCompletedOpen}
+                occurrenceProjectGroups={occurrenceProjectGroups}
+                occurrenceDateGroups={activeOccurrenceDateGroups}
+                occurrenceLoading={occurrenceLoading}
+                resolveContextDisplayName={resolveContextDisplayName}
+                renderOccurrenceRow={renderOccurrenceRow}
+              />
+            </div>
             <OccurrenceContextMenu
               visible={occurrenceMenu.visible}
               x={occurrenceMenu.x}
@@ -1230,7 +1297,7 @@ export function TasksPageContainer({
               selectedOccurrenceKeys={selectedOccurrenceKeys}
               activeOccurrenceRows={activeOccurrenceRows}
               todayMembershipKeys={todayMembershipKeys}
-              today={today}
+              today={activeListDate}
               projectOptions={projectOptions}
               onMarkDone={() => void handleMarkSelectedOccurrences("done")}
               onSkip={() => void handleSkipSelectedTasks()}
@@ -1269,7 +1336,7 @@ export function TasksPageContainer({
                     scheduleItemsByDate={filteredScheduleItemsByDate}
                     tasksById={tasksById}
                     setMonthElement={setMonthElement}
-                    onOpenDayDetail={setDayDetailDate}
+                    onOpenDayDetail={standalone ? openStandaloneDay : setDayDetailDate}
                     onSelectDueTask={(task, date) => selectTask(task, task.status, toDateKey(date))}
                     onSelectScheduleItem={() => undefined}
                     onOpenCreateMenu={handleMonthCreateContextMenu}
@@ -1282,10 +1349,16 @@ export function TasksPageContainer({
                 <div className="calendar-week-timeline-head">
                   <div className="calendar-week-time-col calendar-week-time-col-head"><IcoClock /></div>
                   {weekDays.map((day) => (
-                    <div key={`head-${day.toISOString()}`} className={isSameDay(day, today) ? "calendar-week-day-head is-today" : "calendar-week-day-head"}>
+                    <button
+                      key={`head-${day.toISOString()}`}
+                      type="button"
+                      disabled={!standalone}
+                      className={["calendar-week-day-head", isSameDay(day, today) ? "is-today" : "", standalone ? "is-clickable" : ""].filter(Boolean).join(" ")}
+                      onClick={standalone ? () => openStandaloneDay(day) : undefined}
+                    >
                       <small>{weekdays[day.getDay()]}</small>
                       <strong>{day.getDate()}</strong>
-                    </div>
+                    </button>
                   ))}
                 </div>
                 <div className="calendar-week-all-day-row">
@@ -1371,7 +1444,7 @@ export function TasksPageContainer({
                     scheduleItemsByDate={filteredScheduleItemsByDate}
                     tasksById={tasksById}
                     setMonthElement={setMonthElement}
-                    onOpenDayDetail={() => undefined}
+                    onOpenDayDetail={standalone ? openStandaloneDay : () => undefined}
                     onSelectDueTask={() => undefined}
                     onSelectScheduleItem={(item, task) => selectTask(task, item.status as TaskStatus, item.occurrenceDate, item.scheduleId, item.scheduledDate)}
                     onOpenCreateMenu={handleMonthCreateContextMenu}
@@ -1384,10 +1457,16 @@ export function TasksPageContainer({
                 <div className="calendar-week-timeline-head">
                   <div className="calendar-week-time-col calendar-week-time-col-head"><IcoClock /></div>
                   {weekDays.map((day) => (
-                    <div key={`sched-head-${day.toISOString()}`} className={isSameDay(day, today) ? "calendar-week-day-head is-today" : "calendar-week-day-head"}>
+                    <button
+                      key={`sched-head-${day.toISOString()}`}
+                      type="button"
+                      disabled={!standalone}
+                      className={["calendar-week-day-head", isSameDay(day, today) ? "is-today" : "", standalone ? "is-clickable" : ""].filter(Boolean).join(" ")}
+                      onClick={standalone ? () => openStandaloneDay(day) : undefined}
+                    >
                       <small>{weekdays[day.getDay()]}</small>
                       <strong>{day.getDate()}</strong>
-                    </div>
+                    </button>
                   ))}
                 </div>
                 <div className="calendar-week-scroll" ref={weekTimelineScrollRef}>
@@ -1441,7 +1520,7 @@ export function TasksPageContainer({
         )}
 
         {/* Day tasks panel (calendar month click) */}
-        {dayDetailDate && sidebarMode === "calendar" && (
+        {!standalone && dayDetailDate && sidebarMode === "calendar" && (
           <CalendarDayDetailPanel
             dayDetailDate={dayDetailDate}
             dayDetailTasks={dayDetailTasks}

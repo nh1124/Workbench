@@ -64,7 +64,7 @@ export function CalendarMonthGrid({
             <div
               key={cell.key}
               className={["calendar-cell", !cell.inCurrentMonth ? "muted" : "", isToday ? "is-today" : ""].filter(Boolean).join(" ")}
-              onClick={mode === "due" ? () => onOpenDayDetail(cell.date) : undefined}
+              onClick={() => onOpenDayDetail(cell.date)}
               onContextMenu={(event) => {
                 if ((event.target as HTMLElement).closest("button")) return;
                 onOpenCreateMenu(event, cell.date);
@@ -90,7 +90,10 @@ export function CalendarMonthGrid({
                     key={`${item.scheduleId ?? "auto"}::${item.occurrenceDate}::${item.taskId}`}
                     type="button"
                     className={`calendar-task-pill${item.status === "done" ? " done" : ""}`}
-                    onClick={() => { if (fullTask) onSelectScheduleItem(item, fullTask); }}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (fullTask) onSelectScheduleItem(item, fullTask);
+                    }}
                     title={item.startTime ? `${item.startTime}${item.endTime ? `–${item.endTime}` : ""} ${item.title}` : item.title}
                   >
                     {item.startTime ? <span className="schedule-pill-time">{item.startTime}</span> : null}

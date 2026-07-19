@@ -70,6 +70,9 @@
   color: #475569;
 }
 .calendar-week-day-head {
+  border: 0;
+  color: inherit;
+  font: inherit;
   min-height: 50px;
   background: #0f172a;
   padding: 0.35rem 0.24rem 0.28rem;
@@ -78,6 +81,7 @@
   justify-items: center;
   gap: 0.08rem;
 }
+.calendar-week-day-head:disabled { cursor: default; opacity: 1; }
 .calendar-week-day-head small {
   font-size: 0.56rem;
   letter-spacing: 0.13em;
@@ -91,6 +95,8 @@
   color: #cbd5e1;
 }
 .calendar-week-day-head.is-today strong { color: #67e8f9; }
+.calendar-week-day-head.is-clickable { cursor: pointer; }
+.calendar-week-day-head.is-clickable:hover { background: #172033; }
 .calendar-week-all-day-row { border-top: 1px solid rgba(51, 65, 85, 0.35); }
 .calendar-week-all-day-label {
   min-height: 54px;

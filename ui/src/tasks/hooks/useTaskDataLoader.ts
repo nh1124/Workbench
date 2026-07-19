@@ -25,7 +25,7 @@ import {
 } from "../types";
 import { buildTodayRows } from "../lib/taskTodayRows";
 import { countDistinctOverdueTasks, countDistinctPlannedTasks } from "../lib/taskOccurrenceCounts";
-import { taskOccurrenceRowKey } from "../lib/taskOccurrenceIdentity";
+import { normalizeDateKey, taskOccurrenceRowKey } from "../lib/taskOccurrenceIdentity";
 
 export interface TaskDataState {
   tasks: Task[];
@@ -69,7 +69,8 @@ export interface TaskDataLoadOptions {
 export function useTaskDataLoader(
   contextFilter: string,
   selectedTaskId: string | null,
-  onTaskGone: () => void
+  onTaskGone: () => void,
+  dayCompositionDate?: string
 ): TaskDataState & TaskDataLoaderActions {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [projectOptions, setProjectOptions] = useState<ProjectOption[]>([]);
@@ -110,6 +111,7 @@ export function useTaskDataLoader(
     try {
       const todayDate = startOfDay(new Date());
       const todayKey = toDateKey(todayDate);
+      const compositionDateKey = normalizeDateKey(dayCompositionDate) ?? todayKey;
       const countFrom = toDateKey(addDays(todayDate, -(OCCURRENCE_PAGE_DAYS - 1)));
       const countTo = toDateKey(addDays(todayDate, OCCURRENCE_PAGE_DAYS - 1));
 
@@ -127,10 +129,10 @@ export function useTaskDataLoader(
         projectsApi.list(undefined, "active", 200)
           .then((result) => ({ ok: true as const, result }))
           .catch(() => ({ ok: false as const, result: { items: [] } })),
-        tasksApi.schedule(todayKey, todayKey, contextFilter || undefined).catch(() => [] as TaskScheduleDay[]),
+        tasksApi.schedule(compositionDateKey, compositionDateKey, contextFilter || undefined).catch(() => [] as TaskScheduleDay[]),
         tasksApi.schedule(countFrom, countTo, contextFilter || undefined).catch(() => [] as TaskScheduleDay[]),
         tasksApi.scheduleCalendar(countFrom, countTo).catch(() => [] as ScheduleCalendarDay[]),
-        tasksApi.todayList(todayKey).catch(() => [] as TodayTask[])
+        tasksApi.todayList(compositionDateKey).catch(() => [] as TodayTask[])
       ]);
 
       // Build Today status map from LBS schedule (used to merge live status into task list)
@@ -152,7 +154,7 @@ export function useTaskDataLoader(
       const {
         rows: builtTodayRows,
         membershipKeys: todayMemberships
-      } = buildTodayRows(taskList, myDayTasks, todaySchedule, todayKey);
+      } = buildTodayRows(taskList, myDayTasks, todaySchedule, compositionDateKey);
       const nextPlannedCount = countDistinctPlannedTasks(countScheduleCalendar, todayKey, contextFilter);
       const nextOverdueCount = countDistinctOverdueTasks(countSchedule, todayKey, contextFilter);
 
@@ -237,7 +239,7 @@ export function useTaskDataLoader(
         if (visibleLoadCountRef.current === 0) setIsLoading(false);
       }
     }
-  }, [contextFilter]);
+  }, [contextFilter, dayCompositionDate]);
 
   return {
     tasks,

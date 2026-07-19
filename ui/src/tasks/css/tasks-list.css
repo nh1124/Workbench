@@ -240,6 +240,8 @@
 
 /* ── Task list structure ────────────────────────────────────────────────────── */
 .task-list-section { display: grid; gap: 0; }
+.standalone-day-list-surface { min-height: calc(100% - 3rem); }
+.standalone-day-list-surface > .task-list-section { min-height: 100%; }
 .task-project-block { border-top: 1px solid var(--line); padding-top: 0.7rem; margin-top: 0.7rem; }
 .task-project-block:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
 .task-completed-section > header { cursor: pointer; -webkit-user-select: none; user-select: none; }
