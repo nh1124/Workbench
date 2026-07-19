@@ -181,6 +181,10 @@ scheduler. Owner-scoped; `key` and `holder` are 1..100 chars, `ttlSeconds` 1..86
   Idempotent for the same holder (extends TTL). While another holder's lease is
   unexpired: `MAINTENANCE_LEASE_HELD` (409). Expired leases are reclaimable by anyone,
   so a crashed run recovers after TTL without manual cleanup.
+  Because same-holder acquire always succeeds, overlap protection requires a
+  **unique holder per run** (e.g. `cowork-agent-skills-v2/2026-07-19T03:15`): two runs
+  sharing a static holder name would both acquire. Retries WITHIN one run reuse that
+  run's holder and stay idempotent.
 - `renew { key, holder, ttlSeconds? }` — extends an unexpired lease held by this
   holder; otherwise `MAINTENANCE_LEASE_NOT_HELD` (409).
 - `release { key, holder }` → `{ released: boolean }`; never errors on missing,
@@ -200,12 +204,14 @@ sync.changes.consumer.initialize {
   }
 }
 
-// Each scheduled run (bound scope applies automatically):
-maintenance.lease.acquire { "key": "agent-skills-primary-maintainer", "holder": "cowork-agent-skills-v2" }
-sync.changes.pull { "consumer": "cowork-agent-skills-v2", "includeContent": false }
+// Each scheduled run (bound scope applies automatically).
+// Use a per-run holder so overlapping runs exclude each other:
+maintenance.lease.acquire { "key": "agent-skills-primary-maintainer", "holder": "cowork-agent-skills-v2/<runId>" }
+// includePatch:false too — content edits also appear inside payload.patch:
+sync.changes.pull { "consumer": "cowork-agent-skills-v2", "includeContent": false, "includePatch": false }
 // …process events, fetch only needed bodies via artifacts.item.get…
 sync.changes.commit { "consumer": "cowork-agent-skills-v2", "cursor": "<nextCursor>" }
-maintenance.lease.release { "key": "agent-skills-primary-maintainer", "holder": "cowork-agent-skills-v2" }
+maintenance.lease.release { "key": "agent-skills-primary-maintainer", "holder": "cowork-agent-skills-v2/<runId>" }
 
 // The pre-existing consumer "cowork-agent-skills-incremental" is unscoped:
 // keep pulling with explicit filters instead —
@@ -213,7 +219,8 @@ sync.changes.pull {
   "consumer": "cowork-agent-skills-incremental",
   "projectId": "936c62d5-1d5a-42af-979b-696c3e4d0526",
   "pathPrefix": "skills/",
-  "includeContent": false
+  "includeContent": false,
+  "includePatch": false
 }
 // Flag a Skill for review / resolve after handling:
 maintenance.flag { "target": { "type": "artifact", "id": "<artifact-item-id>" }, "reason": "conflict", "note": "…" }

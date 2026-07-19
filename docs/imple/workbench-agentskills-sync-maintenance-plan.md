@@ -335,6 +335,20 @@ CREATE TABLE maintenance_leases (
 
 ## 9. 既知の制約・残課題
 
+### 9.0 独立レビューで確認した設計上の許容制約（2026-07-19）
+
+- **consumer 初期化と in-flight トランザクションの競合**: `initialize` の head 取得は
+  committed rows の `MAX(id)` であり、初期化の瞬間に未 commit の event（BIGSERIAL 採番済み・
+  数 ms 窓）があると、その event は「初期化以前」扱いになる。厳密化には event 書込全経路への
+  advisory lock か txid ベース cursor が必要で、単一ユーザー・低頻度書込の本システムでは
+  過剰と判断し許容（「現在時点から開始」の意味論の誤差は ms 級）。
+- **mutation 成功後の event 記録は best-effort**: MCP / facade とも sync event 記録は
+  mutation 後の best-effort（失敗時は warn ログのみ）。core DB 障害時に event が失われ得るのは
+  既存 facade と同一の設計で、厳密化には outbox パターン導入が必要（本計画の非対象）。
+  消失時の回復手段は Artifact 実体ツリーの全数監査（Cowork の初回監査と同手順）。
+- **lease の同一 holder 再取得は常に成功**（要件どおり）。重複実行防止には run ごとに
+  一意な holder を使うこと（tool-contracts.md の recipe に明記）。
+
 ### 9.1 Artifact version diff（Phase 2-B、未実装）
 
 `artifact_items` は現在 version の整数と本文しか持たず、過去 version 本文が存在しない。

@@ -70,12 +70,8 @@ type SyncEventRow = {
   resource_deleted_at?: string | null;
 };
 
-type ScopedSyncEventRow = SyncEventRow & {
-  scanned_count: string | number;
-  scanned_max: string | number | null;
-};
-
-type SyncEventScanAggregateRow = {
+type ScopedSyncEventRow = Omit<SyncEventRow, "id"> & {
+  id: SyncEventRow["id"] | null;
   scanned_count: string | number;
   scanned_max: string | number | null;
 };
@@ -455,44 +451,31 @@ export async function listSyncEventsScopedWithPool(
         WHERE ${whereClause}
         ORDER BY s.id ASC
         LIMIT $4
+      ),
+      agg AS (
+        SELECT COUNT(*)::text AS scanned_count, MAX(id)::text AS scanned_max
+        FROM scanned
       )
-      SELECT (SELECT COUNT(*) FROM scanned)::text AS scanned_count,
-        (SELECT MAX(id) FROM scanned)::text AS scanned_max,
-        m.*,
+      SELECT agg.scanned_count, agg.scanned_max,
+        m.id, m.user_id, m.domain, m.resource_id, m.action, m.version, m.payload_json,
+        m.project_id, m.resource_type, m.path, m.previous_path, m.created_at,
         v.deleted_at AS resource_deleted_at
-      FROM matched m
+      FROM agg
+      LEFT JOIN matched m ON TRUE
       LEFT JOIN sync_resource_versions v
         ON v.user_id = m.user_id
        AND v.domain = m.domain
        AND v.resource_id = m.resource_id
-      ORDER BY m.id ASC
+      ORDER BY m.id ASC NULLS FIRST
     `,
     values
   );
 
-  const events = result.rows.map(toEvent);
-  let scannedCount = Number(result.rows[0]?.scanned_count ?? 0);
-  let scannedMax = result.rows[0]?.scanned_max;
-
-  // A matched-row result cannot carry the scan aggregates when there are no matches,
-  // so only that case pays for this bounded aggregate query.
-  if (result.rows.length === 0) {
-    const aggregate = await pool.query<SyncEventScanAggregateRow>(
-      `
-        SELECT COUNT(*)::text AS scanned_count, MAX(id)::text AS scanned_max
-        FROM (
-          SELECT id
-          FROM sync_events
-          WHERE user_id = $1 AND id > $2
-          ORDER BY id ASC
-          LIMIT $3
-        ) s
-      `,
-      [userId, parsedCursor, scanLimit]
-    );
-    scannedCount = Number(aggregate.rows[0]?.scanned_count ?? 0);
-    scannedMax = aggregate.rows[0]?.scanned_max;
-  }
+  const events = result.rows
+    .filter((row): row is ScopedSyncEventRow & SyncEventRow => row.id !== null)
+    .map(toEvent);
+  const scannedCount = Number(result.rows[0]?.scanned_count ?? 0);
+  const scannedMax = result.rows[0]?.scanned_max;
 
   const scannedThrough = scannedCount > 0 && scannedMax !== null && scannedMax !== undefined
     ? String(scannedMax)

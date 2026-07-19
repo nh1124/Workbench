@@ -182,6 +182,10 @@ async function pullSyncChangesWithOperations(
     if (requestScope && !isDeepStrictEqual(requestScope, withoutDomains(boundScope))) {
       throw scopeMismatch();
     }
+    if (options.domains !== undefined
+      && !isDeepStrictEqual(scopedDomains(domains), boundScope.domains)) {
+      throw scopeMismatch();
+    }
     effectiveScope = boundScope;
   } else {
     effectiveScope = requestScope;
@@ -198,10 +202,6 @@ async function pullSyncChangesWithOperations(
   }
 
   const canonicalDomains = scopedDomains(domains);
-  if (effectiveScope?.domains !== undefined && canonicalDomains !== undefined
-    && !isDeepStrictEqual(effectiveScope.domains, canonicalDomains)) {
-    throw scopeMismatch();
-  }
   const mergedScope = normalizeSyncConsumerScope({
     ...(effectiveScope ?? {}),
     ...(canonicalDomains !== undefined ? { domains: canonicalDomains } : {})

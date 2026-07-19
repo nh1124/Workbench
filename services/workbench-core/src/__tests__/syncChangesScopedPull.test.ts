@@ -115,21 +115,18 @@ describe("scoped sync event SQL", () => {
 
   it("advances to scanned_max when fewer matches than the page limit", async () => {
     const calls: QueryCall[] = [];
-    const pool = {
-      async query<Row>(text: string, values?: unknown[]): Promise<{ rows: Row[] }> {
-        calls.push({ text: normalizedSql(text), values });
-        if (text.includes("WITH scanned")) return { rows: [] };
-        return { rows: [{ scanned_count: "10", scanned_max: "20" } as Row] };
-      }
-    };
+    const rows = [{ scanned_count: "10", scanned_max: "20", id: null }];
 
-    const result = await listSyncEventsScopedWithPool(pool, "user-1", "10", 5, { projectId: "other" });
+    const result = await listSyncEventsScopedWithPool(
+      singleResultPool(calls, rows), "user-1", "10", 5, { projectId: "other" }
+    );
     assert.deepEqual(result.events, []);
     assert.equal(result.nextCursor, "20");
     assert.equal(result.scannedThrough, "20");
-    assert.equal(calls.length, 2);
-    assert.match(calls[1].text, /SELECT COUNT\(\*\)::text AS scanned_count, MAX\(id\)::text AS scanned_max/);
-    assert.deepEqual(calls[1].values, ["user-1", 10, 50]);
+    assert.equal(calls.length, 1);
+    assert.match(calls[0].text, /agg AS \( SELECT COUNT\(\*\)::text AS scanned_count, MAX\(id\)::text AS scanned_max FROM scanned \)/);
+    assert.match(calls[0].text, /FROM agg LEFT JOIN matched m ON TRUE/);
+    assert.deepEqual(calls[0].values, ["user-1", 10, 50, 5, "other"]);
   });
 
   it("stops nextCursor at the last matched id when the page limit is reached", async () => {
@@ -143,20 +140,17 @@ describe("scoped sync event SQL", () => {
   });
 
   it("leaves nextCursor undefined when nothing was scanned", async () => {
-    let queryCount = 0;
-    const pool = {
-      async query<Row>(text: string): Promise<{ rows: Row[] }> {
-        queryCount += 1;
-        return text.includes("WITH scanned")
-          ? { rows: [] }
-          : { rows: [{ scanned_count: "0", scanned_max: null } as Row] };
-      }
-    };
+    const calls: QueryCall[] = [];
+    const rows = [{ scanned_count: "0", scanned_max: null, id: null }];
 
-    const result = await listSyncEventsScopedWithPool(pool, "user-1", "7", 5, {});
+    const result = await listSyncEventsScopedWithPool(
+      singleResultPool(calls, rows), "user-1", "7", 5, {}
+    );
+    assert.deepEqual(result.events, []);
     assert.equal(result.nextCursor, undefined);
     assert.equal(result.scannedThrough, "7");
-    assert.equal(queryCount, 2);
+    assert.equal(calls.length, 1);
+    assert.match(calls[0].text, /ORDER BY m\.id ASC NULLS FIRST/);
   });
 
   it("clamps scanLimit to ten pages with a 2000-row cap", async () => {
@@ -182,9 +176,6 @@ function pullPool(
       }
       if (sql.includes("WITH scanned AS")) return { rows: rows as Row[] };
       if (sql.includes("FROM sync_events e")) return { rows: rows as Row[] };
-      if (sql.includes("SELECT COUNT(*)::text AS scanned_count")) {
-        return { rows: [{ scanned_count: "0", scanned_max: null } as Row] };
-      }
       throw new Error(`Unexpected query: ${sql}`);
     }
   };
@@ -296,15 +287,18 @@ describe("scoped sync changes pull", () => {
 
     const state = {
       cursor: "7",
-      scope_json: { projectId: "project-1", domains: ["artifacts"] },
+      scope_json: { projectId: "project-1", domains: ["artifacts", "notes"] },
       initialized_at: "2026-07-19T00:00:00.000Z"
     };
     const equal = await pullSyncChangesWithPool(
       pullPool(state, [eventRow("8")], []),
       "user-1",
-      { projectId: "project-1", domains: ["artifacts"] }
+      { projectId: "project-1", domains: ["notes", "artifacts"] }
     );
-    assert.deepEqual(equal.appliedScope, { projectId: "project-1", domains: ["artifacts"] });
+    assert.deepEqual(equal.appliedScope, {
+      projectId: "project-1",
+      domains: ["artifacts", "notes"]
+    });
 
     await assert.rejects(
       pullSyncChangesWithPool(
@@ -315,5 +309,26 @@ describe("scoped sync changes pull", () => {
       (error) => error instanceof SyncConsumerScopeMismatchError
         && error.code === "SYNC_CONSUMER_SCOPE_MISMATCH"
     );
+  });
+
+  it("rejects a domains argument when the bound scope has no domains", async () => {
+    const state = {
+      cursor: "7",
+      scope_json: { projectId: "project-1" },
+      initialized_at: "2026-07-19T00:00:00.000Z"
+    };
+    const calls: QueryCall[] = [];
+
+    await assert.rejects(
+      pullSyncChangesWithPool(
+        pullPool(state, [eventRow("8")], calls),
+        "user-1",
+        { domains: ["artifacts"] }
+      ),
+      (error) => error instanceof SyncConsumerScopeMismatchError
+        && error.status === 400
+        && error.code === "SYNC_CONSUMER_SCOPE_MISMATCH"
+    );
+    assert.equal(calls.length, 1);
   });
 });
