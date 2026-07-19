@@ -129,12 +129,18 @@ export function registerMaintenanceTools(server: McpServer, ctx?: ToolContext): 
     "sync.changes.pull",
     {
       title: "Pull Sync Changes",
-      description: "Read owner-scoped sync changes for a consumer. This is an at-least-once contract: after processing completes, persist the returned cursor with sync.changes.commit.",
+      description: "Read owner-scoped sync changes for a consumer with optional server-side filters. The cursor advances through the global stream even when a page has no matching events, so commit nextCursor with sync.changes.commit after processing. A consumer initialized with a bound scope rejects conflicting filters. Set includeContent:false to strip note bodies and return contentLength instead; set includePatch:false to strip patch payloads. This is an at-least-once contract.",
       inputSchema: {
         consumer: syncChangesConsumerSchema.optional(),
         cursor: z.string().trim().min(1).optional(),
         domains: z.array(syncChangesDomainSchema).optional(),
-        limit: z.number().int().min(1).max(500).optional()
+        limit: z.number().int().min(1).max(500).optional(),
+        projectId: z.string().min(1).optional(),
+        pathPrefix: z.string().min(1).optional(),
+        resourceTypes: z.array(z.string().min(1)).optional(),
+        actions: z.array(z.enum(["create", "update", "delete", "upsert"])).optional(),
+        includeContent: z.boolean().optional(),
+        includePatch: z.boolean().optional()
       }
     },
     async (input) =>

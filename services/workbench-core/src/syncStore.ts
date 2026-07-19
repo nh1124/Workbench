@@ -11,6 +11,14 @@ export type SyncEventMetadata = {
   previousPath?: string;
 };
 
+export type SyncEventScope = {
+  domains?: SyncDomain[];
+  projectId?: string;
+  pathPrefix?: string;
+  resourceTypes?: string[];
+  actions?: SyncAction[];
+};
+
 export interface SyncEvent {
   cursor: string;
   userId: string;
@@ -62,6 +70,16 @@ type SyncEventRow = {
   resource_deleted_at?: string | null;
 };
 
+type ScopedSyncEventRow = SyncEventRow & {
+  scanned_count: string | number;
+  scanned_max: string | number | null;
+};
+
+type SyncEventScanAggregateRow = {
+  scanned_count: string | number;
+  scanned_max: string | number | null;
+};
+
 type SyncResourceVersionRow = {
   user_id: string;
   domain: string;
@@ -107,6 +125,10 @@ function optionalMetadataText(value: string | undefined): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed || null;
+}
+
+function escapeLikePrefix(value: string): string {
+  return `${value.replace(/[\\%_]/g, "\\$&")}%`;
 }
 
 function toEvent(row: SyncEventRow): SyncEvent {
@@ -359,6 +381,129 @@ export async function listSyncEventsWithPool(
     events,
     nextCursor: events.length > 0 ? events[events.length - 1].cursor : cursor
   };
+}
+
+export async function listSyncEventsScoped(
+  userId: string,
+  cursor: string | undefined,
+  limit: number,
+  scope: SyncEventScope
+): Promise<{ events: SyncEvent[]; nextCursor?: string; scannedThrough: string }> {
+  await ensureCoreSchema();
+  return listSyncEventsScopedWithPool(getCorePool(), userId, cursor, limit, scope);
+}
+
+/** @internal Exported so scoped scan-window behavior can be tested without a live database. */
+export async function listSyncEventsScopedWithPool(
+  pool: SyncCursorQueryPool,
+  userId: string,
+  cursor: string | undefined,
+  limit: number,
+  scope: SyncEventScope
+): Promise<{ events: SyncEvent[]; nextCursor?: string; scannedThrough: string }> {
+  const parsedCursor = cursor && /^\d+$/.test(cursor) ? Number(cursor) : 0;
+  const safeLimit = Math.max(1, Math.min(500, Math.floor(limit)));
+  const scanLimit = Math.max(safeLimit, Math.min(safeLimit * 10, 2000));
+  const values: unknown[] = [userId, parsedCursor, scanLimit, safeLimit];
+  const filters: string[] = [];
+
+  if (scope.domains !== undefined) {
+    values.push(scope.domains);
+    filters.push(`s.domain = ANY($${values.length}::text[])`);
+  }
+  if (scope.projectId !== undefined) {
+    values.push(scope.projectId);
+    const parameter = `$${values.length}`;
+    const knownProjectId = "COALESCE(s.project_id, s.payload_json->'resource'->>'projectId', CASE WHEN s.domain = 'project_context' THEN s.resource_id END)";
+    filters.push(`(${knownProjectId} IS NULL OR ${knownProjectId} = ${parameter})`);
+  }
+  if (scope.pathPrefix !== undefined) {
+    values.push(escapeLikePrefix(scope.pathPrefix));
+    const parameter = `$${values.length}`;
+    filters.push(`(
+      (s.path IS NULL AND s.previous_path IS NULL AND s.payload_json->'resource'->>'path' IS NULL)
+      OR s.path LIKE ${parameter} ESCAPE '\\'
+      OR s.previous_path LIKE ${parameter} ESCAPE '\\'
+      OR s.payload_json->'resource'->>'path' LIKE ${parameter} ESCAPE '\\'
+    )`);
+  }
+  if (scope.resourceTypes !== undefined) {
+    values.push(scope.resourceTypes);
+    const parameter = `$${values.length}`;
+    const knownResourceType = "COALESCE(s.resource_type, s.payload_json->'resource'->>'kind')";
+    filters.push(`(${knownResourceType} IS NULL OR ${knownResourceType} = ANY(${parameter}::text[]))`);
+  }
+  if (scope.actions !== undefined) {
+    values.push(scope.actions);
+    filters.push(`s.action = ANY($${values.length}::text[])`);
+  }
+
+  const whereClause = filters.length > 0 ? filters.join("\n      AND ") : "TRUE";
+  const result = await pool.query<ScopedSyncEventRow>(
+    `
+      WITH scanned AS (
+        SELECT e.id, e.user_id, e.domain, e.resource_id, e.action, e.version, e.payload_json,
+          e.project_id, e.resource_type, e.path, e.previous_path, e.created_at
+        FROM sync_events e
+        WHERE e.user_id = $1 AND e.id > $2
+        ORDER BY e.id ASC
+        LIMIT $3
+      ),
+      matched AS (
+        SELECT s.*
+        FROM scanned s
+        WHERE ${whereClause}
+        ORDER BY s.id ASC
+        LIMIT $4
+      )
+      SELECT (SELECT COUNT(*) FROM scanned)::text AS scanned_count,
+        (SELECT MAX(id) FROM scanned)::text AS scanned_max,
+        m.*,
+        v.deleted_at AS resource_deleted_at
+      FROM matched m
+      LEFT JOIN sync_resource_versions v
+        ON v.user_id = m.user_id
+       AND v.domain = m.domain
+       AND v.resource_id = m.resource_id
+      ORDER BY m.id ASC
+    `,
+    values
+  );
+
+  const events = result.rows.map(toEvent);
+  let scannedCount = Number(result.rows[0]?.scanned_count ?? 0);
+  let scannedMax = result.rows[0]?.scanned_max;
+
+  // A matched-row result cannot carry the scan aggregates when there are no matches,
+  // so only that case pays for this bounded aggregate query.
+  if (result.rows.length === 0) {
+    const aggregate = await pool.query<SyncEventScanAggregateRow>(
+      `
+        SELECT COUNT(*)::text AS scanned_count, MAX(id)::text AS scanned_max
+        FROM (
+          SELECT id
+          FROM sync_events
+          WHERE user_id = $1 AND id > $2
+          ORDER BY id ASC
+          LIMIT $3
+        ) s
+      `,
+      [userId, parsedCursor, scanLimit]
+    );
+    scannedCount = Number(aggregate.rows[0]?.scanned_count ?? 0);
+    scannedMax = aggregate.rows[0]?.scanned_max;
+  }
+
+  const scannedThrough = scannedCount > 0 && scannedMax !== null && scannedMax !== undefined
+    ? String(scannedMax)
+    : String(parsedCursor);
+  const nextCursor = scannedCount === 0
+    ? undefined
+    : events.length === safeLimit
+      ? events[events.length - 1]?.cursor
+      : String(scannedMax);
+
+  return { events, nextCursor, scannedThrough };
 }
 
 export async function getLatestSyncCursor(userId: string): Promise<string> {
