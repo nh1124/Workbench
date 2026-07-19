@@ -12,6 +12,11 @@ import {
   MAINTENANCE_QUEUE_REASONS
 } from "../maintenanceQueue.js";
 import {
+  acquireMaintenanceLease,
+  releaseMaintenanceLease,
+  renewMaintenanceLease
+} from "../maintenanceLeasesStore.js";
+import {
   commitSyncChangesCursor,
   initializeSyncChangesConsumer,
   pullSyncChanges,
@@ -30,6 +35,9 @@ const flagTargetTypeSchema = z.enum(MAINTENANCE_FLAG_TARGET_TYPES);
 const flagReasonSchema = z.enum(MAINTENANCE_FLAG_REASONS);
 const syncChangesDomainSchema = z.enum(SYNC_CHANGES_DOMAINS);
 const syncChangesConsumerSchema = z.string().trim().min(1).max(100);
+const maintenanceLeaseKeySchema = z.string().trim().min(1).max(100);
+const maintenanceLeaseHolderSchema = z.string().trim().min(1).max(100);
+const maintenanceLeaseTtlSchema = z.number().int().min(1).max(86400);
 
 export function registerMaintenanceTools(server: McpServer, ctx: ToolContext): void;
 export function registerMaintenanceTools(server: McpServer): void;
@@ -149,6 +157,62 @@ export function registerMaintenanceTools(server: McpServer, ctx?: ToolContext): 
       asMcpText(
         await runWithAuthContext(ctx.accessToken, ({ userId }) =>
           initializeSyncChangesConsumer(userId, input)
+        )
+      )
+  );
+
+  server.registerTool(
+    "maintenance.lease.acquire",
+    {
+      title: "Acquire Maintenance Lease",
+      description: "Acquire an owner-scoped advisory lease for preventing overlapping scheduled maintenance runs. Acquisition is idempotent for the same holder and extends its TTL, returns a 409-style error while another holder's lease is unexpired, and automatically reclaims expired leases.",
+      inputSchema: {
+        key: maintenanceLeaseKeySchema,
+        holder: maintenanceLeaseHolderSchema,
+        ttlSeconds: maintenanceLeaseTtlSchema.optional()
+      }
+    },
+    async (input) =>
+      asMcpText(
+        await runWithAuthContext(ctx.accessToken, ({ userId }) =>
+          acquireMaintenanceLease(userId, input)
+        )
+      )
+  );
+
+  server.registerTool(
+    "maintenance.lease.renew",
+    {
+      title: "Renew Maintenance Lease",
+      description: "Extend an unexpired owner-scoped maintenance lease held by this holder.",
+      inputSchema: {
+        key: maintenanceLeaseKeySchema,
+        holder: maintenanceLeaseHolderSchema,
+        ttlSeconds: maintenanceLeaseTtlSchema.optional()
+      }
+    },
+    async (input) =>
+      asMcpText(
+        await runWithAuthContext(ctx.accessToken, ({ userId }) =>
+          renewMaintenanceLease(userId, input)
+        )
+      )
+  );
+
+  server.registerTool(
+    "maintenance.lease.release",
+    {
+      title: "Release Maintenance Lease",
+      description: "Release an owner-scoped maintenance lease held by this holder. Missing, expired, or foreign leases return released:false without error.",
+      inputSchema: {
+        key: maintenanceLeaseKeySchema,
+        holder: maintenanceLeaseHolderSchema
+      }
+    },
+    async (input) =>
+      asMcpText(
+        await runWithAuthContext(ctx.accessToken, ({ userId }) =>
+          releaseMaintenanceLease(userId, input)
         )
       )
   );

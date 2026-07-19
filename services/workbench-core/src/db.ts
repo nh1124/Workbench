@@ -360,6 +360,18 @@ export async function ensureCoreSchema(): Promise<void> {
         `);
 
         await pool.query(`
+          CREATE TABLE IF NOT EXISTS maintenance_leases (
+            user_id TEXT NOT NULL REFERENCES workbench_users(id) ON DELETE CASCADE,
+            key TEXT NOT NULL,
+            holder TEXT NOT NULL,
+            expires_at TIMESTAMPTZ NOT NULL,
+            acquired_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            renewed_at TIMESTAMPTZ,
+            PRIMARY KEY (user_id, key)
+          );
+        `);
+
+        await pool.query(`
           CREATE TABLE IF NOT EXISTS usage_events (
             id BIGSERIAL PRIMARY KEY,
             user_id TEXT NOT NULL REFERENCES workbench_users(id) ON DELETE CASCADE,
