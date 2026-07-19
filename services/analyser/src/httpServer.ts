@@ -5,8 +5,62 @@ import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { requireInternalApiKey } from "./auth.js";
+import { requireInternalApiKey, requireUserAuth } from "./auth.js";
 import { ensureAnalyserSchema, provisionServiceAccount } from "./db.js";
+import { AnalyserServiceError } from "./serviceError.js";
+import { listMachines, registerMachine } from "./stores/machines.js";
+import {
+  aggregateActivity,
+  ingestObservations,
+  listObservations,
+  startRetentionHousekeeping
+} from "./stores/observations.js";
+import { getOperation, listOperations, recordOperation } from "./stores/operations.js";
+import {
+  getCollectionPolicyRows,
+  getEffectiveAutomationPolicy,
+  getEffectiveCollectionSettings,
+  upsertAutomationPolicy,
+  upsertCollectionPolicy
+} from "./stores/policies.js";
+import {
+  createProposal,
+  getProposal,
+  listProposals,
+  markProposalExecuted,
+  resolveProposal,
+  supersedeProposal,
+  updateProposalContent
+} from "./stores/proposals.js";
+import { findPublication, listPublications, recordPublication } from "./stores/publications.js";
+import {
+  claimDueRoutine,
+  completeRun,
+  failRun,
+  heartbeatRun,
+  listRoutines,
+  pullForRun,
+  routineStatusSummaries,
+  seedRoutines,
+  updateRoutine
+} from "./stores/routines.js";
+import { getSummary, listSummaries, upsertSummary } from "./stores/summaries.js";
+import {
+  ANALYSER_OPERATION_KINDS,
+  automationPolicySchema,
+  collectionSettingsSchema,
+  dateSchema,
+  isoDateTimeSchema,
+  observationInputSchema,
+  OBSERVATION_SOURCES,
+  operationInputSchema,
+  proposalContentUpdateSchema,
+  proposalExecutionSchema,
+  proposalInputSchema,
+  proposalSupersedeSchema,
+  publicationInputSchema,
+  summaryInputSchema
+} from "./types.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,46 +75,583 @@ function requireEnv(name: string): string {
 const logger = createLogger("analyser");
 installProcessHandlers(logger);
 
-const app = express();
-app.use(cors());
-app.use(express.json({ limit: "5mb" }));
-app.use(requestLogger(logger));
-
 type AsyncRouteHandler = (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<unknown>;
+
 function asyncRoute(handler: AsyncRouteHandler): express.RequestHandler {
   return (req, res, next) => { void handler(req, res, next).catch(next); };
+}
+
+function ownerFromRequest(req: express.Request, res: express.Response): string | undefined {
+  const owner = req.authUser?.serviceAccountId;
+  if (!owner) {
+    res.status(401).json({ message: "Missing auth context" });
+    return undefined;
+  }
+  return owner;
+}
+
+function respondError(res: express.Response, error: unknown): express.Response {
+  if (error instanceof AnalyserServiceError) {
+    return res.status(error.status).json({ message: error.message, code: error.code });
+  }
+  if (error instanceof SyntaxError && "status" in error && (error as { status?: unknown }).status === 400) {
+    return res.status(400).json({ message: "Invalid JSON body", code: "INVALID_INPUT" });
+  }
+  return res.status(500).json({
+    message: error instanceof Error ? error.message : "Analyser request failed",
+    code: "ANALYSER_INTERNAL_ERROR"
+  });
 }
 
 function invalid(res: express.Response, error: z.ZodError): express.Response {
   return res.status(400).json({ message: error.flatten(), code: "INVALID_INPUT" });
 }
 
-const provisionSchema = z.object({
-  coreUserId: z.string().min(1),
-  username: z.string().min(1)
+function parse<T extends z.ZodTypeAny>(
+  schema: T,
+  value: unknown,
+  res: express.Response
+): z.infer<T> | undefined {
+  const parsed = schema.safeParse(value);
+  if (!parsed.success) {
+    invalid(res, parsed.error);
+    return undefined;
+  }
+  return parsed.data;
+}
+
+const boundedText = (maximum: number) => z.string().trim().min(1).max(maximum);
+const uuidParamsSchema = z.object({ id: z.string().uuid() }).strict();
+const runParamsSchema = z.object({ runId: z.string().uuid() }).strict();
+const routineKeySchema = boundedText(100);
+const routineParamsSchema = z.object({ key: routineKeySchema }).strict();
+const emptyObjectSchema = z.object({}).strict();
+const paginationSchema = {
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  cursor: boundedText(4_000).optional()
+};
+
+export const provisionSchema = z.object({
+  coreUserId: boundedText(2_000),
+  username: boundedText(2_000)
 }).strict();
 
-app.get("/health", (_req, res) => {
-  res.json({ service: "analyser", status: "ok", timestamp: new Date().toISOString() });
+export const machineRegisterSchema = z.object({
+  machineKey: boundedText(500),
+  displayName: boundedText(500).optional(),
+  platform: boundedText(200).optional()
+}).strict();
+
+export const collectionPolicyUpdateSchema = z.object({
+  machineId: z.string().uuid().nullable().optional(),
+  settings: collectionSettingsSchema,
+  expectedVersion: z.number().int().positive().optional()
+}).strict();
+
+export const automationPolicyUpdateSchema = z.object({
+  policy: automationPolicySchema,
+  expectedVersion: z.number().int().positive().optional()
+}).strict();
+
+export const observationIngestSchema = z.object({
+  machineId: z.string().uuid().optional(),
+  observations: z.array(observationInputSchema).max(500)
+}).strict();
+
+export const observationListQuerySchema = z.object({
+  source: z.enum(OBSERVATION_SOURCES).optional(),
+  machineId: z.string().uuid().optional(),
+  projectId: boundedText(2_000).optional(),
+  from: isoDateTimeSchema.optional(),
+  to: isoDateTimeSchema.optional(),
+  ...paginationSchema
+}).strict().superRefine((value, context) => {
+  if (value.from && value.to && new Date(value.from).getTime() > new Date(value.to).getTime()) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["to"], message: "to must be on or after from" });
+  }
 });
 
-app.post("/internal/accounts", requireInternalApiKey, asyncRoute(async (req, res) => {
-  const parsed = provisionSchema.safeParse(req.body ?? {});
-  if (!parsed.success) return invalid(res, parsed.error);
-  await provisionServiceAccount(parsed.data.coreUserId, parsed.data.username);
-  return res.status(201).json({ status: "ok", service: "analyser" });
-}));
+export const activityAggregateQuerySchema = z.object({
+  from: dateSchema,
+  to: dateSchema,
+  machineId: z.string().uuid().optional()
+}).strict().refine((value) => value.from <= value.to, {
+  path: ["to"],
+  message: "to must be on or after from"
+});
 
-app.use((error: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
-  if (res.headersSent) { next(error); return; }
-  res.status(500).json({
-    message: error instanceof Error ? error.message : "Analyser request failed",
-    code: "ANALYSER_INTERNAL_ERROR"
+export const routineUpdateSchema = z.object({
+  name: boundedText(500).optional(),
+  enabled: z.boolean().optional(),
+  scheduleKind: z.enum(["interval", "cron"]).optional(),
+  scheduleExpr: boundedText(100).optional(),
+  timezone: boundedText(100).optional(),
+  maxRetries: z.number().int().min(0).max(10).optional(),
+  backoffMinutes: z.number().int().min(1).max(1_440).optional(),
+  skillVersion: boundedText(200).optional(),
+  expectedVersion: z.number().int().positive().optional()
+}).strict().refine((value) => Object.keys(value).some((key) => key !== "expectedVersion"), {
+  message: "At least one routine field is required"
+});
+
+const holderSchema = boundedText(2_000);
+const leaseSecondsSchema = z.number().int().min(1).max(86_400).optional();
+
+export const routineClaimSchema = z.object({
+  key: routineKeySchema.optional(),
+  holder: holderSchema,
+  leaseSeconds: leaseSecondsSchema
+}).strict();
+
+export const runHeartbeatSchema = z.object({
+  holder: holderSchema,
+  leaseSeconds: leaseSecondsSchema
+}).strict();
+
+export const runPullSchema = z.object({
+  holder: holderSchema,
+  limit: z.number().int().min(1).max(500).optional()
+}).strict();
+
+export const runCompleteSchema = z.object({ holder: holderSchema }).strict();
+export const runFailSchema = z.object({
+  holder: holderSchema,
+  errorSummary: boundedText(2_000)
+}).strict();
+
+export const summaryListQuerySchema = z.object({
+  kind: boundedText(100).optional(),
+  from: dateSchema.optional(),
+  to: dateSchema.optional(),
+  routineKey: boundedText(2_000).optional(),
+  ...paginationSchema
+}).strict().refine((value) => !value.from || !value.to || value.from <= value.to, {
+  path: ["to"],
+  message: "to must be on or after from"
+});
+
+export const proposalListQuerySchema = z.object({
+  status: z.enum(["open", "approved", "rejected", "executed", "superseded"]).optional(),
+  kind: boundedText(100).optional(),
+  routineKey: boundedText(2_000).optional(),
+  ...paginationSchema
+}).strict();
+
+export const proposalResolutionBodySchema = z.object({
+  status: z.enum(["approved", "rejected"]),
+  provenance: boundedText(2_000),
+  expectedVersion: z.number().int().positive()
+}).strict();
+
+export const operationListQuerySchema = z.object({
+  operationKind: z.enum(ANALYSER_OPERATION_KINDS).optional(),
+  result: z.enum(["succeeded", "failed", "skipped"]).optional(),
+  proposalId: z.string().uuid().optional(),
+  ...paginationSchema
+}).strict();
+
+export const publicationListQuerySchema = z.object({
+  sourceKind: z.enum(["summary", "proposal"]).optional(),
+  sourceId: z.string().uuid().optional(),
+  ...paginationSchema
+}).strict();
+
+export const publicationFindQuerySchema = z.object({
+  sourceKind: z.enum(["summary", "proposal"]),
+  sourceId: z.string().uuid(),
+  targetKind: z.enum(["note", "artifact"]),
+  contentHash: z.string().trim().min(8).max(128).regex(/^[0-9a-fA-F]+$/)
+}).strict();
+
+export interface AppDeps {
+  requireUserAuth: express.RequestHandler;
+  requireInternalApiKey: express.RequestHandler;
+  provisionServiceAccount: typeof provisionServiceAccount;
+  registerMachine: typeof registerMachine;
+  listMachines: typeof listMachines;
+  getEffectiveCollectionSettings: typeof getEffectiveCollectionSettings;
+  getCollectionPolicyRows: typeof getCollectionPolicyRows;
+  getEffectiveAutomationPolicy: typeof getEffectiveAutomationPolicy;
+  upsertCollectionPolicy: typeof upsertCollectionPolicy;
+  upsertAutomationPolicy: typeof upsertAutomationPolicy;
+  ingestObservations: typeof ingestObservations;
+  listObservations: typeof listObservations;
+  aggregateActivity: typeof aggregateActivity;
+  listRoutines: typeof listRoutines;
+  routineStatusSummaries: typeof routineStatusSummaries;
+  seedRoutines: typeof seedRoutines;
+  updateRoutine: typeof updateRoutine;
+  claimDueRoutine: typeof claimDueRoutine;
+  heartbeatRun: typeof heartbeatRun;
+  pullForRun: typeof pullForRun;
+  completeRun: typeof completeRun;
+  failRun: typeof failRun;
+  upsertSummary: typeof upsertSummary;
+  listSummaries: typeof listSummaries;
+  getSummary: typeof getSummary;
+  createProposal: typeof createProposal;
+  listProposals: typeof listProposals;
+  getProposal: typeof getProposal;
+  updateProposalContent: typeof updateProposalContent;
+  resolveProposal: typeof resolveProposal;
+  supersedeProposal: typeof supersedeProposal;
+  markProposalExecuted: typeof markProposalExecuted;
+  recordOperation: typeof recordOperation;
+  listOperations: typeof listOperations;
+  getOperation: typeof getOperation;
+  recordPublication: typeof recordPublication;
+  listPublications: typeof listPublications;
+  findPublication: typeof findPublication;
+}
+
+const realAppDeps: AppDeps = {
+  requireUserAuth,
+  requireInternalApiKey,
+  provisionServiceAccount,
+  registerMachine,
+  listMachines,
+  getEffectiveCollectionSettings,
+  getCollectionPolicyRows,
+  getEffectiveAutomationPolicy,
+  upsertCollectionPolicy,
+  upsertAutomationPolicy,
+  ingestObservations,
+  listObservations,
+  aggregateActivity,
+  listRoutines,
+  routineStatusSummaries,
+  seedRoutines,
+  updateRoutine,
+  claimDueRoutine,
+  heartbeatRun,
+  pullForRun,
+  completeRun,
+  failRun,
+  upsertSummary,
+  listSummaries,
+  getSummary,
+  createProposal,
+  listProposals,
+  getProposal,
+  updateProposalContent,
+  resolveProposal,
+  supersedeProposal,
+  markProposalExecuted,
+  recordOperation,
+  listOperations,
+  getOperation,
+  recordPublication,
+  listPublications,
+  findPublication
+};
+
+function userRoute(deps: AppDeps, handler: AsyncRouteHandler): express.RequestHandler[] {
+  return [deps.requireUserAuth, asyncRoute(async (req, res, next) => {
+    const owner = ownerFromRequest(req, res);
+    if (!owner) return;
+    return handler(req, res, next);
+  })];
+}
+
+export function buildApp(deps: AppDeps): express.Express {
+  const app = express();
+  app.use(cors());
+  app.use(express.json({ limit: "5mb" }));
+  app.use(requestLogger(logger));
+
+  app.get("/health", (_req, res) => {
+    res.json({ service: "analyser", status: "ok", timestamp: new Date().toISOString() });
   });
-});
 
-const port = Number(requireEnv("ANALYSER_SERVICE_PORT"));
-const host = requireEnv("ANALYSER_SERVICE_HOST");
-void ensureAnalyserSchema().then(() => {
-  app.listen(port, host, () => logger.info(`[analyser] HTTP service listening on http://${host}:${port}`));
-});
+  app.post("/internal/accounts", deps.requireInternalApiKey, asyncRoute(async (req, res) => {
+    const body = parse(provisionSchema, req.body ?? {}, res);
+    if (!body) return;
+    await deps.provisionServiceAccount(body.coreUserId, body.username);
+    return res.status(201).json({ status: "ok", service: "analyser" });
+  }));
+
+  app.post("/machines/register", ...userRoute(deps, async (req, res) => {
+    const body = parse(machineRegisterSchema, req.body ?? {}, res);
+    if (!body) return;
+    return res.json(await deps.registerMachine(req.authUser!.serviceAccountId, body));
+  }));
+
+  app.get("/machines", ...userRoute(deps, async (req, res) => {
+    const query = parse(emptyObjectSchema, req.query, res);
+    if (!query) return;
+    return res.json({ items: await deps.listMachines(req.authUser!.serviceAccountId) });
+  }));
+
+  app.get("/settings", ...userRoute(deps, async (req, res) => {
+    const query = parse(emptyObjectSchema, req.query, res);
+    if (!query) return;
+    const owner = req.authUser!.serviceAccountId;
+    const [effective, rows, policy] = await Promise.all([
+      deps.getEffectiveCollectionSettings(owner),
+      deps.getCollectionPolicyRows(owner),
+      deps.getEffectiveAutomationPolicy(owner)
+    ]);
+    return res.json({ effective, rows, automation: { policy } });
+  }));
+
+  app.get("/settings/effective", ...userRoute(deps, async (req, res) => {
+    const query = parse(z.object({ machineId: z.string().uuid().optional() }).strict(), req.query, res);
+    if (!query) return;
+    return res.json(await deps.getEffectiveCollectionSettings(req.authUser!.serviceAccountId, query.machineId));
+  }));
+
+  app.put("/settings/collection", ...userRoute(deps, async (req, res) => {
+    const body = parse(collectionPolicyUpdateSchema, req.body ?? {}, res);
+    if (!body) return;
+    return res.json(await deps.upsertCollectionPolicy(req.authUser!.serviceAccountId, {
+      ...body,
+      updatedBy: req.authUser!.usernameSnapshot
+    }));
+  }));
+
+  app.put("/settings/automation", ...userRoute(deps, async (req, res) => {
+    const body = parse(automationPolicyUpdateSchema, req.body ?? {}, res);
+    if (!body) return;
+    return res.json(await deps.upsertAutomationPolicy(req.authUser!.serviceAccountId, {
+      ...body,
+      updatedBy: req.authUser!.usernameSnapshot
+    }));
+  }));
+
+  app.post("/observations/ingest", ...userRoute(deps, async (req, res) => {
+    const body = parse(observationIngestSchema, req.body ?? {}, res);
+    if (!body) return;
+    return res.json(await deps.ingestObservations(
+      req.authUser!.serviceAccountId,
+      body.observations,
+      body.machineId ? { machineId: body.machineId } : {}
+    ));
+  }));
+
+  app.get("/observations", ...userRoute(deps, async (req, res) => {
+    const query = parse(observationListQuerySchema, req.query, res);
+    if (!query) return;
+    return res.json(await deps.listObservations(req.authUser!.serviceAccountId, query));
+  }));
+
+  app.get("/observations/aggregate", ...userRoute(deps, async (req, res) => {
+    const query = parse(activityAggregateQuerySchema, req.query, res);
+    if (!query) return;
+    return res.json(await deps.aggregateActivity(req.authUser!.serviceAccountId, query));
+  }));
+
+  app.get("/routines", ...userRoute(deps, async (req, res) => {
+    const query = parse(emptyObjectSchema, req.query, res);
+    if (!query) return;
+    return res.json({ items: await deps.listRoutines(req.authUser!.serviceAccountId) });
+  }));
+
+  app.get("/routines/status", ...userRoute(deps, async (req, res) => {
+    const query = parse(emptyObjectSchema, req.query, res);
+    if (!query) return;
+    return res.json({ items: await deps.routineStatusSummaries(req.authUser!.serviceAccountId) });
+  }));
+
+  app.post("/routines/seed", ...userRoute(deps, async (req, res) => {
+    const body = parse(emptyObjectSchema, req.body ?? {}, res);
+    if (!body) return;
+    await deps.seedRoutines(req.authUser!.serviceAccountId);
+    return res.status(204).send();
+  }));
+
+  app.patch("/routines/:key", ...userRoute(deps, async (req, res) => {
+    const params = parse(routineParamsSchema, req.params, res);
+    const body = parse(routineUpdateSchema, req.body ?? {}, res);
+    if (!params || !body) return;
+    return res.json(await deps.updateRoutine(req.authUser!.serviceAccountId, params.key, body));
+  }));
+
+  app.post("/routines/claim", ...userRoute(deps, async (req, res) => {
+    const body = parse(routineClaimSchema, req.body ?? {}, res);
+    if (!body) return;
+    return res.json({ claim: await deps.claimDueRoutine(req.authUser!.serviceAccountId, body) });
+  }));
+
+  app.post("/runs/:runId/heartbeat", ...userRoute(deps, async (req, res) => {
+    const params = parse(runParamsSchema, req.params, res);
+    const body = parse(runHeartbeatSchema, req.body ?? {}, res);
+    if (!params || !body) return;
+    return res.json(await deps.heartbeatRun(
+      req.authUser!.serviceAccountId,
+      params.runId,
+      body.holder,
+      body.leaseSeconds
+    ));
+  }));
+
+  app.post("/runs/:runId/pull", ...userRoute(deps, async (req, res) => {
+    const params = parse(runParamsSchema, req.params, res);
+    const body = parse(runPullSchema, req.body ?? {}, res);
+    if (!params || !body) return;
+    return res.json(await deps.pullForRun(
+      req.authUser!.serviceAccountId,
+      params.runId,
+      body.holder,
+      body.limit
+    ));
+  }));
+
+  app.post("/runs/:runId/complete", ...userRoute(deps, async (req, res) => {
+    const params = parse(runParamsSchema, req.params, res);
+    const body = parse(runCompleteSchema, req.body ?? {}, res);
+    if (!params || !body) return;
+    return res.json(await deps.completeRun(req.authUser!.serviceAccountId, params.runId, body.holder));
+  }));
+
+  app.post("/runs/:runId/fail", ...userRoute(deps, async (req, res) => {
+    const params = parse(runParamsSchema, req.params, res);
+    const body = parse(runFailSchema, req.body ?? {}, res);
+    if (!params || !body) return;
+    return res.json(await deps.failRun(req.authUser!.serviceAccountId, params.runId, body.holder, {
+      errorSummary: body.errorSummary
+    }));
+  }));
+
+  app.post("/summaries", ...userRoute(deps, async (req, res) => {
+    const body = parse(summaryInputSchema, req.body ?? {}, res);
+    if (!body) return;
+    return res.json({ summary: await deps.upsertSummary(req.authUser!.serviceAccountId, body) });
+  }));
+
+  app.get("/summaries", ...userRoute(deps, async (req, res) => {
+    const query = parse(summaryListQuerySchema, req.query, res);
+    if (!query) return;
+    return res.json(await deps.listSummaries(req.authUser!.serviceAccountId, query));
+  }));
+
+  app.get("/summaries/:id", ...userRoute(deps, async (req, res) => {
+    const params = parse(uuidParamsSchema, req.params, res);
+    if (!params) return;
+    return res.json(await deps.getSummary(req.authUser!.serviceAccountId, params.id));
+  }));
+
+  app.post("/proposals", ...userRoute(deps, async (req, res) => {
+    const body = parse(proposalInputSchema, req.body ?? {}, res);
+    if (!body) return;
+    const result = await deps.createProposal(req.authUser!.serviceAccountId, body);
+    return res.status(result.created ? 201 : 200).json(result);
+  }));
+
+  app.get("/proposals", ...userRoute(deps, async (req, res) => {
+    const query = parse(proposalListQuerySchema, req.query, res);
+    if (!query) return;
+    return res.json(await deps.listProposals(req.authUser!.serviceAccountId, query));
+  }));
+
+  app.get("/proposals/:id", ...userRoute(deps, async (req, res) => {
+    const params = parse(uuidParamsSchema, req.params, res);
+    if (!params) return;
+    return res.json(await deps.getProposal(req.authUser!.serviceAccountId, params.id));
+  }));
+
+  app.patch("/proposals/:id/content", ...userRoute(deps, async (req, res) => {
+    const params = parse(uuidParamsSchema, req.params, res);
+    const body = parse(proposalContentUpdateSchema, req.body ?? {}, res);
+    if (!params || !body) return;
+    return res.json(await deps.updateProposalContent(req.authUser!.serviceAccountId, params.id, body));
+  }));
+
+  app.post("/proposals/:id/resolve", ...userRoute(deps, async (req, res) => {
+    const params = parse(uuidParamsSchema, req.params, res);
+    const body = parse(proposalResolutionBodySchema, req.body ?? {}, res);
+    if (!params || !body) return;
+    return res.json(await deps.resolveProposal(req.authUser!.serviceAccountId, params.id, {
+      ...body,
+      resolvedBy: req.authUser!.usernameSnapshot
+    }));
+  }));
+
+  app.post("/proposals/:id/supersede", ...userRoute(deps, async (req, res) => {
+    const params = parse(uuidParamsSchema, req.params, res);
+    const body = parse(proposalSupersedeSchema, req.body ?? {}, res);
+    if (!params || !body) return;
+    return res.json(await deps.supersedeProposal(req.authUser!.serviceAccountId, params.id, body));
+  }));
+
+  app.post("/proposals/:id/executed", ...userRoute(deps, async (req, res) => {
+    const params = parse(uuidParamsSchema, req.params, res);
+    const body = parse(proposalExecutionSchema, req.body ?? {}, res);
+    if (!params || !body) return;
+    return res.json(await deps.markProposalExecuted(req.authUser!.serviceAccountId, params.id, body));
+  }));
+
+  app.post("/operations", ...userRoute(deps, async (req, res) => {
+    const body = parse(operationInputSchema, req.body ?? {}, res);
+    if (!body) return;
+    const result = await deps.recordOperation(req.authUser!.serviceAccountId, body);
+    return res.status(result.created ? 201 : 200).json(result);
+  }));
+
+  app.get("/operations", ...userRoute(deps, async (req, res) => {
+    const query = parse(operationListQuerySchema, req.query, res);
+    if (!query) return;
+    return res.json(await deps.listOperations(req.authUser!.serviceAccountId, query));
+  }));
+
+  app.get("/operations/:id", ...userRoute(deps, async (req, res) => {
+    const params = parse(uuidParamsSchema, req.params, res);
+    if (!params) return;
+    return res.json(await deps.getOperation(req.authUser!.serviceAccountId, params.id));
+  }));
+
+  app.post("/publications", ...userRoute(deps, async (req, res) => {
+    const body = parse(publicationInputSchema, req.body ?? {}, res);
+    if (!body) return;
+    const result = await deps.recordPublication(req.authUser!.serviceAccountId, body);
+    return res.status(result.created ? 201 : 200).json(result);
+  }));
+
+  app.get("/publications", ...userRoute(deps, async (req, res) => {
+    const query = parse(publicationListQuerySchema, req.query, res);
+    if (!query) return;
+    return res.json(await deps.listPublications(req.authUser!.serviceAccountId, query));
+  }));
+
+  app.get("/publications/find", ...userRoute(deps, async (req, res) => {
+    const query = parse(publicationFindQuerySchema, req.query, res);
+    if (!query) return;
+    const publication = await deps.findPublication(req.authUser!.serviceAccountId, query);
+    return res.json({ publication: publication ?? null });
+  }));
+
+  app.get("/status", ...userRoute(deps, async (req, res) => {
+    const query = parse(emptyObjectSchema, req.query, res);
+    if (!query) return;
+    const owner = req.authUser!.serviceAccountId;
+    const [routines, openProposals, machines] = await Promise.all([
+      deps.routineStatusSummaries(owner),
+      deps.listProposals(owner, { status: "open", limit: 1 }),
+      deps.listMachines(owner)
+    ]);
+    return res.json({ routines, hasOpenProposals: openProposals.items.length > 0, machines });
+  }));
+
+  app.use((_req, _res, next) => {
+    next(new AnalyserServiceError(404, "ROUTE_NOT_FOUND", "Route not found"));
+  });
+
+  app.use((error: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (res.headersSent) {
+      next(error);
+      return;
+    }
+    respondError(res, error);
+  });
+
+  return app;
+}
+
+if (process.env.ANALYSER_SKIP_BOOTSTRAP !== "1") {
+  const port = Number(requireEnv("ANALYSER_SERVICE_PORT"));
+  const host = requireEnv("ANALYSER_SERVICE_HOST");
+  const app = buildApp(realAppDeps);
+  void ensureAnalyserSchema().then(() => {
+    startRetentionHousekeeping(3_600_000, logger);
+    app.listen(port, host, () => logger.info(`[analyser] HTTP service listening on http://${host}:${port}`));
+  });
+}

@@ -274,7 +274,7 @@ analyser.operations.record     analyser.publications.record
 | AW-2 | `[implemented]` | services/analyser | machines / collection policies / automation policies / observations store（idempotent ingest・list・aggregate・retention cleanup・windowTitle 二重 gate）+ tests |
 | AW-3 | `[implemented]` | services/analyser | schedule module（cron subset + tz + DST tests）+ routines/runs store（claim/heartbeat/complete/fail/seed）+ tests |
 | AW-4 | `[implemented]` | services/analyser | summaries / proposals / operations / publications store + tests |
-| AW-5 | `[pending]` | services/analyser | httpServer 全 routes + zod 検証 + route tests |
+| AW-5 | `[implemented]` | services/analyser | httpServer 全 routes + zod 検証 + route tests（残: automation policy stored version の read 公開 → AW-13 で対応） |
 | AW-6 | `[pending]` | core | analyserClient + provisioning + /api/analyser/* facade |
 | AW-7 | `[pending]` | core | MCP analyser.* tools 登録 + annotations + tests |
 | AW-8 | `[pending]` | core | sync_events projector（scoped consumer + timer + 手動 flush）+ tests |
