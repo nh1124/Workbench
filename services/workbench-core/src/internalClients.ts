@@ -377,6 +377,22 @@ export const artifactsClient = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }).then((result) => resolveArtifactItemProjectName(token, result)),
+  flagArtifactItemMaintenance: (token: string, id: string, payload: unknown) =>
+    serviceRequest<unknown>(artifactsService, `/artifacts/items/${encodeURIComponent(id)}/maintenance-flag`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  resolveArtifactItemMaintenance: (token: string, id: string, payload: unknown) =>
+    serviceRequest<unknown>(artifactsService, `/artifacts/items/${encodeURIComponent(id)}/maintenance-flag/resolve`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  listArtifactMaintenanceQueue: (
+    token: string,
+    options: { projectId?: string; reason?: string; cursor?: string; limit?: number } = {}
+  ) => serviceRequest<unknown>(artifactsService, `/maintenance/artifact-queue${buildQuery(options)}`, token),
   removeItem: (token: string, id: string) =>
     serviceRequest<void>(artifactsService, `/artifacts/items/${encodeURIComponent(id)}`, token, { method: "DELETE" }),
   uploadFile: async (

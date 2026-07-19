@@ -5234,7 +5234,8 @@ app.post("/api/maintenance/flags", async (req, res) => {
     const result = await flagMaintenanceTarget({
       accessToken: authContext.accessToken,
       userId: authContext.userId,
-      source: "core-api"
+      source: "core-api",
+      actor: authContext.username
     }, parsed.data);
     return res.json(result);
   } catch (error) {

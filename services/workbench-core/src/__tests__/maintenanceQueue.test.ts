@@ -29,7 +29,7 @@ process.env.CORE_DB_PASSWORD ||= "workbench-test-unused";
 
 const [
   { aggregateMaintenanceQueue },
-  { confirmMaintenanceMemory, flagMaintenanceTarget },
+  { confirmMaintenanceMemory, flagMaintenanceTarget, resolveMaintenanceTarget },
   { InternalServiceError },
   { registerMaintenanceTools },
   { registerProjectContextTools },
@@ -57,7 +57,7 @@ const [
   import("../mcp/registerWbsTools.js")
 ]);
 
-type Kind = "memory" | "note" | "brief" | "index_drift";
+type Kind = "memory" | "note" | "brief" | "index_drift" | "artifact";
 type Page = {
   items: unknown[];
   nextCursor?: string;
@@ -85,13 +85,13 @@ function emptyPage(totals: Record<string, number> = {}): Page {
   return { items: [], totals: { byReason: totals } };
 }
 
-function makeSources(pages: Record<Kind, Record<string, Page>>) {
+function makeSources(pages: Partial<Record<Kind, Record<string, Page>>>) {
   const calls: Array<{ kind: Kind; options: Record<string, unknown> }> = [];
-  const sources = Object.fromEntries((["memory", "note", "brief", "index_drift"] as Kind[]).map((kind) => [
+  const sources = Object.fromEntries((["memory", "note", "brief", "index_drift", "artifact"] as Kind[]).map((kind) => [
     kind,
     async (_token: string, options: { cursor?: string } = {}) => {
       calls.push({ kind, options: { ...options } });
-      return pages[kind][options.cursor ?? "start"] ?? emptyPage();
+      return pages[kind]?.[options.cursor ?? "start"] ?? emptyPage();
     }
   ])) as Record<Kind, (token: string, options?: Record<string, unknown>) => Promise<unknown>>;
   return { calls, sources };
@@ -237,6 +237,37 @@ describe("Maintenance queue facade", () => {
     assert.deepEqual(calls.map((call) => call.kind), ["brief"]);
     assert.equal(calls[0]?.options.reason, "brief_oversized");
   });
+
+  it("includes Artifact queue items, filters to Artifact only, and preserves Artifact fields", async () => {
+    const artifactItem = {
+      ...item("artifact", "artifact-1", "2026-07-06T00:00:00.000Z", ["conflict"]),
+      path: "skills/skill.md",
+      artifactKind: "note",
+      version: 4,
+      flaggedBy: "agent@example.com",
+      flaggedAt: "2026-07-06T00:00:00.000Z",
+      suggestedActions: ["resolve"]
+    };
+    const { calls, sources } = makeSources({
+      artifact: {
+        start: { items: [artifactItem], totals: { byReason: { conflict: 1, manual: 2 } } }
+      }
+    });
+
+    const conflict = await aggregateMaintenanceQueue("token", {
+      kind: "artifact",
+      reason: "conflict"
+    }, sources);
+    assert.deepEqual(conflict.items[0], artifactItem);
+    assert.deepEqual(conflict.totals.byReason, { conflict: 1, manual: 2 });
+    assert.deepEqual(calls.map((call) => call.kind), ["artifact"]);
+    assert.equal(calls[0]?.options.reason, "conflict");
+
+    calls.length = 0;
+    await aggregateMaintenanceQueue("token", { kind: "artifact", reason: "manual" }, sources);
+    assert.deepEqual(calls.map((call) => call.kind), ["artifact"]);
+    assert.equal(calls[0]?.options.reason, "manual");
+  });
 });
 
 describe("Maintenance actions", () => {
@@ -256,6 +287,45 @@ describe("Maintenance actions", () => {
         flagNote: async (_token: string, id: string, payload: unknown) => {
           calls.push({ service: "notes", id, payload });
           return { id, reviewReason: (payload as { reason?: string }).reason };
+        }
+      },
+      artifacts: {
+        flagArtifactItemMaintenance: async (_token: string, id: string, payload: unknown) => {
+          calls.push({ service: "artifacts", id, payload });
+          return {
+            id: "flag-1",
+            artifactItemId: id,
+            projectId: "project-1",
+            reason: (payload as { reason?: string }).reason,
+            artifact: {
+              id,
+              projectId: "project-1",
+              projectName: "Project",
+              title: "Artifact",
+              path: "skills/artifact.md",
+              kind: "note",
+              version: 4
+            }
+          };
+        },
+        resolveArtifactItemMaintenance: async (_token: string, id: string, payload: unknown) => {
+          calls.push({ service: "artifacts-resolve", id, payload });
+          return {
+            id: "flag-1",
+            artifactItemId: id,
+            projectId: "project-1",
+            reason: "conflict",
+            status: "resolved",
+            artifact: {
+              id,
+              projectId: "project-1",
+              projectName: "Project",
+              title: "Artifact",
+              path: "skills/artifact.md",
+              kind: "note",
+              version: 4
+            }
+          };
         }
       }
     };
@@ -308,6 +378,142 @@ describe("Maintenance actions", () => {
     assert.equal(syncEvents[0]?.domain, "notes");
     assert.equal(syncEvents[0]?.resourceId, "note-1");
     assert.equal((syncEvents[0]?.payload.patch as Record<string, unknown>).note, "needs review");
+  });
+
+  it("flags Artifact items and records scoped sync metadata plus index invalidation", async () => {
+    const calls: Array<{ service: string; id: string; payload: unknown }> = [];
+    const syncEvents: Array<{
+      domain: string;
+      resourceId: string;
+      payload: Record<string, unknown>;
+      metadata?: Record<string, unknown>;
+    }> = [];
+    const invalidations: Array<{ projectIds: Array<string | undefined>; input: Record<string, unknown> }> = [];
+    const recorders = {
+      recordSyncEvent: async (
+        userId: string,
+        domain: "projects" | "notes" | "artifacts" | "tasks" | "project_context",
+        resourceId: string,
+        action: "create" | "update" | "delete" | "upsert",
+        payload: Record<string, unknown> = {},
+        metadata?: Record<string, unknown>
+      ) => {
+        syncEvents.push({ domain, resourceId, payload, metadata });
+        return { cursor: "1", userId, domain, resourceId, action, version: 1, payload, createdAt: "2026-07-06T00:00:00.000Z" };
+      },
+      recordProjectContextInvalidations: async (
+        _userId: string,
+        projectIds: Array<string | undefined>,
+        input: Record<string, unknown>
+      ) => {
+        invalidations.push({ projectIds, input });
+      }
+    };
+
+    const result = await flagMaintenanceTarget(
+      {
+        accessToken: "token",
+        userId: "user-1",
+        source: "core-mcp",
+        actor: "agent@example.com"
+      },
+      {
+        target: { type: "artifact", id: "artifact-1" },
+        reason: "conflict",
+        note: "merge disagreement"
+      },
+      makeActionClients(calls),
+      recorders
+    );
+
+    assert.equal((result as { artifactItemId: string }).artifactItemId, "artifact-1");
+    assert.deepEqual(calls, [{
+      service: "artifacts",
+      id: "artifact-1",
+      payload: { reason: "conflict", note: "merge disagreement", flaggedBy: "agent@example.com" }
+    }]);
+    assert.deepEqual(syncEvents[0]?.metadata, {
+      projectId: "project-1",
+      resourceType: "note",
+      path: "skills/artifact.md"
+    });
+    assert.equal(syncEvents[0]?.domain, "artifacts");
+    assert.equal(syncEvents[0]?.payload.operation, "maintenance-flag");
+    assert.equal(syncEvents[0]?.payload.reason, "conflict");
+    assert.deepEqual(invalidations[0]?.projectIds, ["project-1"]);
+    assert.deepEqual(invalidations[0]?.input.changed, ["index"]);
+    assert.equal(invalidations[0]?.input.entityType, "index");
+  });
+
+  it("does not fail Artifact flag actions when sync recording fails", async () => {
+    const calls: Array<{ service: string; id: string; payload: unknown }> = [];
+    const result = await flagMaintenanceTarget(
+      { accessToken: "token", userId: "user-1", source: "core-api" },
+      { target: { type: "artifact", id: "artifact-1" }, reason: "manual" },
+      makeActionClients(calls),
+      {
+        recordSyncEvent: async () => {
+          throw new Error("sync unavailable");
+        },
+        recordProjectContextInvalidations: async () => {
+          throw new Error("invalidation unavailable");
+        }
+      }
+    );
+
+    assert.equal((result as { artifactItemId: string }).artifactItemId, "artifact-1");
+    assert.equal(calls[0]?.service, "artifacts");
+  });
+
+  it("resolves Artifact flags and propagates downstream 404 responses", async () => {
+    const calls: Array<{ service: string; id: string; payload: unknown }> = [];
+    const clients = makeActionClients(calls);
+    const result = await resolveMaintenanceTarget(
+      {
+        accessToken: "token",
+        userId: "user-1",
+        source: "core-mcp",
+        actor: "reviewer@example.com"
+      },
+      { target: { type: "artifact", id: "artifact-1" }, note: "resolved" },
+      clients,
+      {
+        recordSyncEvent: async (userId, domain, resourceId, action, payload) => ({
+          cursor: "1",
+          userId,
+          domain,
+          resourceId,
+          action,
+          version: 1,
+          payload: payload ?? {},
+          createdAt: "2026-07-06T00:00:00.000Z"
+        }),
+        recordProjectContextInvalidations: async () => undefined
+      }
+    );
+    assert.equal((result as { status: string }).status, "resolved");
+    assert.deepEqual(calls[0], {
+      service: "artifacts-resolve",
+      id: "artifact-1",
+      payload: { note: "resolved", resolvedBy: "reviewer@example.com" }
+    });
+
+    clients.artifacts.resolveArtifactItemMaintenance = async () => {
+      throw new InternalServiceError("artifacts", 404, JSON.stringify({
+        code: "ARTIFACT_MAINTENANCE_FLAG_NOT_FOUND",
+        message: "No open maintenance flag"
+      }));
+    };
+    await assert.rejects(
+      () => resolveMaintenanceTarget(
+        { accessToken: "token", userId: "user-1", source: "core-mcp" },
+        { target: { type: "artifact", id: "artifact-1" } },
+        clients
+      ),
+      (error: unknown) => error instanceof InternalServiceError
+        && error.status === 404
+        && error.body.includes("ARTIFACT_MAINTENANCE_FLAG_NOT_FOUND")
+    );
   });
 
   it("preserves downstream memory 409 errors for HTTP forwarding", async () => {
@@ -378,6 +584,7 @@ describe("Maintenance MCP contract", () => {
     assert.ok(definition);
     const schema = z.object(definition.inputSchema ?? {});
     assert.equal(schema.safeParse({ kind: "memory", reason: "raw", projectId: "project-1", cursor: "cursor", limit: 20 }).success, true);
+    assert.equal(schema.safeParse({ kind: "artifact", reason: "conflict" }).success, true);
     assert.equal(schema.safeParse({ kind: "task" }).success, false);
     assert.equal(schema.safeParse({ reason: "source_changed" }).success, true);
     assert.equal(schema.safeParse({ reason: "unused" }).success, true);
@@ -401,6 +608,11 @@ describe("Maintenance MCP contract", () => {
       reason: "manual"
     }).success, true);
     assert.equal(schema.safeParse({
+      target: { type: "artifact", id: "artifact-1" },
+      reason: "conflict",
+      note: "review conflict"
+    }).success, true);
+    assert.equal(schema.safeParse({
       target: { type: "brief", id: "project-1" },
       reason: "manual"
     }).success, false);
@@ -408,6 +620,21 @@ describe("Maintenance MCP contract", () => {
       target: { type: "memory", id: "memory-1" },
       reason: "raw"
     }).success, false);
+  });
+
+  it("registers maintenance.review.resolve for Artifact flags only", () => {
+    const tools = captureTools(registerMaintenanceTools);
+    const definition = tools.get("maintenance.review.resolve");
+    assert.ok(definition);
+    assert.match(definition.description ?? "", /audit history/i);
+    assert.match(definition.description ?? "", /no open flag/i);
+    const schema = z.object(definition.inputSchema ?? {});
+    assert.equal(schema.safeParse({
+      target: { type: "artifact", id: "artifact-1" },
+      note: "resolved"
+    }).success, true);
+    assert.equal(schema.safeParse({ target: { type: "note", id: "note-1" } }).success, false);
+    assert.equal(schema.safeParse({ target: { type: "artifact", id: "" } }).success, false);
   });
 
   it("registers sync.changes.pull with the frozen at-least-once schema", () => {
@@ -491,6 +718,7 @@ describe("Maintenance MCP contract", () => {
 
     assert.equal(names.has("maintenance.queue.list"), true);
     assert.equal(names.has("maintenance.flag"), true);
+    assert.equal(names.has("maintenance.review.resolve"), true);
     assert.equal(names.has("maintenance.usage.summary"), true);
     assert.equal(names.has("sync.changes.pull"), true);
     assert.equal(names.has("sync.changes.commit"), true);

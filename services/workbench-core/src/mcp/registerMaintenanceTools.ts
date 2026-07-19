@@ -3,7 +3,8 @@ import { z } from "zod";
 import {
   flagMaintenanceTarget,
   MAINTENANCE_FLAG_REASONS,
-  MAINTENANCE_FLAG_TARGET_TYPES
+  MAINTENANCE_FLAG_TARGET_TYPES,
+  resolveMaintenanceTarget
 } from "../maintenanceActions.js";
 import {
   aggregateMaintenanceQueue,
@@ -41,7 +42,7 @@ export function registerMaintenanceTools(server: McpServer, ctx?: ToolContext): 
     "maintenance.queue.list",
     {
       title: "List Maintenance Queue",
-      description: "Read the owner-scoped maintenance queue across Projects and Notes.",
+      description: "Read the owner-scoped maintenance queue across Projects, Notes, and Artifacts.",
       inputSchema: {
         kind: queueKindSchema.optional(),
         reason: queueReasonSchema.optional(),
@@ -60,7 +61,7 @@ export function registerMaintenanceTools(server: McpServer, ctx?: ToolContext): 
     "maintenance.flag",
     {
       title: "Flag Maintenance Target",
-      description: "Set only the review_reason on a memory or note for later maintenance review; this cannot promote, confirm, snooze, or clear an item.",
+      description: "Set only the review_reason on a memory or note for later maintenance review; this cannot promote, confirm, snooze, or clear those items. Artifact targets flag an Artifact item of any kind into an open review flag with audit history.",
       inputSchema: {
         target: z.object({
           type: flagTargetTypeSchema,
@@ -72,11 +73,38 @@ export function registerMaintenanceTools(server: McpServer, ctx?: ToolContext): 
     },
     async (input) =>
       asMcpText(
-        await runWithAuthContext(ctx.accessToken, ({ userId }) =>
+        await runWithAuthContext(ctx.accessToken, ({ userId, username }) =>
           flagMaintenanceTarget({
             accessToken: ctx.accessToken,
             userId,
-            source: "core-mcp"
+            source: "core-mcp",
+            actor: username
+          }, input)
+        )
+      )
+  );
+
+  server.registerTool(
+    "maintenance.review.resolve",
+    {
+      title: "Resolve Artifact Maintenance Review",
+      description: "Resolve the open maintenance flag on an Artifact item while keeping the resolved record as audit history. This errors when no open flag exists.",
+      inputSchema: {
+        target: z.object({
+          type: z.literal("artifact"),
+          id: z.string().min(1)
+        }),
+        note: z.string().optional()
+      }
+    },
+    async (input) =>
+      asMcpText(
+        await runWithAuthContext(ctx.accessToken, ({ userId, username }) =>
+          resolveMaintenanceTarget({
+            accessToken: ctx.accessToken,
+            userId,
+            source: "core-mcp",
+            actor: username
           }, input)
         )
       )

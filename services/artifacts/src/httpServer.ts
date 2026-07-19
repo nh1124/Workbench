@@ -27,6 +27,14 @@ import {
 } from "./artifactItemsStore.js";
 import { ensureArtifactsSchema, upsertServiceAccount } from "./db.js";
 import {
+  ARTIFACT_MAINTENANCE_REASONS,
+  ArtifactMaintenanceNotFoundError,
+  InvalidArtifactMaintenanceQueueCursorError,
+  flagArtifactItem,
+  listArtifactMaintenanceQueue,
+  resolveArtifactFlag
+} from "./maintenanceFlagsStore.js";
+import {
   createArtifact,
   deleteArtifact,
   getArtifact,
@@ -358,6 +366,26 @@ const internalAccountSchema = z.object({
   username: z.string().min(1)
 });
 
+const artifactMaintenanceReasonSchema = z.enum(ARTIFACT_MAINTENANCE_REASONS);
+
+const artifactMaintenanceFlagSchema = z.object({
+  reason: artifactMaintenanceReasonSchema,
+  note: z.string().optional(),
+  flaggedBy: z.string().min(1).optional()
+});
+
+const artifactMaintenanceResolveSchema = z.object({
+  note: z.string().optional(),
+  resolvedBy: z.string().min(1).optional()
+});
+
+const artifactMaintenanceQueueQuerySchema = z.object({
+  projectId: z.string().min(1).optional(),
+  reason: artifactMaintenanceReasonSchema.optional(),
+  cursor: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional()
+});
+
 function parseTagsFromUpload(raw: unknown): string[] {
   if (Array.isArray(raw)) {
     return raw.map((tag) => String(tag).trim()).filter((tag) => tag.length > 0);
@@ -610,6 +638,75 @@ app.get("/artifacts/items/:id", requireUserAuth, async (req, res) => {
   }
 
   return res.json(item);
+});
+
+app.post("/artifacts/items/:id/maintenance-flag", requireUserAuth, async (req, res) => {
+  const authUser = req.authUser;
+  if (!authUser) {
+    return res.status(401).json({ message: "Missing auth context" });
+  }
+  const parsed = artifactMaintenanceFlagSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json({ message: parsed.error.flatten() });
+  }
+
+  try {
+    const result = await flagArtifactItem(authUser.coreUserId, String(req.params.id), {
+      reason: parsed.data.reason,
+      ...(parsed.data.note !== undefined ? { note: parsed.data.note } : {}),
+      flaggedBy: parsed.data.flaggedBy ?? authUser.usernameSnapshot
+    });
+    return res.json(result);
+  } catch (error) {
+    if (error instanceof ArtifactMaintenanceNotFoundError) {
+      return res.status(error.status).json({ code: error.code, message: error.message });
+    }
+    throw error;
+  }
+});
+
+app.post("/artifacts/items/:id/maintenance-flag/resolve", requireUserAuth, async (req, res) => {
+  const authUser = req.authUser;
+  if (!authUser) {
+    return res.status(401).json({ message: "Missing auth context" });
+  }
+  const parsed = artifactMaintenanceResolveSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json({ message: parsed.error.flatten() });
+  }
+
+  try {
+    const result = await resolveArtifactFlag(authUser.coreUserId, String(req.params.id), {
+      ...(parsed.data.note !== undefined ? { note: parsed.data.note } : {}),
+      resolvedBy: parsed.data.resolvedBy ?? authUser.usernameSnapshot
+    });
+    return res.json(result);
+  } catch (error) {
+    if (error instanceof ArtifactMaintenanceNotFoundError) {
+      return res.status(error.status).json({ code: error.code, message: error.message });
+    }
+    throw error;
+  }
+});
+
+app.get("/maintenance/artifact-queue", requireUserAuth, async (req, res) => {
+  const owner = req.authUser?.coreUserId;
+  if (!owner) {
+    return res.status(401).json({ message: "Missing auth context" });
+  }
+  const parsed = artifactMaintenanceQueueQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    return res.status(400).json({ message: parsed.error.flatten() });
+  }
+
+  try {
+    return res.json(await listArtifactMaintenanceQueue(owner, parsed.data));
+  } catch (error) {
+    if (error instanceof InvalidArtifactMaintenanceQueueCursorError) {
+      return res.status(error.status).json({ code: error.code, message: error.message });
+    }
+    throw error;
+  }
 });
 
 app.post("/artifacts/folders", requireUserAuth, async (req, res) => {

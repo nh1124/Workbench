@@ -1,6 +1,6 @@
-import { notesClient, projectsClient } from "./internalClients.js";
+import { artifactsClient, notesClient, projectsClient } from "./internalClients.js";
 
-export const MAINTENANCE_QUEUE_KINDS = ["memory", "note", "brief", "index_drift"] as const;
+export const MAINTENANCE_QUEUE_KINDS = ["memory", "note", "brief", "index_drift", "artifact"] as const;
 export type MaintenanceQueueKind = (typeof MAINTENANCE_QUEUE_KINDS)[number];
 
 export const MAINTENANCE_QUEUE_REASONS = [
@@ -37,6 +37,11 @@ export type MaintenanceQueueItem = {
   lifecycleState?: string;
   lastConfirmedAt?: string | null;
   reviewAfter?: string | null;
+  path?: string;
+  artifactKind?: string;
+  version?: number;
+  flaggedBy?: string;
+  flaggedAt?: string;
   updatedAt: string;
   suggestedActions: string[];
 };
@@ -83,7 +88,8 @@ const SOURCE_REASONS: Record<MaintenanceQueueKind, readonly MaintenanceQueueReas
   memory: ["raw", "expired", "unconfirmed", "conflict", "manual"],
   note: ["raw", "expired", "conflict", "manual"],
   brief: ["brief_unmaintained", "brief_oversized"],
-  index_drift: ["source_changed", "unused"]
+  index_drift: ["source_changed", "unused"],
+  artifact: ["conflict", "manual"]
 };
 
 export class MaintenanceQueueInputError extends Error {
@@ -101,7 +107,8 @@ export const defaultMaintenanceQueueSources: MaintenanceQueueSourceClients = {
   memory: (token, options) => projectsClient.listMemoryMaintenanceQueue(token, options),
   note: (token, options) => notesClient.listMaintenanceQueue(token, options),
   brief: (token, options) => projectsClient.listBriefMaintenanceQueue(token, options),
-  index_drift: (token, options) => projectsClient.listIndexDriftMaintenanceQueue(token, options)
+  index_drift: (token, options) => projectsClient.listIndexDriftMaintenanceQueue(token, options),
+  artifact: (token, options) => artifactsClient.listArtifactMaintenanceQueue(token, options)
 };
 
 function clampLimit(limit: number | undefined): number {
@@ -221,6 +228,11 @@ function toQueueItem(value: unknown): MaintenanceQueueItem {
     ...(typeof record.lifecycleState === "string" ? { lifecycleState: record.lifecycleState } : {}),
     ...(typeof record.lastConfirmedAt === "string" || record.lastConfirmedAt === null ? { lastConfirmedAt: record.lastConfirmedAt } : {}),
     ...(typeof record.reviewAfter === "string" || record.reviewAfter === null ? { reviewAfter: record.reviewAfter } : {}),
+    ...(typeof record.path === "string" ? { path: record.path } : {}),
+    ...(typeof record.artifactKind === "string" ? { artifactKind: record.artifactKind } : {}),
+    ...(typeof record.version === "number" && Number.isFinite(record.version) ? { version: record.version } : {}),
+    ...(typeof record.flaggedBy === "string" ? { flaggedBy: record.flaggedBy } : {}),
+    ...(typeof record.flaggedAt === "string" ? { flaggedAt: record.flaggedAt } : {}),
     updatedAt,
     suggestedActions: record.suggestedActions as string[]
   };
