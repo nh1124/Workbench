@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { contextColor } from "../../lib/taskDisplayUtils";
 import type { ProjectOption } from "../../lib/taskDisplayUtils";
+import { useUiStrings } from "../../lib/uiStrings";
 import type { CalendarMode, CalendarStatusFilter, QuickFilter, SidebarMode } from "../types";
 import type { TaskCounters } from "../lib/taskFilterUtils";
 import {
@@ -44,6 +45,7 @@ export function TasksSecondarySidebar({
   calendarMode,
   onOpenCalendarWindow,
 }: TasksSecondarySidebarProps) {
+  const t = useUiStrings();
   const [calendarMenu, setCalendarMenu] = useState<{
     calendar: "due" | "schedule";
     x: number;
@@ -175,7 +177,7 @@ export function TasksSecondarySidebar({
               setCalendarMenu(null);
             }}
           >
-            別ウィンドウで開く
+            {t("openCalendarInNewWindow")}
           </button>
         </div>
       )}

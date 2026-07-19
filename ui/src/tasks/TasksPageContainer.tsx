@@ -17,6 +17,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { openCalendarWindow, readWorkbenchSession, tasksApi } from "../lib/api";
 import { pushErrorNotification } from "../lib/notificationService";
 import { subscribeSyncEvents } from "../lib/syncEvents";
+import { useUiStrings } from "../lib/uiStrings";
 import {
   buildMonthCells,
   contextColor,
@@ -111,6 +112,7 @@ export function TasksPageContainer({
 }: TasksPageContainerProps = {}) {
   const location = useLocation();
   const navigate = useNavigate();
+  const t = useUiStrings();
 
   // ── UI-only local state ──────────────────────────────────────────────────
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>(initialSidebarMode);
@@ -1542,7 +1544,7 @@ export function TasksPageContainer({
             onContextMenu={(event) => event.preventDefault()}
           >
             <button type="button" onClick={() => openCalendarQuickAdd(calendarCreateMenu.date)}>
-              この日にタスクを追加
+              {t("addTaskOnThisDay")}
             </button>
           </div>
         )}
@@ -1557,10 +1559,10 @@ export function TasksPageContainer({
             {!taskPickerOpen ? (
               <div className="calendar-range-actions">
                 <button type="button" onClick={() => openCalendarQuickAdd(timelineSelection.date, timelineSelection.startTime, timelineSelection.endTime)}>
-                  新規タスク（この日時）
+                  {t("createTaskAtThisDateTime")}
                 </button>
                 <button type="button" onClick={() => setTaskPickerOpen(true)}>
-                  既存タスクを予定
+                  {t("scheduleExistingTask")}
                 </button>
               </div>
             ) : (
@@ -1569,7 +1571,7 @@ export function TasksPageContainer({
                   type="search"
                   value={taskPickerQuery}
                   onChange={(event) => setTaskPickerQuery(event.target.value)}
-                  placeholder="タスクを検索"
+                  placeholder={t("searchTasks")}
                   aria-label="Search existing tasks"
                   autoFocus
                 />
@@ -1580,7 +1582,7 @@ export function TasksPageContainer({
                       <small>{resolveContextDisplayName(task.context, task.contextName)}</small>
                     </button>
                   ))}
-                  {taskPickerTasks.length === 0 && <small className="calendar-task-picker-empty">該当するタスクはありません</small>}
+                  {taskPickerTasks.length === 0 && <small className="calendar-task-picker-empty">{t("noMatchingTasks")}</small>}
                 </div>
               </div>
             )}
