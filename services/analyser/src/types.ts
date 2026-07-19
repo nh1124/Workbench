@@ -219,3 +219,47 @@ export interface ActivityAggregate {
   days: ActivityAggregateDay[];
   totals: ActivityAggregateTotals;
 }
+
+export interface RoutineRecord {
+  id: string;
+  key: string;
+  name: string;
+  skillKey: string;
+  skillVersion?: string;
+  scheduleKind: "interval" | "cron";
+  scheduleExpr: string;
+  timezone: string;
+  enabled: boolean;
+  nextRunAt?: string;
+  committedCursor: string;
+  maxRetries: number;
+  backoffMinutes: number;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RunRecord {
+  id: string;
+  routineId: string;
+  routineKey?: string;
+  status: "claimed" | "processing" | "completed" | "failed";
+  holder: string;
+  leaseExpiresAt: string;
+  policySnapshot: {
+    collectionSettings: CollectionSettings;
+    automationPolicy: AutomationPolicy;
+  };
+  pendingReadCursor: string;
+  attempt: number;
+  errorSummary?: string;
+  startedAt: string;
+  finishedAt?: string;
+}
+
+export interface ClaimResult {
+  run: RunRecord;
+  routine: RoutineRecord;
+  collectionSettings: CollectionSettings;
+  automationPolicy: AutomationPolicy;
+}
