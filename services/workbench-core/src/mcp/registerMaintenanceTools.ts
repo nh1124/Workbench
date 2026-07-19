@@ -12,6 +12,7 @@ import {
 } from "../maintenanceQueue.js";
 import {
   commitSyncChangesCursor,
+  initializeSyncChangesConsumer,
   pullSyncChanges,
   SYNC_CHANGES_DOMAINS
 } from "../syncChanges.js";
@@ -95,6 +96,31 @@ export function registerMaintenanceTools(server: McpServer, ctx?: ToolContext): 
       asMcpText(
         await runWithAuthContext(ctx.accessToken, ({ userId }) =>
           summarizeUsage(userId, input.since, input.until)
+        )
+      )
+  );
+
+  server.registerTool(
+    "sync.changes.consumer.initialize",
+    {
+      title: "Initialize Sync Changes Consumer",
+      description: "Create a NEW consumer starting at the CURRENT head of the owner's change stream, with no historical events. This operation is idempotent, never resets an existing consumer, and can optionally bind a permanent scope; re-initializing with a conflicting scope returns an error.",
+      inputSchema: {
+        consumer: syncChangesConsumerSchema,
+        startAt: z.literal("current").optional(),
+        scope: z.object({
+          projectId: z.string().min(1).optional(),
+          pathPrefix: z.string().min(1).optional(),
+          domains: z.array(syncChangesDomainSchema).optional(),
+          resourceTypes: z.array(z.string().min(1)).optional(),
+          actions: z.array(z.enum(["create", "update", "delete", "upsert"])).optional()
+        }).optional()
+      }
+    },
+    async (input) =>
+      asMcpText(
+        await runWithAuthContext(ctx.accessToken, ({ userId }) =>
+          initializeSyncChangesConsumer(userId, input)
         )
       )
   );

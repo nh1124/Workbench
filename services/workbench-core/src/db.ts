@@ -354,6 +354,12 @@ export async function ensureCoreSchema(): Promise<void> {
         `);
 
         await pool.query(`
+          ALTER TABLE sync_consumer_cursors
+            ADD COLUMN IF NOT EXISTS scope_json JSONB,
+            ADD COLUMN IF NOT EXISTS initialized_at TIMESTAMPTZ;
+        `);
+
+        await pool.query(`
           CREATE TABLE IF NOT EXISTS usage_events (
             id BIGSERIAL PRIMARY KEY,
             user_id TEXT NOT NULL REFERENCES workbench_users(id) ON DELETE CASCADE,

@@ -1,9 +1,11 @@
 import {
   commitConsumerCursor,
   getConsumerCursor,
+  initializeSyncConsumer,
   normalizeSyncConsumerId,
   SyncConsumerCursorInputError,
-  type SyncConsumerCursorCommit
+  type SyncConsumerCursorCommit,
+  type SyncConsumerInitializeResult
 } from "./syncConsumerCursorsStore.js";
 import { listSyncEvents, SYNC_DOMAINS, type SyncDomain, type SyncEvent } from "./syncStore.js";
 
@@ -85,4 +87,11 @@ export async function commitSyncChangesCursor(
   input: { consumer?: unknown; cursor?: unknown }
 ): Promise<SyncConsumerCursorCommit> {
   return commitConsumerCursor(userId, input.consumer, input.cursor);
+}
+
+export async function initializeSyncChangesConsumer(
+  userId: string,
+  input: { consumer: unknown; startAt?: unknown; scope?: unknown }
+): Promise<SyncConsumerInitializeResult> {
+  return initializeSyncConsumer(userId, input);
 }
