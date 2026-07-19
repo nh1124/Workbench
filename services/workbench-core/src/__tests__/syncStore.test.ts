@@ -68,6 +68,10 @@ describe("sync event transactions", () => {
               action: "update",
               version: 7,
               payload_json: { source: "test" },
+              project_id: "project-1",
+              resource_type: "note",
+              path: "skills/new.md",
+              previous_path: "skills/old.md",
               created_at: createdAt
             } as Row]
           };
@@ -95,7 +99,13 @@ describe("sync event transactions", () => {
       "projects",
       "project-1",
       "update",
-      { source: "test" }
+      { source: "test" },
+      {
+        projectId: " project-1 ",
+        resourceType: " note ",
+        path: " skills/new.md ",
+        previousPath: " skills/old.md "
+      }
     );
 
     assert.equal(connectCalls, 1);
@@ -107,9 +117,74 @@ describe("sync event transactions", () => {
         ? "VERSION"
         : "EVENT"), ["BEGIN", "VERSION", "EVENT", "COMMIT"]);
     assert.deepEqual(calls[1].values, ["user-1", "projects", "project-1", "update"]);
+    assert.deepEqual(calls[2].values, [
+      "user-1",
+      "projects",
+      "project-1",
+      "update",
+      7,
+      JSON.stringify({ source: "test" }),
+      "project-1",
+      "note",
+      "skills/new.md",
+      "skills/old.md"
+    ]);
     assert.equal(event.cursor, "42");
     assert.equal(event.version, 7);
     assert.deepEqual(event.payload, { source: "test" });
+    assert.equal(event.projectId, "project-1");
+    assert.equal(event.resourceType, "note");
+    assert.equal(event.path, "skills/new.md");
+    assert.equal(event.previousPath, "skills/old.md");
+  });
+
+  it("writes NULL metadata when the envelope is omitted or blank", async () => {
+    const eventInserts: QueryCall[] = [];
+    let eventId = 0;
+    const pool = {
+      async connect() {
+        return {
+          async query<Row>(text: string, values?: unknown[]): Promise<{ rows: Row[] }> {
+            if (text === "BEGIN" || text === "COMMIT") return { rows: [] };
+            if (text.includes("INSERT INTO sync_resource_versions")) {
+              return { rows: [{ version: 1, deleted_at: null } as Row] };
+            }
+            if (text.includes("INSERT INTO sync_events")) {
+              eventInserts.push({ text: normalizedSql(text), values });
+              eventId += 1;
+              return { rows: [{
+                id: String(eventId),
+                user_id: "user-1",
+                domain: "artifacts",
+                resource_id: `item-${eventId}`,
+                action: "create",
+                version: 1,
+                payload_json: {},
+                project_id: values?.[6] ?? null,
+                resource_type: values?.[7] ?? null,
+                path: values?.[8] ?? null,
+                previous_path: values?.[9] ?? null,
+                created_at: "2026-07-19T00:00:00.000Z"
+              } as Row] };
+            }
+            throw new Error(`Unexpected query: ${text}`);
+          },
+          release(): void {}
+        };
+      }
+    };
+
+    const omitted = await recordSyncEventWithPool(pool, "user-1", "artifacts", "item-1", "create");
+    const blank = await recordSyncEventWithPool(pool, "user-1", "artifacts", "item-2", "create", {}, {
+      projectId: " ", resourceType: "", path: "\t", previousPath: "\r\n"
+    });
+
+    assert.deepEqual(eventInserts.map((call) => call.values?.slice(6)), [
+      [null, null, null, null],
+      [null, null, null, null]
+    ]);
+    assert.equal("projectId" in omitted, false);
+    assert.equal("path" in blank, false);
   });
 
   it("records and resolves client operation ids in the event transaction", async () => {
@@ -238,6 +313,10 @@ describe("sync event transactions", () => {
             action: "update",
             version: 3,
             payload_json: { title: "Note" },
+            project_id: "project-1",
+            resource_type: "note",
+            path: "skills/new.md",
+            previous_path: "skills/old.md",
             created_at: createdAt,
             resource_deleted_at: null
           } as Row]
@@ -248,8 +327,13 @@ describe("sync event transactions", () => {
     const filtered = await listSyncEventsWithPool(pool, "user-1", "7", 999, ["notes"]);
     assert.equal(filtered.events[0]?.cursor, "8");
     assert.equal(filtered.events[0]?.domain, "notes");
+    assert.equal(filtered.events[0]?.projectId, "project-1");
+    assert.equal(filtered.events[0]?.resourceType, "note");
+    assert.equal(filtered.events[0]?.path, "skills/new.md");
+    assert.equal(filtered.events[0]?.previousPath, "skills/old.md");
     assert.deepEqual(calls[0].values, ["user-1", 7, 500, ["notes"]]);
     assert.match(calls[0].text, /e\.domain = ANY\(\$4::text\[\]\)/);
+    assert.match(calls[0].text, /e\.project_id, e\.resource_type, e\.path, e\.previous_path/);
 
     await listSyncEventsWithPool(pool, "user-1", undefined, 10);
     assert.deepEqual(calls[1].values, ["user-1", 0, 10, null]);

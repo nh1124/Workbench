@@ -53,8 +53,8 @@ describe("Project context sync contract", () => {
         entityId: "relation-1",
         source: "core-mcp"
       },
-      async (userId, domain, resourceId, action, payload) => {
-        calls.push({ userId, domain, resourceId, action, payload });
+      async (userId, domain, resourceId, action, payload, metadata) => {
+        calls.push({ userId, domain, resourceId, action, payload, metadata });
         return {
           cursor: String(calls.length), userId, domain, resourceId, action,
           version: 1, payload, createdAt: "2026-06-21T00:00:00.000Z"
@@ -65,6 +65,7 @@ describe("Project context sync contract", () => {
     assert.deepEqual(calls.map((call) => call.resourceId).sort(), ["project-a", "project-b"]);
     assert.equal(calls.every((call) => call.domain === "project_context"), true);
     assert.equal(calls.every((call) => call.action === "update"), true);
+    assert.equal(calls.every((call) => (call.metadata as Record<string, unknown>).resourceType === "project_context"), true);
   });
 
   it("uses the Project id as the resource id for delete invalidations", async () => {
@@ -79,8 +80,8 @@ describe("Project context sync contract", () => {
         source: "sync-push",
         action: "delete"
       },
-      async (userId, domain, resourceId, action, payload) => {
-        calls.push({ userId, domain, resourceId, action, payload });
+      async (userId, domain, resourceId, action, payload, metadata) => {
+        calls.push({ userId, domain, resourceId, action, payload, metadata });
         return {
           cursor: "9", userId, domain, resourceId, action,
           version: 1, payload, createdAt: "2026-06-21T00:00:00.000Z"
@@ -102,7 +103,8 @@ describe("Project context sync contract", () => {
         entityType: "project",
         entityId: "project-delete",
         source: "sync-push"
-      }
+      },
+      metadata: { projectId: "project-delete", resourceType: "project_context" }
     });
   });
 

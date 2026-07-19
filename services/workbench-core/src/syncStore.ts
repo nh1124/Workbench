@@ -4,6 +4,13 @@ export const SYNC_DOMAINS = ["projects", "notes", "artifacts", "tasks", "project
 export type SyncDomain = (typeof SYNC_DOMAINS)[number];
 export type SyncAction = "create" | "update" | "delete" | "upsert";
 
+export type SyncEventMetadata = {
+  projectId?: string;
+  resourceType?: string;
+  path?: string;
+  previousPath?: string;
+};
+
 export interface SyncEvent {
   cursor: string;
   userId: string;
@@ -12,6 +19,10 @@ export interface SyncEvent {
   action: SyncAction;
   version: number;
   payload: Record<string, unknown>;
+  projectId?: string;
+  resourceType?: string;
+  path?: string;
+  previousPath?: string;
   createdAt: string;
 }
 
@@ -43,6 +54,10 @@ type SyncEventRow = {
   action: string;
   version: number;
   payload_json: unknown;
+  project_id?: string | null;
+  resource_type?: string | null;
+  path?: string | null;
+  previous_path?: string | null;
   created_at: string;
   resource_deleted_at?: string | null;
 };
@@ -88,6 +103,12 @@ function jsonObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
+function optionalMetadataText(value: string | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
 function toEvent(row: SyncEventRow): SyncEvent {
   const payload = { ...jsonObject(row.payload_json) };
   const resourceDeletedAt = row.resource_deleted_at ? new Date(row.resource_deleted_at).toISOString() : undefined;
@@ -110,6 +131,10 @@ function toEvent(row: SyncEventRow): SyncEvent {
     action: row.action as SyncAction,
     version: row.version,
     payload,
+    ...(row.project_id !== null && row.project_id !== undefined ? { projectId: row.project_id } : {}),
+    ...(row.resource_type !== null && row.resource_type !== undefined ? { resourceType: row.resource_type } : {}),
+    ...(row.path !== null && row.path !== undefined ? { path: row.path } : {}),
+    ...(row.previous_path !== null && row.previous_path !== undefined ? { previousPath: row.previous_path } : {}),
     createdAt: new Date(row.created_at).toISOString()
   };
 }
@@ -143,10 +168,11 @@ export async function recordSyncEvent(
   domain: SyncDomain,
   resourceId: string,
   action: SyncAction,
-  payload: Record<string, unknown> = {}
+  payload: Record<string, unknown> = {},
+  metadata?: SyncEventMetadata
 ): Promise<SyncEvent> {
   await ensureCoreSchema();
-  return recordSyncEventWithPool(getCorePool(), userId, domain, resourceId, action, payload);
+  return recordSyncEventWithPool(getCorePool(), userId, domain, resourceId, action, payload, metadata);
 }
 
 /** @internal Exported only so transaction ownership can be tested without a live database. */
@@ -156,7 +182,8 @@ export async function recordSyncEventWithPool(
   domain: SyncDomain,
   resourceId: string,
   action: SyncAction,
-  payload: Record<string, unknown> = {}
+  payload: Record<string, unknown> = {},
+  metadata?: SyncEventMetadata
 ): Promise<SyncEvent> {
   const client = await pool.connect();
 
@@ -191,11 +218,26 @@ export async function recordSyncEventWithPool(
     }
     const eventResult = await client.query<SyncEventRow>(
       `
-        INSERT INTO sync_events (user_id, domain, resource_id, action, version, payload_json)
-        VALUES ($1, $2, $3, $4, $5, $6::jsonb)
-        RETURNING id, user_id, domain, resource_id, action, version, payload_json, created_at
+        INSERT INTO sync_events (
+          user_id, domain, resource_id, action, version, payload_json,
+          project_id, resource_type, path, previous_path
+        )
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10)
+        RETURNING id, user_id, domain, resource_id, action, version, payload_json,
+          project_id, resource_type, path, previous_path, created_at
       `,
-      [userId, domain, resourceId, action, version, JSON.stringify(eventPayload)]
+      [
+        userId,
+        domain,
+        resourceId,
+        action,
+        version,
+        JSON.stringify(eventPayload),
+        optionalMetadataText(metadata?.projectId),
+        optionalMetadataText(metadata?.resourceType),
+        optionalMetadataText(metadata?.path),
+        optionalMetadataText(metadata?.previousPath)
+      ]
     );
     const eventRow = eventResult.rows[0];
     const clientOpId = typeof eventPayload.clientOpId === "string" && eventPayload.clientOpId.trim()
@@ -296,7 +338,8 @@ export async function listSyncEventsWithPool(
   const safeLimit = Math.max(1, Math.min(500, Math.floor(limit)));
   const result = await pool.query<SyncEventRow>(
     `
-      SELECT e.id, e.user_id, e.domain, e.resource_id, e.action, e.version, e.payload_json, e.created_at,
+      SELECT e.id, e.user_id, e.domain, e.resource_id, e.action, e.version, e.payload_json,
+        e.project_id, e.resource_type, e.path, e.previous_path, e.created_at,
         v.deleted_at AS resource_deleted_at
       FROM sync_events e
       LEFT JOIN sync_resource_versions v

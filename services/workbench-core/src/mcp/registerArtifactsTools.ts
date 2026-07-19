@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { artifactsClient } from "../internalClients.js";
+import { logger } from "../logger.js";
 import { createLocalJob, getLocalJob, serializeLocalJobForOwner } from "../localClientsStore.js";
 import {
   createArtifactNoteWithIndex,
@@ -15,11 +16,36 @@ import {
   uploadArtifactFileWithIndex
 } from "../projectContext.js";
 import { recordProjectContextInvalidationsBestEffort } from "../projectContextSync.js";
+import { artifactDeletionSnapshotRoot, artifactEventMetadata } from "../syncEventMetadata.js";
+import { recordSyncEvent, type SyncAction, type SyncEventMetadata } from "../syncStore.js";
 import { recordResourceReadUsageBestEffort } from "../usageInstrumentation.js";
 import { asMcpText, runWithAuth, runWithAuthContext } from "./helpers.js";
 
-type ToolContext = {
+export type ArtifactsToolsDependencies = {
+  artifactsClient?: Partial<typeof artifactsClient>;
+  createArtifactNoteWithIndex?: typeof createArtifactNoteWithIndex;
+  linkArtifactToProject?: typeof linkArtifactToProject;
+  listArtifactProjectIdsBestEffort?: typeof listArtifactProjectIdsBestEffort;
+  maintainArtifactIndexBestEffort?: typeof maintainArtifactIndexBestEffort;
+  reconcileArtifactMutationBestEffort?: typeof reconcileArtifactMutationBestEffort;
+  recordProjectContextInvalidationsBestEffort?: typeof recordProjectContextInvalidationsBestEffort;
+  recordSyncEvent?: typeof recordSyncEvent;
+  removeArtifactItemWithProjectCleanup?: typeof removeArtifactItemWithProjectCleanup;
+  runWithAuthContext?: typeof runWithAuthContext;
+  unlinkArtifactFromProject?: typeof unlinkArtifactFromProject;
+  uploadArtifactFileWithIndex?: typeof uploadArtifactFileWithIndex;
+};
+
+export type ArtifactsToolContext = {
   accessToken: string;
+  dependencies?: ArtifactsToolsDependencies;
+};
+
+type ArtifactMutationDependencies = {
+  artifactsClient: typeof artifactsClient;
+  listArtifactProjectIdsBestEffort: typeof listArtifactProjectIdsBestEffort;
+  maintainArtifactIndexBestEffort: typeof maintainArtifactIndexBestEffort;
+  reconcileArtifactMutationBestEffort: typeof reconcileArtifactMutationBestEffort;
 };
 
 const artifactItemKindSchema = z.enum(["folder", "note", "file"]);
@@ -69,32 +95,60 @@ function artifactItemResourceType(value: unknown): string {
   return typeof kind === "string" && kind.trim() ? kind.trim() : "artifact_item";
 }
 
+function artifactItemId(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const id = (value as { id?: unknown }).id;
+  return typeof id === "string" && id.trim() ? id.trim() : undefined;
+}
+
+async function recordArtifactSyncEventBestEffort(
+  recorder: typeof recordSyncEvent,
+  userId: string,
+  resourceId: string | undefined,
+  action: SyncAction,
+  payload: Record<string, unknown>,
+  metadata?: SyncEventMetadata
+): Promise<void> {
+  if (!resourceId) return;
+  try {
+    await recorder(userId, "artifacts", resourceId, action, payload, metadata);
+  } catch (error) {
+    logger.warn("[sync] failed to record MCP Artifact event", {
+      resourceId,
+      action,
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+}
+
 async function updateArtifactItemWithIndex(
   token: string,
   id: string,
-  payload: unknown
-): Promise<{ result: unknown; projectIds: string[] }> {
+  payload: unknown,
+  dependencies: ArtifactMutationDependencies
+): Promise<{ before: unknown; result: unknown; projectIds: string[] }> {
   let before: unknown;
   let beforeProjectIds: string[] = [];
   try {
-    before = await artifactsClient.getItem(token, id);
-    beforeProjectIds = await listArtifactProjectIdsBestEffort(token, before);
+    before = await dependencies.artifactsClient.getItem(token, id);
+    beforeProjectIds = await dependencies.listArtifactProjectIdsBestEffort(token, before);
   } catch {
     before = undefined;
   }
-  const result = await artifactsClient.updateItem(token, id, payload);
-  if (before) await reconcileArtifactMutationBestEffort(token, before, result);
-  else await maintainArtifactIndexBestEffort(token, result);
-  const afterProjectIds = await listArtifactProjectIdsBestEffort(token, result);
-  return { result, projectIds: [...new Set([...beforeProjectIds, ...afterProjectIds])] };
+  const result = await dependencies.artifactsClient.updateItem(token, id, payload);
+  if (before) await dependencies.reconcileArtifactMutationBestEffort(token, before, result);
+  else await dependencies.maintainArtifactIndexBestEffort(token, result);
+  const afterProjectIds = await dependencies.listArtifactProjectIdsBestEffort(token, result);
+  return { before, result, projectIds: [...new Set([...beforeProjectIds, ...afterProjectIds])] };
 }
 
 async function invalidateMembershipFromMcp(
   userId: string,
   projectId: string,
-  artifactItemId: string
+  artifactItemId: string,
+  recorder: typeof recordProjectContextInvalidationsBestEffort
 ): Promise<void> {
-  await recordProjectContextInvalidationsBestEffort(userId, [projectId], {
+  await recorder(userId, [projectId], {
     changed: ["membership", "index"],
     entityType: "membership",
     entityId: artifactItemId,
@@ -105,9 +159,10 @@ async function invalidateMembershipFromMcp(
 async function invalidateArtifactIndexFromMcp(
   userId: string,
   projectIds: string[],
-  artifactItemId: string
+  artifactItemId: string,
+  recorder: typeof recordProjectContextInvalidationsBestEffort
 ): Promise<void> {
-  await recordProjectContextInvalidationsBestEffort(userId, projectIds, {
+  await recorder(userId, projectIds, {
     changed: ["index"],
     entityType: "index",
     entityId: artifactItemId,
@@ -115,12 +170,32 @@ async function invalidateArtifactIndexFromMcp(
   });
 }
 
-export function registerArtifactsTools(server: McpServer, ctx: ToolContext): void;
+export function registerArtifactsTools(server: McpServer, ctx: ArtifactsToolContext): void;
 export function registerArtifactsTools(server: McpServer): void;
-export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): void {
+export function registerArtifactsTools(server: McpServer, ctx?: ArtifactsToolContext): void {
   if (!ctx) {
     throw new Error("Tool context is required");
   }
+  const dependencyOverrides = ctx.dependencies;
+  const mutationDependencies: ArtifactMutationDependencies = {
+    artifactsClient: { ...artifactsClient, ...dependencyOverrides?.artifactsClient },
+    listArtifactProjectIdsBestEffort:
+      dependencyOverrides?.listArtifactProjectIdsBestEffort ?? listArtifactProjectIdsBestEffort,
+    maintainArtifactIndexBestEffort:
+      dependencyOverrides?.maintainArtifactIndexBestEffort ?? maintainArtifactIndexBestEffort,
+    reconcileArtifactMutationBestEffort:
+      dependencyOverrides?.reconcileArtifactMutationBestEffort ?? reconcileArtifactMutationBestEffort
+  };
+  const withAuthContext = dependencyOverrides?.runWithAuthContext ?? runWithAuthContext;
+  const syncRecorder = dependencyOverrides?.recordSyncEvent ?? recordSyncEvent;
+  const contextInvalidationRecorder = dependencyOverrides?.recordProjectContextInvalidationsBestEffort
+    ?? recordProjectContextInvalidationsBestEffort;
+  const createNoteWithIndex = dependencyOverrides?.createArtifactNoteWithIndex ?? createArtifactNoteWithIndex;
+  const linkToProject = dependencyOverrides?.linkArtifactToProject ?? linkArtifactToProject;
+  const removeItemWithCleanup = dependencyOverrides?.removeArtifactItemWithProjectCleanup
+    ?? removeArtifactItemWithProjectCleanup;
+  const unlinkFromProject = dependencyOverrides?.unlinkArtifactFromProject ?? unlinkArtifactFromProject;
+  const uploadFileWithIndex = dependencyOverrides?.uploadArtifactFileWithIndex ?? uploadArtifactFileWithIndex;
   server.registerTool(
     "artifacts.list",
     {
@@ -294,9 +369,15 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
       }
     },
     async ({ artifactItemId, ...input }) => {
-      const result = await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
-        const memberships = await linkArtifactToProject(ctx.accessToken, artifactItemId, input);
-        await invalidateMembershipFromMcp(userId, input.projectId, artifactItemId);
+      const result = await withAuthContext(ctx.accessToken, async ({ userId }) => {
+        const memberships = await linkToProject(ctx.accessToken, artifactItemId, input);
+        await recordArtifactSyncEventBestEffort(syncRecorder, userId, artifactItemId, "update", {
+          source: "core-mcp",
+          relation: "project-membership",
+          action: "link",
+          projectId: input.projectId
+        }, { projectId: input.projectId });
+        await invalidateMembershipFromMcp(userId, input.projectId, artifactItemId, contextInvalidationRecorder);
         return memberships;
       });
       return asMcpText(result);
@@ -314,9 +395,15 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
       }
     },
     async ({ artifactItemId, projectId }) => {
-      await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
-        await unlinkArtifactFromProject(ctx.accessToken, artifactItemId, projectId);
-        await invalidateMembershipFromMcp(userId, projectId, artifactItemId);
+      await withAuthContext(ctx.accessToken, async ({ userId }) => {
+        await unlinkFromProject(ctx.accessToken, artifactItemId, projectId);
+        await recordArtifactSyncEventBestEffort(syncRecorder, userId, artifactItemId, "update", {
+          source: "core-mcp",
+          relation: "project-membership",
+          action: "unlink",
+          projectId
+        }, { projectId });
+        await invalidateMembershipFromMcp(userId, projectId, artifactItemId, contextInvalidationRecorder);
       });
       return asMcpText({ status: "ok" });
     }
@@ -336,11 +423,16 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
       }
     },
     async (payload) => {
-      const result = await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
-        const created = await artifactsClient.createFolder(ctx.accessToken, payload);
-        await maintainArtifactIndexBestEffort(ctx.accessToken, created);
-        const projectIds = await listArtifactProjectIdsBestEffort(ctx.accessToken, created);
-        await invalidateArtifactIndexFromMcp(userId, projectIds, String((created as { id?: unknown }).id ?? "unknown"));
+      const result = await withAuthContext(ctx.accessToken, async ({ userId }) => {
+        const created = await mutationDependencies.artifactsClient.createFolder(ctx.accessToken, payload);
+        await mutationDependencies.maintainArtifactIndexBestEffort(ctx.accessToken, created);
+        const projectIds = await mutationDependencies.listArtifactProjectIdsBestEffort(ctx.accessToken, created);
+        const itemId = artifactItemId(created);
+        await recordArtifactSyncEventBestEffort(syncRecorder, userId, itemId, "create", {
+          source: "core-mcp",
+          resource: created as Record<string, unknown>
+        }, artifactEventMetadata(undefined, created));
+        await invalidateArtifactIndexFromMcp(userId, projectIds, itemId ?? "unknown", contextInvalidationRecorder);
         return created;
       });
       return asMcpText(result);
@@ -363,10 +455,15 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
       }
     },
     async (payload) => {
-      const result = await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
-        const created = await createArtifactNoteWithIndex(ctx.accessToken, payload);
-        const projectIds = await listArtifactProjectIdsBestEffort(ctx.accessToken, created);
-        await invalidateArtifactIndexFromMcp(userId, projectIds, String((created as { id?: unknown }).id ?? "unknown"));
+      const result = await withAuthContext(ctx.accessToken, async ({ userId }) => {
+        const created = await createNoteWithIndex(ctx.accessToken, payload);
+        const projectIds = await mutationDependencies.listArtifactProjectIdsBestEffort(ctx.accessToken, created);
+        const itemId = artifactItemId(created);
+        await recordArtifactSyncEventBestEffort(syncRecorder, userId, itemId, "create", {
+          source: "core-mcp",
+          resource: created as Record<string, unknown>
+        }, artifactEventMetadata(undefined, created));
+        await invalidateArtifactIndexFromMcp(userId, projectIds, itemId ?? "unknown", contextInvalidationRecorder);
         return created;
       });
       return asMcpText(result);
@@ -390,9 +487,14 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
       }
     },
     async ({ id, ...payload }) => {
-      const result = await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
-        const mutation = await updateArtifactItemWithIndex(ctx.accessToken, id, payload);
-        await invalidateArtifactIndexFromMcp(userId, mutation.projectIds, id);
+      const result = await withAuthContext(ctx.accessToken, async ({ userId }) => {
+        const mutation = await updateArtifactItemWithIndex(ctx.accessToken, id, payload, mutationDependencies);
+        await recordArtifactSyncEventBestEffort(syncRecorder, userId, id, "update", {
+          source: "core-mcp",
+          patch: payload,
+          resource: mutation.result as Record<string, unknown>
+        }, artifactEventMetadata(mutation.before, mutation.result));
+        await invalidateArtifactIndexFromMcp(userId, mutation.projectIds, id, contextInvalidationRecorder);
         return mutation.result;
       });
       return asMcpText(result);
@@ -416,9 +518,14 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
       }
     },
     async ({ id, returnContent, ...payload }) => {
-      const result = await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
-        const mutation = await updateArtifactItemWithIndex(ctx.accessToken, id, payload);
-        await invalidateArtifactIndexFromMcp(userId, mutation.projectIds, id);
+      const result = await withAuthContext(ctx.accessToken, async ({ userId }) => {
+        const mutation = await updateArtifactItemWithIndex(ctx.accessToken, id, payload, mutationDependencies);
+        await recordArtifactSyncEventBestEffort(syncRecorder, userId, id, "update", {
+          source: "core-mcp",
+          patch: payload,
+          resource: mutation.result as Record<string, unknown>
+        }, artifactEventMetadata(mutation.before, mutation.result));
+        await invalidateArtifactIndexFromMcp(userId, mutation.projectIds, id, contextInvalidationRecorder);
         return mutation.result;
       });
       return asMcpText(compactArtifactItemResult(result, returnContent));
@@ -442,9 +549,14 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
       if (!payload.path && !payload.projectId) {
         throw new Error("path or projectId is required");
       }
-      const result = await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
-        const mutation = await updateArtifactItemWithIndex(ctx.accessToken, id, payload);
-        await invalidateArtifactIndexFromMcp(userId, mutation.projectIds, id);
+      const result = await withAuthContext(ctx.accessToken, async ({ userId }) => {
+        const mutation = await updateArtifactItemWithIndex(ctx.accessToken, id, payload, mutationDependencies);
+        await recordArtifactSyncEventBestEffort(syncRecorder, userId, id, "update", {
+          source: "core-mcp",
+          patch: payload,
+          resource: mutation.result as Record<string, unknown>
+        }, artifactEventMetadata(mutation.before, mutation.result));
+        await invalidateArtifactIndexFromMcp(userId, mutation.projectIds, id, contextInvalidationRecorder);
         return mutation.result;
       });
       return asMcpText(compactArtifactItemResult(result, returnContent));
@@ -463,9 +575,15 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
       }
     },
     async ({ id, projectId, projectName }) => {
-      const result = await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
-        const mutation = await updateArtifactItemWithIndex(ctx.accessToken, id, { projectId, projectName });
-        await invalidateArtifactIndexFromMcp(userId, mutation.projectIds, id);
+      const result = await withAuthContext(ctx.accessToken, async ({ userId }) => {
+        const patch = { projectId, projectName };
+        const mutation = await updateArtifactItemWithIndex(ctx.accessToken, id, patch, mutationDependencies);
+        await recordArtifactSyncEventBestEffort(syncRecorder, userId, id, "update", {
+          source: "core-mcp",
+          patch,
+          resource: mutation.result as Record<string, unknown>
+        }, artifactEventMetadata(mutation.before, mutation.result));
+        await invalidateArtifactIndexFromMcp(userId, mutation.projectIds, id, contextInvalidationRecorder);
         return mutation.result;
       });
       return asMcpText(compactArtifactItemResult(result));
@@ -485,11 +603,16 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
       }
     },
     async ({ id, returnContent, ...payload }) => {
-      const result = await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
-        const updated = await artifactsClient.patchNoteContent(ctx.accessToken, id, payload);
-        await maintainArtifactIndexBestEffort(ctx.accessToken, updated);
-        const projectIds = await listArtifactProjectIdsBestEffort(ctx.accessToken, updated);
-        await invalidateArtifactIndexFromMcp(userId, projectIds, id);
+      const result = await withAuthContext(ctx.accessToken, async ({ userId }) => {
+        const updated = await mutationDependencies.artifactsClient.patchNoteContent(ctx.accessToken, id, payload);
+        await mutationDependencies.maintainArtifactIndexBestEffort(ctx.accessToken, updated);
+        const projectIds = await mutationDependencies.listArtifactProjectIdsBestEffort(ctx.accessToken, updated);
+        await recordArtifactSyncEventBestEffort(syncRecorder, userId, id, "update", {
+          source: "core-mcp",
+          patch: payload,
+          resource: updated as Record<string, unknown>
+        }, artifactEventMetadata(undefined, updated));
+        await invalidateArtifactIndexFromMcp(userId, projectIds, id, contextInvalidationRecorder);
         return updated;
       });
       return asMcpText(compactArtifactItemResult(result, returnContent));
@@ -513,11 +636,16 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
       }
     },
     async ({ id, returnContent, ...payload }) => {
-      const result = await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
-        const updated = await artifactsClient.updateNoteSection(ctx.accessToken, id, payload);
-        await maintainArtifactIndexBestEffort(ctx.accessToken, updated);
-        const projectIds = await listArtifactProjectIdsBestEffort(ctx.accessToken, updated);
-        await invalidateArtifactIndexFromMcp(userId, projectIds, id);
+      const result = await withAuthContext(ctx.accessToken, async ({ userId }) => {
+        const updated = await mutationDependencies.artifactsClient.updateNoteSection(ctx.accessToken, id, payload);
+        await mutationDependencies.maintainArtifactIndexBestEffort(ctx.accessToken, updated);
+        const projectIds = await mutationDependencies.listArtifactProjectIdsBestEffort(ctx.accessToken, updated);
+        await recordArtifactSyncEventBestEffort(syncRecorder, userId, id, "update", {
+          source: "core-mcp",
+          patch: payload,
+          resource: updated as Record<string, unknown>
+        }, artifactEventMetadata(undefined, updated));
+        await invalidateArtifactIndexFromMcp(userId, projectIds, id, contextInvalidationRecorder);
         return updated;
       });
       return asMcpText(compactArtifactItemResult(result, returnContent));
@@ -534,9 +662,18 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
       }
     },
     async ({ id }) => {
-      await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
-        const snapshot = await removeArtifactItemWithProjectCleanup(ctx.accessToken, id);
-        await invalidateArtifactIndexFromMcp(userId, projectIdsFromArtifactDeletionSnapshot(snapshot), id);
+      await withAuthContext(ctx.accessToken, async ({ userId }) => {
+        const snapshot = await removeItemWithCleanup(ctx.accessToken, id);
+        await recordArtifactSyncEventBestEffort(syncRecorder, userId, id, "delete", {
+          source: "core-mcp",
+          deleted: true
+        }, artifactEventMetadata(artifactDeletionSnapshotRoot(snapshot)));
+        await invalidateArtifactIndexFromMcp(
+          userId,
+          projectIdsFromArtifactDeletionSnapshot(snapshot),
+          id,
+          contextInvalidationRecorder
+        );
       });
       return asMcpText({ status: "ok" });
     }
@@ -559,10 +696,15 @@ export function registerArtifactsTools(server: McpServer, ctx?: ToolContext): vo
       }
     },
     async (payload) => {
-      const result = await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
-        const created = await uploadArtifactFileWithIndex(ctx.accessToken, payload);
-        const projectIds = await listArtifactProjectIdsBestEffort(ctx.accessToken, created);
-        await invalidateArtifactIndexFromMcp(userId, projectIds, String((created as { id?: unknown }).id ?? "unknown"));
+      const result = await withAuthContext(ctx.accessToken, async ({ userId }) => {
+        const created = await uploadFileWithIndex(ctx.accessToken, payload);
+        const projectIds = await mutationDependencies.listArtifactProjectIdsBestEffort(ctx.accessToken, created);
+        const itemId = artifactItemId(created);
+        await recordArtifactSyncEventBestEffort(syncRecorder, userId, itemId, "create", {
+          source: "core-mcp",
+          resource: created as Record<string, unknown>
+        }, artifactEventMetadata(undefined, created));
+        await invalidateArtifactIndexFromMcp(userId, projectIds, itemId ?? "unknown", contextInvalidationRecorder);
         return created;
       });
       return asMcpText(result);

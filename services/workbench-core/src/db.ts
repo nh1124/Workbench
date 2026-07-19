@@ -322,6 +322,14 @@ export async function ensureCoreSchema(): Promise<void> {
         `);
 
         await pool.query(`
+          ALTER TABLE sync_events
+            ADD COLUMN IF NOT EXISTS project_id TEXT,
+            ADD COLUMN IF NOT EXISTS resource_type TEXT,
+            ADD COLUMN IF NOT EXISTS path TEXT,
+            ADD COLUMN IF NOT EXISTS previous_path TEXT;
+        `);
+
+        await pool.query(`
           CREATE TABLE IF NOT EXISTS sync_applied_client_ops (
             user_id TEXT NOT NULL REFERENCES workbench_users(id) ON DELETE CASCADE,
             client_op_id TEXT NOT NULL,
@@ -364,6 +372,12 @@ export async function ensureCoreSchema(): Promise<void> {
         await pool.query(`
           CREATE INDEX IF NOT EXISTS idx_sync_events_user_id
             ON sync_events (user_id, id ASC);
+        `);
+
+        await pool.query(`
+          CREATE INDEX IF NOT EXISTS idx_sync_events_user_project
+            ON sync_events (user_id, project_id, id)
+            WHERE project_id IS NOT NULL;
         `);
 
         await pool.query(`

@@ -1,5 +1,11 @@
 import { logger } from "./logger.js";
-import { recordSyncEvent, type SyncAction, type SyncDomain, type SyncEvent } from "./syncStore.js";
+import {
+  recordSyncEvent,
+  type SyncAction,
+  type SyncDomain,
+  type SyncEvent,
+  type SyncEventMetadata
+} from "./syncStore.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -41,7 +47,8 @@ type SyncEventRecorder = (
   domain: SyncDomain,
   resourceId: string,
   action: SyncAction,
-  payload: JsonRecord
+  payload: JsonRecord,
+  metadata?: SyncEventMetadata
 ) => Promise<SyncEvent>;
 
 export class ProjectContextSyncError extends Error {
@@ -89,7 +96,8 @@ export async function recordProjectContextInvalidation(
     "project_context",
     input.projectId,
     input.action ?? "update",
-    buildProjectContextInvalidationPayload(input)
+    buildProjectContextInvalidationPayload(input),
+    { projectId: input.projectId, resourceType: "project_context" }
   );
 }
 

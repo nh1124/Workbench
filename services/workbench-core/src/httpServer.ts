@@ -81,6 +81,7 @@ import {
   unlinkArtifactFromProject,
   uploadArtifactFileWithIndex
 } from "./projectContext.js";
+import { artifactDeletionSnapshotRoot, artifactEventMetadata } from "./syncEventMetadata.js";
 import {
   archiveLocalClient,
   assertLocalClientCapability,
@@ -110,7 +111,16 @@ import {
   type LocalJobStatus,
   type LocalJobTarget
 } from "./localClientsStore.js";
-import { getAppliedClientOp, getLatestSyncCursor, getSyncResourceVersion, listSyncEvents, recordSyncEvent, type SyncAction, type SyncDomain } from "./syncStore.js";
+import {
+  getAppliedClientOp,
+  getLatestSyncCursor,
+  getSyncResourceVersion,
+  listSyncEvents,
+  recordSyncEvent,
+  type SyncAction,
+  type SyncDomain,
+  type SyncEventMetadata
+} from "./syncStore.js";
 import {
   buildProjectContextSyncItem,
   parseProjectContextBaselineCursor,
@@ -1443,14 +1453,15 @@ async function recordSyncEventBestEffort(
   domain: SyncDomain,
   resourceId: string | undefined,
   action: SyncAction,
-  payload: Record<string, unknown> = {}
+  payload: Record<string, unknown> = {},
+  metadata?: SyncEventMetadata
 ): Promise<void> {
   if (!resourceId) return;
   const clientOpId = facadeSyncDomains.has(domain) ? syncRequestContext.getStore()?.clientOpId : undefined;
   const pending = recordSyncEvent(userId, domain, resourceId, action, {
     ...payload,
     ...(clientOpId ? { clientOpId } : {})
-  })
+  }, metadata)
     .then((event) => {
       syncEventBroadcaster.publish(userId, {
         domain: event.domain,
@@ -2509,6 +2520,7 @@ async function applySyncPushOperation(
   }
 
   let artifactBefore: unknown;
+  let artifactDeletionSnapshot: Awaited<ReturnType<typeof removeArtifactItemWithProjectCleanup>> | undefined;
   let artifactProjectIds: string[] = [];
   if (resourceId) {
     try {
@@ -2570,8 +2582,8 @@ async function applySyncPushOperation(
     if (!resourceId) {
       throw new LocalClientStoreError(400, "SYNC_RESOURCE_ID_REQUIRED", "Delete requires resourceId.");
     }
-    const deletionSnapshot = await removeArtifactItemWithProjectCleanup(authContext.accessToken, resourceId);
-    artifactProjectIds.push(...projectIdsFromArtifactDeletionSnapshot(deletionSnapshot));
+    artifactDeletionSnapshot = await removeArtifactItemWithProjectCleanup(authContext.accessToken, resourceId);
+    artifactProjectIds.push(...projectIdsFromArtifactDeletionSnapshot(artifactDeletionSnapshot));
     nextResourceId = resourceId;
     result = { id: resourceId, deleted: true };
   }
@@ -2595,7 +2607,10 @@ async function applySyncPushOperation(
     localClientId: authContext.localClient?.id,
     ...(action !== "delete" ? { resource: result } : {}),
     ...(action === "delete" ? { deleted: true } : {})
-  });
+  }, artifactEventMetadata(
+    action === "delete" ? artifactDeletionSnapshotRoot(artifactDeletionSnapshot) : artifactBefore,
+    action === "delete" ? undefined : result
+  ));
   await recordProjectContextInvalidationsBestEffort(authContext.userId, artifactProjectIds, {
     changed: ["index"],
     entityType: "index",
@@ -5132,7 +5147,7 @@ app.put("/api/sync/blobs/:blobId", async (req, res) => {
       localClientId: authContext.localClient?.id,
       checksum,
       sizeBytes: buffer.length
-    });
+    }, artifactEventMetadata(undefined, result));
     await recordProjectContextInvalidationsBestEffort(authContext.userId, projectIds, {
       changed: ["index"],
       entityType: "index",
@@ -6002,7 +6017,7 @@ app.post("/api/artifacts/items/:artifactItemId/projects", async (req, res) => {
       relation: "project-membership",
       action: "link",
       projectId
-    });
+    }, { projectId });
     await invalidateProjectContextFromApi(
       authContext.userId,
       [projectId],
@@ -6030,7 +6045,7 @@ app.delete("/api/artifacts/items/:artifactItemId/projects/:projectId", async (re
       relation: "project-membership",
       action: "unlink",
       projectId: String(req.params.projectId)
-    });
+    }, { projectId: String(req.params.projectId) });
     await invalidateProjectContextFromApi(
       authContext.userId,
       [String(req.params.projectId)],
@@ -6055,7 +6070,7 @@ app.post("/api/artifacts/folders", async (req, res) => {
     await recordSyncEventBestEffort(authContext.userId, "artifacts", objectId(result), "create", {
       source: "core-api",
       resource: result as Record<string, unknown>
-    });
+    }, artifactEventMetadata(undefined, result));
     await invalidateArtifactIndexFromApi(authContext.userId, projectIds, objectId(result) ?? "unknown");
     return res.status(201).json(result);
   } catch (error) {
@@ -6073,7 +6088,7 @@ app.post("/api/artifacts/notes", async (req, res) => {
     await recordSyncEventBestEffort(authContext.userId, "artifacts", objectId(result), "create", {
       source: "core-api",
       resource: result as Record<string, unknown>
-    });
+    }, artifactEventMetadata(undefined, result));
     await invalidateArtifactIndexFromApi(authContext.userId, projectIds, objectId(result) ?? "unknown");
     return res.status(201).json(result);
   } catch (error) {
@@ -6173,7 +6188,7 @@ app.patch("/api/artifacts/items/:id", async (req, res) => {
       source: "core-api",
       patch: req.body as Record<string, unknown>,
       resource: result as Record<string, unknown>
-    });
+    }, artifactEventMetadata(before, result));
     await invalidateArtifactIndexFromApi(authContext.userId, projectIds, String(req.params.id));
     return res.json(result);
   } catch (error) {
@@ -6190,7 +6205,7 @@ app.delete("/api/artifacts/items/:id", async (req, res) => {
     await recordSyncEventBestEffort(authContext.userId, "artifacts", String(req.params.id), "delete", {
       source: "core-api",
       deleted: true
-    });
+    }, artifactEventMetadata(artifactDeletionSnapshotRoot(snapshot)));
     await invalidateArtifactIndexFromApi(
       authContext.userId,
       projectIdsFromArtifactDeletionSnapshot(snapshot),
@@ -6288,7 +6303,7 @@ app.post("/api/artifacts", async (req, res) => {
     await recordSyncEventBestEffort(authContext.userId, "artifacts", objectId(result), "create", {
       source: "core-api",
       resource: result as Record<string, unknown>
-    });
+    }, artifactEventMetadata(undefined, result, "artifact"));
     return res.status(201).json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -6300,12 +6315,18 @@ app.patch("/api/artifacts/:id", async (req, res) => {
   if (!authContext) return;
 
   try {
+    let before: unknown;
+    try {
+      before = await artifactsClient.get(authContext.accessToken, String(req.params.id));
+    } catch {
+      before = undefined;
+    }
     const result = await artifactsClient.update(authContext.accessToken, String(req.params.id), req.body);
     await recordSyncEventBestEffort(authContext.userId, "artifacts", String(req.params.id), "update", {
       source: "core-api",
       patch: req.body as Record<string, unknown>,
       resource: result as Record<string, unknown>
-    });
+    }, artifactEventMetadata(before, result, "artifact"));
     return res.json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -6317,11 +6338,17 @@ app.delete("/api/artifacts/:id", async (req, res) => {
   if (!authContext) return;
 
   try {
+    let before: unknown;
+    try {
+      before = await artifactsClient.get(authContext.accessToken, String(req.params.id));
+    } catch {
+      before = undefined;
+    }
     await artifactsClient.remove(authContext.accessToken, String(req.params.id));
     await recordSyncEventBestEffort(authContext.userId, "artifacts", String(req.params.id), "delete", {
       source: "core-api",
       deleted: true
-    });
+    }, artifactEventMetadata(before, undefined, "artifact"));
     return res.status(204).send();
   } catch (error) {
     return respondInternalError(res, error);
