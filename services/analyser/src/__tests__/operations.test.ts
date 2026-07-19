@@ -1,0 +1,149 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import { DEFAULT_AUTOMATION_POLICY, publicationInputSchema } from "../types.js";
+
+process.env.ANALYSER_DB_HOST ??= "127.0.0.1";
+process.env.ANALYSER_DB_PORT ??= "5551";
+process.env.ANALYSER_DB_NAME ??= "test";
+process.env.ANALYSER_DB_USER ??= "test";
+process.env.ANALYSER_DB_PASSWORD ??= "test";
+
+const { recordOperationWithPool } = await import("../stores/operations.js");
+const { recordPublicationWithPool } = await import("../stores/publications.js");
+
+type Result = { rows: unknown[]; rowCount?: number };
+type Call = { text: string; values?: unknown[] };
+
+function fakePool(responses: Result[]) {
+  const calls: Call[] = [];
+  const pool = {
+    calls,
+    async query<Row = never>(text: string, values?: unknown[]) {
+      calls.push({ text, values });
+      return (responses.shift() ?? { rows: [] }) as { rows: Row[]; rowCount?: number };
+    },
+    async connect() {
+      return { query: pool.query, release() { /* fake client */ } };
+    }
+  };
+  return pool;
+}
+
+const operationRow = {
+  id: "00000000-0000-4000-8000-000000000003",
+  operation_kind: "artifact_move",
+  approval_basis: "policy",
+  proposal_id: null,
+  before_refs: [],
+  after_refs: [],
+  result: "succeeded",
+  detail: null,
+  run_id: null,
+  agent_label: null,
+  idempotency_key: "op-1",
+  created_at: "2026-07-20T00:00:00.000Z"
+};
+
+const policyRow = (overrides: Partial<typeof DEFAULT_AUTOMATION_POLICY> = {}) => ({
+  policy_json: { ...DEFAULT_AUTOMATION_POLICY, ...overrides }
+});
+
+describe("analyser operations", () => {
+  it("rejects policy approval when the kind is not in the allowlist", async () => {
+    const pool = fakePool([{ rows: [] }, { rows: [policyRow({ allowedOperationKinds: [] })] }, { rows: [] }]);
+    await assert.rejects(
+      recordOperationWithPool(pool, "owner-1", {
+        operationKind: "artifact_move", approvalBasis: "policy", result: "succeeded", idempotencyKey: "op-1"
+      }),
+      (error: unknown) => (error as { status: number; code: string }).status === 403
+        && (error as { code: string }).code === "POLICY_FORBIDDEN"
+    );
+  });
+
+  it("rejects policy approval when automation is disabled", async () => {
+    const pool = fakePool([{ rows: [] }, { rows: [policyRow({ enabled: false })] }, { rows: [] }]);
+    await assert.rejects(
+      recordOperationWithPool(pool, "owner-1", {
+        operationKind: "artifact_move", approvalBasis: "policy", result: "skipped", idempotencyKey: "op-2"
+      }),
+      (error: unknown) => (error as { status: number; code: string }).status === 403
+    );
+  });
+
+  it("requires an approved proposal for proposal approval basis", async () => {
+    const pool = fakePool([{ rows: [] }, { rows: [] }, { rows: [] }]);
+    await assert.rejects(
+      recordOperationWithPool(pool, "owner-1", {
+        operationKind: "artifact_move", approvalBasis: "proposal", proposalId: "proposal-1",
+        result: "succeeded", idempotencyKey: "op-3"
+      }),
+      (error: unknown) => (error as { status: number; code: string }).status === 409
+        && (error as { code: string }).code === "PROPOSAL_NOT_APPROVED"
+    );
+    assert.match(pool.calls[1].text, /status = 'approved'/);
+  });
+
+  it("returns created false after an idempotency conflict", async () => {
+    const pool = fakePool([
+      { rows: [] }, { rows: [policyRow()] }, { rows: [] }, { rows: [operationRow] }, { rows: [] }
+    ]);
+    const result = await recordOperationWithPool(pool, "owner-1", {
+      operationKind: "artifact_move", approvalBasis: "policy", result: "succeeded", idempotencyKey: "op-1"
+    });
+    assert.equal(result.created, false);
+    assert.equal(result.operation.id, operationRow.id);
+    assert.match(pool.calls[2].text, /ON CONFLICT \(service_account_id, idempotency_key\) DO NOTHING/);
+    assert.match(pool.calls[3].text, /idempotency_key = \$2/);
+  });
+
+  it("strips secret detail keys before insert", async () => {
+    const pool = fakePool([
+      { rows: [] }, { rows: [policyRow()] }, { rows: [{ ...operationRow, detail: { message: "ok" } }] }, { rows: [] }
+    ]);
+    await recordOperationWithPool(pool, "owner-1", {
+      operationKind: "artifact_move", approvalBasis: "policy", result: "succeeded", idempotencyKey: "op-1",
+      detail: { token: "secret", Cookie: "secret", message: "ok" }
+    });
+    assert.deepEqual(JSON.parse(String(pool.calls[2].values?.[7])), { message: "ok" });
+  });
+});
+
+const publicationRow = {
+  id: "00000000-0000-4000-8000-000000000004",
+  source_kind: "summary",
+  source_id: "00000000-0000-4000-8000-000000000001",
+  target_kind: "note",
+  target_id: "note-1",
+  target_ref: null,
+  content_hash: "abcdef12",
+  provenance: "agent",
+  created_at: "2026-07-20T00:00:00.000Z"
+};
+
+describe("analyser publications", () => {
+  it("returns created false for duplicate publication content", async () => {
+    const pool = fakePool([{ rows: [{ id: publicationRow.source_id }] }, { rows: [] }, { rows: [publicationRow] }]);
+    const result = await recordPublicationWithPool(pool, "owner-1", {
+      sourceKind: "summary", sourceId: publicationRow.source_id, targetKind: "note",
+      targetId: "note-1", contentHash: "abcdef12", provenance: "agent"
+    });
+    assert.equal(result.created, false);
+    assert.match(pool.calls[1].text, /ON CONFLICT \(service_account_id, source_kind, source_id, target_kind, content_hash\) DO NOTHING/);
+  });
+
+  it("rejects non-hex content hashes before querying", async () => {
+    assert.equal(publicationInputSchema.safeParse({
+      sourceKind: "summary", sourceId: "summary-1", targetKind: "note", targetId: "note-1",
+      contentHash: "not-hex!", provenance: "agent"
+    }).success, false);
+    const pool = fakePool([]);
+    await assert.rejects(
+      recordPublicationWithPool(pool, "owner-1", {
+        sourceKind: "summary", sourceId: "summary-1", targetKind: "note", targetId: "note-1",
+        contentHash: "not-hex!", provenance: "agent"
+      }),
+      (error: unknown) => (error as { status: number; code: string }).status === 400
+    );
+    assert.equal(pool.calls.length, 0);
+  });
+});

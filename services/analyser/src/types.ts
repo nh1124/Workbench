@@ -263,3 +263,191 @@ export interface ClaimResult {
   collectionSettings: CollectionSettings;
   automationPolicy: AutomationPolicy;
 }
+
+const boundedText = (maximum: number) => z.string().trim().min(1).max(maximum);
+const optionalResourceRefsSchema = z.array(resourceRefSchema).max(50).optional();
+const scalarSchema = z.union([z.string().trim().max(2_000), z.number().finite(), z.boolean(), z.null()]);
+const flatObjectSchema = z.record(scalarSchema);
+const proposedActionParamsSchema = z.record(z.union([
+  scalarSchema,
+  z.array(z.string().trim().max(2_000)).max(50)
+]));
+
+export const proposedActionSchema = z.object({
+  kind: z.union([z.enum(ANALYSER_OPERATION_KINDS), z.literal("other")]),
+  params: proposedActionParamsSchema.optional()
+}).strict();
+
+export const confidenceEvidenceSchema = z.object({
+  deterministicTarget: z.boolean().optional(),
+  currentEvidence: z.boolean().optional(),
+  policyAllowed: z.boolean().optional(),
+  concurrencyProtected: z.boolean().optional(),
+  reversibleOrNonDestructive: z.boolean().optional(),
+  notes: z.string().trim().max(2_000).optional()
+}).strict();
+
+export const summaryInputSchema = z.object({
+  kind: boundedText(100),
+  periodStart: dateSchema,
+  periodEnd: dateSchema,
+  title: boundedText(500),
+  bodyMarkdown: z.string().trim().max(200_000),
+  metrics: z.record(z.unknown()).optional(),
+  evidenceRefs: optionalResourceRefsSchema,
+  routineKey: boundedText(2_000).optional(),
+  runId: boundedText(2_000).optional(),
+  expectedVersion: z.number().int().positive().optional()
+}).strict().superRefine((value, context) => {
+  if (value.periodStart > value.periodEnd) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["periodEnd"], message: "periodEnd must be on or after periodStart" });
+  }
+});
+
+export const proposalInputSchema = z.object({
+  kind: boundedText(100),
+  title: boundedText(500),
+  bodyMarkdown: z.string().trim().max(200_000),
+  evidenceRefs: optionalResourceRefsSchema,
+  proposedAction: proposedActionSchema.optional(),
+  confidenceEvidence: confidenceEvidenceSchema.optional(),
+  routineKey: boundedText(2_000).optional(),
+  runId: boundedText(2_000).optional(),
+  dedupeKey: boundedText(2_000).optional()
+}).strict();
+
+export const proposalContentUpdateSchema = z.object({
+  title: boundedText(500).optional(),
+  bodyMarkdown: z.string().trim().max(200_000).optional(),
+  evidenceRefs: optionalResourceRefsSchema,
+  proposedAction: proposedActionSchema.optional(),
+  confidenceEvidence: confidenceEvidenceSchema.optional(),
+  expectedVersion: z.number().int().positive()
+}).strict().refine((value) => Object.keys(value).some((key) => key !== "expectedVersion"), {
+  message: "At least one content field is required"
+});
+
+export const proposalResolutionSchema = z.object({
+  status: z.enum(["approved", "rejected"]),
+  resolvedBy: boundedText(2_000),
+  provenance: boundedText(2_000),
+  expectedVersion: z.number().int().positive()
+}).strict();
+
+export const proposalExecutionSchema = z.object({
+  operationId: boundedText(2_000),
+  expectedVersion: z.number().int().positive()
+}).strict();
+
+export const proposalSupersedeSchema = z.object({
+  expectedVersion: z.number().int().positive()
+}).strict();
+
+export const operationInputSchema = z.object({
+  operationKind: z.enum(ANALYSER_OPERATION_KINDS),
+  approvalBasis: z.enum(["policy", "proposal"]),
+  proposalId: boundedText(2_000).optional(),
+  beforeRefs: optionalResourceRefsSchema,
+  afterRefs: optionalResourceRefsSchema,
+  result: z.enum(["succeeded", "failed", "skipped"]),
+  detail: flatObjectSchema.optional(),
+  runId: boundedText(2_000).optional(),
+  agentLabel: boundedText(2_000).optional(),
+  idempotencyKey: boundedText(2_000)
+}).strict().superRefine((value, context) => {
+  if (value.approvalBasis === "proposal" && !value.proposalId) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["proposalId"], message: "proposalId is required for proposal approval" });
+  }
+  if (value.approvalBasis === "policy" && value.proposalId !== undefined) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["proposalId"], message: "proposalId is only valid for proposal approval" });
+  }
+});
+
+export const publicationInputSchema = z.object({
+  sourceKind: z.enum(["summary", "proposal"]),
+  sourceId: boundedText(2_000),
+  targetKind: z.enum(["note", "artifact"]),
+  targetId: boundedText(2_000),
+  targetRef: resourceRefSchema.optional(),
+  contentHash: z.string().trim().min(8).max(128).regex(/^[0-9a-fA-F]+$/, "Expected a hexadecimal content hash"),
+  provenance: z.enum(["ui", "agent"])
+}).strict();
+
+export type ProposedAction = z.infer<typeof proposedActionSchema>;
+export type ConfidenceEvidence = z.infer<typeof confidenceEvidenceSchema>;
+export type SummaryInput = z.infer<typeof summaryInputSchema>;
+export type ProposalInput = z.infer<typeof proposalInputSchema>;
+export type ProposalContentUpdate = z.infer<typeof proposalContentUpdateSchema>;
+export type ProposalResolution = z.infer<typeof proposalResolutionSchema>;
+export type ProposalExecution = z.infer<typeof proposalExecutionSchema>;
+export type ProposalSupersede = z.infer<typeof proposalSupersedeSchema>;
+export type OperationInput = z.infer<typeof operationInputSchema>;
+export type PublicationInput = z.infer<typeof publicationInputSchema>;
+
+export interface SummaryRecord {
+  id: string;
+  kind: string;
+  periodStart: string;
+  periodEnd: string;
+  title: string;
+  bodyMarkdown: string;
+  metrics?: Record<string, unknown>;
+  evidenceRefs: ResourceRef[];
+  routineKey?: string;
+  runId?: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type SummaryListItem = Omit<SummaryRecord, "bodyMarkdown"> & { bodyChars: number };
+
+export type ProposalStatus = "open" | "approved" | "rejected" | "executed" | "superseded";
+export interface ProposalRecord {
+  id: string;
+  kind: string;
+  title: string;
+  bodyMarkdown: string;
+  evidenceRefs: ResourceRef[];
+  proposedAction?: ProposedAction;
+  confidenceEvidence?: ConfidenceEvidence;
+  status: ProposalStatus;
+  approvedBy?: string;
+  approvedAt?: string;
+  approvalProvenance?: string;
+  routineKey?: string;
+  runId?: string;
+  dedupeKey?: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ProposalListItem = Omit<ProposalRecord, "bodyMarkdown"> & { bodyChars: number };
+
+export interface OperationRecord {
+  id: string;
+  operationKind: AnalyserOperationKind;
+  approvalBasis: "policy" | "proposal";
+  proposalId?: string;
+  beforeRefs: ResourceRef[];
+  afterRefs: ResourceRef[];
+  result: "succeeded" | "failed" | "skipped";
+  detail?: Record<string, string | number | boolean | null>;
+  runId?: string;
+  agentLabel?: string;
+  idempotencyKey: string;
+  createdAt: string;
+}
+
+export interface PublicationRecord {
+  id: string;
+  sourceKind: "summary" | "proposal";
+  sourceId: string;
+  targetKind: "note" | "artifact";
+  targetId: string;
+  targetRef?: ResourceRef;
+  contentHash: string;
+  provenance: "ui" | "agent";
+  createdAt: string;
+}
