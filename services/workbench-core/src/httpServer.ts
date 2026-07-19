@@ -37,13 +37,24 @@ import {
   flagMaintenanceTarget,
   MAINTENANCE_FLAG_REASONS,
   MAINTENANCE_FLAG_TARGET_TYPES,
+  resolveMaintenanceTarget,
   snoozeMaintenanceMemory,
   snoozeMaintenanceNote
 } from "./maintenanceActions.js";
 import { aggregateMaintenanceQueue, MaintenanceQueueInputError } from "./maintenanceQueue.js";
 import { getOAuthDynamicClient, saveOAuthDynamicClient } from "./oauthDynamicClientsStore.js";
-import { commitSyncChangesCursor, pullSyncChanges } from "./syncChanges.js";
-import { SyncConsumerCursorInputError } from "./syncConsumerCursorsStore.js";
+import {
+  commitSyncChangesCursor,
+  initializeSyncChangesConsumer,
+  pullSyncChanges,
+  SyncConsumerScopeMismatchError
+} from "./syncChanges.js";
+import { SyncConsumerCursorInputError, SyncConsumerScopeConflictError } from "./syncConsumerCursorsStore.js";
+import {
+  MaintenanceLeaseHeldError,
+  MaintenanceLeaseInputError,
+  MaintenanceLeaseNotHeldError
+} from "./maintenanceLeasesStore.js";
 import {
   recordIndexSearchUsageBestEffort,
   recordProjectContextUsageBestEffort
@@ -1199,6 +1210,14 @@ const maintenanceFlagSchema = z.object({
   note: z.string().optional()
 });
 
+const maintenanceResolveSchema = z.object({
+  target: z.object({
+    type: z.literal("artifact"),
+    id: z.string().min(1)
+  }),
+  note: z.string().optional()
+});
+
 type AuthenticatedContext = {
   userId: string;
   username: string;
@@ -1364,6 +1383,16 @@ export function respondInternalError(res: express.Response, error: unknown): exp
   }
 
   if (error instanceof MaintenanceQueueInputError) {
+    return res.status(error.status).json({ message: error.message, code: error.code });
+  }
+
+  if (
+    error instanceof SyncConsumerScopeConflictError
+    || error instanceof SyncConsumerScopeMismatchError
+    || error instanceof MaintenanceLeaseInputError
+    || error instanceof MaintenanceLeaseHeldError
+    || error instanceof MaintenanceLeaseNotHeldError
+  ) {
     return res.status(error.status).json({ message: error.message, code: error.code });
   }
 
@@ -4968,12 +4997,49 @@ app.get("/api/sync/changes", async (req, res) => {
       ? req.query.domains.filter((value): value is string => typeof value === "string")
       : undefined;
 
+  const queryList = (value: unknown): string[] | undefined => {
+    if (typeof value === "string") {
+      const entries = value.split(",").map((entry) => entry.trim()).filter(Boolean);
+      return entries.length > 0 ? entries : undefined;
+    }
+    if (Array.isArray(value)) {
+      const entries = value.filter((entry): entry is string => typeof entry === "string");
+      return entries.length > 0 ? entries : undefined;
+    }
+    return undefined;
+  };
+  const queryBoolean = (value: unknown): boolean | undefined =>
+    value === "true" ? true : value === "false" ? false : undefined;
+
   try {
     const result = await pullSyncChanges(authContext.userId, {
       consumer: typeof req.query.consumer === "string" ? req.query.consumer : undefined,
       cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
       domains,
-      limit: typeof req.query.limit === "string" ? req.query.limit : undefined
+      limit: typeof req.query.limit === "string" ? req.query.limit : undefined,
+      projectId: typeof req.query.projectId === "string" ? req.query.projectId : undefined,
+      pathPrefix: typeof req.query.pathPrefix === "string" ? req.query.pathPrefix : undefined,
+      resourceTypes: queryList(req.query.resourceTypes),
+      actions: queryList(req.query.actions),
+      includeContent: queryBoolean(req.query.includeContent),
+      includePatch: queryBoolean(req.query.includePatch)
+    });
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/sync/changes/consumers/initialize", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+
+  const body = asJsonRecord(req.body);
+  try {
+    const result = await initializeSyncChangesConsumer(authContext.userId, {
+      consumer: body.consumer,
+      startAt: body.startAt,
+      scope: body.scope
     });
     return res.json(result);
   } catch (error) {
@@ -5232,6 +5298,25 @@ app.post("/api/maintenance/flags", async (req, res) => {
 
   try {
     const result = await flagMaintenanceTarget({
+      accessToken: authContext.accessToken,
+      userId: authContext.userId,
+      source: "core-api",
+      actor: authContext.username
+    }, parsed.data);
+    return res.json(result);
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
+
+app.post("/api/maintenance/reviews/resolve", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext) return;
+  const parsed = maintenanceResolveSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
+
+  try {
+    const result = await resolveMaintenanceTarget({
       accessToken: authContext.accessToken,
       userId: authContext.userId,
       source: "core-api",
