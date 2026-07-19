@@ -149,6 +149,19 @@ services:
     volumes:
       - insights_pgdata:/var/lib/postgresql/data
 
+  analyser-db:
+    image: postgres:16-alpine
+    container_name: workbench-analyser-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: analyser_db
+      POSTGRES_USER: analyser_user
+      POSTGRES_PASSWORD: analyser_pass
+    ports:
+      - "5551:5432"
+    volumes:
+      - analyser_pgdata:/var/lib/postgresql/data
+
 volumes:
   workbench_core_pgdata:
   notes_pgdata:
@@ -160,3 +173,4 @@ volumes:
   mindmaps_pgdata:
   wbs_pgdata:
   insights_pgdata:
+  analyser_pgdata:
