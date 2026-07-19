@@ -30,7 +30,7 @@ import { registerProjectContextTools } from "./mcp/registerProjectContextTools.j
 import { registerTasksTools } from "./mcp/registerTasksTools.js";
 import { registerWbsTools } from "./mcp/registerWbsTools.js";
 import { ensureIntegrationLinked } from "./integrationLinking.js";
-import { artifactsClient, imagesClient, insightsClient, InternalServiceError, mindmapsClient, notesClient, projectsClient, serviceBaseUrls, tasksClient, wbsClient } from "./internalClients.js";
+import { analyserClient, artifactsClient, imagesClient, insightsClient, InternalServiceError, mindmapsClient, notesClient, projectsClient, serviceBaseUrls, tasksClient, wbsClient } from "./internalClients.js";
 import {
   confirmMaintenanceMemory,
   confirmMaintenanceNote,
@@ -147,6 +147,7 @@ import {
 import { buildProjectContextExportResponse } from "./projectContextExport.js";
 import {
   configuredServiceIds,
+  ensureAnalyserAccountProvisioned,
   ensureImagesAccountProvisioned,
   ensureInsightsAccountProvisioned,
   ensureMindmapsAccountProvisioned,
@@ -3930,6 +3931,208 @@ app.get("/api/insights/derived", async (req, res) => {
     return respondInternalError(res, error);
   }
 });
+
+export function requireAnalyserConfigured(res: express.Response): boolean {
+  if (serviceBaseUrls.analyser) return true;
+  res.status(503).json({ message: "Analyser service is not configured", code: "ANALYSER_NOT_CONFIGURED" });
+  return false;
+}
+
+export function pickAnalyserQuery(
+  query: express.Request["query"],
+  allowedKeys: readonly string[]
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const key of allowedKeys) {
+    const value = query[key];
+    if (typeof value === "string") result[key] = value;
+  }
+  return result;
+}
+
+export async function forwardAnalyserRequest<T>(
+  authContext: AuthenticatedContext,
+  delegate: (token: string) => Promise<T>,
+  provision: (context: AuthenticatedContext) => Promise<void> = ensureAnalyserAccountProvisioned
+): Promise<T> {
+  await provision(authContext);
+  return delegate(authContext.accessToken);
+}
+
+type AnalyserFacadeDelegate = (token: string, req: express.Request) => Promise<unknown>;
+
+function analyserFacadeRoute(
+  delegate: AnalyserFacadeDelegate,
+  options: { syncAccess?: boolean; status?: number } = {}
+): express.RequestHandler {
+  return async (req, res) => {
+    const authContext = options.syncAccess
+      ? await requireSyncAccessContext(req, res)
+      : await requireAuthenticatedContext(req, res);
+    if (!authContext || !requireAnalyserConfigured(res)) return;
+    try {
+      const result = await forwardAnalyserRequest(authContext, (token) => delegate(token, req));
+      if (options.status === 204) return res.status(204).send();
+      return res.status(options.status ?? 200).json(result);
+    } catch (error) {
+      return respondInternalError(res, error);
+    }
+  };
+}
+
+app.post(
+  "/api/analyser/machines/register",
+  analyserFacadeRoute((token, req) => analyserClient.registerMachine(token, req.body ?? {}), { syncAccess: true })
+);
+app.get("/api/analyser/machines", analyserFacadeRoute((token) => analyserClient.listMachines(token)));
+app.get("/api/analyser/settings", analyserFacadeRoute((token) => analyserClient.getSettings(token)));
+app.get(
+  "/api/analyser/settings/effective",
+  analyserFacadeRoute((token, req) => analyserClient.getEffectiveSettings(
+    token,
+    pickAnalyserQuery(req.query, ["machineId"])
+  ))
+);
+app.put(
+  "/api/analyser/settings/collection",
+  analyserFacadeRoute((token, req) => analyserClient.updateCollectionPolicy(token, req.body ?? {}))
+);
+app.put(
+  "/api/analyser/settings/automation",
+  analyserFacadeRoute((token, req) => analyserClient.updateAutomationPolicy(token, req.body ?? {}))
+);
+app.post(
+  "/api/analyser/observations/ingest",
+  analyserFacadeRoute((token, req) => analyserClient.ingestObservations(token, req.body ?? {}), { syncAccess: true })
+);
+app.get(
+  "/api/analyser/observations",
+  analyserFacadeRoute((token, req) => analyserClient.listObservations(
+    token,
+    pickAnalyserQuery(req.query, ["source", "machineId", "projectId", "from", "to", "limit", "cursor"])
+  ))
+);
+app.get(
+  "/api/analyser/observations/aggregate",
+  analyserFacadeRoute((token, req) => analyserClient.aggregateActivity(
+    token,
+    pickAnalyserQuery(req.query, ["from", "to", "machineId"])
+  ))
+);
+app.get("/api/analyser/routines", analyserFacadeRoute((token) => analyserClient.listRoutines(token)));
+app.get("/api/analyser/routines/status", analyserFacadeRoute((token) => analyserClient.routineStatus(token)));
+app.post(
+  "/api/analyser/routines/seed",
+  analyserFacadeRoute((token) => analyserClient.seedRoutines(token), { status: 204 })
+);
+app.patch(
+  "/api/analyser/routines/:key",
+  analyserFacadeRoute((token, req) => analyserClient.updateRoutine(token, String(req.params.key), req.body ?? {}))
+);
+app.post(
+  "/api/analyser/routines/claim",
+  analyserFacadeRoute((token, req) => analyserClient.claimRoutine(token, req.body ?? {}))
+);
+app.post(
+  "/api/analyser/runs/:runId/heartbeat",
+  analyserFacadeRoute((token, req) => analyserClient.heartbeatRun(token, String(req.params.runId), req.body ?? {}))
+);
+app.post(
+  "/api/analyser/runs/:runId/pull",
+  analyserFacadeRoute((token, req) => analyserClient.pullRun(token, String(req.params.runId), req.body ?? {}))
+);
+app.post(
+  "/api/analyser/runs/:runId/complete",
+  analyserFacadeRoute((token, req) => analyserClient.completeRun(token, String(req.params.runId), req.body ?? {}))
+);
+app.post(
+  "/api/analyser/runs/:runId/fail",
+  analyserFacadeRoute((token, req) => analyserClient.failRun(token, String(req.params.runId), req.body ?? {}))
+);
+app.post(
+  "/api/analyser/summaries",
+  analyserFacadeRoute((token, req) => analyserClient.upsertSummary(token, req.body ?? {}))
+);
+app.get(
+  "/api/analyser/summaries",
+  analyserFacadeRoute((token, req) => analyserClient.listSummaries(
+    token,
+    pickAnalyserQuery(req.query, ["kind", "from", "to", "routineKey", "limit", "cursor"])
+  ))
+);
+app.get(
+  "/api/analyser/summaries/:id",
+  analyserFacadeRoute((token, req) => analyserClient.getSummary(token, String(req.params.id)))
+);
+app.post(
+  "/api/analyser/proposals",
+  analyserFacadeRoute((token, req) => analyserClient.createProposal(token, req.body ?? {}))
+);
+app.get(
+  "/api/analyser/proposals",
+  analyserFacadeRoute((token, req) => analyserClient.listProposals(
+    token,
+    pickAnalyserQuery(req.query, ["status", "kind", "routineKey", "limit", "cursor"])
+  ))
+);
+app.get(
+  "/api/analyser/proposals/:id",
+  analyserFacadeRoute((token, req) => analyserClient.getProposal(token, String(req.params.id)))
+);
+app.patch(
+  "/api/analyser/proposals/:id/content",
+  analyserFacadeRoute((token, req) => analyserClient.updateProposalContent(
+    token,
+    String(req.params.id),
+    req.body ?? {}
+  ))
+);
+app.post(
+  "/api/analyser/proposals/:id/resolve",
+  analyserFacadeRoute((token, req) => analyserClient.resolveProposal(token, String(req.params.id), req.body ?? {}))
+);
+app.post(
+  "/api/analyser/proposals/:id/supersede",
+  analyserFacadeRoute((token, req) => analyserClient.supersedeProposal(token, String(req.params.id), req.body ?? {}))
+);
+app.post(
+  "/api/analyser/proposals/:id/executed",
+  analyserFacadeRoute((token, req) => analyserClient.markProposalExecuted(token, String(req.params.id), req.body ?? {}))
+);
+app.post(
+  "/api/analyser/operations",
+  analyserFacadeRoute((token, req) => analyserClient.recordOperation(token, req.body ?? {}))
+);
+app.get(
+  "/api/analyser/operations",
+  analyserFacadeRoute((token, req) => analyserClient.listOperations(
+    token,
+    pickAnalyserQuery(req.query, ["operationKind", "result", "proposalId", "limit", "cursor"])
+  ))
+);
+app.get(
+  "/api/analyser/operations/:id",
+  analyserFacadeRoute((token, req) => analyserClient.getOperation(token, String(req.params.id)))
+);
+app.post(
+  "/api/analyser/publications",
+  analyserFacadeRoute((token, req) => analyserClient.recordPublication(token, req.body ?? {}))
+);
+app.get(
+  "/api/analyser/publications",
+  analyserFacadeRoute((token, req) => analyserClient.listPublications(
+    token,
+    pickAnalyserQuery(req.query, ["sourceKind", "sourceId", "limit", "cursor"])
+  ))
+);
+app.get(
+  "/api/analyser/publications/find",
+  analyserFacadeRoute((token, req) => analyserClient.findPublication(
+    token,
+    pickAnalyserQuery(req.query, ["sourceKind", "sourceId", "targetKind", "contentHash"])
+  ))
+);
+app.get("/api/analyser/status", analyserFacadeRoute((token) => analyserClient.getStatus(token)));
 
 app.get("/api/wbs/plans", async (req, res) => {
   const authContext = await requireAuthenticatedContext(req, res);

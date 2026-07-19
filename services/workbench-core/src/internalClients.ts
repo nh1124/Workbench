@@ -19,7 +19,7 @@ function optionalEnv(name: string): string | undefined {
   return value && value.length > 0 ? value : undefined;
 }
 
-type ServiceId = "notes" | "artifacts" | "tasks" | "projects" | "lbs" | "images" | "mindmaps" | "wbs" | "insights";
+type ServiceId = "notes" | "artifacts" | "tasks" | "projects" | "lbs" | "images" | "mindmaps" | "wbs" | "insights" | "analyser";
 
 type ServiceConfig = {
   id: ServiceId;
@@ -41,6 +41,10 @@ const lbsService: ServiceConfig | undefined = lbsBaseUrl ? { id: "lbs", baseUrl:
 const insightsBaseUrl = optionalEnv("INSIGHTS_SERVICE_URL");
 const insightsService: ServiceConfig | undefined = insightsBaseUrl ? { id: "insights", baseUrl: insightsBaseUrl } : undefined;
 
+const analyserBaseUrl = optionalEnv("ANALYSER_SERVICE_URL");
+const analyserService: ServiceConfig | undefined = analyserBaseUrl ? { id: "analyser", baseUrl: analyserBaseUrl } : undefined;
+const analyserInternalApiKey = optionalEnv("INTERNAL_API_KEY_ANALYSER");
+
 const CORE_MUTATION_ORIGIN_HEADER = "x-workbench-core-mutation";
 const CORE_MUTATION_TOKEN_HEADER = "x-workbench-core-mutation-token";
 const coreMutationToken = optionalEnv("WORKBENCH_CORE_MUTATION_TOKEN");
@@ -54,7 +58,8 @@ export const serviceBaseUrls = {
   wbs: wbsService.baseUrl,
   projects: projectsService?.baseUrl,
   lbs: lbsService?.baseUrl,
-  insights: insightsService?.baseUrl
+  insights: insightsService?.baseUrl,
+  analyser: analyserService?.baseUrl
 } as const;
 
 export class InternalServiceError extends Error {
@@ -785,6 +790,233 @@ export const insightsClient = {
     }),
   listDerived: (token: string, query: InsightsDerivedQuery = {}) =>
     serviceRequest<unknown>(requireInsights(), `/derived${buildQuery(query)}`, token)
+};
+
+function requireAnalyser(): ServiceConfig {
+  if (!analyserService) throw new Error("Analyser service is not configured (ANALYSER_SERVICE_URL missing)");
+  return analyserService;
+}
+
+function requireAnalyserInternalApiKey(): string {
+  if (!analyserInternalApiKey) {
+    throw new Error("Analyser service provisioning is not configured (INTERNAL_API_KEY_ANALYSER missing)");
+  }
+  return analyserInternalApiKey;
+}
+
+type AnalyserEffectiveSettingsQuery = {
+  machineId?: string;
+};
+
+type AnalyserObservationQuery = {
+  source?: string;
+  machineId?: string;
+  projectId?: string;
+  from?: string;
+  to?: string;
+  limit?: string | number;
+  cursor?: string;
+};
+
+type AnalyserActivityQuery = {
+  from?: string;
+  to?: string;
+  machineId?: string;
+};
+
+type AnalyserSummaryQuery = {
+  kind?: string;
+  from?: string;
+  to?: string;
+  routineKey?: string;
+  limit?: string | number;
+  cursor?: string;
+};
+
+type AnalyserProposalQuery = {
+  status?: string;
+  kind?: string;
+  routineKey?: string;
+  limit?: string | number;
+  cursor?: string;
+};
+
+type AnalyserOperationQuery = {
+  operationKind?: string;
+  result?: string;
+  proposalId?: string;
+  limit?: string | number;
+  cursor?: string;
+};
+
+type AnalyserPublicationQuery = {
+  sourceKind?: string;
+  sourceId?: string;
+  limit?: string | number;
+  cursor?: string;
+};
+
+type AnalyserPublicationFindQuery = {
+  sourceKind?: string;
+  sourceId?: string;
+  targetKind?: string;
+  contentHash?: string;
+};
+
+export const analyserClient = {
+  provisionAccount: async (payload: unknown) => {
+    const service = requireAnalyser();
+    const response = await fetch(`${service.baseUrl}/internal/accounts`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": requireAnalyserInternalApiKey()
+      },
+      body: JSON.stringify(payload)
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      throw new InternalServiceError(service.id, response.status, text || `HTTP ${response.status}`);
+    }
+    return text.trim() ? JSON.parse(text) as unknown : undefined;
+  },
+  registerMachine: (token: string, payload: unknown) =>
+    serviceRequest<unknown>(requireAnalyser(), "/machines/register", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  listMachines: (token: string) => serviceRequest<unknown>(requireAnalyser(), "/machines", token),
+  getSettings: (token: string) => serviceRequest<unknown>(requireAnalyser(), "/settings", token),
+  getEffectiveSettings: (token: string, query: AnalyserEffectiveSettingsQuery = {}) =>
+    serviceRequest<unknown>(requireAnalyser(), `/settings/effective${buildQuery(query)}`, token),
+  updateCollectionPolicy: (token: string, payload: unknown) =>
+    serviceRequest<unknown>(requireAnalyser(), "/settings/collection", token, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  updateAutomationPolicy: (token: string, payload: unknown) =>
+    serviceRequest<unknown>(requireAnalyser(), "/settings/automation", token, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  ingestObservations: (token: string, payload: unknown) =>
+    serviceRequest<unknown>(requireAnalyser(), "/observations/ingest", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  listObservations: (token: string, query: AnalyserObservationQuery = {}) =>
+    serviceRequest<unknown>(requireAnalyser(), `/observations${buildQuery(query)}`, token),
+  aggregateActivity: (token: string, query: AnalyserActivityQuery) =>
+    serviceRequest<unknown>(requireAnalyser(), `/observations/aggregate${buildQuery(query)}`, token),
+  listRoutines: (token: string) => serviceRequest<unknown>(requireAnalyser(), "/routines", token),
+  routineStatus: (token: string) => serviceRequest<unknown>(requireAnalyser(), "/routines/status", token),
+  seedRoutines: (token: string) =>
+    serviceRequest<void>(requireAnalyser(), "/routines/seed", token, { method: "POST" }),
+  updateRoutine: (token: string, key: string, payload: unknown) =>
+    serviceRequest<unknown>(requireAnalyser(), `/routines/${encodeURIComponent(key)}`, token, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  claimRoutine: (token: string, payload: unknown) =>
+    serviceRequest<unknown>(requireAnalyser(), "/routines/claim", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  heartbeatRun: (token: string, runId: string, payload: unknown) =>
+    serviceRequest<unknown>(requireAnalyser(), `/runs/${encodeURIComponent(runId)}/heartbeat`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  pullRun: (token: string, runId: string, payload: unknown) =>
+    serviceRequest<unknown>(requireAnalyser(), `/runs/${encodeURIComponent(runId)}/pull`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  completeRun: (token: string, runId: string, payload: unknown) =>
+    serviceRequest<unknown>(requireAnalyser(), `/runs/${encodeURIComponent(runId)}/complete`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  failRun: (token: string, runId: string, payload: unknown) =>
+    serviceRequest<unknown>(requireAnalyser(), `/runs/${encodeURIComponent(runId)}/fail`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  upsertSummary: (token: string, payload: unknown) =>
+    serviceRequest<unknown>(requireAnalyser(), "/summaries", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  listSummaries: (token: string, query: AnalyserSummaryQuery = {}) =>
+    serviceRequest<unknown>(requireAnalyser(), `/summaries${buildQuery(query)}`, token),
+  getSummary: (token: string, id: string) =>
+    serviceRequest<unknown>(requireAnalyser(), `/summaries/${encodeURIComponent(id)}`, token),
+  createProposal: (token: string, payload: unknown) =>
+    serviceRequest<unknown>(requireAnalyser(), "/proposals", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  listProposals: (token: string, query: AnalyserProposalQuery = {}) =>
+    serviceRequest<unknown>(requireAnalyser(), `/proposals${buildQuery(query)}`, token),
+  getProposal: (token: string, id: string) =>
+    serviceRequest<unknown>(requireAnalyser(), `/proposals/${encodeURIComponent(id)}`, token),
+  updateProposalContent: (token: string, id: string, payload: unknown) =>
+    serviceRequest<unknown>(requireAnalyser(), `/proposals/${encodeURIComponent(id)}/content`, token, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  resolveProposal: (token: string, id: string, payload: unknown) =>
+    serviceRequest<unknown>(requireAnalyser(), `/proposals/${encodeURIComponent(id)}/resolve`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  supersedeProposal: (token: string, id: string, payload: unknown) =>
+    serviceRequest<unknown>(requireAnalyser(), `/proposals/${encodeURIComponent(id)}/supersede`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  markProposalExecuted: (token: string, id: string, payload: unknown) =>
+    serviceRequest<unknown>(requireAnalyser(), `/proposals/${encodeURIComponent(id)}/executed`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  recordOperation: (token: string, payload: unknown) =>
+    serviceRequest<unknown>(requireAnalyser(), "/operations", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  listOperations: (token: string, query: AnalyserOperationQuery = {}) =>
+    serviceRequest<unknown>(requireAnalyser(), `/operations${buildQuery(query)}`, token),
+  getOperation: (token: string, id: string) =>
+    serviceRequest<unknown>(requireAnalyser(), `/operations/${encodeURIComponent(id)}`, token),
+  recordPublication: (token: string, payload: unknown) =>
+    serviceRequest<unknown>(requireAnalyser(), "/publications", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  listPublications: (token: string, query: AnalyserPublicationQuery = {}) =>
+    serviceRequest<unknown>(requireAnalyser(), `/publications${buildQuery(query)}`, token),
+  findPublication: (token: string, query: AnalyserPublicationFindQuery) =>
+    serviceRequest<unknown>(requireAnalyser(), `/publications/find${buildQuery(query)}`, token),
+  getStatus: (token: string) => serviceRequest<unknown>(requireAnalyser(), "/status", token)
 };
 
 export const tasksClient = {
