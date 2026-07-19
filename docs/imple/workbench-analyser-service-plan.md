@@ -276,7 +276,7 @@ analyser.operations.record     analyser.publications.record
 | AW-4 | `[implemented]` | services/analyser | summaries / proposals / operations / publications store + tests |
 | AW-5 | `[implemented]` | services/analyser | httpServer 全 routes + zod 検証 + route tests（残: automation policy stored version の read 公開 → AW-13 で対応） |
 | AW-6 | `[implemented]` | core | analyserClient + provisioning + /api/analyser/* facade（machines/ingest は syncAccess 認可） |
-| AW-7 | `[pending]` | core | MCP analyser.* tools 登録 + annotations + tests |
+| AW-7 | `[implemented]` | core | MCP analyser.* tools 登録 + annotations + tests（18 tools、approve/reject/settings-write なし） |
 | AW-8 | `[pending]` | core | sync_events projector（scoped consumer + timer + 手動 flush）+ tests |
 | AW-9 | `[pending]` | core | MCP wrap + HTTP middleware の access 計測（allowlist・二重 gate）+ tests |
 | AW-10 | `[pending]` | sync-daemon | 設定粒度化 + uploader を analyser ingest へ + summarizer/autoPublish/summary upload 削除 |

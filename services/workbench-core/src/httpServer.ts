@@ -21,6 +21,7 @@ import { getIntegrationManifests } from "./integrations/index.js";
 import { registerArtifactsTools } from "./mcp/registerArtifactsTools.js";
 import { registerDeepResearchTools } from "./mcp/registerDeepResearchTools.js";
 import { registerImageTools } from "./mcp/registerImageTools.js";
+import { registerAnalyserTools } from "./mcp/registerAnalyserTools.js";
 import { registerInsightsTools } from "./mcp/registerInsightsTools.js";
 import { registerMaintenanceTools } from "./mcp/registerMaintenanceTools.js";
 import { registerMindmapTools } from "./mcp/registerMindmapTools.js";
@@ -7342,6 +7343,7 @@ function createMcpServerInstance(injectedContext: McpInjectedContext): McpServer
   registerMaintenanceTools(server, injectedContext);
   registerDeepResearchTools(server, injectedContext);
   registerImageTools(server, injectedContext);
+  registerAnalyserTools(server, injectedContext);
   registerInsightsTools(server, injectedContext);
   registerMindmapTools(server, injectedContext);
   registerWbsTools(server, injectedContext);
