@@ -270,8 +270,8 @@ analyser.operations.record     analyser.publications.record
 
 | ID | Status | Scope | Task |
 |---|---|---|---|
-| AW-1 | `[pending]` | services/analyser | scaffold + DB schema 全表 + auth + provisioning + health + package/tsconfig + .env.example + compose analyser-db + workspace 配線（insights は cutover まで並存） |
-| AW-2 | `[pending]` | services/analyser | machines / collection policies / automation policies / observations store（idempotent ingest・list・aggregate・retention cleanup）+ tests |
+| AW-1 | `[implemented]` | services/analyser | scaffold + DB schema 全表 + auth + provisioning + health + package/tsconfig + .env.example + compose analyser-db + workspace 配線（insights は cutover まで並存）(commit d66e213) |
+| AW-2 | `[implemented]` | services/analyser | machines / collection policies / automation policies / observations store（idempotent ingest・list・aggregate・retention cleanup・windowTitle 二重 gate）+ tests |
 | AW-3 | `[pending]` | services/analyser | schedule module（cron subset + tz + DST tests）+ routines/runs store（claim/heartbeat/complete/fail/seed）+ tests |
 | AW-4 | `[pending]` | services/analyser | summaries / proposals / operations / publications store + tests |
 | AW-5 | `[pending]` | services/analyser | httpServer 全 routes + zod 検証 + route tests |

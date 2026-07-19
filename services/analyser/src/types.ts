@@ -154,3 +154,68 @@ export const automationPolicySchema = z.object({
   bulkAllowed: z.boolean(),
   allowedOperationKinds: z.array(z.enum(ANALYSER_OPERATION_KINDS))
 }).strict();
+
+export type CollectionSettingsOverride = z.infer<typeof collectionSettingsSchema>;
+
+export interface MachineRecord {
+  id: string;
+  machineKey: string;
+  displayName?: string;
+  platform?: string;
+  registeredAt: string;
+  lastSeenAt: string;
+}
+
+export const observationInputSchema = z.object({
+  source: z.enum(OBSERVATION_SOURCES),
+  action: z.string().trim().min(1),
+  actorKind: z.enum(ACTOR_KINDS),
+  machineId: z.string().trim().min(1).optional(),
+  projectId: z.string().trim().min(1).optional(),
+  occurredAt: isoDateTimeSchema,
+  resourceRefs: z.array(resourceRefSchema).optional(),
+  metadata: z.record(z.union([z.string(), z.number().finite(), z.boolean(), z.null()])).optional(),
+  sourceEventId: z.string().optional(),
+  dedupeKey: z.string().trim().min(1)
+}).strict();
+
+export interface ObservationInput {
+  source: ObservationSource;
+  action: string;
+  actorKind: ActorKind;
+  machineId?: string;
+  projectId?: string;
+  occurredAt: string;
+  resourceRefs?: ResourceRef[];
+  metadata?: Record<string, string | number | boolean | null>;
+  sourceEventId?: string;
+  dedupeKey: string;
+}
+
+export interface ObservationRecord extends ObservationInput {
+  seq: string;
+  id: string;
+  receivedAt: string;
+  expiresAt: string;
+}
+
+export interface ActivityAggregateDay {
+  date: string;
+  machineId: string | null;
+  sampleCount: number;
+  idleCount: number;
+  activeCount: number;
+  apps: Record<string, number>;
+}
+
+export interface ActivityAggregateTotals {
+  sampleCount: number;
+  idleCount: number;
+  activeCount: number;
+  apps: Record<string, number>;
+}
+
+export interface ActivityAggregate {
+  days: ActivityAggregateDay[];
+  totals: ActivityAggregateTotals;
+}
