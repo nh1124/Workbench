@@ -277,7 +277,7 @@ analyser.operations.record     analyser.publications.record
 | AW-5 | `[implemented]` | services/analyser | httpServer 全 routes + zod 検証 + route tests（残: automation policy stored version の read 公開 → AW-13 で対応） |
 | AW-6 | `[implemented]` | core | analyserClient + provisioning + /api/analyser/* facade（machines/ingest は syncAccess 認可） |
 | AW-7 | `[implemented]` | core | MCP analyser.* tools 登録 + annotations + tests（18 tools、approve/reject/settings-write なし） |
-| AW-8 | `[pending]` | core | sync_events projector（scoped consumer + timer + 手動 flush）+ tests |
+| AW-8 | `[implemented]` | core | sync_events projector（consumer `analyser-projector` + 60s timer + /api/analyser/projector/flush、payload 非転送、未 provisioning は skip）+ tests |
 | AW-9 | `[pending]` | core | MCP wrap + HTTP middleware の access 計測（allowlist・二重 gate）+ tests |
 | AW-10 | `[pending]` | sync-daemon | 設定粒度化 + uploader を analyser ingest へ + summarizer/autoPublish/summary upload 削除 |
 | AW-11 | `[pending]` | ui | api.ts analyser client + AnalyserPage 骨格 + Overview + Activity |

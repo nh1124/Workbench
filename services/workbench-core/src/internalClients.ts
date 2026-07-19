@@ -804,6 +804,43 @@ function requireAnalyserInternalApiKey(): string {
   return analyserInternalApiKey;
 }
 
+export type AnalyserInternalIngestResult = {
+  ingested: number;
+  duplicates: number;
+  rejected: Record<string, number>;
+};
+
+export type AnalyserInternalEffectiveSettingsResult = {
+  settings: { workbenchChanges: "off" | "metadata" };
+  ownerVersion?: number;
+  machineVersion?: number;
+};
+
+async function analyserInternalRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const service = requireAnalyser();
+  const headers = new Headers(init?.headers ?? {});
+  headers.set("x-api-key", requireAnalyserInternalApiKey());
+  const response = await fetch(`${service.baseUrl}${path}`, { ...init, headers });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new InternalServiceError(service.id, response.status, text || `HTTP ${response.status}`);
+  }
+  return text.trim() ? JSON.parse(text) as T : undefined as T;
+}
+
+export const analyserInternalClient = {
+  ingestObservations: (body: { coreUserId: string; machineId?: string; observations: unknown[] }) =>
+    analyserInternalRequest<AnalyserInternalIngestResult>("/internal/observations/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }),
+  getEffectiveSettings: (query: { coreUserId: string; machineId?: string }) =>
+    analyserInternalRequest<AnalyserInternalEffectiveSettingsResult>(
+      `/internal/settings/effective${buildQuery(query)}`
+    )
+};
+
 type AnalyserEffectiveSettingsQuery = {
   machineId?: string;
 };

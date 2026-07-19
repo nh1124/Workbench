@@ -43,6 +43,7 @@ import {
   snoozeMaintenanceNote
 } from "./maintenanceActions.js";
 import { aggregateMaintenanceQueue, MaintenanceQueueInputError } from "./maintenanceQueue.js";
+import { projectSyncEventsForUser, startAnalyserProjector } from "./analyserProjector.js";
 import { getOAuthDynamicClient, saveOAuthDynamicClient } from "./oauthDynamicClientsStore.js";
 import {
   commitSyncChangesCursor,
@@ -4006,6 +4007,15 @@ app.post(
   "/api/analyser/observations/ingest",
   analyserFacadeRoute((token, req) => analyserClient.ingestObservations(token, req.body ?? {}), { syncAccess: true })
 );
+app.post("/api/analyser/projector/flush", async (req, res) => {
+  const authContext = await requireAuthenticatedContext(req, res);
+  if (!authContext || !requireAnalyserConfigured(res)) return;
+  try {
+    return res.json(await projectSyncEventsForUser(authContext.userId));
+  } catch (error) {
+    return respondInternalError(res, error);
+  }
+});
 app.get(
   "/api/analyser/observations",
   analyserFacadeRoute((token, req) => analyserClient.listObservations(
@@ -7515,6 +7525,7 @@ export async function startHttpServer(): Promise<void> {
   }
 
   await ensureCoreSchema();
+  if (serviceBaseUrls.analyser) startAnalyserProjector();
   app.listen(port, host, () => {
     logger.info(`Workbench Core HTTP listening on ${host}:${port}`);
     logger.info(`MCP HTTP endpoint available at POST http://${host}:${port}/mcp`);

@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { requireInternalApiKey, requireUserAuth } from "./auth.js";
-import { ensureAnalyserSchema, provisionServiceAccount } from "./db.js";
+import { ensureAnalyserSchema, findServiceAccountByCoreUserId, provisionServiceAccount } from "./db.js";
 import { AnalyserServiceError } from "./serviceError.js";
 import { listMachines, registerMachine } from "./stores/machines.js";
 import {
@@ -158,6 +158,17 @@ export const observationIngestSchema = z.object({
   observations: z.array(observationInputSchema).max(500)
 }).strict();
 
+export const internalObservationIngestSchema = z.object({
+  coreUserId: boundedText(2_000),
+  machineId: z.string().uuid().optional(),
+  observations: z.array(observationInputSchema).max(500)
+}).strict();
+
+export const internalEffectiveSettingsQuerySchema = z.object({
+  coreUserId: boundedText(2_000),
+  machineId: z.string().uuid().optional()
+}).strict();
+
 export const observationListQuerySchema = z.object({
   source: z.enum(OBSERVATION_SOURCES).optional(),
   machineId: z.string().uuid().optional(),
@@ -267,6 +278,7 @@ export interface AppDeps {
   requireUserAuth: express.RequestHandler;
   requireInternalApiKey: express.RequestHandler;
   provisionServiceAccount: typeof provisionServiceAccount;
+  findServiceAccountByCoreUserId: typeof findServiceAccountByCoreUserId;
   registerMachine: typeof registerMachine;
   listMachines: typeof listMachines;
   getEffectiveCollectionSettings: typeof getEffectiveCollectionSettings;
@@ -308,6 +320,7 @@ const realAppDeps: AppDeps = {
   requireUserAuth,
   requireInternalApiKey,
   provisionServiceAccount,
+  findServiceAccountByCoreUserId,
   registerMachine,
   listMachines,
   getEffectiveCollectionSettings,
@@ -368,6 +381,30 @@ export function buildApp(deps: AppDeps): express.Express {
     if (!body) return;
     await deps.provisionServiceAccount(body.coreUserId, body.username);
     return res.status(201).json({ status: "ok", service: "analyser" });
+  }));
+
+  app.post("/internal/observations/ingest", deps.requireInternalApiKey, asyncRoute(async (req, res) => {
+    const body = parse(internalObservationIngestSchema, req.body ?? {}, res);
+    if (!body) return;
+    const account = await deps.findServiceAccountByCoreUserId(body.coreUserId);
+    if (!account) {
+      throw new AnalyserServiceError(404, "ACCOUNT_NOT_FOUND", "Analyser service account not found");
+    }
+    return res.json(await deps.ingestObservations(
+      account.id,
+      body.observations,
+      body.machineId ? { machineId: body.machineId } : {}
+    ));
+  }));
+
+  app.get("/internal/settings/effective", deps.requireInternalApiKey, asyncRoute(async (req, res) => {
+    const query = parse(internalEffectiveSettingsQuerySchema, req.query, res);
+    if (!query) return;
+    const account = await deps.findServiceAccountByCoreUserId(query.coreUserId);
+    if (!account) {
+      throw new AnalyserServiceError(404, "ACCOUNT_NOT_FOUND", "Analyser service account not found");
+    }
+    return res.json(await deps.getEffectiveCollectionSettings(account.id, query.machineId));
   }));
 
   app.post("/machines/register", ...userRoute(deps, async (req, res) => {
