@@ -411,8 +411,8 @@ metadata_json, changed_by, created_at; note kind のみ・上限付き）の追�
 | W3 artifact maintenance | [implemented] 672e189 |
 | W4 MCP schema + docs | [implemented] (tool-contracts.md / SKILL.md / 本書) |
 | W5 lease (Phase 2) | [implemented] fdeeca6 |
-| 統合テスト（Step 5 シナリオ） | [pending] live 環境（`npm run dev:services` + 実 DB）での受入待ち。単体 132 (core) + 11 (artifacts) は green |
-| 最終レビュー・commit | [done] 2026-07-19 各 wave を Claude がレビューし commit |
+| 統合テスト（Step 5 シナリオ） | [done] 2026-07-19 live dev スタック（実 Postgres）で 30/30 checks green（head init 冪等/409、scoped pull、commit 再配信なし、move previousPath、delete 前 path、flag→queue→resolve→監査、他 owner 404、consumer per-owner 分離）。単体 133 (core) + 11 (artifacts) green |
+| 最終レビュー・commit | [done] 2026-07-19 各 wave を Claude がレビューし commit。Codex 独立最終レビューの指摘 2 件（scoped pull の 2 文レース、bound consumer の domains narrowing）を修正済み、2 件は §9.0 の許容制約として記録 |
 
 実装補足（推奨案からの変更・§6 以外に確定したもの）:
 
