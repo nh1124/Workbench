@@ -1,6 +1,6 @@
 # AgentSkills 定期メンテナンス基盤強化 実装計画
 
-Status: 計画作成済み、実装中
+Status: Phase 1 (W1〜W4) + Phase 2-A (W5 lease) 実装完了。残: live 環境での統合シナリオ受入（§10）
 Last updated: 2026-07-19
 
 関連文書:
@@ -392,10 +392,20 @@ metadata_json, changed_by, created_at; note kind のみ・上限付き）の追�
 |---|---|
 | 調査（§2） | [done] 2026-07-19 |
 | 計画書作成 | [done] 2026-07-19 |
-| W1 envelope + emission | [pending] |
-| W2 initialize + scoped pull | [pending] |
-| W3 artifact maintenance | [pending] |
-| W4 MCP schema + docs | [pending] |
-| W5 lease (Phase 2) | [pending] |
-| 統合テスト（Step 5 シナリオ） | [pending] |
-| 最終レビュー・commit | [pending] |
+| W1 envelope + emission | [implemented] 628bebf |
+| W2 initialize + scoped pull | [implemented] 7ff76c8, bd5e156 |
+| W3 artifact maintenance | [implemented] 672e189 |
+| W4 MCP schema + docs | [implemented] (tool-contracts.md / SKILL.md / 本書) |
+| W5 lease (Phase 2) | [implemented] fdeeca6 |
+| 統合テスト（Step 5 シナリオ） | [pending] live 環境（`npm run dev:services` + 実 DB）での受入待ち。単体 132 (core) + 11 (artifacts) は green |
+| 最終レビュー・commit | [done] 2026-07-19 各 wave を Claude がレビューし commit |
+
+実装補足（推奨案からの変更・§6 以外に確定したもの）:
+
+- artifact_maintenance_flags に `project_id` snapshot 列を追加（計画 §5.4 の DDL に対する追加）。
+  flag 後に Artifact 本体が削除されても projectId でのキュー絞り込みと監査を維持するため。
+- 既存 unscoped consumer への scope の lazy-bind は行わない（暗黙の挙動変更を避ける）。
+  `cowork-agent-skills-incremental` は unscoped のまま、pull ごとの明示フィルターで運用する。
+- resolve は `maintenance.review.resolve`（artifact のみ、enum で将来拡張可能）。
+- HTTP facade `/api/maintenance/flags` も target type `artifact` を受け付ける（enum 共有のため）。
+  resolve の facade ルートは未追加（MCP のみ。UI が必要になった時点で追加）。
