@@ -289,7 +289,7 @@ analyser.operations.record     analyser.publications.record
 | AW-15b | `[in-progress]` | ui | 旧 UI 削除: MaintenancePage、maintenanceApi/insights api・型 |
 | AW-16 | `[implemented]` | notes, projects, artifacts | 旧 maintenance queue/confirm/snooze/flag endpoint と note 側 lifecycle fields を削除。**memory 側 lifecycle_state/last_confirmed_at/review_* は authority セマンティクスと不可分のため維持**（許容制約 §12 参照）。index-read-marks は維持。既存 DB の旧列は残置（非破壊） |
 | AW-17 | `[implemented]` | skills, docs | ローカル Skills 4 種（analyser-cycle 新設・maintenance 全面改稿・project 境界追記・materialize 新設）+ tool-contracts 18-tool 契約 + README + 運用 runbook + CLAUDE.md 導線。**AgentSkills 正本（Workbench artifacts）への反映は cutover 後（AW-19 内）に実施**（本番が新コードになるまで新契約の材料化を防ぐため） |
-| AW-18 | `[pending]` | root | 統合 live smoke + Codex read-only 独立最終レビュー + 指摘対応 |
+| AW-18 | `[in-progress]` | root | 統合 live smoke **42/42 合格**（2026-07-20 ローカル実機: 登録→settings→projector 冪等・本文非転送→ui_access 計測 read 除外→claim 排他→fail 時 cursor 不動→complete 前進→proposal 承認境界→export 二重 dedupe→pc_activity fail-closed gate）。残: 独立最終レビュー |
 | AW-19 | `[pending]` | server | 本番 cutover: backup → deploy → migration → restart → live smoke（**SSH mutation は実行前に Owner 確認**） |
 | AW-R | `[in-progress]` | root | 実装指揮・レビュー・commit・進捗ボード維持 |
 
