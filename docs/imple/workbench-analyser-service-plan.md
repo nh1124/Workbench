@@ -290,7 +290,7 @@ analyser.operations.record     analyser.publications.record
 | AW-16 | `[implemented]` | notes, projects, artifacts | 旧 maintenance queue/confirm/snooze/flag endpoint と note 側 lifecycle fields を削除。**memory 側 lifecycle_state/last_confirmed_at/review_* は authority セマンティクスと不可分のため維持**（許容制約 §12 参照）。index-read-marks は維持。既存 DB の旧列は残置（非破壊） |
 | AW-17 | `[implemented]` | skills, docs | ローカル Skills 4 種（analyser-cycle 新設・maintenance 全面改稿・project 境界追記・materialize 新設）+ tool-contracts 18-tool 契約 + README + 運用 runbook + CLAUDE.md 導線。**AgentSkills 正本（Workbench artifacts）への反映は cutover 後（AW-19 内）に実施**（本番が新コードになるまで新契約の材料化を防ぐため） |
 | AW-18 | `[implemented]` | root | 統合 live smoke **51/51 合格**（2026-07-20、quota 復旧後に再実施）。Codex read-only 独立最終レビュー実施 → 5 major + 1 minor の実欠陥を検出、全件修正・live smoke で検証済み（詳細は §12A） |
-| AW-19 | `[pending]` | server | 本番 cutover: backup → deploy → migration → restart → live smoke（**SSH mutation は実行前に Owner 確認**） |
+| AW-19 | `[implemented]` | server | 本番 cutover 完了（2026-07-20）。backup 5DB → 2 段階 deploy（pre-deletion tag で migration 実行 → 最終 HEAD）→ 全サービス再起動 → live smoke 合格。running commit 777525e で origin と一致。**副作用**: 調査中の `tmux capture-pane` が既知 tmux 3.3a バグでサーバー再現し tmux server が 2 度クラッシュ（詳細は完了報告）。復旧のため systemd --user scope（`workbench-web.scope`）でサービスを起動し直し、tmux 依存を切り離した |
 | AW-R | `[in-progress]` | root | 実装指揮・レビュー・commit・進捗ボード維持 |
 
 ## 11. サーバー cutover 手順（AW-19）
@@ -357,3 +357,17 @@ Codex read-only 独立レビューが実コードを検証して報告した 6 �
 - routine PATCH が version ガードのみで next_run_at の再検証をしないため、直後に
   completion が走った場合ごく稀に stale な due 時刻へ巻き戻り、不要な追加 claim を
   1 回誘発しうる（§12A の 6）。cursor 不整合や二重実行には至らないため修正は見送り。
+- **本番サーバーの `tmux` (3.3a, el10 build) は `capture-pane` で SIGABRT する既知不具合を
+  持つ**（2026-07-20 cutover 中に 2 回実機再現）。以後、本番サーバーでの状態確認は
+  `tmux capture-pane` を使わず、ログファイルへのリダイレクト（`tee`/`>>`）+ `cat`/`tail`
+  または `ps`/`curl` を使うこと。サービスプロセスは tmux セッションではなく
+  `systemd-run --user --scope --unit=workbench-web` で起動し直し、tmux クラッシュから
+  独立させた（`npm run dev:web:no-artifacts` を実行）。将来的に `infra/auto_update.sh`
+  も同じ systemd scope 方式へ移行するか、tmux 版を修正するかは別途判断が必要
+  （現状は `infra/auto_update.sh` が tmux `send-keys`/`has-session` 前提のままで、
+  systemd scope 上のプロセスに対しては機能しない）。
+- AgentSkills 正本（Workbench artifacts, projectId 936c62d5-1d5a-42af-979b-696c3e4d0526）
+  への新 4 skill + tool-contracts.md 反映は、cutover 実施タイミングで claude.ai Workbench
+  コネクタが `mcp-proxy.anthropic.com` の 502 で無応答、ローカル `workbench` MCP はログイン
+  情報未保有のため未実施。ローカル `.agents/skills/**`（本リポジトリの実運用に使われる方）
+  は完全に最新。正本への反映は後日、どちらかの MCP 接続が復旧してから実施。
