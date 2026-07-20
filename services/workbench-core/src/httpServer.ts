@@ -1622,18 +1622,6 @@ function optionalNullableRawString(
 
 function validateSyncNoteMutationPayload(payload: Record<string, unknown>): void {
   const code = "SYNC_NOTE_PAYLOAD_INVALID";
-  const lifecycleState = payload.lifecycleState;
-  if (lifecycleState !== undefined && lifecycleState !== "raw" && lifecycleState !== "triaged") {
-    throw new LocalClientStoreError(400, code, "Note lifecycleState must be raw or triaged when provided.");
-  }
-
-  const reviewAfter = payload.reviewAfter;
-  if (reviewAfter !== undefined && reviewAfter !== null) {
-    if (typeof reviewAfter !== "string" || !z.string().datetime().safeParse(reviewAfter).success) {
-      throw new LocalClientStoreError(400, code, "Note reviewAfter must be a datetime string, null, or omitted.");
-    }
-  }
-
   const tags = payload.tags;
   if (tags !== undefined && (!Array.isArray(tags) || tags.some((tag) => typeof tag !== "string"))) {
     throw new LocalClientStoreError(400, code, "Note tags must be an array of strings when provided.");

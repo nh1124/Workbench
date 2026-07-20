@@ -1593,7 +1593,7 @@ export const projectsClient = {
   },
   markIndexEntriesRead: (token: string, payload: unknown) => {
     if (!projectsService) throw new Error("Projects service is not configured");
-    return serviceRequest<unknown>(projectsService, "/maintenance/index-read-marks", token, {
+    return serviceRequest<unknown>(projectsService, "/project-index/read-marks", token, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)

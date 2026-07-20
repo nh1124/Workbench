@@ -320,7 +320,7 @@ app.get("/internal/default-project", requireInternalApiKey, async (req, res) => 
 
 app.use(requireCoreMutationOriginMiddleware);
 
-app.post("/maintenance/index-read-marks", requireUserAuth, async (req, res) => {
+app.post("/project-index/read-marks", requireUserAuth, async (req, res) => {
   const parsed = indexReadMarksSchema.safeParse(req.body ?? {});
   if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
   const owner = req.authUser?.coreUserId;

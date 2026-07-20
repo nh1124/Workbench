@@ -8,8 +8,6 @@ type ToolContext = {
   accessToken: string;
 };
 
-const mcpLifecycleStateSchema = z.enum(["raw", "triaged"]);
-
 export function registerNotesTools(server: McpServer, ctx: ToolContext): void;
 export function registerNotesTools(server: McpServer): void;
 export function registerNotesTools(server: McpServer, ctx?: ToolContext): void {
@@ -65,8 +63,7 @@ export function registerNotesTools(server: McpServer, ctx?: ToolContext): void {
         content: z.string().optional(),
         projectId: z.string().min(1),
         projectName: z.string().optional(),
-        tags: z.array(z.string()).optional(),
-        lifecycleState: mcpLifecycleStateSchema.optional()
+        tags: z.array(z.string()).optional()
       }
     },
     async (payload) => {

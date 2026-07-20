@@ -1,93 +1,79 @@
 # Workbench Maintenance Tool Contracts
 
-Frozen contracts for the maintenance loop, transcribed from the Core MCP registrations
-(`registerMaintenanceTools.ts`, `registerNotesTools.ts`, `registerProjectContextTools.ts`).
+Frozen contracts for the analyser-based maintenance loop, transcribed from the Core MCP
+registrations (`registerAnalyserTools.ts`, `registerNotesTools.ts`, `registerProjectContextTools.ts`).
 The implementation is authoritative; if the running server's schema disagrees, follow the server.
 
-## maintenance.queue.list (read)
+Shared shapes: `ResourceRef = { service, resourceType, resourceId, pathSnapshot? }` (all strings).
+Dates are `YYYY-MM-DD`; datetimes are ISO 8601 with offset. List tools use keyset `cursor`
+pagination with `limit` 1..200 (default 50) and return `{ items, nextCursor? }`.
 
-Input:
+## analyser.* — routine execution
 
-```jsonc
-{
-  "kind": "memory | note | brief | index_drift | artifact", // optional
-  "reason": "raw | expired | unconfirmed | conflict | manual | source_changed | unused | brief_unmaintained | brief_oversized", // optional
-  "projectId": "string",                                 // optional
-  "cursor": "string",                                    // optional, opaque compound cursor
-  "limit": 1                                             // optional int 1..100, default 20
-}
-```
+- `analyser.status.get` (read) () → `{ routines: [{ key, enabled, nextRunAt?, lastCompletedAt?,
+  lastFailedAt?, lastErrorSummary?, activeRun: { id, holder, leaseExpiresAt } | null }],
+  hasOpenProposals, machines }`.
+- `analyser.routines.list` (read) () → `{ items: RoutineRecord[] }` — key, schedule
+  (`interval` minutes or 5-field cron subset + IANA timezone), enabled, committedCursor, version.
+- `analyser.routines.claim` (write) `{ key?, holder, leaseSeconds? (default 900) }` →
+  `{ claim: null }` when nothing is due, else `{ claim: { run, routine, collectionSettings,
+  automationPolicy } }`. Atomic: one active run per routine; stale leases are auto-failed.
+  Claiming does not advance the cursor.
+- `analyser.routines.heartbeat` (write, idempotent) `{ runId, holder, leaseSeconds? }` —
+  extends the lease and marks the run `processing`. `RUN_NOT_ACTIVE` (409) after expiry.
+- `analyser.observations.pull` (write — advances the run's pending cursor)
+  `{ runId, holder, limit? 1..500 (default 200) }` → `{ items: Observation[], pendingReadCursor }`.
+  Repeat until `items` is empty. Observations carry metadata + resourceRefs ONLY — resolve the
+  refs with normal Workbench tools when analysis needs bodies. A failed run re-reads the same
+  observations next time; only `complete` commits.
+- `analyser.routines.complete` (write) `{ runId, holder }` — atomically commits
+  pending→committed cursor and computes `nextRunAt`.
+- `analyser.routines.fail` (write) `{ runId, holder, errorSummary (≤2000 chars) }` — records the
+  failure; the committed cursor does NOT move; retry backoff then next scheduled slot.
 
-Output:
+## analyser.* — observations and settings
 
-```jsonc
-{
-  "items": [
-    {
-      "id": "<kind>:<resourceId>",
-      "kind": "memory | note | brief | index_drift",
-      "projectId": "…",
-      "projectName": "…",
-      "resourceId": "…",
-      "title": "…",                    // memory: first body line, brief: project name
-      "excerpt": "…",                  // ~200 chars
-      "reasons": ["unconfirmed"],      // one or more
-      "authority": "agent_observed",   // memory only
-      "lifecycleState": "triaged",     // memory/note only
-      "lastConfirmedAt": null,
-      "reviewAfter": null,
-      "updatedAt": "ISO datetime",
-      "suggestedActions": ["confirm", "supersede", "archive"]
-    }
-  ],
-  "nextCursor": "…",                    // present when more pages exist
-  "totals": { "byReason": { "raw": 3, "unconfirmed": 7 } }
-}
-```
+- `analyser.settings.get` (read) `{ machineId? }` → effective collection settings
+  (`workbenchChanges`, `mcpAccess`, `uiAccess`, `agentSessionEvents`, foreground/windowTitle/
+  localFile toggles, `screenshots`, retention, allow/deny filters). READ-ONLY for agents:
+  collection policy is changed only by the owner in the Analyser UI. Never widen collection.
+- `analyser.observations.list` (read) `{ source?, machineId?, projectId?, from?, to?, limit?,
+  cursor? }` — ad-hoc inspection outside a run (does not touch cursors). Sources:
+  `workbench_change | mcp_access | ui_access | agent_session | pc_activity | local_file`.
 
-Reason semantics: `raw` (untriaged), `expired` (`reviewAfter` passed), `unconfirmed`
-(old `agent_observed` memory never confirmed), `conflict`/`manual` (flagged),
-`source_changed` (index entry behind its source), `unused` (index entry unread past the
-threshold), `brief_unmaintained` (empty or too-short brief), `brief_oversized`
-(brief larger than the slimness threshold; propose moving detail out).
+## analyser.* — summaries, proposals, operations, publications
 
-`artifact` kind items are open Artifact maintenance flags. They carry the common shape
-plus `path`, `artifactKind` (folder|note|file), `version`, `flaggedBy`, `flaggedAt`;
-`resourceId` is the Artifact item id, `suggestedActions` is `["resolve"]`.
-
-## maintenance.flag (write — queue-add only)
-
-For memory/note: sets only `review_reason` on the target. Cannot promote, confirm,
-snooze, or clear an item. For artifact: opens (or updates in place) the single open
-maintenance flag on an Artifact item of any kind; the flag row keeps audit history.
-
-Input:
-
-```jsonc
-{
-  "target": { "type": "memory | note | artifact", "id": "string" },
-  "reason": "conflict | manual",
-  "note": "string"                     // optional; memory/note: carried in the sync event payload only. artifact: persisted on the flag row
-}
-```
-
-Output: the updated memory/note resource, or the Artifact flag joined with
-`artifact: { id, projectId, projectName, title, path, kind, version }`.
-
-`type: "artifact"` targets an Artifacts-service item by item id (any kind).
-`type: "note"` still means a Notes-service note — the two are never interchangeable.
-Re-flagging an item with an open flag updates reason/note/flaggedBy in place
-(no duplicate open flags). Other-owner or missing items return 404.
-
-## maintenance.review.resolve (write)
-
-Resolves the open maintenance flag on an Artifact item. The resolved row is kept as
-audit history (`status: "resolved"`, `resolvedBy`, `resolvedAt`, `resolutionNote`);
-nothing is deleted. Errors (404) when no open flag exists. Works even if the Artifact
-item was deleted after flagging.
-
-Input: `{ "target": { "type": "artifact", "id": "string" }, "note": "string" /* optional */ }`
-Output: the resolved flag joined with the artifact info (see maintenance.flag).
+- `analyser.summaries.list` (read) `{ kind?, from?, to?, routineKey?, limit?, cursor? }` —
+  metadata + `bodyChars`, no bodies. `analyser.summaries.get` (read) `{ id }` → full record.
+- `analyser.summaries.upsert` (write, idempotent per `(kind, periodStart, periodEnd)`)
+  `{ kind, periodStart, periodEnd, title, bodyMarkdown, metrics?, evidenceRefs?, routineKey?,
+  runId?, expectedVersion? }`. Summaries are analysis records inside Analyser — creating one
+  needs no approval and it is not yet durable Workbench knowledge.
+- `analyser.proposals.list` (read) `{ status?, kind?, routineKey?, limit?, cursor? }`;
+  `analyser.proposals.get` (read) `{ id }`.
+- `analyser.proposals.create` (write) `{ kind, title, bodyMarkdown, evidenceRefs?,
+  proposedAction? { kind, params? }, confidenceEvidence?, routineKey?, runId?, dedupeKey? }` —
+  status is always `open`; `dedupeKey` makes re-runs idempotent. No approval needed to CREATE.
+- `analyser.proposals.update` (write) — discriminated by `action`:
+  - `{ id, action: "update_content", title?, bodyMarkdown?, evidenceRefs?, proposedAction?,
+    confidenceEvidence?, expectedVersion }` — allowed only while `open`.
+  - `{ id, action: "mark_executed", operationId, expectedVersion }` — allowed only on a
+    user-`approved` proposal whose operation is already recorded with `proposalId = id`.
+  Agents can NEVER set `approved`/`rejected`; that happens in the Analyser UI only.
+- `analyser.operations.record` (write, idempotent per `idempotencyKey`)
+  `{ operationKind: artifact_move | artifact_metadata_update |
+  artifact_secondary_membership_add | progress_note_upsert, approvalBasis: policy | proposal,
+  proposalId? (required for proposal basis), beforeRefs?, afterRefs?, result: succeeded |
+  failed | skipped, detail?, runId?, agentLabel?, idempotencyKey }`.
+  Record AFTER the domain mutation succeeded via normal Workbench tools; recording performs
+  nothing. `policy` basis is validated server-side against the owner's automation policy
+  allowlist (403 `POLICY_FORBIDDEN` otherwise); `proposal` basis requires an approved proposal.
+- `analyser.publications.record` (write, idempotent per content hash)
+  `{ sourceKind: summary | proposal, sourceId, targetKind: note | artifact, targetId,
+  targetRef?, contentHash (sha256 hex of the exported content) }` — provenance is forced to
+  `agent`. Record after exporting a summary/approved proposal to a Note/Artifact with normal
+  tools so identical re-exports are skipped. Check first with `analyser.publications`-recorded
+  state via the UI/HTTP if unsure; duplicate records return `created: false` harmlessly.
 
 ## sync.changes.consumer.initialize (write — consumer creation only)
 
@@ -166,29 +152,15 @@ so out-of-scope replays must be tolerated.
 Contract: process the batch, then persist `nextCursor` with `sync.changes.commit`.
 Uncommitted batches are re-delivered; downstream actions must tolerate replay.
 
+Note: Workbench mutations are ALSO projected automatically into analyser observations
+(`source: workbench_change`) by Core's projector. Routine-based analysis should prefer
+`analyser.observations.pull`; use `sync.changes.*` directly for sync-style consumers
+(e.g. AgentSkills materialization) that need paths and patches.
+
 ## sync.changes.commit (write — cursor only)
 
 Input: `{ "consumer": "string" /* optional */, "cursor": "string" /* required */ }`
 Output: `{ "consumer", "cursor", "updatedAt" }`
-
-## maintenance.lease.acquire / renew / release (write — advisory locks)
-
-Prevent overlapping scheduled maintenance runs. Advisory only; Workbench runs no
-scheduler. Owner-scoped; `key` and `holder` are 1..100 chars, `ttlSeconds` 1..86400
-(default 1800).
-
-- `acquire { key, holder, ttlSeconds? }` → `{ key, holder, expiresAt, acquiredAt, renewedAt? }`.
-  Idempotent for the same holder (extends TTL). While another holder's lease is
-  unexpired: `MAINTENANCE_LEASE_HELD` (409). Expired leases are reclaimable by anyone,
-  so a crashed run recovers after TTL without manual cleanup.
-  Because same-holder acquire always succeeds, overlap protection requires a
-  **unique holder per run** (e.g. `cowork-agent-skills-v2/2026-07-19T03:15`): two runs
-  sharing a static holder name would both acquire. Retries WITHIN one run reuse that
-  run's holder and stay idempotent.
-- `renew { key, holder, ttlSeconds? }` — extends an unexpired lease held by this
-  holder; otherwise `MAINTENANCE_LEASE_NOT_HELD` (409).
-- `release { key, holder }` → `{ released: boolean }`; never errors on missing,
-  expired, or foreign leases.
 
 ## Cowork recipe: AgentSkills scoped consumer
 
@@ -204,85 +176,40 @@ sync.changes.consumer.initialize {
   }
 }
 
-// Each scheduled run (bound scope applies automatically).
-// Use a per-run holder so overlapping runs exclude each other:
-maintenance.lease.acquire { "key": "agent-skills-primary-maintainer", "holder": "cowork-agent-skills-v2/<runId>" }
+// Each scheduled run (bound scope applies automatically). Overlap protection now
+// comes from the analyser routine claim (agent-skills-materialization routine);
+// there is no separate lease tool.
 // includePatch:false too — content edits also appear inside payload.patch:
 sync.changes.pull { "consumer": "cowork-agent-skills-v2", "includeContent": false, "includePatch": false }
 // …process events, fetch only needed bodies via artifacts.item.get…
 sync.changes.commit { "consumer": "cowork-agent-skills-v2", "cursor": "<nextCursor>" }
-maintenance.lease.release { "key": "agent-skills-primary-maintainer", "holder": "cowork-agent-skills-v2/<runId>" }
-
-// The pre-existing consumer "cowork-agent-skills-incremental" is unscoped:
-// keep pulling with explicit filters instead —
-sync.changes.pull {
-  "consumer": "cowork-agent-skills-incremental",
-  "projectId": "936c62d5-1d5a-42af-979b-696c3e4d0526",
-  "pathPrefix": "skills/",
-  "includeContent": false,
-  "includePatch": false
-}
-// Flag a Skill for review / resolve after handling:
-maintenance.flag { "target": { "type": "artifact", "id": "<artifact-item-id>" }, "reason": "conflict", "note": "…" }
-maintenance.review.resolve { "target": { "type": "artifact", "id": "<artifact-item-id>" }, "note": "…" }
+// Conflicts (locally edited skill would be overwritten) become analyser proposals:
+analyser.proposals.create { "kind": "skill_materialization_conflict", "title": "…", "bodyMarkdown": "…", "evidenceRefs": [ … ], "dedupeKey": "skill-conflict:<artifact-item-id>" }
 ```
-
-## maintenance.usage.summary (read)
-
-Input: `{ "since": "ISO datetime" /* optional, default last 30 days */, "until": "ISO datetime" /* optional */ }`
-
-Output:
-
-```jsonc
-{
-  "since": "…",
-  "until": "…",
-  "truncation": { "count": 4, "bySection": [{ "section": "index", "count": 3 }] },
-  "zeroHitQueries": [{ "queryText": "…", "count": 2 }],   // missing-knowledge signals
-  "topResources": [{ "sourceService": "artifacts", "resourceType": "note", "resourceId": "…", "count": 9 }]
-}
-```
-
-## insights.* (activity analysis)
-
-Aggregated capture activity from machines that opted into upload. All reads are scoped to the
-authenticated user. If the server answers "Insights service is not configured", the deployment
-has no insights service — skip activity analysis and say so.
-
-- `insights.machines.list` () → `{ items: [{ id, machineKey, displayName?, platform?, registeredAt, lastSeenAt }] }`
-- `insights.activity.query` ({ from, to, machineId? }) — dates `YYYY-MM-DD`, both inclusive →
-  `{ totals: { activeSeconds, idleSeconds, contextSwitches }, categories: { <name>: seconds }, apps: { <name>: seconds }, days: [{ date, machineId, activeSeconds, contextSwitches }] }`
-- `insights.summaries.list` ({ machineId?, from?, to?, limit?, cursor? }) → metadata + `metricsJson`, no markdown bodies; keyset cursor.
-- `insights.summaries.get` ({ machineId, date }) → one summary including `summaryMarkdown`
-  (App Activity / Top Window Titles / Timeline / Focus Blocks / Context Switches / Categories / Idle Time).
-- `insights.derived.ingest` ({ machineId?, observedDate, kind, title, contentMarkdown, payloadJson? }) —
-  the only agent write into insights. Text derived from local-only sources (screenshots) after
-  explicit human-directed processing; never image data, never automated.
-- `insights.derived.list` ({ from?, to?, kind?, limit?, cursor? }) → prior derived observations.
-
-Analysis conclusions do not go into insights; they become memory/note proposals via the
-supporting tools below.
 
 ## Supporting tools used by this skill
 
 - `projects.list` / `projects.get` — resolve projects and the default project.
-- `projects.memory.append` — proposals only; always saved as `agent_observed`.
+- `projects.memory.append` — durable-knowledge proposals; always saved as `agent_observed`.
   `lifecycleState` accepts `raw | triaged` only. Use `supersedesId` for replacement drafts.
 - `projects.memory.archive` — retirement proposal for clearly dead knowledge.
 - `notes.list` / `notes.create` / `notes.update` — digest note search and idempotent upsert.
-  `notes.create` accepts `lifecycleState` of `raw | triaged` only.
 - `projects.index.rebuild` — repair only, on observed drift; never routine.
 
 ## Not available to agents (by design)
 
-Confirm and snooze exist only as UI-path HTTP routes
-(`POST /api/project-memories/:id/confirm|snooze`, `POST /api/notes/:id/confirm|snooze`).
-They are intentionally unregistered as MCP tools; do not call them over HTTP either —
-they record a user/UI caller. Direct the user to the /maintenance UI for promotion.
+- Proposal approve/reject and supersede: Analyser UI only (`/analyser?tab=proposals`).
+- Collection and automation policy writes: Analyser UI Settings only. Agents read the
+  effective policy via `analyser.settings.get` / the claim's `policySnapshot`.
+- Routine schedule/enable changes: Analyser UI Settings (HTTP user path).
+- The legacy `maintenance.*` and `insights.*` tools no longer exist; if a server still
+  offers them it predates this design — stop and report the version mismatch.
 
 ## Digest conventions
 
-- Note title: `Workbench Weekly Digest <YYYY-Www>` (ISO week, e.g. `2026-W28`).
-- Tag: `workbench-maintenance`. Location: default project.
-- Idempotent: search by exact title first; update when found, create otherwise.
+- Digest = an analyser summary: `analyser.summaries.upsert` with `kind: "weekly_digest"`,
+  `periodStart`/`periodEnd` = the ISO week's Monday/Sunday, title
+  `Workbench Weekly Digest <YYYY-Www>` (e.g. `2026-W28`). Idempotent per week by contract.
+- Export to a Note only on request (Analyser UI export, or agent-side export + 
+  `analyser.publications.record`).
 - Digest feed reads must not commit the `maintenance-agent` cursor.

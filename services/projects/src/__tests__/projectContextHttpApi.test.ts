@@ -107,6 +107,38 @@ test("Projects HTTP context routes return owner-scoped 404, 409 and 400 response
     });
     assert.equal(exportOtherOwner.status, 404);
 
+    const readResourceId = `read-${Date.now()}`;
+    const readEntryResponse = await fetch(`${base}/projects/${project.id}/index-entries/upsert`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        sourceService: "notes",
+        resourceType: "note",
+        resourceId: readResourceId,
+        associationKind: "primary",
+        title: "Read tracking target",
+        summaryText: "read tracking target",
+        sourceUpdatedAt: "2026-07-01T00:00:00.000Z"
+      })
+    });
+    assert.equal(readEntryResponse.status, 200);
+    const readEntry = await readEntryResponse.json() as { id: string };
+    const readMarkResponse = await fetch(`${base}/project-index/read-marks`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        marks: [{ sourceService: "notes", resourceId: readResourceId }],
+        readAt: "2026-07-02T00:00:00.000Z"
+      })
+    });
+    assert.equal(readMarkResponse.status, 200);
+    assert.deepEqual(await readMarkResponse.json(), { updated: 1 });
+    const readMark = await db.getProjectsPool().query<{ last_read_at: string | null }>(
+      `SELECT last_read_at::text FROM project_index_entries WHERE id = $1`,
+      [readEntry.id]
+    );
+    assert.ok(readMark.rows[0]?.last_read_at);
+
     const backfillProjectResponse = await fetch(`${base}/projects`, {
       method: "POST",
       headers,

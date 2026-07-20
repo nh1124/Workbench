@@ -74,27 +74,6 @@ const MEMORY_SELECT = `
   FROM project_memory_entries m
 `;
 
-const MEMORY_RETURNING = `
-  m.id, m.project_id, m.kind, m.body_markdown, m.authority, m.source_service,
-  m.source_resource_type, m.source_resource_id, m.confidence, m.status,
-  m.supersedes_id, m.lifecycle_state, m.review_after, m.last_confirmed_at,
-  m.review_reason, m.created_by_kind, m.created_at, m.updated_at
-`;
-
-async function getMemoryForOwner(memoryId: string, ownerAccountId: string): Promise<ProjectMemoryEntry | undefined> {
-  await ensureProjectsSchema();
-  const result = await getProjectsPool().query<MemoryRow>(
-    `
-      ${MEMORY_SELECT}
-      JOIN projects p ON p.id = m.project_id
-      WHERE m.id = $1 AND p.owner_account_id = $2
-      LIMIT 1
-    `,
-    [memoryId, normalizeOwner(ownerAccountId)]
-  );
-  return result.rows[0] ? toMemory(result.rows[0]) : undefined;
-}
-
 export async function listProjectMemories(
   projectId: string,
   ownerAccountId: string,
@@ -227,7 +206,6 @@ export async function updateProjectMemory(
     values.push(input.reviewReason ?? null);
     setClauses.push(`review_reason = $${values.length}`);
   }
-
   const result = await getProjectsPool().query<MemoryRow>(
     `
       UPDATE project_memory_entries m
@@ -243,4 +221,3 @@ export async function updateProjectMemory(
   );
   return result.rows[0] ? toMemory(result.rows[0]) : undefined;
 }
-

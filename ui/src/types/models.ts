@@ -9,10 +9,6 @@ export interface Note {
   projectId: string;
   projectName?: string;
   tags: string[];
-  lifecycleState?: "raw" | "triaged" | "curated" | "verified";
-  reviewAfter?: string | null;
-  lastConfirmedAt?: string | null;
-  reviewReason?: "conflict" | "manual" | null;
   createdAt: string;
   updatedAt: string;
 }

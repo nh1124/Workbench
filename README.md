@@ -1,51 +1,64 @@
 # Workbench
 
-Workbench is split into a Core gateway plus internal domain services.
+Workbench is a Core gateway backed by internal domain services. External clients use Core; each domain service owns its data and database.
 
 ## Architecture
 
-- External consumers (UI, agent runtimes, future clients) call **Workbench Core only**.
+- External consumers such as the UI and agent runtimes call **Workbench Core only**.
 - **Workbench Core** is the single public MCP/tool provider and external HTTP facade.
-- `notes`, `artifacts`, `tasks`, `projects`, `images`, `mindmaps`, `wbs`, and `insights` are internal business services.
-- Each service keeps its own database and service-local account table.
-- Core delegates to services through internal HTTP clients.
+- `notes`, `artifacts`, `tasks`, `projects`, `images`, `mindmaps`, `wbs`, and `analyser` are internal services.
+- Core delegates to internal services over HTTP and provisions service-local accounts where required.
+- Analyser stores collection policy, metadata-only observations and resource references, server-side routine schedules and cursors, summaries, proposals, operation audit records, and publication dedupe records. Existing domain services still own and perform resource mutations.
 
-Flow:
+```text
+UI / Agent Runtime -> Workbench Core -> Internal Services
+                                      -> Analyser
+```
 
-`UI / Agent Runtime -> Workbench Core -> Internal Services`
-
-## Auth Model
+## Auth model
 
 - User auth is centralized in Core.
-- Core issues signed JWT access + refresh tokens on register/login.
-- UI stores both tokens, sends `Authorization: Bearer <access token>`, and refreshes access tokens via refresh token.
-- Core validates JWT for external API and Core MCP execution.
-- Core forwards bearer JWT to internal service business routes.
-- Services validate **access** JWT. Tasks uses the JWT `sub` directly as the local LBS owner identity.
-- Tasks runs the TypeScript/Postgres LBS data plane in-process; there is no remote LBS account or token provisioning.
-- Internal provisioning/admin endpoints (`/internal/accounts`) require `x-api-key`.
-- `x-workbench-username` trust model is removed.
-- `owner = "system"` fallback on protected CRUD is removed.
+- Core issues signed JWT access and refresh tokens on register/login.
+- The UI sends `Authorization: Bearer <access token>` and refreshes expired access tokens.
+- Core validates JWTs for the external API and Core MCP execution, then forwards the bearer JWT to internal business routes.
+- Internal provisioning endpoints use `x-api-key`.
+- Tasks is the provisioning exception: it uses the JWT `sub` as its local owner identity and has no `/internal/accounts` route.
+- `x-workbench-username` trust and the `owner = "system"` fallback are not used.
 
-## Services
+## Services and default ports
 
-- `services/workbench-core`
-  - External HTTP facade
-  - External MCP server (`dev:mcp` / `mcp`)
-  - User account/auth source of truth
-  - Integration config persistence and activation flow
-- `services/notes`
-  - Internal notes HTTP API
-- `services/artifacts`
-  - Internal artifacts HTTP API
-- `services/tasks`
-  - Internal tasks HTTP API and local TypeScript/Postgres LBS engine
-- `services/projects`
-  - Internal projects HTTP API
-- `services/images`
-  - Internal image generation HTTP API
+| Workspace | Default HTTP port | Responsibility |
+|---|---:|---|
+| `services/workbench-core` | 4100 | Public HTTP facade, MCP server, auth, service provisioning, integration configuration, analyser projection |
+| `services/notes` | 4101 | Notes API |
+| `services/artifacts` | 4102 | Artifact tree, content, files, and Project memberships |
+| `services/tasks` | 4103 | Tasks API and local TypeScript/PostgreSQL LBS engine |
+| `services/projects` | 4104 | Projects, brief, memory, relations, links, and index |
+| `services/images` | 4105 | Image generation jobs and assets |
+| `services/mindmaps` | 4106 | Mind-map documents |
+| `services/wbs` | 4107 | WBS plans |
+| `services/analyser` | 4109 | Collection policy, observations, routine state, summaries, proposals, operations, and publications |
 
-## Core External Endpoints
+Core facade route prefixes include `/api/notes`, `/api/artifacts`, `/api/tasks`, `/api/projects`, `/api/images`, `/api/mindmaps`, `/api/wbs`, and `/api/analyser`. Analyser's direct `/health` and business routes are internal; clients use the Core `/api/analyser/*` facade or the `analyser.*` MCP tools.
+
+## Analyser routine contract
+
+Analyser seeds these owner-scoped routines idempotently in the `Asia/Tokyo` timezone:
+
+- `daily-work-summary`
+- `progress-record-maintenance`
+- `artifact-classification`
+- `workbench-knowledge-maintenance`
+- `weekly-workbench-digest`
+- `agent-skills-materialization`
+
+Schedule configuration, `nextRunAt`, committed observation cursors, active runs, leases, retry counts, and backoff state live server-side only. An external agent polls coarsely and calls `analyser.routines.claim`; `{ "claim": null }` means there is no due work.
+
+A claimed run heartbeats before its lease expires, repeatedly pulls metadata-only observations, resolves only necessary resource bodies through existing Core tools, and writes summaries or proposals. A direct resource operation is allowed only for a high-confidence, policy-allowlisted kind and is performed by the owning domain tool, verified by re-read, then recorded with `analyser.operations.record`. Completing a run commits its pending cursor; failing a run leaves the committed cursor unchanged so observations can be retried.
+
+Agents may create proposals but cannot approve/reject them or change collection settings. Those actions use the authenticated Analyser UI. Agent-side exports to Notes or Artifacts are deduplicated through `analyser.publications.record`.
+
+## Core external endpoints
 
 - `GET /health`
 - `POST /accounts/register`
@@ -54,162 +67,111 @@ Flow:
 - `GET /auth/me`
 - `GET /.well-known/oauth-protected-resource`
 - `GET /.well-known/oauth-authorization-server`
-- `POST /oauth/register` (OAuth Dynamic Client Registration for public clients)
-- `POST /oauth/token` (OAuth token endpoint: `authorization_code` and `refresh_token` grants)
+- `POST /oauth/register`
+- `POST /oauth/token`
 - `GET /integrations/manifests`
 - `GET /integrations/configs`
 - `PUT /integrations/configs/:integrationId`
 
-Core facade for domain resources:
+Activation with `PUT /integrations/configs/:integrationId` and `enabled=true` tries login with saved values first, auto-registers if login fails, and stores the resulting access token plus any refresh token.
 
-- Notes: `/api/notes`, `/api/notes/:id`, `/api/notes/projects`
-- Artifacts: `/api/artifacts`, `/api/artifacts/:id`, `/api/artifacts/projects`
-- Tasks: `/api/tasks`, `/api/tasks/:id`, `/api/tasks/:id/history`, `/api/tasks/projects`, `/api/tasks/export`, `/api/tasks/import`
-- Images: `/api/images/defaults`, `/api/images/references`, `/api/images/generations`, `/api/images/assets/:id/download`
+## Internal service contract
 
-Activation behavior for `PUT /integrations/configs/:integrationId` with `enabled=true`:
+Internal service routes are called by Core:
 
-- Core tries login using saved values first.
-- If login fails, Core auto-registers.
-- On success, `accessToken` and optional `refreshToken` are stored in integration config values.
+- `POST /internal/accounts` requires `x-api-key` and `{ coreUserId, username }`.
+- Business routes require a bearer JWT and resolve the account by `core_user_id`.
+- Tasks scopes directly by the bearer JWT owner and does not expose `/internal/accounts`.
 
-## Internal Service Endpoints
+## Environment variables
 
-All service routes are internal-facing (called by Core).
-
-Common internal contract:
-
-- `POST /internal/accounts` (requires `x-api-key`, payload `{ coreUserId, username }`)
-- Business CRUD routes require bearer JWT and resolve account by `core_user_id`.
-- Tasks is the exception to provisioning: it has no `/internal/accounts` route and scopes data directly by the bearer JWT owner.
-
-## Environment Variables
-
-Workbench keeps port and local URL settings in one canonical file:
-
-- `infra/workbench.env`
-
-`infra/initialize_system.*` creates this file from `infra/workbench.env.example` and synchronizes derived values into service `.env` files. Edit `infra/workbench.env` when changing local ports, hosts, or the UI dev port, then run:
+The canonical local port and URL file is `infra/workbench.env`. `infra/initialize_system.*` creates it from `infra/workbench.env.example`, and the environment helper synchronizes derived values into service `.env` files:
 
 ```bash
 node infra/scripts/workbench-env.mjs sync
 node infra/scripts/workbench-env.mjs check
 ```
 
-Service `.env` files should keep secrets and DB credentials. Service ports and values such as `VITE_WORKBENCH_CORE_URL` are generated from `infra/workbench.env`.
+Edit `infra/workbench.env` when changing hosts or ports. Keep secrets and database credentials in service `.env` files.
 
 ### Core
 
-- `CORE_SERVICE_HOST` (for remote deployment, use `0.0.0.0`)
-- `CORE_SERVICE_PORT`
-- `CORE_EXTERNAL_BASE_URL` (recommended for remote MCP/OAuth behind proxies/tunnels; must be public HTTPS base URL)
-- `JWT_SECRET`
-- `JWT_ISSUER`
-- `JWT_EXPIRY_SECONDS`
-- `OAUTH_REFRESH_TOKEN_EXPIRY_SECONDS` (optional, default: `2592000`)
-- `JWT_REFRESH_EXPIRY_SECONDS` (optional, default: `2592000`)
-- `OAUTH_CLIENT_METADATA_HOST_ALLOWLIST` (optional, comma-separated host allowlist for client metadata URL fetches)
-- `NOTES_SERVICE_URL`
-- `ARTIFACTS_SERVICE_URL`
-- `TASKS_SERVICE_URL`
-- `PROJECTS_SERVICE_URL` (optional)
-- `IMAGES_SERVICE_URL`
-- `INTERNAL_API_KEY_NOTES`
-- `INTERNAL_API_KEY_ARTIFACTS`
-- `INTERNAL_API_KEY_PROJECTS` (optional)
-- `INTERNAL_API_KEY_IMAGES`
-- `WORKBENCH_CORE_MUTATION_TOKEN` (optional, sent to domain services with Core-origin mutations)
+- `CORE_SERVICE_HOST`, `CORE_SERVICE_PORT`, `CORE_EXTERNAL_BASE_URL`
+- `JWT_SECRET`, `JWT_ISSUER`, `JWT_EXPIRY_SECONDS`
+- `OAUTH_REFRESH_TOKEN_EXPIRY_SECONDS`, `OAUTH_CLIENT_METADATA_HOST_ALLOWLIST`
+- `NOTES_SERVICE_URL`, `ARTIFACTS_SERVICE_URL`, `TASKS_SERVICE_URL`
+- `PROJECTS_SERVICE_URL`, `IMAGES_SERVICE_URL`, `MINDMAPS_SERVICE_URL`, `WBS_SERVICE_URL`
+- `ANALYSER_SERVICE_URL` (default local URL `http://127.0.0.1:4109`)
+- matching `INTERNAL_API_KEY_*` values, including `INTERNAL_API_KEY_ANALYSER`
+- `WORKBENCH_CORE_MUTATION_TOKEN` when the Core-origin guard is enabled
 
-### Services
+### Analyser
 
-- `JWT_SECRET`
-- `JWT_ISSUER`
-- `INTERNAL_API_KEY`
-- `WORKBENCH_REQUIRE_CORE_MUTATION_ORIGIN` (optional, set `true` to reject direct user-facing mutations outside Core)
-- `WORKBENCH_CORE_MUTATION_TOKEN` (optional, must match Core when the mutation-origin guard is enabled)
-- service-specific DB variables
-  - Tasks service additionally uses:
-    - `TASKS_LBS_MODE=local`
-    - `TASKS_TIMEZONE`
+- `ANALYSER_SERVICE_HOST`, `ANALYSER_SERVICE_PORT`
+- `ANALYSER_DB_HOST`, `ANALYSER_DB_PORT`, `ANALYSER_DB_NAME`, `ANALYSER_DB_USER`, `ANALYSER_DB_PASSWORD`
+- `JWT_SECRET`, `JWT_ISSUER`
+- `INTERNAL_API_KEY_ANALYSER`
 
-## UI Config
+### Shared service options
 
-`ui/.env` requires only:
+- `JWT_SECRET`, `JWT_ISSUER`, `INTERNAL_API_KEY`
+- `WORKBENCH_REQUIRE_CORE_MUTATION_ORIGIN`, `WORKBENCH_CORE_MUTATION_TOKEN`
+- service-specific database variables
+- Tasks additionally uses `TASKS_LBS_MODE=local` and `TASKS_TIMEZONE`
 
-- `VITE_WORKBENCH_CORE_URL`
+The UI needs only `VITE_WORKBENCH_CORE_URL`. For remote MCP or OAuth clients, set `CORE_EXTERNAL_BASE_URL` to the exact externally reachable HTTPS origin or base path.
 
-UI calls Core endpoints only.
+## Launch
 
-For remote MCP connector setups, configure `CORE_EXTERNAL_BASE_URL` to the exact externally reachable HTTPS origin (or base path) used by clients so OAuth issuer/resource metadata and MCP token audience validation remain consistent.
+Root scripts include Analyser:
 
-## Scripts
-
-Root scripts:
-
-- `npm run dev`: Core + internal services + web UI
-- `npm run dev:services`: Core + internal services (HTTP)
-- `npm run dev:gateway:stdio`: Core HTTP + internal services + **Core MCP stdio**
+- `npm run dev`: Core, all internal services, and the web UI
+- `npm run dev:services`: Core and all internal HTTP services
+- `npm run dev:gateway:stdio`: Core HTTP, internal services, and Core MCP over stdio
 - `npm run dev:mcp`: alias of `dev:gateway:stdio`
 - `npm run dev:mcp:stdio`: alias of `dev:gateway:stdio`
-- `npm run dev:native:full`: Core + internal services + UI + Tauri
+- `npm run dev:native:full`: Core, internal services, UI, and Tauri
 
 Infra shortcuts:
 
-- `infra/start_services.*`: start backend service stack
-- `infra/start_gateway_stdio.*`: start Core MCP gateway + internal services
-- `infra/reset_and_bootstrap.*`: reset DB volumes + bootstrap initial account
+- `infra/start_services.*`: initialize/check configuration, start database containers plus the Dockerized Artifacts service, then run the other HTTP services locally
+- `infra/start_gateway_stdio.*`: start the Core MCP gateway and internal services
+- `infra/reset_and_bootstrap.*`: reset database volumes and bootstrap the initial account
 - `infra/start_web.*`
 - `infra/start_native.*`
 
-Config helpers:
+To start only the Analyser database and service during development:
 
-- `node infra/scripts/workbench-env.mjs sync`: synchronize runtime `.env` files from `infra/workbench.env`
-- `node infra/scripts/workbench-env.mjs check`: fail if runtime `.env` files drift from `infra/workbench.env`
-- `node infra/scripts/workbench-env.mjs ports [--ui|--only-ui]`: print configured ports for launch scripts
+```bash
+docker compose up -d analyser-db
+npm run dev:http --workspace services/analyser
+```
 
-## Public Web Serving
+## Public web serving
 
-For a public web entrypoint, build the UI and expose Workbench Core only. Core serves `ui/dist` when it exists, while API, OAuth, and MCP routes remain on the same origin.
+Core serves `ui/dist` when it exists, keeping the UI, API, OAuth, and MCP routes on one origin.
 
-1. Confirm canonical local settings:
+1. Check canonical settings with `node infra/scripts/workbench-env.mjs check`.
+2. Build the UI with `npm run build --workspace ui`.
+3. Start services with `infra/start_services.*`.
+4. Publish only the configured Core port (default `4100`).
 
-   ```bash
-   cat infra/workbench.env
-   node infra/scripts/workbench-env.mjs check
-   ```
-
-2. Build the web UI:
-
-   ```bash
-   npm run build --workspace ui
-   ```
-
-3. Start backend services:
-
-   ```bash
-   bash infra/start_services.sh
-   ```
-
-4. Publish only the Core port from `infra/workbench.env`:
-
-   ```text
-   http://127.0.0.1:4100
-   ```
-
-5. Open the tunnel URL in a browser. The built UI uses the current browser origin as its Core URL when served by Core, so a separate `5174` tunnel is not needed.
-
-For stable remote OAuth or MCP clients, set `CORE_EXTERNAL_BASE_URL` in `services/workbench-core/.env` to the public HTTPS tunnel origin and restart Core. For browser-only use behind a tunnel that forwards `x-forwarded-proto` and `x-forwarded-host`, Core can derive the issuer from request headers.
+The built UI uses the browser origin as its Core URL. For stable remote OAuth or MCP clients, set `CORE_EXTERNAL_BASE_URL` and restart Core.
 
 ## Databases
 
-`docker-compose.yml` starts:
+`docker-compose.yml` defines these PostgreSQL services and host ports:
 
-- Core DB: `5542`
-- Notes DB: `5543`
-- Artifacts DB: `5544`
-- Tasks DB: `5545`
-- Projects DB: `5546`
-- Images DB: `5547`
-- Mindmaps DB: `5548`
-- WBS DB: `5549`
-- Insights DB: `5550`
+| Compose service | Container | Host port | Database | Volume |
+|---|---|---:|---|---|
+| `workbench-core-db` | `workbench-core-db` | 5542 | `workbench_core_db` | `workbench_core_pgdata` |
+| `notes-db` | `workbench-notes-db` | 5543 | `notes_db` | `notes_pgdata` |
+| `artifacts-db` | `workbench-artifacts-db` | 5544 | `artifacts_db` | `artifacts_pgdata` |
+| `tasks-db` | `workbench-tasks-db` | 5545 | `tasks_db` | `tasks_pgdata` |
+| `projects-db` | `workbench-projects-db` | 5546 | `projects_db` | `projects_pgdata` |
+| `images-db` | `workbench-images-db` | 5547 | `images_db` | `images_pgdata` |
+| `mindmaps-db` | `workbench-mindmaps-db` | 5548 | `mindmaps_db` | `mindmaps_pgdata` |
+| `wbs-db` | `workbench-wbs-db` | 5549 | `wbs_db` | `wbs_pgdata` |
+| `analyser-db` | `workbench-analyser-db` | 5551 | `analyser_db` | `analyser_pgdata` |
+
+See `docs/imple/workbench-analyser-operations-runbook.md` for settings, routine triage, retention, backup/restore, and log procedures.

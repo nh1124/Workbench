@@ -50,6 +50,26 @@ Do not put into the brief: procedures (put them in Notes), reference bodies (Art
 - On a brief version conflict, re-read the brief, reconcile the change, and retry only when intent remains clear.
 - Never edit index entries manually. Use rebuild only to repair observed drift, not as a routine step.
 
+## Direct operations vs proposals (Analyser boundary)
+
+When acting from analysis (an analyser routine or any "clean this up" task), a Workbench
+mutation may be performed directly ONLY when all five conditions hold:
+
+- **deterministicTarget** — exactly one correct target/destination by explicit rule;
+- **currentEvidence** — the evidence resources were just re-read and still support the change;
+- **policyAllowed** — the owner's automation policy is enabled and lists the operation kind
+  (initial allowlist: `artifact_move`, `artifact_metadata_update`,
+  `artifact_secondary_membership_add`, `progress_note_upsert`; read via `analyser.settings.get`);
+- **concurrencyProtected** — the mutation passes version/optimistic-concurrency fields;
+- **reversibleOrNonDestructive** — small and undoable.
+
+Everything else — deletes, primary-membership removal, bulk operations, meaning-changing body
+rewrites, ambiguous targets, stale evidence — becomes an analyser proposal
+(`analyser.proposals.create`; creating one needs no approval). After a direct operation,
+re-read the authoritative resource and membership/index, then record it with
+`analyser.operations.record`. Never write resource bodies into analyser records; evidence is
+always resource refs. A numeric confidence score alone never justifies direct action.
+
 ## Verify mutations
 
 - Re-read a brief after update and compare its version and content.
