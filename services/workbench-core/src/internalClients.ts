@@ -844,12 +844,20 @@ export const analyserClient = {
   routineStatus: (token: string) => serviceRequest<unknown>(requireAnalyser(), "/routines/status", token),
   seedRoutines: (token: string) =>
     serviceRequest<void>(requireAnalyser(), "/routines/seed", token, { method: "POST" }),
+  createRoutine: (token: string, payload: unknown) =>
+    serviceRequest<unknown>(requireAnalyser(), "/routines", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
   updateRoutine: (token: string, key: string, payload: unknown) =>
     serviceRequest<unknown>(requireAnalyser(), `/routines/${encodeURIComponent(key)}`, token, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }),
+  deleteRoutine: (token: string, key: string) =>
+    serviceRequest<void>(requireAnalyser(), `/routines/${encodeURIComponent(key)}`, token, { method: "DELETE" }),
   claimRoutine: (token: string, payload: unknown) =>
     serviceRequest<unknown>(requireAnalyser(), "/routines/claim", token, {
       method: "POST",

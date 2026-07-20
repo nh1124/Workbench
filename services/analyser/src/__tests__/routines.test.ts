@@ -11,6 +11,8 @@ process.env.ANALYSER_DB_PASSWORD ??= "test";
 const {
   claimDueRoutineWithPool,
   completeRunWithPool,
+  createRoutineWithPool,
+  deleteRoutineWithPool,
   failRunWithPool,
   heartbeatRunWithPool,
   pullForRunWithPool,
@@ -252,5 +254,85 @@ describe("analyser routine updates", () => {
     assert.equal(called, true);
     assert.equal(result.nextRunAt, next.toISOString());
     assert.equal((pool.calls[1].values?.[8] as Date).toISOString(), next.toISOString());
+  });
+});
+
+describe("createRoutineWithPool", () => {
+  const input = {
+    key: "custom-weekly",
+    name: "Custom weekly",
+    skillKey: "workbench-analyser-cycle",
+    scheduleKind: "cron" as const,
+    scheduleExpr: "0 9 * * 1",
+    timezone: "Asia/Tokyo"
+  };
+
+  it("inserts a new routine and computes next_run_at from the schedule", async () => {
+    const next = new Date("2026-07-27T00:00:00.000Z");
+    let called = false;
+    const computeNext = () => { called = true; return next; };
+    const created = routineRow({ key: "custom-weekly", name: "Custom weekly", schedule_expr: "0 9 * * 1", version: 1 });
+    const pool = fakePool([{ rows: [created] }]);
+    const result = await createRoutineWithPool(pool, "owner-1", input, { computeNext, now: new Date(timestamp) });
+    assert.equal(called, true);
+    assert.equal(result.key, "custom-weekly");
+    assert.match(pool.calls[0].text, /INSERT INTO analyser_routines/);
+    assert.match(pool.calls[0].text, /ON CONFLICT \(service_account_id, key\) DO NOTHING/);
+    assert.equal((pool.calls[0].values?.[9] as Date).toISOString(), next.toISOString());
+  });
+
+  it("rejects a duplicate key with 409", async () => {
+    const pool = fakePool([{ rows: [] }]);
+    await assert.rejects(
+      () => createRoutineWithPool(pool, "owner-1", input, { computeNext: () => new Date(timestamp) }),
+      (error: unknown) => (error as { status?: number; code?: string }).status === 409
+        && (error as { code?: string }).code === "ROUTINE_KEY_EXISTS"
+    );
+  });
+
+  it("rejects an invalid schedule before touching the database", async () => {
+    const pool = fakePool([]);
+    await assert.rejects(
+      () => createRoutineWithPool(pool, "owner-1", { ...input, scheduleExpr: "not a cron" }),
+      (error: unknown) => (error as { status?: number }).status === 400
+    );
+    assert.equal(pool.calls.length, 0);
+  });
+
+  it("leaves next_run_at null when created disabled", async () => {
+    const created = routineRow({ key: "custom-weekly", enabled: false, next_run_at: null });
+    const pool = fakePool([{ rows: [created] }]);
+    let called = false;
+    await createRoutineWithPool(pool, "owner-1", { ...input, enabled: false }, { computeNext: () => { called = true; return new Date(timestamp); } });
+    assert.equal(called, false);
+    assert.equal(pool.calls[0].values?.[9], null);
+  });
+});
+
+describe("deleteRoutineWithPool", () => {
+  it("deletes a routine with no active run", async () => {
+    const pool = fakePool([{ rows: [] }, { rows: [{ id: "routine-1" }] }]);
+    await deleteRoutineWithPool(pool, "owner-1", "custom-weekly");
+    assert.match(pool.calls[0].text, /status IN \('claimed','processing'\)/);
+    assert.match(pool.calls[1].text, /DELETE FROM analyser_routines/);
+  });
+
+  it("refuses to delete while an active run holds a live lease (409)", async () => {
+    const pool = fakePool([{ rows: [{ id: "run-1" }] }]);
+    await assert.rejects(
+      () => deleteRoutineWithPool(pool, "owner-1", "daily-work-summary"),
+      (error: unknown) => (error as { status?: number; code?: string }).status === 409
+        && (error as { code?: string }).code === "ROUTINE_HAS_ACTIVE_RUN"
+    );
+    assert.equal(pool.calls.length, 1);
+  });
+
+  it("returns 404 when the routine does not exist", async () => {
+    const pool = fakePool([{ rows: [] }, { rows: [] }]);
+    await assert.rejects(
+      () => deleteRoutineWithPool(pool, "owner-1", "missing"),
+      (error: unknown) => (error as { status?: number; code?: string }).status === 404
+        && (error as { code?: string }).code === "ROUTINE_NOT_FOUND"
+    );
   });
 });

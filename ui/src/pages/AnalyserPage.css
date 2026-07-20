@@ -974,6 +974,38 @@
 .analyser-settings-actions {
   display: flex;
   justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.analyser-danger {
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.5);
+}
+
+.analyser-danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.analyser-routine-status {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.5rem 1rem;
+  margin: 0.25rem 0 0.75rem;
+  font-size: 0.85rem;
+}
+
+.analyser-routine-status > div {
+  display: flex;
+  flex-direction: column;
+}
+
+.analyser-routine-status dt {
+  opacity: 0.6;
+  font-size: 0.75rem;
+}
+
+.analyser-routine-status dd {
+  margin: 0;
 }
 
 .analyser-machine-select {

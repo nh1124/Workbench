@@ -43,6 +43,8 @@ import {
 import {
   claimDueRoutine,
   completeRun,
+  createRoutine,
+  deleteRoutine,
   failRun,
   heartbeatRun,
   listRoutines,
@@ -245,6 +247,19 @@ export const activityAggregateQuerySchema = z.object({
   message: "to must be on or after from"
 });
 
+export const routineCreateSchema = z.object({
+  key: routineKeySchema,
+  name: boundedText(500),
+  skillKey: boundedText(200),
+  skillVersion: boundedText(200).optional(),
+  scheduleKind: z.enum(["interval", "cron"]),
+  scheduleExpr: boundedText(100),
+  timezone: boundedText(100),
+  enabled: z.boolean().optional(),
+  maxRetries: z.number().int().min(0).max(10).optional(),
+  backoffMinutes: z.number().int().min(1).max(1_440).optional()
+}).strict();
+
 export const routineUpdateSchema = z.object({
   name: boundedText(500).optional(),
   enabled: z.boolean().optional(),
@@ -347,6 +362,8 @@ export interface AppDeps {
   listRoutines: typeof listRoutines;
   routineStatusSummaries: typeof routineStatusSummaries;
   seedRoutines: typeof seedRoutines;
+  createRoutine: typeof createRoutine;
+  deleteRoutine: typeof deleteRoutine;
   updateRoutine: typeof updateRoutine;
   claimDueRoutine: typeof claimDueRoutine;
   heartbeatRun: typeof heartbeatRun;
@@ -392,6 +409,8 @@ const realAppDeps: AppDeps = {
   listRoutines,
   routineStatusSummaries,
   seedRoutines,
+  createRoutine,
+  deleteRoutine,
   updateRoutine,
   claimDueRoutine,
   heartbeatRun,
@@ -564,11 +583,24 @@ export function buildApp(deps: AppDeps): express.Express {
     return res.status(204).send();
   }));
 
+  app.post("/routines", ...userRoute(deps, async (req, res) => {
+    const body = parse(routineCreateSchema, req.body ?? {}, res);
+    if (!body) return;
+    return res.status(201).json(await deps.createRoutine(req.authUser!.serviceAccountId, body));
+  }));
+
   app.patch("/routines/:key", ...userRoute(deps, async (req, res) => {
     const params = parse(routineParamsSchema, req.params, res);
     const body = parse(routineUpdateSchema, req.body ?? {}, res);
     if (!params || !body) return;
     return res.json(await deps.updateRoutine(req.authUser!.serviceAccountId, params.key, body));
+  }));
+
+  app.delete("/routines/:key", ...userRoute(deps, async (req, res) => {
+    const params = parse(routineParamsSchema, req.params, res);
+    if (!params) return;
+    await deps.deleteRoutine(req.authUser!.serviceAccountId, params.key);
+    return res.status(204).send();
   }));
 
   app.post("/routines/claim", ...userRoute(deps, async (req, res) => {

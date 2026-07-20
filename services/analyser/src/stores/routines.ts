@@ -255,6 +255,83 @@ export async function seedRoutinesWithPool(
     ON CONFLICT (service_account_id, key) DO NOTHING`, values);
 }
 
+export interface CreateRoutineInput {
+  key: string;
+  name: string;
+  skillKey: string;
+  skillVersion?: string;
+  scheduleKind: ScheduleKind;
+  scheduleExpr: string;
+  timezone: string;
+  enabled?: boolean;
+  maxRetries?: number;
+  backoffMinutes?: number;
+}
+
+export async function createRoutine(
+  owner: string,
+  input: CreateRoutineInput,
+  options: SchedulerOptions = {}
+): Promise<RoutineRecord> {
+  return createRoutineWithPool(getAnalyserPool(), owner, input, options);
+}
+
+export async function createRoutineWithPool(
+  pool: AnalyserQueryPool,
+  owner: string,
+  input: CreateRoutineInput,
+  options: SchedulerOptions = {}
+): Promise<RoutineRecord> {
+  validateInteger(input.maxRetries, 0, 10, "maxRetries");
+  validateInteger(input.backoffMinutes, 1, 1_440, "backoffMinutes");
+  parseSchedule(input.scheduleKind, input.scheduleExpr, input.timezone);
+  const enabled = input.enabled ?? true;
+  const nextRunAt = enabled
+    ? (options.computeNext ?? computeNextRunAt)(input.scheduleKind, input.scheduleExpr, input.timezone, options.now ?? new Date())
+    : null;
+  const result = await pool.query<RoutineRow>(`INSERT INTO analyser_routines
+      (service_account_id, key, name, skill_key, skill_version, schedule_kind, schedule_expr,
+        timezone, enabled, next_run_at, max_retries, backoff_minutes)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+    ON CONFLICT (service_account_id, key) DO NOTHING
+    RETURNING ${ROUTINE_COLUMNS}`, [
+    owner,
+    input.key,
+    input.name,
+    input.skillKey,
+    input.skillVersion ?? null,
+    input.scheduleKind,
+    input.scheduleExpr,
+    input.timezone,
+    enabled,
+    nextRunAt,
+    input.maxRetries ?? 3,
+    input.backoffMinutes ?? 15
+  ]);
+  if (!result.rows[0]) throw new AnalyserServiceError(409, "ROUTINE_KEY_EXISTS", "A routine with this key already exists");
+  return mapRoutine(result.rows[0]);
+}
+
+export async function deleteRoutine(owner: string, key: string): Promise<void> {
+  return deleteRoutineWithPool(getAnalyserPool(), owner, key);
+}
+
+export async function deleteRoutineWithPool(pool: AnalyserQueryPool, owner: string, key: string): Promise<void> {
+  const active = await pool.query<{ id: string }>(`SELECT run.id
+    FROM analyser_runs run
+    JOIN analyser_routines routine ON routine.id = run.routine_id
+    WHERE routine.service_account_id = $1 AND routine.key = $2
+      AND run.status IN ('claimed','processing') AND run.lease_expires_at > NOW()
+    LIMIT 1`, [owner, key]);
+  if (active.rows[0]) {
+    throw new AnalyserServiceError(409, "ROUTINE_HAS_ACTIVE_RUN", "Routine has an active run; wait for it to finish or fail");
+  }
+  const result = await pool.query<{ id: string }>(`DELETE FROM analyser_routines
+    WHERE service_account_id = $1 AND key = $2
+    RETURNING id`, [owner, key]);
+  if (!result.rows[0]) throw new AnalyserServiceError(404, "ROUTINE_NOT_FOUND", "Routine not found");
+}
+
 export async function listRoutines(owner: string): Promise<RoutineRecord[]> {
   return listRoutinesWithPool(getAnalyserPool(), owner);
 }

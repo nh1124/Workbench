@@ -280,6 +280,9 @@ beforeEach(() => {
   vi.spyOn(analyserApi, "operations").mockResolvedValue({ items: [] });
   vi.spyOn(analyserApi, "settings").mockResolvedValue(settingsResult());
   vi.spyOn(analyserApi, "routines").mockResolvedValue({ items: [analyserRoutine()] });
+  vi.spyOn(analyserApi, "routineStatus").mockResolvedValue({ items: statusResult().routines });
+  vi.spyOn(analyserApi, "createRoutine").mockImplementation(async (body) => analyserRoutine({ ...body, version: 1 }));
+  vi.spyOn(analyserApi, "deleteRoutine").mockResolvedValue(undefined);
   vi.spyOn(analyserApi, "updateCollectionPolicy").mockImplementation(async (body) => ({
     machineId: body.machineId ?? null,
     settings: body.settings,
@@ -579,7 +582,7 @@ describe("AnalyserPage", () => {
   });
 
   it("saves only changed routine schedule fields with the routine version", async () => {
-    renderPage("/analyser?tab=settings");
+    renderPage("/analyser?tab=routines");
 
     const expression = await screen.findByLabelText("Daily work summary schedule expression");
     fireEvent.change(expression, { target: { value: "30" } });
@@ -589,6 +592,34 @@ describe("AnalyserPage", () => {
       scheduleExpr: "30",
       expectedVersion: 5
     }));
+  });
+
+  it("creates a routine from the Routines tab form", async () => {
+    renderPage("/analyser?tab=routines");
+
+    fireEvent.click(await screen.findByRole("button", { name: "New routine" }));
+    fireEvent.change(screen.getByLabelText("New routine key"), { target: { value: "custom-weekly" } });
+    fireEvent.change(screen.getByLabelText("New routine name"), { target: { value: "Custom weekly" } });
+    fireEvent.change(screen.getByLabelText("New routine skill key"), { target: { value: "workbench-analyser-cycle" } });
+    fireEvent.change(screen.getByLabelText("New routine schedule expression"), { target: { value: "0 9 * * 1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create routine" }));
+
+    await waitFor(() => expect(analyserApi.createRoutine).toHaveBeenCalledWith(expect.objectContaining({
+      key: "custom-weekly",
+      name: "Custom weekly",
+      skillKey: "workbench-analyser-cycle",
+      scheduleKind: "cron",
+      scheduleExpr: "0 9 * * 1"
+    })));
+  });
+
+  it("deletes a routine after confirmation", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    renderPage("/analyser?tab=routines");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(analyserApi.deleteRoutine).toHaveBeenCalledWith("daily-work-summary"));
+    confirmSpy.mockRestore();
   });
 
   it("shows an invalid routine schedule message inline", async () => {
@@ -603,7 +634,7 @@ describe("AnalyserPage", () => {
       code: "INVALID_SCHEDULE"
     }));
 
-    renderPage("/analyser?tab=settings");
+    renderPage("/analyser?tab=routines");
     fireEvent.change(await screen.findByLabelText("Daily work summary schedule expression"), { target: { value: "bad cron" } });
     fireEvent.click(screen.getByRole("button", { name: "Save routine" }));
 

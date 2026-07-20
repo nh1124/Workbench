@@ -3878,9 +3878,17 @@ app.post(
   "/api/analyser/routines/seed",
   analyserFacadeRoute((token) => analyserClient.seedRoutines(token), { status: 204 })
 );
+app.post(
+  "/api/analyser/routines",
+  analyserFacadeRoute((token, req) => analyserClient.createRoutine(token, req.body ?? {}), { status: 201, userOnly: true })
+);
 app.patch(
   "/api/analyser/routines/:key",
   analyserFacadeRoute((token, req) => analyserClient.updateRoutine(token, String(req.params.key), req.body ?? {}), { userOnly: true })
+);
+app.delete(
+  "/api/analyser/routines/:key",
+  analyserFacadeRoute((token, req) => analyserClient.deleteRoutine(token, String(req.params.key)), { status: 204, userOnly: true })
 );
 app.post(
   "/api/analyser/routines/claim",

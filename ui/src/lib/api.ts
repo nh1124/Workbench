@@ -1090,6 +1090,26 @@ export const analyserApi = {
       method: "POST",
       body: JSON.stringify({})
     }),
+  createRoutine: (body: {
+    key: string;
+    name: string;
+    skillKey: string;
+    skillVersion?: string;
+    scheduleKind: "interval" | "cron";
+    scheduleExpr: string;
+    timezone: string;
+    enabled?: boolean;
+    maxRetries?: number;
+    backoffMinutes?: number;
+  }): Promise<AnalyserRoutineRecord> =>
+    fetchJson(analyserApiUrl("/routines"), {
+      method: "POST",
+      body: JSON.stringify(body)
+    }),
+  deleteRoutine: (key: string): Promise<void> =>
+    fetchJson(analyserApiUrl(`/routines/${encodeURIComponent(key)}`), {
+      method: "DELETE"
+    }),
   updateRoutine: (key: string, body: {
     name?: string;
     enabled?: boolean;
