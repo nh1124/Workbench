@@ -193,7 +193,8 @@ analyser.proposals.create { "kind": "skill_materialization_conflict", "title": "
 - `projects.memory.append` — durable-knowledge proposals; always saved as `agent_observed`.
   `lifecycleState` accepts `raw | triaged` only. Use `supersedesId` for replacement drafts.
 - `projects.memory.archive` — retirement proposal for clearly dead knowledge.
-- `notes.list` / `notes.create` / `notes.update` — digest note search and idempotent upsert.
+- `notes.list` / `notes.create` / `notes.update` — note reads and exports. Notes no longer
+  carry lifecycle/review fields.
 - `projects.index.rebuild` — repair only, on observed drift; never routine.
 
 ## Not available to agents (by design)

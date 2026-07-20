@@ -1010,12 +1010,12 @@ describe("local client HTTP APIs", () => {
     }
   });
 
-  it("validates and forwards note lifecycle metadata during sync push", async (t) => {
+  it("validates and forwards note metadata during sync push", async (t) => {
     const harness = await requireHarness(t);
     if (!harness) return;
 
     const pool = harness.db.getCorePool();
-    const { userId, username } = await createTestUser(pool, "sync-note-lifecycle");
+    const { userId, username } = await createTestUser(pool, "sync-note-metadata");
     const { accessToken } = harness.auth.issueTokenBundle({ userId, username });
     const server = await startTestServer(harness);
     const originalFetch = globalThis.fetch;
@@ -1026,7 +1026,7 @@ describe("local client HTTP APIs", () => {
       const registerResponse = await requestJson(server.baseUrl, "POST", "/api/local-clients/register", {
         headers: bearerHeaders(accessToken),
         body: {
-          deviceId: "device-sync-note-lifecycle",
+          deviceId: "device-sync-note-metadata",
           clientName: "Sync Daemon",
           platform: "linux",
           syncRootId: "notes",
@@ -1065,7 +1065,7 @@ describe("local client HTTP APIs", () => {
             headers: { "Content-Type": "application/json" }
           });
         }
-        throw new Error(`Unexpected upstream request in sync note lifecycle test: ${method} ${url.href}`);
+        throw new Error(`Unexpected upstream request in sync note metadata test: ${method} ${url.href}`);
       };
 
       const rawCreateResponse = await requestJson(server.baseUrl, "POST", "/api/sync/push", {
@@ -1078,8 +1078,6 @@ describe("local client HTTP APIs", () => {
             payload: {
               title: "Capture Daily Summary 2026-07-07",
               content: "Captured activity",
-              lifecycleState: "raw",
-              reviewAfter: "2026-07-08T00:00:00.000Z",
               tags: ["workbench-capture"]
             }
           }]
@@ -1097,8 +1095,6 @@ describe("local client HTTP APIs", () => {
         body: {
           title: "Capture Daily Summary 2026-07-07",
           content: "Captured activity",
-          lifecycleState: "raw",
-          reviewAfter: "2026-07-08T00:00:00.000Z",
           tags: ["workbench-capture"]
         }
       });
@@ -1113,8 +1109,6 @@ describe("local client HTTP APIs", () => {
             payload: {
               title: "Capture Daily Summary 2026-07-07",
               content: "Captured activity",
-              lifecycleState: "raw",
-              reviewAfter: "2026-07-08T00:00:00.000Z",
               tags: ["workbench-capture"]
             }
           }]
@@ -1136,8 +1130,7 @@ describe("local client HTTP APIs", () => {
         },
         body: {
           title: "Created through REST",
-          content: "Core may have applied this before the network failed",
-          lifecycleState: "raw"
+          content: "Core may have applied this before the network failed"
         }
       });
       assert.equal(restCreateResponse.status, 201);
@@ -1153,8 +1146,7 @@ describe("local client HTTP APIs", () => {
             action: "create",
             payload: {
               title: "Created through REST",
-              content: "Core may have applied this before the network failed",
-              lifecycleState: "raw"
+              content: "Core may have applied this before the network failed"
             }
           }]
         }
@@ -1172,24 +1164,12 @@ describe("local client HTTP APIs", () => {
         body: {
           ops: [
             {
-              clientOpId: "note-verified-rejected",
-              domain: "notes",
-              action: "update",
-              resourceId: "note-verified",
-              payload: {
-                title: "Should not be promoted",
-                lifecycleState: "verified"
-              }
-            },
-            {
               clientOpId: "note-triaged-continues",
               domain: "notes",
               action: "update",
               resourceId: "note-triaged",
               payload: {
                 title: "Still applies",
-                lifecycleState: "triaged",
-                reviewAfter: null,
                 tags: ["capture", "triaged"]
               }
             }
@@ -1197,10 +1177,7 @@ describe("local client HTTP APIs", () => {
         }
       });
       assert.equal(mixedResponse.status, 202);
-      const mixedRejected = mixedResponse.body.rejected as Array<Record<string, unknown>>;
-      assert.equal(mixedRejected.length, 1);
-      assert.equal(mixedRejected[0].clientOpId, "note-verified-rejected");
-      assert.equal(mixedRejected[0].code, "SYNC_NOTE_PAYLOAD_INVALID");
+      assert.deepEqual(mixedResponse.body.rejected, []);
       const mixedApplied = mixedResponse.body.applied as Array<Record<string, unknown>>;
       assert.equal(mixedApplied.length, 1);
       assert.equal(mixedApplied[0].clientOpId, "note-triaged-continues");
@@ -1210,8 +1187,6 @@ describe("local client HTTP APIs", () => {
         pathname: "/notes/note-triaged",
         body: {
           title: "Still applies",
-          lifecycleState: "triaged",
-          reviewAfter: null,
           tags: ["capture", "triaged"]
         }
       }]);
