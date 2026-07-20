@@ -280,7 +280,7 @@ analyser.operations.record     analyser.publications.record
 | AW-8 | `[implemented]` | core | sync_events projector（consumer `analyser-projector` + 60s timer + /api/analyser/projector/flush、payload 非転送、未 provisioning は skip）+ tests |
 | AW-9 | `[implemented]` | core | MCP wrap + HTTP middleware の access 計測（allowlist・二重 gate・analyser.*/auth/sync/oauth 除外・60s settings cache・best-effort batch flush）+ tests |
 | AW-10 | `[implemented]` | sync-daemon | 設定粒度化（windowTitleCapture/Upload 追加・autoPublish 削除）+ uploader を analyser ingest へ（server 効果ポリシー fail-closed gate）+ summarizer/summary 経路全削除 |
-| AW-11 | `[pending]` | ui | api.ts analyser client + AnalyserPage 骨格 + Overview + Activity |
+| AW-11 | `[implemented]` | ui | api.ts analyser client + AnalyserPage 5 タブ骨格 + Overview + Activity（本文非表示の明示、resource ref リンク） |
 | AW-12 | `[pending]` | ui | Summaries + Proposals（approve/reject/export/実行記録） |
 | AW-13 | `[pending]` | ui | Settings（collection/automation/machine override/retention/routines） |
 | AW-14 | `[pending]` | migration | insights → analyser データ移行 + maintenance open items → proposals（idempotent, backup 前提） |

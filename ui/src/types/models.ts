@@ -945,6 +945,262 @@ export interface InsightsSummaryListResult {
   nextCursor?: string;
 }
 
+export type AnalyserObservationSource =
+  | "workbench_change"
+  | "mcp_access"
+  | "ui_access"
+  | "agent_session"
+  | "pc_activity"
+  | "local_file";
+
+export type AnalyserActorKind = "user" | "agent" | "system";
+
+export interface AnalyserResourceRef {
+  service: string;
+  resourceType: string;
+  resourceId: string;
+  pathSnapshot?: string;
+}
+
+export interface AnalyserCollectionSettings {
+  workbenchChanges: "off" | "metadata";
+  mcpAccess: "off" | "mutations" | "reads_and_mutations";
+  uiAccess: "off" | "mutations" | "reads_and_mutations";
+  agentSessionEvents: "off" | "explicit_only";
+  foregroundAppCapture: boolean;
+  foregroundAppUpload: boolean;
+  windowTitleCapture: boolean;
+  windowTitleUpload: boolean;
+  localFileEvents: "off" | "metadata";
+  localFileUpload: boolean;
+  screenshots: "off" | "local_only";
+  retentionDays: Record<AnalyserObservationSource, number>;
+  localScreenshotRetentionDays: number;
+  projectAllow: string[];
+  projectDeny: string[];
+  resourceTypeAllow: string[];
+  resourceTypeDeny: string[];
+  localRootAllow: string[];
+  localRootDeny: string[];
+  excludePatterns: string[];
+}
+
+export type AnalyserCollectionSettingsOverride = Partial<
+  Omit<AnalyserCollectionSettings, "retentionDays">
+> & { retentionDays?: Partial<Record<AnalyserObservationSource, number>> };
+
+export type AnalyserOperationKind =
+  | "artifact_move"
+  | "artifact_metadata_update"
+  | "artifact_secondary_membership_add"
+  | "progress_note_upsert";
+
+export interface AnalyserAutomationPolicy {
+  enabled: boolean;
+  requireHighConfidence: boolean;
+  destructiveAllowed: boolean;
+  bulkAllowed: boolean;
+  allowedOperationKinds: AnalyserOperationKind[];
+}
+
+export interface AnalyserMachineRecord {
+  id: string;
+  machineKey: string;
+  displayName?: string;
+  platform?: string;
+  registeredAt: string;
+  lastSeenAt: string;
+}
+
+export interface AnalyserObservationRecord {
+  seq: string;
+  id: string;
+  source: AnalyserObservationSource;
+  action: string;
+  actorKind: AnalyserActorKind;
+  machineId?: string;
+  projectId?: string;
+  occurredAt: string;
+  resourceRefs?: AnalyserResourceRef[];
+  metadata?: Record<string, string | number | boolean | null>;
+  sourceEventId?: string;
+  dedupeKey: string;
+  receivedAt: string;
+  expiresAt: string;
+}
+
+export interface AnalyserActivityAggregateDay {
+  date: string;
+  machineId: string | null;
+  sampleCount: number;
+  idleCount: number;
+  activeCount: number;
+  apps: Record<string, number>;
+}
+
+export interface AnalyserActivityAggregateTotals {
+  sampleCount: number;
+  idleCount: number;
+  activeCount: number;
+  apps: Record<string, number>;
+}
+
+export interface AnalyserActivityAggregate {
+  days: AnalyserActivityAggregateDay[];
+  totals: AnalyserActivityAggregateTotals;
+}
+
+export interface AnalyserRoutineRecord {
+  id: string;
+  key: string;
+  name: string;
+  skillKey: string;
+  skillVersion?: string;
+  scheduleKind: "interval" | "cron";
+  scheduleExpr: string;
+  timezone: string;
+  enabled: boolean;
+  nextRunAt?: string;
+  committedCursor: string;
+  maxRetries: number;
+  backoffMinutes: number;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AnalyserRoutineStatusSummary {
+  key: string;
+  enabled: boolean;
+  nextRunAt?: string;
+  lastCompletedAt?: string;
+  lastFailedAt?: string;
+  lastErrorSummary?: string;
+  activeRun: { id: string; holder: string; leaseExpiresAt: string } | null;
+}
+
+export interface AnalyserSummaryRecord {
+  id: string;
+  kind: string;
+  periodStart: string;
+  periodEnd: string;
+  title: string;
+  bodyMarkdown: string;
+  metrics?: Record<string, unknown>;
+  evidenceRefs: AnalyserResourceRef[];
+  routineKey?: string;
+  runId?: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type AnalyserSummaryListItem = Omit<AnalyserSummaryRecord, "bodyMarkdown"> & { bodyChars: number };
+
+export interface AnalyserProposedAction {
+  kind: AnalyserOperationKind | "other";
+  params?: Record<string, string | number | boolean | null | string[]>;
+}
+
+export interface AnalyserConfidenceEvidence {
+  deterministicTarget?: boolean;
+  currentEvidence?: boolean;
+  policyAllowed?: boolean;
+  concurrencyProtected?: boolean;
+  reversibleOrNonDestructive?: boolean;
+  notes?: string;
+}
+
+export type AnalyserProposalStatus = "open" | "approved" | "rejected" | "executed" | "superseded";
+
+export interface AnalyserProposalRecord {
+  id: string;
+  kind: string;
+  title: string;
+  bodyMarkdown: string;
+  evidenceRefs: AnalyserResourceRef[];
+  proposedAction?: AnalyserProposedAction;
+  confidenceEvidence?: AnalyserConfidenceEvidence;
+  status: AnalyserProposalStatus;
+  approvedBy?: string;
+  approvedAt?: string;
+  approvalProvenance?: string;
+  routineKey?: string;
+  runId?: string;
+  dedupeKey?: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type AnalyserProposalListItem = Omit<AnalyserProposalRecord, "bodyMarkdown"> & { bodyChars: number };
+
+export interface AnalyserOperationRecord {
+  id: string;
+  operationKind: AnalyserOperationKind;
+  approvalBasis: "policy" | "proposal";
+  proposalId?: string;
+  beforeRefs: AnalyserResourceRef[];
+  afterRefs: AnalyserResourceRef[];
+  result: "succeeded" | "failed" | "skipped";
+  detail?: Record<string, string | number | boolean | null>;
+  runId?: string;
+  agentLabel?: string;
+  idempotencyKey: string;
+  createdAt: string;
+}
+
+export interface AnalyserPublicationRecord {
+  id: string;
+  sourceKind: "summary" | "proposal";
+  sourceId: string;
+  targetKind: "note" | "artifact";
+  targetId: string;
+  targetRef?: AnalyserResourceRef;
+  contentHash: string;
+  provenance: "ui" | "agent";
+  createdAt: string;
+}
+
+export interface AnalyserCollectionPolicyRecord {
+  machineId: string | null;
+  settings: AnalyserCollectionSettingsOverride;
+  version: number;
+  updatedBy: string;
+  updatedAt: string;
+}
+
+export interface AnalyserAutomationPolicyRecord {
+  policy: AnalyserAutomationPolicy;
+  version: number;
+  updatedBy: string;
+  updatedAt: string;
+}
+
+export interface AnalyserSettingsResult {
+  effective: {
+    settings: AnalyserCollectionSettings;
+    ownerVersion?: number;
+    machineVersion?: number;
+  };
+  rows: AnalyserCollectionPolicyRecord[];
+  automation: { policy: AnalyserAutomationPolicy };
+}
+
+export interface AnalyserStatusResult {
+  routines: AnalyserRoutineStatusSummary[];
+  hasOpenProposals: boolean;
+  machines: AnalyserMachineRecord[];
+}
+
+export interface AnalyserProjectorFlushResult {
+  projected: number;
+  skipped?: true;
+  duplicates?: number;
+  rejected?: number;
+  batches?: number;
+}
+
 export interface MaintenanceUsageSummary {
   since: string;
   until: string;
