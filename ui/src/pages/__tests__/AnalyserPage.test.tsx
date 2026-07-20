@@ -7,6 +7,11 @@ import { analyserApi, ApiError } from "../../lib/api";
 import type {
   AnalyserActivityAggregate,
   AnalyserObservationRecord,
+  AnalyserOperationRecord,
+  AnalyserProposalListItem,
+  AnalyserProposalRecord,
+  AnalyserSummaryListItem,
+  AnalyserSummaryRecord,
   AnalyserStatusResult
 } from "../../types/models";
 import { AnalyserPage } from "../AnalyserPage";
@@ -72,6 +77,75 @@ function observation(id: string, overrides: Partial<AnalyserObservationRecord> =
   };
 }
 
+function summary(id: string, overrides: Partial<AnalyserSummaryRecord> = {}): AnalyserSummaryRecord {
+  return {
+    id,
+    kind: "weekly_work",
+    periodStart: "2026-07-13",
+    periodEnd: "2026-07-19",
+    title: `Summary ${id}`,
+    bodyMarkdown: `# Summary body ${id}`,
+    metrics: { activeDays: 5 },
+    evidenceRefs: [{ service: "notes", resourceType: "note", resourceId: `note-${id}` }],
+    routineKey: "weekly-workbench-digest",
+    version: 1,
+    createdAt: updatedAt,
+    updatedAt,
+    ...overrides
+  };
+}
+
+function summaryListItem(id: string, overrides: Partial<AnalyserSummaryRecord> = {}): AnalyserSummaryListItem {
+  const { bodyMarkdown: _bodyMarkdown, ...item } = summary(id, overrides);
+  return { ...item, bodyChars: summary(id, overrides).bodyMarkdown.length };
+}
+
+function proposal(id: string, overrides: Partial<AnalyserProposalRecord> = {}): AnalyserProposalRecord {
+  return {
+    id,
+    kind: "artifact_organization",
+    title: `Proposal ${id}`,
+    bodyMarkdown: `Proposal body ${id}`,
+    evidenceRefs: [{ service: "artifacts", resourceType: "artifact_item", resourceId: `artifact-${id}` }],
+    proposedAction: { kind: "artifact_move", params: { targetPath: "archive/2026" } },
+    confidenceEvidence: {
+      deterministicTarget: true,
+      currentEvidence: true,
+      policyAllowed: true,
+      concurrencyProtected: true,
+      reversibleOrNonDestructive: true,
+      notes: "All checks passed."
+    },
+    status: "open",
+    routineKey: "artifact-classification",
+    version: 3,
+    createdAt: updatedAt,
+    updatedAt,
+    ...overrides
+  };
+}
+
+function proposalListItem(id: string, overrides: Partial<AnalyserProposalRecord> = {}): AnalyserProposalListItem {
+  const full = proposal(id, overrides);
+  const { bodyMarkdown: _bodyMarkdown, ...item } = full;
+  return { ...item, bodyChars: full.bodyMarkdown.length };
+}
+
+function operation(id: string, overrides: Partial<AnalyserOperationRecord> = {}): AnalyserOperationRecord {
+  return {
+    id,
+    operationKind: "artifact_move",
+    approvalBasis: "proposal",
+    proposalId: "proposal-executed",
+    beforeRefs: [{ service: "artifacts", resourceType: "artifact_item", resourceId: "artifact-before", pathSnapshot: "inbox/item.md" }],
+    afterRefs: [{ service: "artifacts", resourceType: "artifact_item", resourceId: "artifact-after", pathSnapshot: "archive/item.md" }],
+    result: "succeeded",
+    idempotencyKey: `operation-${id}`,
+    createdAt: updatedAt,
+    ...overrides
+  };
+}
+
 function LocationProbe() {
   const location = useLocation();
   return <div data-testid="location">{`${location.pathname}${location.search}`}</div>;
@@ -103,6 +177,13 @@ beforeEach(() => {
   vi.spyOn(analyserApi, "machines").mockResolvedValue({ items: statusResult().machines });
   vi.spyOn(analyserApi, "activityAggregate").mockResolvedValue(aggregateResult());
   vi.spyOn(analyserApi, "observations").mockResolvedValue({ items: [] });
+  vi.spyOn(analyserApi, "summaries").mockResolvedValue({ items: [] });
+  vi.spyOn(analyserApi, "summary").mockImplementation(async (id) => summary(id));
+  vi.spyOn(analyserApi, "proposals").mockResolvedValue({ items: [] });
+  vi.spyOn(analyserApi, "proposal").mockImplementation(async (id) => proposal(id));
+  vi.spyOn(analyserApi, "resolveProposal").mockImplementation(async (id, body) => proposal(id, { status: body.status }));
+  vi.spyOn(analyserApi, "supersedeProposal").mockImplementation(async (id) => proposal(id, { status: "superseded" }));
+  vi.spyOn(analyserApi, "operations").mockResolvedValue({ items: [] });
   vi.spyOn(analyserApi, "seedRoutines").mockResolvedValue(undefined);
   vi.spyOn(analyserApi, "projectorFlush").mockResolvedValue({ projected: 0, skipped: true });
 });
@@ -200,5 +281,132 @@ describe("AnalyserPage", () => {
       limit: 50,
       cursor: "cursor-2"
     });
+  });
+
+  it("renders summaries, fetches detail with body and metrics, and disables export", async () => {
+    vi.mocked(analyserApi.summaries).mockResolvedValue({ items: [summaryListItem("summary-1", { title: "Weekly focus" })] });
+    vi.mocked(analyserApi.summary).mockResolvedValue(summary("summary-1", {
+      title: "Weekly focus",
+      bodyMarkdown: "## Focused delivery\nCompleted the analyser shell.",
+      metrics: { focusHours: 12, completed: true }
+    }));
+
+    renderPage("/analyser?tab=summaries");
+
+    fireEvent.click(await screen.findByText("Weekly focus"));
+    expect(await screen.findByText(/Completed the analyser shell/)).toBeTruthy();
+    expect(screen.getByText("focusHours")).toBeTruthy();
+    expect(screen.getByText("12")).toBeTruthy();
+    expect(analyserApi.summary).toHaveBeenCalledWith("summary-1");
+    const exportButton = screen.getByRole("button", { name: "Export" }) as HTMLButtonElement;
+    expect(exportButton.disabled).toBe(true);
+    expect(exportButton.title).toBe("Export arrives with the publication pipeline");
+  });
+
+  it("appends the next summaries page using nextCursor", async () => {
+    vi.mocked(analyserApi.summaries)
+      .mockResolvedValueOnce({ items: [summaryListItem("summary-1", { title: "First summary" })], nextCursor: "summary-cursor-2" })
+      .mockResolvedValueOnce({ items: [summaryListItem("summary-2", { title: "Second summary" })] });
+
+    renderPage("/analyser?tab=summaries");
+
+    expect(await screen.findByText("First summary")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    expect(await screen.findByText("Second summary")).toBeTruthy();
+    expect(screen.getByText("First summary")).toBeTruthy();
+    expect(analyserApi.summaries).toHaveBeenLastCalledWith({
+      kind: undefined,
+      from: undefined,
+      to: undefined,
+      routineKey: undefined,
+      limit: 50,
+      cursor: "summary-cursor-2"
+    });
+  });
+
+  it("uses the open proposal filter by default and approves with UI provenance and version", async () => {
+    const open = proposal("proposal-approve", { title: "Approve indexing fix", version: 7 });
+    vi.mocked(analyserApi.proposals).mockResolvedValue({ items: [proposalListItem(open.id, open)] });
+    vi.mocked(analyserApi.proposal).mockResolvedValue(open);
+    vi.mocked(analyserApi.resolveProposal).mockResolvedValue({ ...open, status: "approved", version: 8 });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    renderPage("/analyser?tab=proposals");
+
+    expect(await screen.findByText("Approve indexing fix")).toBeTruthy();
+    expect(analyserApi.proposals).toHaveBeenCalledWith({ status: "open", kind: undefined, limit: 50 });
+    fireEvent.click(screen.getByText("Approve indexing fix"));
+    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(analyserApi.resolveProposal).toHaveBeenCalledWith("proposal-approve", {
+      status: "approved",
+      provenance: "workbench-ui",
+      expectedVersion: 7
+    }));
+  });
+
+  it("rejects an open proposal after confirmation with UI provenance and version", async () => {
+    const open = proposal("proposal-reject", { title: "Reject stale move", version: 4 });
+    vi.mocked(analyserApi.proposals).mockResolvedValue({ items: [proposalListItem(open.id, open)] });
+    vi.mocked(analyserApi.proposal).mockResolvedValue(open);
+    vi.mocked(analyserApi.resolveProposal).mockResolvedValue({ ...open, status: "rejected", version: 5 });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    renderPage("/analyser?tab=proposals");
+
+    fireEvent.click(await screen.findByText("Reject stale move"));
+    fireEvent.click(await screen.findByRole("button", { name: "Reject" }));
+    await waitFor(() => expect(analyserApi.resolveProposal).toHaveBeenCalledWith("proposal-reject", {
+      status: "rejected",
+      provenance: "workbench-ui",
+      expectedVersion: 4
+    }));
+  });
+
+  it("reloads proposal detail and shows a notice on VERSION_CONFLICT", async () => {
+    const stale = proposal("proposal-conflict", { title: "Concurrent proposal", version: 2, bodyMarkdown: "Stale proposal body" });
+    const fresh = proposal("proposal-conflict", { title: "Concurrent proposal", version: 3, bodyMarkdown: "Fresh proposal body" });
+    vi.mocked(analyserApi.proposals).mockResolvedValue({ items: [proposalListItem(stale.id, stale)] });
+    vi.mocked(analyserApi.proposal).mockResolvedValueOnce(stale).mockResolvedValueOnce(fresh);
+    vi.mocked(analyserApi.resolveProposal).mockRejectedValue(new ApiError({
+      backend: "core",
+      method: "POST",
+      path: "/api/analyser/proposals/proposal-conflict/resolve",
+      url: "http://core/api/analyser/proposals/proposal-conflict/resolve",
+      detail: "Proposal version conflict",
+      status: 409,
+      code: "VERSION_CONFLICT"
+    }));
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    renderPage("/analyser?tab=proposals");
+
+    fireEvent.click(await screen.findByText("Concurrent proposal"));
+    expect(await screen.findByText("Stale proposal body")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    expect(await screen.findByText("Proposal changed elsewhere — reloaded.")).toBeTruthy();
+    expect(await screen.findByText("Fresh proposal body")).toBeTruthy();
+    expect(analyserApi.proposal).toHaveBeenCalledTimes(2);
+  });
+
+  it("loads and renders the recorded operation for an executed proposal", async () => {
+    const executed = proposal("proposal-executed", { title: "Executed artifact move", status: "executed" });
+    vi.mocked(analyserApi.proposals).mockImplementation(async (query) => query.status === "executed"
+      ? { items: [proposalListItem(executed.id, executed)] }
+      : { items: [] });
+    vi.mocked(analyserApi.proposal).mockResolvedValue(executed);
+    vi.mocked(analyserApi.operations).mockResolvedValue({ items: [operation("operation-1")] });
+
+    renderPage("/analyser?tab=proposals");
+
+    fireEvent.click(screen.getByRole("button", { name: "executed" }));
+    fireEvent.click(await screen.findByText("Executed artifact move"));
+    expect(await screen.findByText("succeeded")).toBeTruthy();
+    expect(screen.getAllByText("artifact move").length).toBeGreaterThan(0);
+    expect(screen.getByText("inbox/item.md")).toBeTruthy();
+    expect(screen.getByText("archive/item.md")).toBeTruthy();
+    expect(analyserApi.operations).toHaveBeenCalledWith({ proposalId: "proposal-executed" });
+    const exportButton = screen.getByRole("button", { name: "Export" }) as HTMLButtonElement;
+    expect(exportButton.disabled).toBe(true);
+    expect(exportButton.title).toBe("Export arrives with the publication pipeline");
   });
 });

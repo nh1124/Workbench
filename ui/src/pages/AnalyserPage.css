@@ -517,6 +517,279 @@
   margin-top: 0.65rem;
 }
 
+.analyser-record-tab {
+  display: grid;
+  gap: 0.72rem;
+  min-width: 0;
+}
+
+.analyser-summary-filters {
+  grid-template-columns: minmax(150px, 0.8fr) minmax(145px, 0.7fr) minmax(145px, 0.7fr) minmax(190px, 1fr);
+}
+
+.analyser-filter-bar input,
+.analyser-proposal-filters select {
+  min-width: 0;
+  border: 1px solid rgba(71, 85, 105, 0.72);
+  border-radius: 9px;
+  background: rgba(15, 23, 42, 0.82);
+  color: #e5e7eb;
+  padding: 0.46rem 0.58rem;
+}
+
+.analyser-selectable-table tbody tr {
+  cursor: pointer;
+}
+
+.analyser-selectable-table tbody tr:hover,
+.analyser-selectable-table tbody tr:focus,
+.analyser-selectable-table tbody tr.selected {
+  outline: none;
+  background: rgba(8, 145, 178, 0.12);
+}
+
+.analyser-kind-badge {
+  border-color: rgba(168, 85, 247, 0.38);
+  background: rgba(88, 28, 135, 0.28);
+  color: #d8b4fe;
+}
+
+.analyser-detail-panel {
+  display: grid;
+  gap: 0.85rem;
+  min-width: 0;
+  border: 1px solid rgba(71, 85, 105, 0.78);
+  border-radius: 14px;
+  background: linear-gradient(165deg, rgba(17, 26, 48, 0.96), rgba(8, 14, 27, 0.98));
+  padding: 0.9rem;
+}
+
+.analyser-detail-panel > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  border-bottom: 1px solid rgba(51, 65, 85, 0.62);
+  padding-bottom: 0.75rem;
+}
+
+.analyser-detail-panel h2 {
+  margin: 0.38rem 0 0;
+  color: #f1f5f9;
+  font-size: 1.18rem;
+}
+
+.analyser-detail-panel header p,
+.analyser-detail-panel section > p,
+.analyser-confidence-list p {
+  margin: 0.25rem 0 0;
+  color: #94a3b8;
+  font-size: 0.76rem;
+}
+
+.analyser-detail-panel h3,
+.analyser-operation h4 {
+  margin: 0 0 0.42rem;
+  color: #cbd5e1;
+  font-size: 0.74rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.analyser-markdown {
+  max-width: 100%;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid rgba(51, 65, 85, 0.66);
+  border-radius: 10px;
+  background: rgba(2, 6, 23, 0.55);
+  color: #dbe7f5;
+  padding: 0.72rem;
+  font-family: inherit;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.analyser-key-value-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+  gap: 0.42rem;
+}
+
+.analyser-key-value-grid > span {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+  border: 1px solid rgba(51, 65, 85, 0.58);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.55);
+  padding: 0.46rem;
+}
+
+.analyser-key-value-grid > span > strong {
+  color: #8fa4c0;
+  font-size: 0.64rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.analyser-key-value-grid > span > span {
+  color: #dbe7f5;
+  font-size: 0.76rem;
+  overflow-wrap: anywhere;
+}
+
+.analyser-proposal-filters {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 0.7rem;
+  border: 1px solid rgba(51, 65, 85, 0.8);
+  border-radius: 12px;
+  background: linear-gradient(170deg, rgba(17, 26, 48, 0.9), rgba(10, 18, 34, 0.98));
+  padding: 0.66rem;
+}
+
+.analyser-proposal-filters label {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 190px;
+  color: #94a3b8;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.analyser-status-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.analyser-status-chips button {
+  border: 1px solid rgba(71, 85, 105, 0.68);
+  border-radius: 999px;
+  background: rgba(30, 41, 59, 0.54);
+  color: #94a3b8;
+  padding: 0.34rem 0.58rem;
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-transform: capitalize;
+}
+
+.analyser-status-chips button.active {
+  border-color: rgba(103, 232, 249, 0.48);
+  background: rgba(8, 145, 178, 0.2);
+  color: #a5f3fc;
+}
+
+.analyser-proposal-status.status-open {
+  border-color: rgba(245, 158, 11, 0.42);
+  background: rgba(113, 63, 18, 0.3);
+  color: #fde68a;
+}
+
+.analyser-proposal-status.status-approved,
+.analyser-proposal-status.status-executed {
+  border-color: rgba(16, 185, 129, 0.42);
+  background: rgba(5, 46, 22, 0.46);
+  color: #86efac;
+}
+
+.analyser-proposal-status.status-rejected,
+.analyser-proposal-status.status-superseded {
+  background: rgba(30, 41, 59, 0.58);
+  color: #aebed3;
+}
+
+.analyser-notice {
+  margin: 0;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  border-radius: 9px;
+  background: rgba(7, 89, 133, 0.18);
+  color: #bae6fd;
+  padding: 0.48rem 0.62rem;
+  font-size: 0.76rem;
+}
+
+.analyser-actions .analyser-reject-action {
+  border-color: rgba(248, 113, 113, 0.4);
+  background: rgba(127, 29, 29, 0.25);
+  color: #fecaca;
+}
+
+.analyser-secondary-menu {
+  position: relative;
+  color: #cbd5e1;
+  font-size: 0.72rem;
+}
+
+.analyser-secondary-menu summary {
+  min-height: 2rem;
+  box-sizing: border-box;
+  cursor: pointer;
+  border: 1px solid rgba(148, 163, 184, 0.36);
+  border-radius: 9px;
+  background: rgba(30, 41, 59, 0.42);
+  padding: 0.48rem 0.65rem;
+  font-weight: 800;
+  list-style: none;
+}
+
+.analyser-secondary-menu[open] button {
+  position: absolute;
+  z-index: 2;
+  top: calc(100% + 0.25rem);
+  right: 0;
+  white-space: nowrap;
+}
+
+.analyser-proposed-action,
+.analyser-confidence-list,
+.analyser-operation {
+  display: grid;
+  gap: 0.48rem;
+}
+
+.analyser-proposed-action > strong {
+  color: #e2e8f0;
+  font-size: 0.82rem;
+}
+
+.analyser-confidence-list > span {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: #cbd5e1;
+  font-size: 0.76rem;
+}
+
+.analyser-confidence-list > span b {
+  width: 1rem;
+  color: #fca5a5;
+  text-align: center;
+}
+
+.analyser-confidence-list > span.yes b {
+  color: #86efac;
+}
+
+.analyser-approval {
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  border-radius: 10px;
+  background: rgba(5, 46, 22, 0.18);
+  padding: 0.65rem;
+}
+
+.analyser-operation {
+  border: 1px solid rgba(51, 65, 85, 0.66);
+  border-radius: 10px;
+  padding: 0.65rem;
+}
+
 .analyser-placeholder {
   margin-top: 1.6rem;
 }
@@ -538,6 +811,16 @@
   .analyser-filter-bar,
   .analyser-day-row {
     grid-template-columns: 1fr;
+  }
+
+  .analyser-proposal-filters,
+  .analyser-detail-panel > header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .analyser-proposal-filters label {
+    min-width: 0;
   }
 
   .analyser-range {

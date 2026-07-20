@@ -7,8 +7,14 @@ import type {
   AnalyserMachineRecord,
   AnalyserObservationRecord,
   AnalyserObservationSource,
+  AnalyserOperationRecord,
+  AnalyserProposalListItem,
+  AnalyserProposalRecord,
+  AnalyserProposalStatus,
   AnalyserResourceRef,
-  AnalyserStatusResult
+  AnalyserStatusResult,
+  AnalyserSummaryListItem,
+  AnalyserSummaryRecord
 } from "../types/models";
 import "./AnalyserPage.css";
 
@@ -22,6 +28,8 @@ const SOURCES: AnalyserObservationSource[] = [
   "local_file"
 ];
 const OBSERVATION_PAGE_SIZE = 50;
+const ANALYSER_PAGE_SIZE = 50;
+const PROPOSAL_STATUSES: AnalyserProposalStatus[] = ["open", "approved", "rejected", "executed", "superseded"];
 
 type AnalyserTab = (typeof TABS)[number];
 type ActivityPeriod = 7 | 14 | 30;
@@ -60,6 +68,10 @@ function isAnalyserNotConfigured(error: unknown): boolean {
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
+}
+
+function isVersionConflict(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 409 && error.code === "VERSION_CONFLICT";
 }
 
 function NotConfiguredState() {
@@ -464,7 +476,381 @@ function ActivityTab() {
   );
 }
 
-function PlaceholderTab({ name }: { name: "Summaries" | "Proposals" | "Settings" }) {
+function compactValue(value: unknown): string {
+  if (value === null) return "null";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function ReferenceList({ refs, labelText }: { refs: AnalyserResourceRef[]; labelText: string }) {
+  if (refs.length === 0) return <p className="analyser-muted">No {labelText.toLowerCase()}.</p>;
+  return (
+    <div className="analyser-resource-refs" aria-label={labelText}>
+      {refs.map((resource, index) => (
+        <ResourceReference key={`${resource.service}:${resource.resourceType}:${resource.resourceId}:${index}`} resource={resource} />
+      ))}
+    </div>
+  );
+}
+
+function ExportButton() {
+  return <button type="button" disabled title="Export arrives with the publication pipeline">Export</button>;
+}
+
+function SummaryTab() {
+  const [kind, setKind] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [routineKey, setRoutineKey] = useState("");
+  const [summaries, setSummaries] = useState<AnalyserSummaryListItem[]>([]);
+  const [nextCursor, setNextCursor] = useState<string>();
+  const [selectedId, setSelectedId] = useState<string>();
+  const [selected, setSelected] = useState<AnalyserSummaryRecord>();
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [error, setError] = useState<string>();
+  const [notConfigured, setNotConfigured] = useState(false);
+  const kinds = useMemo(() => Array.from(new Set([...summaries.map((item) => item.kind), ...(kind ? [kind] : [])])).sort(), [kind, summaries]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setSummaries([]);
+    setNextCursor(undefined);
+    setSelectedId(undefined);
+    setSelected(undefined);
+    setError(undefined);
+    void analyserApi.summaries({
+      kind: kind || undefined,
+      from: from || undefined,
+      to: to || undefined,
+      routineKey: routineKey.trim() || undefined,
+      limit: ANALYSER_PAGE_SIZE
+    }).then((result) => {
+      if (cancelled) return;
+      setSummaries(result.items);
+      setNextCursor(result.nextCursor);
+    }).catch((requestError: unknown) => {
+      if (cancelled) return;
+      if (isAnalyserNotConfigured(requestError)) setNotConfigured(true);
+      else setError(errorMessage(requestError, "Summaries are unavailable."));
+    }).finally(() => {
+      if (!cancelled) setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [from, kind, routineKey, to]);
+
+  const loadMore = async () => {
+    if (!nextCursor) return;
+    setLoadingMore(true);
+    setError(undefined);
+    try {
+      const result = await analyserApi.summaries({
+        kind: kind || undefined,
+        from: from || undefined,
+        to: to || undefined,
+        routineKey: routineKey.trim() || undefined,
+        limit: ANALYSER_PAGE_SIZE,
+        cursor: nextCursor
+      });
+      setSummaries((current) => [...current, ...result.items]);
+      setNextCursor(result.nextCursor);
+    } catch (requestError) {
+      if (isAnalyserNotConfigured(requestError)) setNotConfigured(true);
+      else setError(errorMessage(requestError, "More summaries could not be loaded."));
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  const selectSummary = async (id: string) => {
+    setSelectedId(id);
+    setSelected(undefined);
+    setDetailLoading(true);
+    setError(undefined);
+    try {
+      setSelected(await analyserApi.summary(id));
+    } catch (requestError) {
+      if (isAnalyserNotConfigured(requestError)) setNotConfigured(true);
+      else setError(errorMessage(requestError, "Summary detail is unavailable."));
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  if (notConfigured) return <NotConfiguredState />;
+
+  return (
+    <section className="analyser-record-tab" aria-label="Summaries">
+      <div className="analyser-section-header">
+        <div><h2>Summaries</h2><p>Generated analysis grouped by period and routine.</p></div>
+      </div>
+
+      <div className="analyser-filter-bar analyser-summary-filters">
+        <label><span>Kind</span><select aria-label="Summary kind" value={kind} onChange={(event) => setKind(event.target.value)}><option value="">All kinds</option>{kinds.map((item) => <option key={item} value={item}>{label(item)}</option>)}</select></label>
+        <label><span>From</span><input aria-label="Summary period from" type="date" value={from} onChange={(event) => setFrom(event.target.value)} /></label>
+        <label><span>To</span><input aria-label="Summary period to" type="date" value={to} onChange={(event) => setTo(event.target.value)} /></label>
+        <label><span>Routine key</span><input aria-label="Summary routine key" value={routineKey} onChange={(event) => setRoutineKey(event.target.value)} placeholder="Optional" /></label>
+      </div>
+
+      {error ? <p className="analyser-error" role="alert">{error}</p> : null}
+      {loading ? <p className="analyser-muted">Loading summaries...</p> : null}
+      {!loading && summaries.length === 0 ? <div className="analyser-empty-card compact"><h2>No summaries found</h2><p>Adjust the filters or wait for a routine to publish a summary.</p></div> : null}
+
+      {summaries.length > 0 ? (
+        <div className="analyser-table-wrap">
+          <table className="analyser-table analyser-selectable-table">
+            <thead><tr><th>Period</th><th>Kind</th><th>Title</th><th>Body chars</th><th>Updated</th><th>Routine</th></tr></thead>
+            <tbody>{summaries.map((summary) => (
+              <tr
+                key={summary.id}
+                className={selectedId === summary.id ? "selected" : undefined}
+                aria-selected={selectedId === summary.id}
+                tabIndex={0}
+                onClick={() => void selectSummary(summary.id)}
+                onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") void selectSummary(summary.id); }}
+              >
+                <td>{summary.periodStart} – {summary.periodEnd}</td>
+                <td><span className="analyser-state analyser-kind-badge">{label(summary.kind)}</span></td>
+                <td><strong>{summary.title}</strong></td>
+                <td>{summary.bodyChars}</td>
+                <td>{formatDateTime(summary.updatedAt)}</td>
+                <td>{summary.routineKey || "—"}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      ) : null}
+
+      {nextCursor ? <div className="analyser-load-more"><button type="button" onClick={() => void loadMore()} disabled={loadingMore}>{loadingMore ? "Loading..." : "Load more"}</button></div> : null}
+
+      {detailLoading ? <p className="analyser-muted">Loading summary detail...</p> : null}
+      {selected ? (
+        <article className="analyser-detail-panel" aria-label="Summary detail">
+          <header><div><span className="analyser-state analyser-kind-badge">{label(selected.kind)}</span><h2>{selected.title}</h2><p>{selected.periodStart} – {selected.periodEnd}</p></div><div className="analyser-actions"><ExportButton /></div></header>
+          {selected.metrics && Object.keys(selected.metrics).length > 0 ? <section><h3>Metrics</h3><div className="analyser-key-value-grid">{Object.entries(selected.metrics).map(([key, value]) => <span key={key}><strong>{key}</strong><span>{compactValue(value)}</span></span>)}</div></section> : null}
+          <section><h3>Summary</h3><pre className="analyser-markdown">{selected.bodyMarkdown || "No summary text is available."}</pre></section>
+          <section><h3>Evidence</h3><ReferenceList refs={selected.evidenceRefs} labelText="Evidence references" /></section>
+        </article>
+      ) : null}
+    </section>
+  );
+}
+
+const CONFIDENCE_FIELDS = [
+  "deterministicTarget",
+  "currentEvidence",
+  "policyAllowed",
+  "concurrencyProtected",
+  "reversibleOrNonDestructive"
+] as const;
+
+function ProposalTab() {
+  const [status, setStatus] = useState<AnalyserProposalStatus>("open");
+  const [kind, setKind] = useState("");
+  const [proposals, setProposals] = useState<AnalyserProposalListItem[]>([]);
+  const [nextCursor, setNextCursor] = useState<string>();
+  const [selectedId, setSelectedId] = useState<string>();
+  const [selected, setSelected] = useState<AnalyserProposalRecord>();
+  const [operations, setOperations] = useState<AnalyserOperationRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [operationLoading, setOperationLoading] = useState(false);
+  const [busyAction, setBusyAction] = useState<"approve" | "reject" | "supersede">();
+  const [notice, setNotice] = useState<string>();
+  const [error, setError] = useState<string>();
+  const [notConfigured, setNotConfigured] = useState(false);
+  const kinds = useMemo(() => Array.from(new Set([...proposals.map((item) => item.kind), ...(kind ? [kind] : [])])).sort(), [kind, proposals]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setProposals([]);
+    setNextCursor(undefined);
+    setSelectedId(undefined);
+    setSelected(undefined);
+    setOperations([]);
+    setNotice(undefined);
+    setError(undefined);
+    void analyserApi.proposals({ status, kind: kind || undefined, limit: ANALYSER_PAGE_SIZE }).then((result) => {
+      if (cancelled) return;
+      setProposals(result.items);
+      setNextCursor(result.nextCursor);
+    }).catch((requestError: unknown) => {
+      if (cancelled) return;
+      if (isAnalyserNotConfigured(requestError)) setNotConfigured(true);
+      else setError(errorMessage(requestError, "Proposals are unavailable."));
+    }).finally(() => {
+      if (!cancelled) setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [kind, status]);
+
+  const loadProposalOperations = async (proposal: AnalyserProposalRecord) => {
+    setOperations([]);
+    if (proposal.status !== "executed") return;
+    setOperationLoading(true);
+    try {
+      const result = await analyserApi.operations({ proposalId: proposal.id });
+      setOperations(result.items);
+    } catch (requestError) {
+      setError(errorMessage(requestError, "Recorded operation is unavailable."));
+    } finally {
+      setOperationLoading(false);
+    }
+  };
+
+  const selectProposal = async (id: string, keepNotice = false) => {
+    setSelectedId(id);
+    setSelected(undefined);
+    setOperations([]);
+    setDetailLoading(true);
+    if (!keepNotice) setNotice(undefined);
+    setError(undefined);
+    try {
+      const proposal = await analyserApi.proposal(id);
+      setSelected(proposal);
+      await loadProposalOperations(proposal);
+    } catch (requestError) {
+      if (isAnalyserNotConfigured(requestError)) setNotConfigured(true);
+      else setError(errorMessage(requestError, "Proposal detail is unavailable."));
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const loadMore = async () => {
+    if (!nextCursor) return;
+    setLoadingMore(true);
+    setError(undefined);
+    try {
+      const result = await analyserApi.proposals({ status, kind: kind || undefined, limit: ANALYSER_PAGE_SIZE, cursor: nextCursor });
+      setProposals((current) => [...current, ...result.items]);
+      setNextCursor(result.nextCursor);
+    } catch (requestError) {
+      if (isAnalyserNotConfigured(requestError)) setNotConfigured(true);
+      else setError(errorMessage(requestError, "More proposals could not be loaded."));
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  const reloadConflict = async (id: string) => {
+    setNotice("Proposal changed elsewhere — reloaded.");
+    await selectProposal(id, true);
+  };
+
+  const resolve = async (resolution: "approved" | "rejected") => {
+    if (!selected) return;
+    const verb = resolution === "approved" ? "Approve" : "Reject";
+    if (!window.confirm(`${verb} “${selected.title}”?`)) return;
+    setBusyAction(resolution === "approved" ? "approve" : "reject");
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      const updated = await analyserApi.resolveProposal(selected.id, {
+        status: resolution,
+        provenance: "workbench-ui",
+        expectedVersion: selected.version
+      });
+      setSelected(updated);
+      setProposals((current) => current.filter((item) => item.id !== updated.id));
+      setNotice(`Proposal ${resolution}.`);
+    } catch (requestError) {
+      if (isVersionConflict(requestError)) await reloadConflict(selected.id);
+      else setError(errorMessage(requestError, `Unable to ${verb.toLowerCase()} proposal.`));
+    } finally {
+      setBusyAction(undefined);
+    }
+  };
+
+  const supersede = async () => {
+    if (!selected || !window.confirm(`Supersede “${selected.title}”?`)) return;
+    setBusyAction("supersede");
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      const updated = await analyserApi.supersedeProposal(selected.id, { expectedVersion: selected.version });
+      setSelected(updated);
+      setProposals((current) => current.filter((item) => item.id !== updated.id));
+      setNotice("Proposal superseded.");
+    } catch (requestError) {
+      if (isVersionConflict(requestError)) await reloadConflict(selected.id);
+      else setError(errorMessage(requestError, "Unable to supersede proposal."));
+    } finally {
+      setBusyAction(undefined);
+    }
+  };
+
+  if (notConfigured) return <NotConfiguredState />;
+
+  return (
+    <section className="analyser-record-tab" aria-label="Proposals">
+      <div className="analyser-section-header"><div><h2>Proposals</h2><p>Review recommendations and record user approval or rejection.</p></div></div>
+
+      <div className="analyser-proposal-filters">
+        <div className="analyser-status-chips" aria-label="Proposal status filter">{PROPOSAL_STATUSES.map((item) => <button type="button" key={item} aria-pressed={status === item} className={status === item ? `active status-${item}` : `status-${item}`} onClick={() => setStatus(item)}>{label(item)}</button>)}</div>
+        <label><span>Kind</span><select aria-label="Proposal kind" value={kind} onChange={(event) => setKind(event.target.value)}><option value="">All kinds</option>{kinds.map((item) => <option key={item} value={item}>{label(item)}</option>)}</select></label>
+      </div>
+
+      {notice ? <p className="analyser-notice" role="status">{notice}</p> : null}
+      {error ? <p className="analyser-error" role="alert">{error}</p> : null}
+      {loading ? <p className="analyser-muted">Loading proposals...</p> : null}
+      {!loading && proposals.length === 0 ? <div className="analyser-empty-card compact"><h2>No {label(status)} proposals</h2><p>Choose another status or kind.</p></div> : null}
+
+      {proposals.length > 0 ? (
+        <div className="analyser-table-wrap">
+          <table className="analyser-table analyser-selectable-table">
+            <thead><tr><th>Status</th><th>Kind</th><th>Title</th><th>Updated</th><th>Routine</th></tr></thead>
+            <tbody>{proposals.map((proposal) => (
+              <tr key={proposal.id} className={selectedId === proposal.id ? "selected" : undefined} aria-selected={selectedId === proposal.id} tabIndex={0} onClick={() => void selectProposal(proposal.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") void selectProposal(proposal.id); }}>
+                <td><span className={`analyser-state analyser-proposal-status status-${proposal.status}`}>{label(proposal.status)}</span></td>
+                <td>{label(proposal.kind)}</td>
+                <td><strong>{proposal.title}</strong></td>
+                <td>{formatDateTime(proposal.updatedAt)}</td>
+                <td>{proposal.routineKey || "—"}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      ) : null}
+
+      {nextCursor ? <div className="analyser-load-more"><button type="button" onClick={() => void loadMore()} disabled={loadingMore}>{loadingMore ? "Loading..." : "Load more"}</button></div> : null}
+
+      {detailLoading ? <p className="analyser-muted">Loading proposal detail...</p> : null}
+      {selected ? (
+        <article className="analyser-detail-panel" aria-label="Proposal detail">
+          <header>
+            <div><span className={`analyser-state analyser-proposal-status status-${selected.status}`}>{label(selected.status)}</span><h2>{selected.title}</h2><p>{label(selected.kind)} · updated {formatDateTime(selected.updatedAt)}</p></div>
+            <div className="analyser-actions">
+              {selected.status === "open" ? <><button type="button" onClick={() => void resolve("approved")} disabled={Boolean(busyAction)}>{busyAction === "approve" ? "Approving..." : "Approve"}</button><button type="button" className="analyser-reject-action" onClick={() => void resolve("rejected")} disabled={Boolean(busyAction)}>{busyAction === "reject" ? "Rejecting..." : "Reject"}</button><details className="analyser-secondary-menu"><summary>More</summary><button type="button" onClick={() => void supersede()} disabled={Boolean(busyAction)}>{busyAction === "supersede" ? "Superseding..." : "Supersede"}</button></details></> : null}
+              <ExportButton />
+            </div>
+          </header>
+
+          <section><h3>Proposal</h3><pre className="analyser-markdown">{selected.bodyMarkdown || "No proposal text is available."}</pre></section>
+          <section><h3>Evidence</h3><ReferenceList refs={selected.evidenceRefs} labelText="Evidence references" /></section>
+
+          <section><h3>Proposed action</h3>{selected.proposedAction ? <div className="analyser-proposed-action"><strong>{label(selected.proposedAction.kind)}</strong>{selected.proposedAction.params && Object.keys(selected.proposedAction.params).length > 0 ? <div className="analyser-key-value-grid">{Object.entries(selected.proposedAction.params).map(([key, value]) => <span key={key}><strong>{key}</strong><span>{compactValue(value)}</span></span>)}</div> : <p className="analyser-muted">No parameters.</p>}</div> : <p className="analyser-muted">No proposed action is recorded.</p>}</section>
+
+          <section><h3>Confidence evidence</h3>{selected.confidenceEvidence ? <div className="analyser-confidence-list">{CONFIDENCE_FIELDS.map((field) => <span key={field} className={selected.confidenceEvidence?.[field] ? "yes" : "no"}><b aria-hidden="true">{selected.confidenceEvidence?.[field] ? "✓" : "✕"}</b>{label(field.replace(/([a-z])([A-Z])/g, "$1_$2").toLowerCase())}</span>)}{selected.confidenceEvidence.notes ? <p><strong>Notes:</strong> {selected.confidenceEvidence.notes}</p> : null}</div> : <p className="analyser-muted">No confidence evidence is recorded.</p>}</section>
+
+          {selected.status === "approved" ? <section className="analyser-approval"><h3>Approval</h3><div className="analyser-key-value-grid"><span><strong>Provenance</strong><span>{selected.approvalProvenance || "—"}</span></span><span><strong>Approved by</strong><span>{selected.approvedBy || "—"}</span></span><span><strong>Approved at</strong><span>{optionalDate(selected.approvedAt)}</span></span></div><p>Execution is performed by agents via allow-listed operations; this screen only records approval.</p></section> : null}
+
+          {selected.status === "executed" ? <section><h3>Recorded operation</h3>{operationLoading ? <p className="analyser-muted">Loading recorded operation...</p> : null}{!operationLoading && operations.length === 0 ? <p className="analyser-muted">No recorded operation was found.</p> : operations.map((operation) => <article className="analyser-operation" key={operation.id}><div className="analyser-key-value-grid"><span><strong>Kind</strong><span>{label(operation.operationKind)}</span></span><span><strong>Result</strong><span>{label(operation.result)}</span></span><span><strong>Created</strong><span>{formatDateTime(operation.createdAt)}</span></span></div><div><h4>Before references</h4><ReferenceList refs={operation.beforeRefs} labelText="Before references" /></div><div><h4>After references</h4><ReferenceList refs={operation.afterRefs} labelText="After references" /></div></article>)}</section> : null}
+        </article>
+      ) : null}
+    </section>
+  );
+}
+
+function PlaceholderTab({ name }: { name: "Settings" }) {
   return (
     <section className="analyser-placeholder" aria-label={name}>
       <h2>{name}</h2>
@@ -509,8 +895,8 @@ export function AnalyserPage() {
 
       {activeTab === "overview" ? <OverviewTab /> : null}
       {activeTab === "activity" ? <ActivityTab /> : null}
-      {activeTab === "summaries" ? <PlaceholderTab name="Summaries" /> : null}
-      {activeTab === "proposals" ? <PlaceholderTab name="Proposals" /> : null}
+      {activeTab === "summaries" ? <SummaryTab /> : null}
+      {activeTab === "proposals" ? <ProposalTab /> : null}
       {activeTab === "settings" ? <PlaceholderTab name="Settings" /> : null}
     </div>
   );
