@@ -90,8 +90,10 @@ import {
   PROJECT_CONTEXT_EXPORT_CODES
 } from "./projectContextExport.js";
 import {
+  CAPTURE_UPLOAD_META_KEYS,
   CaptureError,
   CaptureManager,
+  CaptureServerPolicyProvider,
   CaptureUploader
 } from "./capture/index.js";
 
@@ -173,6 +175,7 @@ export type DaemonState = {
   manifestStore: ManifestStore;
   capture?: CaptureManager;
   captureUploader?: CaptureUploader;
+  capturePolicy?: CaptureServerPolicyProvider;
   captureUploadIdentityWarned?: boolean;
   identity?: ClientIdentity;
   lastHeartbeatAt?: string;
@@ -6371,6 +6374,12 @@ async function performTick(state: DaemonState): Promise<void> {
     }
     await scanSyncFolder(state);
     state.capture?.runDailyRetention();
+    // Refresh the server collection policy and reconcile local acquisition so a
+    // UI toggle (foreground/screenshot/window-title off) actually stops capture.
+    if (state.capture && state.capturePolicy && state.identity) {
+      await state.capturePolicy.refresh();
+      await state.capture.reconcile();
+    }
     const captureConfig = state.capture?.config();
     if (captureConfig?.enabled && captureConfig.uploadEnabled && state.captureUploader) {
       if (state.identity) {
@@ -7986,11 +7995,22 @@ async function main(): Promise<void> {
     tickRunning: false,
     tickQueued: false
   };
+  const captureGetJson = async <T>(pathValue: string): Promise<T> => {
+    const identity = state.identity;
+    if (!identity) throw new Error("Local client identity is not registered.");
+    return coreJson<T>(config, pathValue, { method: "GET", localIdentity: identity });
+  };
+  state.capturePolicy = new CaptureServerPolicyProvider({
+    getJson: captureGetJson,
+    getMachineId: () => state.capture?.storage.getMeta(CAPTURE_UPLOAD_META_KEYS.machineId)?.trim() || undefined,
+    logger: console
+  });
   state.capture = new CaptureManager({
     syncRoot: config.syncRoot,
     dbPath: env("WORKBENCH_CAPTURE_DB_PATH"),
     platform: platform(),
-    logger: console
+    logger: console,
+    getServerPolicy: () => state.capturePolicy?.get() ?? null
   });
   state.captureUploader = new CaptureUploader({
     storage: state.capture.storage,
@@ -8016,6 +8036,10 @@ async function main(): Promise<void> {
       });
     }
   });
+  if (state.identity) {
+    await state.capturePolicy.refresh();
+    await state.capture.reconcile();
+  }
   await state.capture.startFromConfig();
   startStatusServer(state);
   startSyncWatcher(state);

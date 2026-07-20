@@ -235,6 +235,47 @@ AgentSkills 正本 artifacts にのみ存在。正本 skill 削除時、Analyser
 
 ---
 
+## 6.5 承認済みスコープ（2026-07-21）と実装計画
+
+Owner 承認により **A2 / A4（local_file 実装）/ 派生テキスト集約** を実装する。
+派生データのサーバ集約は **「派生テキストのみ」**（Owner 選択）:
+スクショ/キャプチャ画像は**ローカル限定を維持**し、ローカル agent が生成した
+**テキスト要点だけ**を明示 opt-in でサーバへ集約する（旧 `insights.derived.ingest`
+の analyser 版を復活）。OCR 全文・画像・secret は集約しない。
+
+### 実装 wave
+
+| Wave | 内容 | 対象 | 状態 |
+|---|---|---|---|
+| IW-1 | A2: daemon に共有 ServerPolicyProvider を導入し、foreground/windowTitle/screenshot を「ローカル設定 AND サーバー effective policy」で取得段階 gate（stricter-wins） | sync-daemon | `[pending]` |
+| IW-2 | A4: local_file watcher producer（明示 root のみ・metadata のみ）+ analyser ingest filter に localRoot allow/deny・excludePatterns 評価を追加 + local_file の metadata allowlist | sync-daemon, analyser | `[pending]` |
+| IW-3 | 派生テキスト集約: analyser に derived-capture store + ingest route + MCP tool（agent-facing）、collection 設定に `screenshotDerivedUpload`(既定 false・明示 opt-in) 追加、UI に表示/設定 | analyser, core, ui | `[pending]` |
+
+### 設計メモ
+
+- **ServerPolicyProvider（IW-1）**: uploader の既存 60s cache 付き
+  `/api/analyser/settings/effective` 取得を共有プロバイダへ切り出し、uploader と
+  CaptureManager が同一キャッシュを参照。CaptureManager は `effectiveConfig()`
+  = ローカル config を server policy で絞った値を supervisor/scheduler へ渡し、
+  policy 変化時に start/stop を再構成。**取得失敗時は last-known を保持**、一度も
+  取得できていない起動直後は**ローカル opt-in を暫定 gate**（local で明示 ON した
+  もののみ）とし、初回取得後にサーバー設定を強制。screenshot は
+  `local.screenshotsEnabled && server.screenshots !== "off"`、foreground は
+  `local.enabled && server.foregroundAppCapture !== "off"`、windowTitle は
+  両者 AND。
+- **local_file（IW-2）**: 監視対象 root は server collection settings の
+  `localRootAllow` を daemon が effective 取得して使用。event type / relative path /
+  mtime / size のみを local_file observation として ingest（本文非読取）。
+  `localRootDeny`・`excludePatterns` を daemon 側と analyser ingest 側の二重 gate。
+  ローカルは既定 OFF、`server.localFileEvents !== "off" && server.localFileUpload`
+  も必要。
+- **派生テキスト（IW-3）**: 新 setting `screenshotDerivedUpload`(bool, 既定 false)。
+  ローカル agent が capture 機上でスクショを処理し、要点テキストを
+  `analyser.captures.derived.ingest`（新 MCP tool、machine-scoped）で明示送信。
+  analyser に軽量な `analyser_derived_captures` 相当の store（machine_id, kind,
+  title, summary_markdown(要点・size 制限), evidence_refs, occurred_at）。画像・
+  OCR 全文・secret は保存しない。解析ルーチンが参照可能に。UI に一覧表示。
+
 ## 7. 次アクション
 
 Owner 承認後、フェーズ単位で着手する。着手順・粒度（例: まず P1-a のみ / P1 一括 / 柱 B

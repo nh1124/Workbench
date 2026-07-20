@@ -27,4 +27,5 @@ export { CaptureError, CaptureManager } from "./manager.js";
 export { CaptureSupervisor, decodeSamplerStdoutChunk, ingestSamplerLine } from "./supervisor.js";
 export { ScreenshotScheduler, shouldCaptureScreenshot } from "./screenshotScheduler.js";
 export { CAPTURE_UPLOAD_META_KEYS, CaptureUploader, type CaptureGetJson, type CapturePostJson, type CaptureUploaderOptions } from "./uploader.js";
+export { CaptureServerPolicyProvider, normalizeServerCapturePolicy, type ServerCapturePolicy } from "./serverPolicy.js";
 

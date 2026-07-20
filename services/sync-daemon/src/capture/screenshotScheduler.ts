@@ -47,6 +47,10 @@ export class ScreenshotScheduler {
 
   constructor(options: ScreenshotSchedulerOptions) { this.options = options; }
 
+  get active(): boolean {
+    return Boolean(this.timer);
+  }
+
   start(): void {
     this.stop();
     const config = this.options.getConfig();

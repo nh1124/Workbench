@@ -6,6 +6,7 @@ import { StringDecoder } from "node:string_decoder";
 import { describe, it } from "node:test";
 import {
   CaptureManager,
+  CaptureServerPolicyProvider,
   CaptureStorage,
   CaptureUploader,
   CAPTURE_UPLOAD_META_KEYS,
@@ -13,6 +14,7 @@ import {
   assertCaptureDbPathAllowed,
   decodeSamplerStdoutChunk,
   ingestSamplerLine,
+  normalizeServerCapturePolicy,
   shouldCaptureScreenshot,
   validateCaptureConfigPatch,
   type CaptureLogger
@@ -187,6 +189,85 @@ describe("capture storage", () => {
         manager.close();
       }
     });
+  });
+
+  it("narrows local capture config by the server effective policy (stricter-wins)", async () => {
+    await withTempDir(async (dir) => {
+      // Local opts everything in; the server policy is the acquisition gate.
+      let policy = normalizeServerCapturePolicy({
+        foregroundAppCapture: "off",
+        screenshots: "off",
+        windowTitleCapture: false
+      });
+      const manager = new CaptureManager({
+        syncRoot: join(dir, "sync-root"),
+        dbPath: join(dir, "capture.sqlite"),
+        platform: "linux",
+        logger: silentLogger(),
+        getServerPolicy: () => policy
+      });
+      try {
+        manager.storage.updateConfig({ uploadEnabled: true });
+        manager.storage.setEnabled(true);
+        manager.storage.updateConfig({ screenshotsEnabled: true, windowTitleCapture: true } as never);
+        // Server says off → effective config disables both, and window titles are
+        // blanked at persistence even though the local opt-in is on.
+        manager.storage.insertSample(
+          { sampledAt: "2026-07-10T00:00:00.000Z", processName: "Code", windowTitle: "secret doc" },
+          (manager as unknown as { effectiveConfig(): { windowTitleCapture: boolean } }).effectiveConfig() as never
+        );
+        // Flip the server policy on; effective config now permits capture.
+        policy = normalizeServerCapturePolicy({
+          foregroundAppCapture: "metadata",
+          screenshots: "local_only",
+          windowTitleCapture: true
+        });
+        const effective = (manager as unknown as { effectiveConfig(): Record<string, unknown> }).effectiveConfig();
+        assert.equal(effective.enabled, true);
+        assert.equal(effective.screenshotsEnabled, true);
+        assert.equal(effective.windowTitleCapture, true);
+      } finally {
+        manager.close();
+      }
+    });
+  });
+
+  it("server policy provider caches within TTL and keeps the last value on failure", async () => {
+    let now = 1_000;
+    let responses: Array<{ settings: Record<string, unknown> } | Error> = [
+      { settings: { screenshots: "local_only", foregroundAppUpload: true } }
+    ];
+    const provider = new CaptureServerPolicyProvider({
+      getJson: async <T>(path: string): Promise<T> => {
+        assert.match(path, /\/api\/analyser\/settings\/effective/);
+        const next = responses.shift();
+        if (next instanceof Error) throw next;
+        return (next ?? { settings: {} }) as T;
+      },
+      getMachineId: () => "machine-1",
+      logger: silentLogger(),
+      now: () => now,
+      ttlMs: 60_000
+    });
+
+    const first = await provider.refresh();
+    assert.equal(first?.screenshots, "local_only");
+    assert.equal(first?.foregroundAppUpload, true);
+    // Within TTL: no new fetch, cached value returned.
+    responses = [new Error("should not be called")];
+    assert.equal((await provider.refresh())?.screenshots, "local_only");
+    // After TTL, a failing fetch keeps the last-known value (no flapping).
+    now += 61_000;
+    responses = [new Error("network down")];
+    assert.equal((await provider.refresh())?.screenshots, "local_only");
+  });
+
+  it("normalizes partial server settings to safe defaults", () => {
+    const policy = normalizeServerCapturePolicy({ screenshots: "banana", localRootAllow: ["C:/work", 5] });
+    assert.equal(policy.screenshots, "off");
+    assert.equal(policy.foregroundAppCapture, "off");
+    assert.deepEqual(policy.localRootAllow, ["C:/work"]);
+    assert.equal(policy.windowTitleCapture, false);
   });
 
   it("skips malformed sampler lines and decodes split UTF-8 output", async () => {

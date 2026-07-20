@@ -8,6 +8,7 @@ import type {
 import { CaptureStorage, validateCaptureConfigPatch } from "./storage.js";
 import { CaptureError, CaptureSupervisor, type CaptureSupervisorOptions } from "./supervisor.js";
 import { ScreenshotScheduler, type ScreenshotSchedulerOptions } from "./screenshotScheduler.js";
+import type { ServerCapturePolicy } from "./serverPolicy.js";
 
 export type CaptureManagerOptions = {
   syncRoot: string;
@@ -17,6 +18,9 @@ export type CaptureManagerOptions = {
   logger?: CaptureLogger;
   supervisorOptions?: Partial<Omit<CaptureSupervisorOptions, "onSample" | "logger" | "platform">>;
   screenshotOptions?: Partial<Omit<ScreenshotSchedulerOptions, "logger" | "platform" | "screenshotsDir" | "getConfig" | "getLastForeground" | "onCaptured">>;
+  // Returns the last-known server effective policy (null until first fetch).
+  // Acquisition runs only when the local opt-in AND the server policy agree.
+  getServerPolicy?: () => ServerCapturePolicy | null;
 };
 
 export type CaptureApiStatus = {
@@ -41,10 +45,12 @@ export class CaptureManager {
   private readonly supervisor: CaptureSupervisor;
   private readonly logger?: CaptureLogger;
   private readonly screenshotScheduler: ScreenshotScheduler;
+  private readonly getServerPolicy?: () => ServerCapturePolicy | null;
   private lastForeground?: CaptureSample;
 
   constructor(options: CaptureManagerOptions) {
     this.logger = options.logger;
+    this.getServerPolicy = options.getServerPolicy;
     this.storage = CaptureStorage.open({
       syncRoot: options.syncRoot,
       dbPath: options.dbPath,
@@ -57,7 +63,7 @@ export class CaptureManager {
       ...options.supervisorOptions,
       onSample: (sample) => {
         this.lastForeground = sample;
-        this.storage.insertSample(sample, this.storage.getConfig());
+        this.storage.insertSample(sample, this.effectiveConfig());
       }
     });
     this.screenshotScheduler = new ScreenshotScheduler({
@@ -65,10 +71,51 @@ export class CaptureManager {
       logger: options.logger,
       ...options.screenshotOptions,
       screenshotsDir: this.storage.screenshotsDir,
-      getConfig: () => this.storage.getConfig(),
+      getConfig: () => this.effectiveConfig(),
       getLastForeground: () => this.lastForeground,
       onCaptured: (input) => { this.storage.insertScreenshot(input); }
     });
+  }
+
+  /**
+   * Local config narrowed by the server policy (stricter-wins). Until the first
+   * successful server fetch the policy is null and the local opt-in governs.
+   */
+  private effectiveConfig(): CaptureConfig {
+    const local = this.storage.getConfig();
+    const policy = this.getServerPolicy?.() ?? null;
+    if (!policy) return local;
+    return {
+      ...local,
+      enabled: local.enabled && policy.foregroundAppCapture !== "off",
+      screenshotsEnabled: local.screenshotsEnabled && policy.screenshots !== "off",
+      windowTitleCapture: local.windowTitleCapture && policy.windowTitleCapture === true
+    };
+  }
+
+  /**
+   * Re-evaluate acquisition against the current effective config. Called after a
+   * server-policy refresh so a UI toggle stops (or starts) local collection.
+   */
+  async reconcile(): Promise<void> {
+    const effective = this.effectiveConfig();
+    try {
+      if (effective.enabled && !this.supervisor.alive) {
+        await this.supervisor.start(effective);
+      } else if (!effective.enabled && this.supervisor.alive) {
+        this.supervisor.stop();
+      }
+    } catch (error) {
+      this.logger?.warn("[capture] reconcile could not (re)start the sampler", {
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
+    const wantScreenshots = effective.enabled && effective.screenshotsEnabled;
+    if (wantScreenshots && !this.screenshotScheduler.active) {
+      this.screenshotScheduler.start();
+    } else if (!wantScreenshots && this.screenshotScheduler.active) {
+      this.screenshotScheduler.stop();
+    }
   }
 
   close(): void {
@@ -78,7 +125,7 @@ export class CaptureManager {
   }
 
   async startFromConfig(): Promise<void> {
-    const config = this.storage.getConfig();
+    const config = this.effectiveConfig();
     if (!config.enabled) return;
     try {
       await this.supervisor.start(config);
@@ -107,10 +154,13 @@ export class CaptureManager {
   }
 
   async enable(): Promise<CaptureApiStatus> {
-    const config = this.storage.setEnabled(true);
+    this.storage.setEnabled(true);
+    const config = this.effectiveConfig();
     try {
-      await this.supervisor.start(config);
-      this.screenshotScheduler.start();
+      if (config.enabled) {
+        await this.supervisor.start(config);
+        this.screenshotScheduler.start();
+      }
     } catch (error) {
       this.storage.setEnabled(false);
       throw error;
@@ -128,16 +178,17 @@ export class CaptureManager {
   async updateConfig(rawPatch: Record<string, unknown>): Promise<CaptureApiStatus> {
     const previous = this.storage.getConfig();
     const patch = validateCaptureConfigPatch(rawPatch);
-    const next = this.storage.updateConfig(patch as CaptureConfigPatch);
+    this.storage.updateConfig(patch as CaptureConfigPatch);
+    const next = this.effectiveConfig();
     if (next.enabled && (
       previous.intervalSeconds !== next.intervalSeconds
       || previous.idleThresholdSeconds !== next.idleThresholdSeconds
     )) {
       await this.supervisor.restart(next);
     }
-    if (previous.enabled !== next.enabled || previous.screenshotsEnabled !== next.screenshotsEnabled || previous.screenshotIntervalSeconds !== next.screenshotIntervalSeconds) {
-      this.screenshotScheduler.start();
-    }
+    // Server policy or the local toggles may have flipped acquisition; reconcile
+    // brings the sampler and screenshot scheduler in line with the effective config.
+    await this.reconcile();
     return this.apiStatus();
   }
 
