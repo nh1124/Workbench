@@ -25,7 +25,6 @@ process.env.INTERNAL_API_KEY_TASKS ||= "test-internal-key";
 process.env.INTERNAL_API_KEY_IMAGES ||= "test-internal-key";
 process.env.INTERNAL_API_KEY_MINDMAPS ||= "test-internal-key";
 process.env.INTERNAL_API_KEY_WBS ||= "test-internal-key";
-process.env.INTERNAL_API_KEY_INSIGHTS ||= "test-internal-key";
 process.env.INTERNAL_API_KEY_ANALYSER ||= "test-internal-key";
 
 const { registerAnalyserTools } = await import("../mcp/registerAnalyserTools.js");

@@ -3,7 +3,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
-import { clearWorkbenchSession, localDaemonApi, maintenanceApi, saveWorkbenchSession } from "../lib/api";
+import { clearWorkbenchSession, localDaemonApi, saveWorkbenchSession } from "../lib/api";
 
 beforeEach(async () => {
   window.history.pushState({}, "", "/maintenance");
@@ -21,7 +21,6 @@ beforeEach(async () => {
     watcherActive: true,
     remoteArtifactSnapshotComplete: true
   });
-  vi.spyOn(maintenanceApi, "queue").mockResolvedValue({ items: [], totals: { byReason: {} } });
 });
 
 afterEach(async () => {

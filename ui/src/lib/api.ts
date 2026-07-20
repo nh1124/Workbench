@@ -62,10 +62,6 @@ import type {
   CaptureSummaryRecord,
   CaptureSummaryResult,
   CaptureScreenshotListResult,
-  InsightsActivityAggregate,
-  InsightsMachine,
-  InsightsSummaryDetail,
-  InsightsSummaryListResult,
   IntegrationManifest,
   LocalClientAuditEventRecord,
   LocalClientRecord,
@@ -83,10 +79,6 @@ import type {
   MindmapListResult,
   MindmapMode,
   MindmapUpdateInput,
-  MaintenanceQueueKind,
-  MaintenanceQueueReason,
-  MaintenanceQueueResult,
-  MaintenanceUsageSummary,
   Note,
   NoteProjectSummary,
   ProjectDefaultSelection,
@@ -1175,59 +1167,6 @@ export const analyserApi = {
     })
 };
 
-export const maintenanceApi = {
-  queue: (
-    options: {
-      kind?: MaintenanceQueueKind;
-      reason?: MaintenanceQueueReason;
-      projectId?: string;
-      cursor?: string;
-      limit?: number;
-    } = {}
-  ): Promise<MaintenanceQueueResult> => {
-    const params = new URLSearchParams();
-    if (options.kind) params.set("kind", options.kind);
-    if (options.reason) params.set("reason", options.reason);
-    if (options.projectId) params.set("projectId", options.projectId);
-    if (options.cursor) params.set("cursor", options.cursor);
-    if (options.limit) params.set("limit", String(options.limit));
-    const query = params.toString();
-    return fetchJson<MaintenanceQueueResult>(coreApiPath(`/api/maintenance/queue${query ? `?${query}` : ""}`));
-  },
-  confirmMemory: (memoryId: string, payload: { reviewAfter?: string | null } = {}): Promise<ProjectMemoryEntry> =>
-    fetchJson<ProjectMemoryEntry>(coreApiPath(`/api/project-memories/${encodeURIComponent(memoryId)}/confirm`), {
-      method: "POST",
-      body: JSON.stringify(payload)
-    }),
-  snoozeMemory: (memoryId: string, payload: { until: string }): Promise<ProjectMemoryEntry> =>
-    fetchJson<ProjectMemoryEntry>(coreApiPath(`/api/project-memories/${encodeURIComponent(memoryId)}/snooze`), {
-      method: "POST",
-      body: JSON.stringify(payload)
-    }),
-  confirmNote: (
-    noteId: string,
-    payload: { lifecycleState?: "curated" | "verified"; reviewAfter?: string | null } = {}
-  ): Promise<Note> =>
-    fetchJson<Note>(coreApiPath(`/api/notes/${encodeURIComponent(noteId)}/confirm`), {
-      method: "POST",
-      body: JSON.stringify(payload)
-    }),
-  snoozeNote: (noteId: string, payload: { until: string }): Promise<Note> =>
-    fetchJson<Note>(coreApiPath(`/api/notes/${encodeURIComponent(noteId)}/snooze`), {
-      method: "POST",
-      body: JSON.stringify(payload)
-    }),
-  flag: (payload: {
-    target: { type: "memory" | "note"; id: string };
-    reason: "conflict" | "manual";
-    note?: string;
-  }): Promise<ProjectMemoryEntry | Note> =>
-    fetchJson<ProjectMemoryEntry | Note>(coreApiPath("/api/maintenance/flags"), {
-      method: "POST",
-      body: JSON.stringify(payload)
-    })
-};
-
 export const artifactsApi = {
   list: (projectId?: string, limit?: number): Promise<Artifact[]> => {
     const params = new URLSearchParams();
@@ -2248,29 +2187,6 @@ export const coreApi = {
       method: "PUT",
       body: JSON.stringify(payload)
     }),
-  maintenanceUsageSummary: (): Promise<MaintenanceUsageSummary> =>
-    fetchJson<MaintenanceUsageSummary>(`${coreBaseUrl()}/api/maintenance/usage/summary`),
-  insightsMachines: (): Promise<{ items: InsightsMachine[] }> =>
-    fetchJson(`${coreBaseUrl()}/api/insights/machines`),
-  insightsActivity: (options: { from: string; to: string; machineId?: string }): Promise<InsightsActivityAggregate> => {
-    const params = new URLSearchParams({ from: options.from, to: options.to });
-    if (options.machineId) params.set("machineId", options.machineId);
-    return fetchJson(`${coreBaseUrl()}/api/insights/activity?${params.toString()}`);
-  },
-  insightsSummaries: (
-    options: { machineId?: string; from?: string; to?: string; limit?: number; cursor?: string } = {}
-  ): Promise<InsightsSummaryListResult> => {
-    const params = new URLSearchParams();
-    if (options.machineId) params.set("machineId", options.machineId);
-    if (options.from) params.set("from", options.from);
-    if (options.to) params.set("to", options.to);
-    if (options.limit) params.set("limit", String(options.limit));
-    if (options.cursor) params.set("cursor", options.cursor);
-    const query = params.toString();
-    return fetchJson(`${coreBaseUrl()}/api/insights/summaries${query ? `?${query}` : ""}`);
-  },
-  insightsSummary: (machineId: string, date: string): Promise<InsightsSummaryDetail> =>
-    fetchJson(`${coreBaseUrl()}/api/insights/summaries/${encodeURIComponent(machineId)}/${encodeURIComponent(date)}`),
   listLocalClients: (): Promise<{ items: LocalClientRecord[] }> =>
     fetchJson(`${coreBaseUrl()}/api/local-clients`),
   listLocalClientAuditEvents: (

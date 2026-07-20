@@ -29,7 +29,7 @@ ensure_env "${PROJECT_ROOT}/services/notes/.env" "${PROJECT_ROOT}/services/notes
 ensure_env "${PROJECT_ROOT}/services/artifacts/.env" "${PROJECT_ROOT}/services/artifacts/.env.example"
 ensure_env "${PROJECT_ROOT}/services/tasks/.env" "${PROJECT_ROOT}/services/tasks/.env.example"
 ensure_env "${PROJECT_ROOT}/services/projects/.env" "${PROJECT_ROOT}/services/projects/.env.example"
-ensure_env "${PROJECT_ROOT}/services/insights/.env" "${PROJECT_ROOT}/services/insights/.env.example"
+ensure_env "${PROJECT_ROOT}/services/analyser/.env" "${PROJECT_ROOT}/services/analyser/.env.example"
 ensure_env "${PROJECT_ROOT}/services/workbench-core/.env" "${PROJECT_ROOT}/services/workbench-core/.env.example"
 ensure_env "${PROJECT_ROOT}/ui/.env" "${PROJECT_ROOT}/ui/.env.example"
 ensure_env "${PROJECT_ROOT}/native/desktop/.env" "${PROJECT_ROOT}/native/desktop/.env.example"

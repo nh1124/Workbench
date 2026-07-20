@@ -461,18 +461,6 @@ export type ProjectMemoryKind = "decision" | "fact" | "preference" | "pitfall" |
 export type ProjectMemoryAuthority = "user_confirmed" | "agent_observed" | "imported";
 export type ProjectMemoryStatus = "active" | "superseded" | "archived";
 export type ProjectMemoryLifecycleState = "raw" | "triaged" | "curated" | "verified";
-export type MaintenanceQueueKind = "memory" | "note" | "brief" | "index_drift";
-export type MaintenanceQueueReason =
-  | "raw"
-  | "expired"
-  | "unconfirmed"
-  | "conflict"
-  | "manual"
-  | "source_changed"
-  | "unused"
-  | "brief_unmaintained"
-  | "brief_oversized";
-
 export interface ProjectMemoryEntry {
   id: string;
   projectId: string;
@@ -497,31 +485,6 @@ export interface ProjectMemoryEntry {
 export interface ProjectMemoryListResult {
   items: ProjectMemoryEntry[];
   nextCursor?: string;
-}
-
-export interface MaintenanceQueueItem {
-  id: string;
-  kind: MaintenanceQueueKind;
-  projectId: string;
-  projectName: string;
-  resourceId: string;
-  title: string;
-  excerpt: string;
-  reasons: MaintenanceQueueReason[];
-  authority?: ProjectMemoryAuthority;
-  lifecycleState?: ProjectMemoryLifecycleState;
-  lastConfirmedAt?: string | null;
-  reviewAfter?: string | null;
-  updatedAt: string;
-  suggestedActions: string[];
-}
-
-export interface MaintenanceQueueResult {
-  items: MaintenanceQueueItem[];
-  nextCursor?: string;
-  totals: {
-    byReason: Partial<Record<MaintenanceQueueReason, number>>;
-  };
 }
 
 export type ProjectIndexAssociationKind = "primary" | "secondary";
@@ -902,49 +865,6 @@ export interface CaptureScreenshotListResult {
   nextCursor?: string;
 }
 
-export interface InsightsMachine {
-  id: string;
-  machineKey: string;
-  displayName?: string;
-  platform?: string;
-  registeredAt: string;
-  lastSeenAt: string;
-}
-
-export interface InsightsActivityAggregate {
-  totals: {
-    activeSeconds: number;
-    idleSeconds: number;
-    contextSwitches: number;
-  };
-  categories: Record<string, number>;
-  apps: Record<string, number>;
-  days: Array<{
-    date: string;
-    machineId: string;
-    activeSeconds: number;
-    contextSwitches: number;
-  }>;
-}
-
-export interface InsightsSummaryMeta {
-  machineId: string;
-  summaryDate: string;
-  metricsJson?: Record<string, unknown>;
-  sampleCount: number;
-  generatedAt: string;
-  updatedAt: string;
-}
-
-export interface InsightsSummaryDetail extends InsightsSummaryMeta {
-  summaryMarkdown: string;
-}
-
-export interface InsightsSummaryListResult {
-  items: InsightsSummaryMeta[];
-  nextCursor?: string;
-}
-
 export type AnalyserObservationSource =
   | "workbench_change"
   | "mcp_access"
@@ -1225,22 +1145,6 @@ export interface AnalyserProjectorFlushResult {
   duplicates?: number;
   rejected?: number;
   batches?: number;
-}
-
-export interface MaintenanceUsageSummary {
-  since: string;
-  until: string;
-  truncation: {
-    count: number;
-    bySection: Array<{ section: string; count: number }>;
-  };
-  zeroHitQueries: Array<{ queryText: string; count: number }>;
-  topResources: Array<{
-    sourceService: string;
-    resourceType: string;
-    resourceId: string;
-    count: number;
-  }>;
 }
 
 export interface LocalDaemonStatus {

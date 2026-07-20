@@ -10,5 +10,5 @@ echo "Starting Core MCP stdio gateway with internal services..."
 echo "[INFO] External MCP surface is provided by Workbench Core only."
 echo "[INFO] UI is NOT started in this mode."
 cd "${PROJECT_ROOT}"
-docker compose up -d workbench-core-db notes-db artifacts-db tasks-db projects-db images-db mindmaps-db wbs-db insights-db
+docker compose up -d workbench-core-db notes-db artifacts-db tasks-db projects-db images-db mindmaps-db wbs-db analyser-db
 npm run dev:gateway:stdio
