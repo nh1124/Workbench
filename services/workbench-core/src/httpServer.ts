@@ -751,6 +751,37 @@ async function resolveClientFromDynamicRegistration(clientId: string): Promise<R
   };
 }
 
+const LOOPBACK_REDIRECT_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+function isLoopbackRedirectUri(uri: URL): boolean {
+  return uri.protocol === "http:" && LOOPBACK_REDIRECT_HOSTNAMES.has(uri.hostname.toLowerCase());
+}
+
+/**
+ * RFC 8252 §7.3: for loopback-interface redirect URIs the authorization server
+ * MUST allow any port at request time, because native clients (e.g. Claude Code)
+ * bind an ephemeral OS-assigned port per run. Non-loopback URIs still require an
+ * exact match. PKCE (S256, mandated here) protects the code; the final redirect
+ * always uses the client-supplied URI with its actual port.
+ */
+export function redirectUriMatches(registered: string, requested: string): boolean {
+  if (registered === requested) return true;
+  let registeredUrl: URL;
+  let requestedUrl: URL;
+  try {
+    registeredUrl = new URL(registered);
+    requestedUrl = new URL(requested);
+  } catch {
+    return false;
+  }
+  if (isLoopbackRedirectUri(registeredUrl) && isLoopbackRedirectUri(requestedUrl)) {
+    // Treat all loopback hosts as equivalent and ignore the port; match on path + query.
+    return registeredUrl.pathname === requestedUrl.pathname
+      && registeredUrl.search === requestedUrl.search;
+  }
+  return false;
+}
+
 async function resolveOAuthClient(clientId: string, redirectUri: string): Promise<ResolveOAuthClientResult> {
   let resolvedClient: ResolvedOAuthClient;
   if (isHttpsClientId(clientId)) {
@@ -784,7 +815,7 @@ async function resolveOAuthClient(clientId: string, redirectUri: string): Promis
     resolvedClient = dynamicallyRegisteredClient;
   }
 
-  if (!resolvedClient.redirectUris.includes(redirectUri)) {
+  if (!resolvedClient.redirectUris.some((registered) => redirectUriMatches(registered, redirectUri))) {
     return {
       ok: false,
       error: "invalid_redirect_uri",
