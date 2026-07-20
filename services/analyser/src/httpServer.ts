@@ -198,12 +198,37 @@ export const internalEffectiveSettingsQuerySchema = z.object({
   machineId: z.string().uuid().optional()
 }).strict();
 
+const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+// Accept either a full ISO datetime (agents) or a bare calendar date (the UI's
+// period presets send YYYY-MM-DD). A bare date is widened to the whole day in
+// UTC: "start" → 00:00:00.000Z, "end" → 23:59:59.999Z, so the occurred_at range
+// stays inclusive. Full ISO datetimes pass through unchanged.
+function observationBoundarySchema(boundary: "start" | "end") {
+  return z.string().trim().transform((value, context) => {
+    if (DATE_ONLY_PATTERN.test(value)) {
+      const iso = `${value}T${boundary === "start" ? "00:00:00.000" : "23:59:59.999"}Z`;
+      if (Number.isNaN(new Date(iso).getTime())) {
+        context.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid date" });
+        return z.NEVER;
+      }
+      return iso;
+    }
+    const parsed = isoDateTimeSchema.safeParse(value);
+    if (!parsed.success) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Expected an ISO datetime or a YYYY-MM-DD date" });
+      return z.NEVER;
+    }
+    return parsed.data;
+  });
+}
+
 export const observationListQuerySchema = z.object({
   source: z.enum(OBSERVATION_SOURCES).optional(),
   machineId: z.string().uuid().optional(),
   projectId: boundedText(2_000).optional(),
-  from: isoDateTimeSchema.optional(),
-  to: isoDateTimeSchema.optional(),
+  from: observationBoundarySchema("start").optional(),
+  to: observationBoundarySchema("end").optional(),
   ...paginationSchema
 }).strict().superRefine((value, context) => {
   if (value.from && value.to && new Date(value.from).getTime() > new Date(value.to).getTime()) {
