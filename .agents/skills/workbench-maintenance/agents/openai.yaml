@@ -1,6 +1,6 @@
 interface:
   display_name: "Workbench Maintenance"
-  short_description: "Maintain Workbench knowledge freshness and the review queue"
-  default_prompt: "Use $workbench-maintenance to pull recent changes, triage the maintenance queue, and report findings without promoting anything."
+  short_description: "Maintain Workbench knowledge freshness via Analyser proposals"
+  default_prompt: "Use $workbench-maintenance to analyse recent observations, inspect affected knowledge, and record findings as Analyser proposals without promoting anything."
 policy:
   allow_implicit_invocation: true

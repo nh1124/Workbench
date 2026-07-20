@@ -1,0 +1,6 @@
+interface:
+  display_name: "Workbench Analyser Cycle"
+  short_description: "Run one Workbench Analyser routine end-to-end"
+  default_prompt: "Use $workbench-analyser-cycle to claim the due Analyser routine, pull observations, do focused reads, record summaries/proposals, and complete or fail the run."
+policy:
+  allow_implicit_invocation: true

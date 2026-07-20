@@ -1,0 +1,6 @@
+interface:
+  display_name: "Workbench AgentSkills Materialize"
+  short_description: "Materialize canonical AgentSkills into a local skill cache"
+  default_prompt: "Use $workbench-agent-skills-materialize to one-way sync the canonical AgentSkills store into this agent's local skill directory."
+policy:
+  allow_implicit_invocation: true
