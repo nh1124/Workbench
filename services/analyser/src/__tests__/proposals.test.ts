@@ -86,6 +86,21 @@ describe("analyser proposals", () => {
     assert.match(pool.calls[0].text, /proposal\.status = 'approved'/);
   });
 
+  it("requires the linked operation to have succeeded, not merely exist", async () => {
+    // A failed/skipped operation must not be able to mark the proposal executed:
+    // the SQL guard checks operation.result = 'succeeded', and when that fails the
+    // fallback read also reports operation_recorded: false so the caller sees
+    // OPERATION_NOT_RECORDED rather than a false success.
+    const pool = fakePool([{ rows: [] }, { rows: [{ status: "approved", version: 2, operation_recorded: false }] }]);
+    await assert.rejects(
+      proposals.markProposalExecutedWithPool(pool, "owner-1", row.id, { operationId: "operation-1", expectedVersion: 2 }),
+      (error: unknown) => (error as { status: number; code: string }).status === 400
+        && (error as { code: string }).code === "OPERATION_NOT_RECORDED"
+    );
+    assert.match(pool.calls[0].text, /operation\.result = 'succeeded'/);
+    assert.match(pool.calls[1].text, /operation\.result = 'succeeded'/);
+  });
+
   it("only marks approved proposals executed", async () => {
     const pool = fakePool([{ rows: [] }, { rows: [{ status: "open", version: 1, operation_recorded: true }] }]);
     await assert.rejects(

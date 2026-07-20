@@ -940,6 +940,18 @@ export const analyserClient = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }),
+  reservePublication: (token: string, payload: unknown) =>
+    serviceRequest<unknown>(requireAnalyser(), "/publications/reserve", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  finalizePublication: (token: string, id: string, payload: unknown) =>
+    serviceRequest<unknown>(requireAnalyser(), `/publications/${encodeURIComponent(id)}/finalize`, token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
   listPublications: (token: string, query: AnalyserPublicationQuery = {}) =>
     serviceRequest<unknown>(requireAnalyser(), `/publications${buildQuery(query)}`, token),
   findPublication: (token: string, query: AnalyserPublicationFindQuery) =>

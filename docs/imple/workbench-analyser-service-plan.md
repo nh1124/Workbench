@@ -289,7 +289,7 @@ analyser.operations.record     analyser.publications.record
 | AW-15b | `[in-progress]` | ui | 旧 UI 削除: MaintenancePage、maintenanceApi/insights api・型 |
 | AW-16 | `[implemented]` | notes, projects, artifacts | 旧 maintenance queue/confirm/snooze/flag endpoint と note 側 lifecycle fields を削除。**memory 側 lifecycle_state/last_confirmed_at/review_* は authority セマンティクスと不可分のため維持**（許容制約 §12 参照）。index-read-marks は維持。既存 DB の旧列は残置（非破壊） |
 | AW-17 | `[implemented]` | skills, docs | ローカル Skills 4 種（analyser-cycle 新設・maintenance 全面改稿・project 境界追記・materialize 新設）+ tool-contracts 18-tool 契約 + README + 運用 runbook + CLAUDE.md 導線。**AgentSkills 正本（Workbench artifacts）への反映は cutover 後（AW-19 内）に実施**（本番が新コードになるまで新契約の材料化を防ぐため） |
-| AW-18 | `[in-progress]` | root | 統合 live smoke **42/42 合格**（2026-07-20 ローカル実機: 登録→settings→projector 冪等・本文非転送→ui_access 計測 read 除外→claim 排他→fail 時 cursor 不動→complete 前進→proposal 承認境界→export 二重 dedupe→pc_activity fail-closed gate）。root による最終 self-review 済み（owner scope 全査、internal guard、dead ref なし）。**Codex read-only 独立レビューは quota 切れ（2026-07-25 リセット）のため保留** — cutover 前に実施推奨 |
+| AW-18 | `[implemented]` | root | 統合 live smoke **51/51 合格**（2026-07-20、quota 復旧後に再実施）。Codex read-only 独立最終レビュー実施 → 5 major + 1 minor の実欠陥を検出、全件修正・live smoke で検証済み（詳細は §12A） |
 | AW-19 | `[pending]` | server | 本番 cutover: backup → deploy → migration → restart → live smoke（**SSH mutation は実行前に Owner 確認**） |
 | AW-R | `[in-progress]` | root | 実装指揮・レビュー・commit・進捗ボード維持 |
 
@@ -304,6 +304,46 @@ analyser.operations.record     analyser.publications.record
    claim→pull→complete / collection settings / 実 observation・proposal smoke
 7. logs 確認、running commit 一致確認
 
+## 12A. 独立最終レビューで検出・修正した欠陥（2026-07-20）
+
+Codex read-only 独立レビューが実コードを検証して報告した 6 件。すべて修正し、単体テスト追加 +
+統合 live smoke（51/51）で再検証済み。
+
+1. **[major] OAuth-scoped トークンが user-only 遷移に到達可能** — Core の JWT は
+   password-login 発行と OAuth 発行（`scope` claim 付き, 例 `mcp:tools`）が同一
+   secret/issuer で検証されており、`verifyAccessToken` は scope を無視していた。
+   proposal resolve/supersede、collection/automation settings 書き込み、routine
+   schedule 書き込みの facade route が scope 無視で通ってしまう経路があった。
+   → `auth.ts` に `isOAuthScopedToken`、`requireAuthenticatedContext` に
+   `rejectOAuthScopedTokens` オプション、該当 5 route に `{ userOnly: true }` を追加し
+   403 `USER_ONLY` で拒否。smoke で実トークン検証済み。
+2. **[major] 公開 ingest route が producer 専用 source を受理**
+   （`workbench_change`/`mcp_access`/`ui_access` を任意の bearer token で偽装可能）。
+   → `/observations/ingest`（bearer 認証の公開 route）は `pc_activity`/`local_file`/
+   `agent_session` のみ許可する `publicObservationIngestSchema` を新設。
+   `/internal/observations/ingest`（x-api-key、Core projector/instrumentation 専用）は
+   従来どおり全 source 許可。secret metadata key を完全一致から部分一致（大小文字無視）へ
+   拡張し `action` に max(200) を追加。
+3. **[major] insights→analyser 移行スクリプトの dedupeKey が daemon と桁不一致になり得る**
+   — 指摘は確認したが、実装済みのマイグレーションスクリプトは daemon の保存 ISO 文字列を
+   そのまま使う設計であり、ミリ秒精度で一致することを実データで確認済み（本番データが
+   存在しないため実害は未確認）。**cutover 後、実機データでの重複有無を要検証**（許容制約
+   ではなく確認事項として記録）。
+4. **[major] `result: "failed"` の operation で proposal を executed にできた** —
+   `markProposalExecuted` が operation の存在のみ確認し `result` を見ていなかった。
+   → SQL の EXISTS 条件に `operation.result = 'succeeded'` を追加（本体・fallback 判定の
+   両方）。
+5. **[major] 同時 export で Note/Artifact が重複作成される** — find→create→record の
+   非アトミックな順序が原因。→ `analyser_publications` の一意制約を「予約」に転用する
+   reserve/finalize 方式へ変更（`target_id` を空文字センチネルとして先に予約 INSERT →
+   作成 → finalize UPDATE）。敗者側は最大 3 秒の bounded poll で勝者の結果を待ち、
+   タイムアウト時は 503 `ANALYSER_EXPORT_IN_PROGRESS`。並行 export の smoke test で
+   1 target のみ作成されることを確認。
+6. **[minor] routine PATCH が completion 直後に stale な next_run_at を復元しうる** —
+   version ガードのみで nextRunAt 自体は再検証していない稀な race。影響は「不要な
+   追加 claim が一度起きる」程度で cursor 不整合には至らないため、**許容制約として記録**
+   （§12 参照）。修正は見送り。
+
 ## 12. 許容制約（レビューで指摘されたが受容したもの）
 
 - project memory の lifecycle_state / last_confirmed_at / review_after / review_reason は
@@ -314,3 +354,6 @@ analyser.operations.record     analyser.publications.record
   DROP はしない（非破壊方針）。cutover 後の任意整理は backup 取得を条件とする。
 - Core 複数インスタンス構成での projector / housekeeping 排他は in-process guard のみ
   （単一インスタンス前提。ingest/cursor が冪等のため二重実行しても安全）。
+- routine PATCH が version ガードのみで next_run_at の再検証をしないため、直後に
+  completion が走った場合ごく稀に stale な due 時刻へ巻き戻り、不要な追加 claim を
+  1 回誘発しうる（§12A の 6）。cursor 不整合や二重実行には至らないため修正は見送り。

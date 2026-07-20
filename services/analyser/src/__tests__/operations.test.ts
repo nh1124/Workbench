@@ -9,7 +9,7 @@ process.env.ANALYSER_DB_USER ??= "test";
 process.env.ANALYSER_DB_PASSWORD ??= "test";
 
 const { recordOperationWithPool } = await import("../stores/operations.js");
-const { recordPublicationWithPool } = await import("../stores/publications.js");
+const { finalizePublicationWithPool, recordPublicationWithPool, reservePublicationWithPool } = await import("../stores/publications.js");
 
 type Result = { rows: unknown[]; rowCount?: number };
 type Call = { text: string; values?: unknown[] };
@@ -145,5 +145,54 @@ describe("analyser publications", () => {
       (error: unknown) => (error as { status: number; code: string }).status === 400
     );
     assert.equal(pool.calls.length, 0);
+  });
+});
+
+describe("analyser publication reservations (export race prevention)", () => {
+  it("reserves with an empty target_id sentinel before the caller creates the target", async () => {
+    const reservedRow = { ...publicationRow, target_id: "", target_ref: null };
+    const pool = fakePool([{ rows: [{ id: publicationRow.source_id }] }, { rows: [reservedRow] }]);
+    const result = await reservePublicationWithPool(pool, "owner-1", {
+      sourceKind: "summary", sourceId: publicationRow.source_id, targetKind: "note",
+      contentHash: "abcdef12", provenance: "ui"
+    });
+    assert.equal(result.reserved, true);
+    assert.equal(result.publication.targetId, "");
+    assert.match(pool.calls[1].text, /VALUES \(\$1, \$2, \$3, \$4, \$5, NULL, \$6, \$7\)/);
+    assert.match(pool.calls[1].text, /ON CONFLICT \(service_account_id, source_kind, source_id, target_kind, content_hash\) DO NOTHING/);
+    assert.deepEqual(pool.calls[1].values?.slice(0, 5), ["owner-1", "summary", publicationRow.source_id, "note", ""]);
+  });
+
+  it("loses the reservation race and returns the existing row instead of creating a second one", async () => {
+    const pool = fakePool([
+      { rows: [{ id: publicationRow.source_id }] },
+      { rows: [] }, // ON CONFLICT DO NOTHING: someone else already reserved it
+      { rows: [publicationRow] } // read-back finds the winner's (already finalized) row
+    ]);
+    const result = await reservePublicationWithPool(pool, "owner-1", {
+      sourceKind: "summary", sourceId: publicationRow.source_id, targetKind: "note",
+      contentHash: "abcdef12", provenance: "ui"
+    });
+    assert.equal(result.reserved, false);
+    assert.equal(result.publication.targetId, "note-1");
+  });
+
+  it("finalize only overwrites the caller's own still-empty reservation, never an already-finalized row", async () => {
+    const pool = fakePool([{ rows: [publicationRow] }]);
+    const finalized = await finalizePublicationWithPool(pool, "owner-1", publicationRow.id, {
+      targetId: "note-1",
+      targetRef: { service: "notes", resourceType: "note", resourceId: "note-1" }
+    });
+    assert.equal(finalized.targetId, "note-1");
+    assert.match(pool.calls[0].text, /WHERE service_account_id = \$1 AND id = \$2 AND target_id = ''/);
+  });
+
+  it("finalize fails closed when the reservation was already finalized (no matching empty row)", async () => {
+    const pool = fakePool([{ rows: [] }]);
+    await assert.rejects(
+      finalizePublicationWithPool(pool, "owner-1", publicationRow.id, { targetId: "note-1" }),
+      (error: unknown) => (error as { status: number; code: string }).status === 409
+        && (error as { code: string }).code === "PUBLICATION_ALREADY_FINALIZED"
+    );
   });
 });

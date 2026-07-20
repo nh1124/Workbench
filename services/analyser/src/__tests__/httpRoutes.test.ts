@@ -123,8 +123,8 @@ describe("analyser HTTP routes", () => {
       }) as AppDeps["ingestObservations"]
     }), async (baseUrl) => {
       const observation = {
-        source: "workbench_change",
-        action: "updated",
+        source: "pc_activity",
+        action: "foreground_sample",
         actorKind: "user",
         occurredAt: "2026-07-20T00:00:00.000Z",
         dedupeKey: "event-1"
@@ -141,6 +141,34 @@ describe("analyser HTTP routes", () => {
         observations: [observation],
         options: { machineId }
       });
+    });
+  });
+
+  it("rejects producer-exclusive sources on the public ingest route", async () => {
+    let ingestCalled = false;
+    await withServer(makeDeps({
+      ingestObservations: (async () => {
+        ingestCalled = true;
+        return { ingested: 0, duplicates: 0, rejected: {} };
+      }) as AppDeps["ingestObservations"]
+    }), async (baseUrl) => {
+      for (const source of ["workbench_change", "mcp_access", "ui_access"]) {
+        const { response, body } = await requestJson(baseUrl, "/observations/ingest", {
+          method: "POST",
+          body: {
+            observations: [{
+              source,
+              action: "x",
+              actorKind: "system",
+              occurredAt: "2026-07-20T00:00:00.000Z",
+              dedupeKey: `event-${source}`
+            }]
+          }
+        });
+        assert.equal(response.status, 400, `expected 400 for source ${source}`);
+        assert.equal((body as { code?: string }).code, "INVALID_INPUT");
+      }
+      assert.equal(ingestCalled, false);
     });
   });
 

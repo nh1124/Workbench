@@ -1,9 +1,13 @@
 import { getAnalyserPool } from "../db.js";
 import { AnalyserServiceError } from "../serviceError.js";
 import {
+  publicationFinalizeInputSchema,
   publicationInputSchema,
+  publicationReserveInputSchema,
+  type PublicationFinalizeInput,
   type PublicationInput,
   type PublicationRecord,
+  type PublicationReserveInput,
   type ResourceRef
 } from "../types.js";
 import type { AnalyserQueryPool } from "./machines.js";
@@ -44,6 +48,18 @@ function mapPublication(row: PublicationRow): PublicationRecord {
 function parseInput(value: unknown): PublicationInput {
   const parsed = publicationInputSchema.safeParse(value);
   if (!parsed.success) throw new AnalyserServiceError(400, "INVALID_PUBLICATION", "Invalid publication input");
+  return parsed.data;
+}
+
+function parseReserveInput(value: unknown): PublicationReserveInput {
+  const parsed = publicationReserveInputSchema.safeParse(value);
+  if (!parsed.success) throw new AnalyserServiceError(400, "INVALID_PUBLICATION", "Invalid publication reservation input");
+  return parsed.data;
+}
+
+function parseFinalizeInput(value: unknown): PublicationFinalizeInput {
+  const parsed = publicationFinalizeInputSchema.safeParse(value);
+  if (!parsed.success) throw new AnalyserServiceError(400, "INVALID_PUBLICATION", "Invalid publication finalize input");
   return parsed.data;
 }
 
@@ -94,6 +110,73 @@ export async function recordPublicationWithPool(
   const existing = await findPublicationWithPool(pool, owner, input);
   if (!existing) throw new AnalyserServiceError(500, "PUBLICATION_RECORD_FAILED", "Publication dedupe record not found");
   return { publication: existing, created: false };
+}
+
+// Sentinel used to mark a reservation row whose export target has not been created yet.
+// Never a valid target id (Note/Artifact ids are non-empty), so it can never collide.
+const RESERVATION_SENTINEL = "";
+
+export async function reservePublication(
+  owner: string,
+  input: Pick<PublicationInput, "sourceKind" | "sourceId" | "targetKind" | "contentHash" | "provenance">
+): Promise<{ publication: PublicationRecord; reserved: boolean }> {
+  return reservePublicationWithPool(getAnalyserPool(), owner, input);
+}
+
+// Reserves the (owner, sourceKind, sourceId, targetKind, contentHash) dedupe slot BEFORE
+// the caller creates the actual Note/Artifact, so two concurrent identical exports cannot
+// both create a target: only the reserver (reserved: true) may proceed to create + finalize;
+// the loser (reserved: false) gets back the existing row, which finalizePublication fills in
+// once the reserver completes (see analyserExport.ts's bounded poll on target_id === "").
+export async function reservePublicationWithPool(
+  pool: AnalyserQueryPool,
+  owner: string,
+  rawInput: Pick<PublicationInput, "sourceKind" | "sourceId" | "targetKind" | "contentHash" | "provenance">
+): Promise<{ publication: PublicationRecord; reserved: boolean }> {
+  const input = parseReserveInput(rawInput);
+  const sourceTable = input.sourceKind === "summary" ? "analyser_summaries" : "analyser_proposals";
+  const source = await pool.query<{ id: string }>(`SELECT id FROM ${sourceTable}
+    WHERE service_account_id = $1 AND id = $2`, [owner, input.sourceId]);
+  if (!source.rows[0]) throw new AnalyserServiceError(400, "SOURCE_NOT_FOUND", "Publication source not found");
+  const inserted = await pool.query<PublicationRow>(`INSERT INTO analyser_publications
+    (service_account_id, source_kind, source_id, target_kind, target_id, target_ref, content_hash, provenance)
+    VALUES ($1, $2, $3, $4, $5, NULL, $6, $7)
+    ON CONFLICT (service_account_id, source_kind, source_id, target_kind, content_hash) DO NOTHING
+    RETURNING ${PUBLICATION_COLUMNS}`, [
+    owner, input.sourceKind, input.sourceId, input.targetKind, RESERVATION_SENTINEL, input.contentHash, input.provenance
+  ]);
+  if (inserted.rows[0]) return { publication: mapPublication(inserted.rows[0]), reserved: true };
+  const existing = await findPublicationWithPool(pool, owner, input);
+  if (!existing) throw new AnalyserServiceError(500, "PUBLICATION_RESERVE_FAILED", "Publication dedupe record not found");
+  return { publication: existing, reserved: false };
+}
+
+export async function finalizePublication(
+  owner: string,
+  publicationId: string,
+  rawInput: { targetId: string; targetRef?: ResourceRef }
+): Promise<PublicationRecord> {
+  return finalizePublicationWithPool(getAnalyserPool(), owner, publicationId, rawInput);
+}
+
+// Only the reservation holder can call this (it owns publicationId from its own reserve
+// call), and the WHERE guard only matches while the row is still the "" sentinel, so a
+// finalize can never overwrite an already-finalized row.
+export async function finalizePublicationWithPool(
+  pool: AnalyserQueryPool,
+  owner: string,
+  publicationId: string,
+  rawInput: { targetId: string; targetRef?: ResourceRef }
+): Promise<PublicationRecord> {
+  const input = parseFinalizeInput(rawInput);
+  const result = await pool.query<PublicationRow>(`UPDATE analyser_publications SET
+      target_id = $3, target_ref = $4::jsonb
+    WHERE service_account_id = $1 AND id = $2 AND target_id = ''
+    RETURNING ${PUBLICATION_COLUMNS}`, [
+    owner, publicationId, input.targetId, input.targetRef === undefined ? null : JSON.stringify(input.targetRef)
+  ]);
+  if (!result.rows[0]) throw new AnalyserServiceError(409, "PUBLICATION_ALREADY_FINALIZED", "Publication reservation was already finalized or not found");
+  return mapPublication(result.rows[0]);
 }
 
 export async function findPublication(

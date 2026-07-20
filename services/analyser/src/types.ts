@@ -168,7 +168,7 @@ export interface MachineRecord {
 
 export const observationInputSchema = z.object({
   source: z.enum(OBSERVATION_SOURCES),
-  action: z.string().trim().min(1),
+  action: z.string().trim().min(1).max(200),
   actorKind: z.enum(ACTOR_KINDS),
   machineId: z.string().trim().min(1).optional(),
   projectId: z.string().trim().min(1).optional(),
@@ -383,6 +383,15 @@ export type ProposalExecution = z.infer<typeof proposalExecutionSchema>;
 export type ProposalSupersede = z.infer<typeof proposalSupersedeSchema>;
 export type OperationInput = z.infer<typeof operationInputSchema>;
 export type PublicationInput = z.infer<typeof publicationInputSchema>;
+
+export const publicationReserveInputSchema = publicationInputSchema.omit({ targetId: true, targetRef: true });
+export type PublicationReserveInput = z.infer<typeof publicationReserveInputSchema>;
+
+export const publicationFinalizeInputSchema = z.object({
+  targetId: boundedText(2_000),
+  targetRef: resourceRefSchema.optional()
+}).strict();
+export type PublicationFinalizeInput = z.infer<typeof publicationFinalizeInputSchema>;
 
 export interface SummaryRecord {
   id: string;

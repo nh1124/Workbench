@@ -43,7 +43,9 @@ const publicationSchema = z.object({
   sourceKind: z.enum(["summary", "proposal"]),
   sourceId: z.string().min(1),
   targetKind: z.enum(["note", "artifact"]),
-  targetId: z.string().min(1),
+  // Empty while a concurrent reservation has not yet been finalized with a real
+  // Note/Artifact id (see exportAnalyserRecord's reserve/finalize flow below).
+  targetId: z.string(),
   targetRef: resourceRefSchema.optional(),
   contentHash: z.string().min(1),
   provenance: z.enum(["ui", "agent"]),
@@ -54,9 +56,9 @@ const findPublicationResultSchema = z.object({
   publication: publicationSchema.nullable()
 }).passthrough();
 
-const recordPublicationResultSchema = z.object({
+const reservePublicationResultSchema = z.object({
   publication: publicationSchema,
-  created: z.boolean()
+  reserved: z.boolean()
 }).passthrough();
 
 export type AnalyserExportInput = z.infer<typeof exportInputSchema>;
@@ -73,7 +75,7 @@ export type AnalyserExportResult = {
 };
 
 export type AnalyserExportDependencies = {
-  analyserClient: Pick<typeof analyserClient, "getSummary" | "getProposal" | "findPublication" | "recordPublication">;
+  analyserClient: Pick<typeof analyserClient, "getSummary" | "getProposal" | "findPublication" | "reservePublication" | "finalizePublication">;
   notesClient: Pick<typeof notesClient, "create">;
   artifactsClient: Pick<typeof artifactsClient, "createNote">;
 };
@@ -206,17 +208,28 @@ export async function exportAnalyserRecord(
   const title = input.title ?? source.title;
   const content = buildContent(title, source.bodyMarkdown, source.evidenceRefs ?? [], input.sourceKind, input.sourceId);
   const contentHash = createHash("sha256").update(`${input.targetKind}\n${content}`).digest("hex");
-  const findResult = parseServiceResult(
-    findPublicationResultSchema,
-    await deps.analyserClient.findPublication(token, {
+
+  // Reserve the dedupe slot BEFORE creating anything: whichever concurrent export request
+  // wins the reservation is the only one allowed to create a Note/Artifact and finalize the
+  // publication row; the loser waits for (or reports) the winner's result instead of also
+  // creating a duplicate target. This closes a create-then-record race where two concurrent
+  // identical exports could otherwise both pass a "not found yet" check and both create.
+  const reserveResult = parseServiceResult(
+    reservePublicationResultSchema,
+    await deps.analyserClient.reservePublication(token, {
       sourceKind: input.sourceKind,
       sourceId: input.sourceId,
       targetKind: input.targetKind,
-      contentHash
+      contentHash,
+      provenance: "ui"
     }),
     "analyser"
   );
-  if (findResult.publication) return resultFromPublication(findResult.publication, false);
+
+  if (!reserveResult.reserved) {
+    const resolved = await awaitFinalizedPublication(deps, token, input, contentHash, reserveResult.publication);
+    return resultFromPublication(resolved, false);
+  }
 
   let createdTarget: unknown;
   let createdTargetId: string;
@@ -246,18 +259,53 @@ export async function exportAnalyserRecord(
     };
   }
 
-  const recorded = parseServiceResult(
-    recordPublicationResultSchema,
-    await deps.analyserClient.recordPublication(token, {
-      sourceKind: input.sourceKind,
-      sourceId: input.sourceId,
-      targetKind: input.targetKind,
+  const finalized = parseServiceResult(
+    publicationSchema,
+    await deps.analyserClient.finalizePublication(token, reserveResult.publication.id, {
       targetId: createdTargetId,
-      targetRef: ref,
-      contentHash,
-      provenance: "ui"
+      targetRef: ref
     }),
     "analyser"
   );
-  return resultFromPublication(recorded.publication, recorded.created);
+  return resultFromPublication(finalized, true);
+}
+
+const RESERVATION_POLL_ATTEMPTS = 10;
+const RESERVATION_POLL_DELAY_MS = 300;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Waits for a concurrent exporter to finish finalizing the publication it reserved first.
+async function awaitFinalizedPublication(
+  deps: AnalyserExportDependencies,
+  token: string,
+  input: AnalyserExportInput,
+  contentHash: string,
+  initial: AnalyserExportPublication
+): Promise<AnalyserExportPublication> {
+  let current = initial;
+  for (let attempt = 0; attempt < RESERVATION_POLL_ATTEMPTS && !current.targetId; attempt += 1) {
+    await sleep(RESERVATION_POLL_DELAY_MS);
+    const findResult = parseServiceResult(
+      findPublicationResultSchema,
+      await deps.analyserClient.findPublication(token, {
+        sourceKind: input.sourceKind,
+        sourceId: input.sourceId,
+        targetKind: input.targetKind,
+        contentHash
+      }),
+      "analyser"
+    );
+    if (findResult.publication) current = findResult.publication;
+  }
+  if (!current.targetId) {
+    throw exportError(
+      503,
+      "ANALYSER_EXPORT_IN_PROGRESS",
+      "Another export of this content is still in progress; retry shortly"
+    );
+  }
+  return current;
 }

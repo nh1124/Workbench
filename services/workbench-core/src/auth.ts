@@ -29,6 +29,12 @@ export interface AccessTokenClaims {
   iss: string;
   iat: number;
   exp: number;
+  /** Present only on OAuth-client-issued tokens (e.g. "mcp:tools"); absent on
+   * tokens issued by the password login flow. Used to restrict user-only
+   * write paths (proposal approval, collection/automation settings, routine
+   * schedules) to the browser-authenticated user, not third-party OAuth
+   * clients holding a scoped MCP token. */
+  scope?: string;
 }
 
 export interface RefreshTokenClaims {
@@ -103,6 +109,7 @@ function verifyTokenWithUse(token: string, expectedUse: TokenUse): {
   iss: string;
   iat: number;
   exp: number;
+  scope?: string;
 } {
   const decoded = jwt.verify(token, jwtSecret, {
     algorithms: ["HS256"],
@@ -119,6 +126,7 @@ function verifyTokenWithUse(token: string, expectedUse: TokenUse): {
   const iss = typeof decoded.iss === "string" ? decoded.iss : undefined;
   const iat = typeof decoded.iat === "number" ? decoded.iat : undefined;
   const exp = typeof decoded.exp === "number" ? decoded.exp : undefined;
+  const scope = typeof decoded.scope === "string" ? decoded.scope : undefined;
 
   if (!sub || !username || !tokenUse || !iss || !iat || !exp) {
     throw new Error("Invalid token claims");
@@ -133,7 +141,8 @@ function verifyTokenWithUse(token: string, expectedUse: TokenUse): {
     tokenUse,
     iss,
     iat,
-    exp
+    exp,
+    ...(scope === undefined ? {} : { scope })
   };
 }
 
@@ -143,6 +152,12 @@ export function verifyAccessToken(token: string): AccessTokenClaims {
     ...claims,
     tokenUse: "access"
   };
+}
+
+/** True for tokens issued by the OAuth client-authorization flow (they carry
+ * a `scope` claim); false for tokens issued by the password login flow. */
+export function isOAuthScopedToken(claims: Pick<AccessTokenClaims, "scope">): boolean {
+  return claims.scope !== undefined;
 }
 
 export function verifyRefreshToken(token: string): RefreshTokenClaims {

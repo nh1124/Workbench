@@ -250,18 +250,20 @@ export async function markProposalExecutedWithPool(
     WHERE proposal.service_account_id = $1 AND proposal.id = $2
       AND proposal.status = 'approved' AND proposal.version = $4
       AND EXISTS (SELECT 1 FROM analyser_operations operation
-        WHERE operation.id = $3 AND operation.service_account_id = $1 AND operation.proposal_id = $2)
+        WHERE operation.id = $3 AND operation.service_account_id = $1 AND operation.proposal_id = $2
+          AND operation.result = 'succeeded')
     RETURNING ${PROPOSAL_COLUMNS}`, [owner, id, input.operationId, input.expectedVersion]);
   if (result.rows[0]) return mapProposal(result.rows[0]);
   const check = await pool.query<ProposalStateRow & { operation_recorded: boolean }>(`SELECT proposal.status, proposal.version,
       EXISTS (SELECT 1 FROM analyser_operations operation
-        WHERE operation.id = $3 AND operation.service_account_id = $1 AND operation.proposal_id = $2) AS operation_recorded
+        WHERE operation.id = $3 AND operation.service_account_id = $1 AND operation.proposal_id = $2
+          AND operation.result = 'succeeded') AS operation_recorded
     FROM analyser_proposals proposal WHERE proposal.service_account_id = $1 AND proposal.id = $2`, [owner, id, input.operationId]);
   const state = check.rows[0];
   if (!state) throw new AnalyserServiceError(404, "PROPOSAL_NOT_FOUND", "Proposal not found");
   if (state.status !== "approved") throw new AnalyserServiceError(409, "INVALID_TRANSITION", "Only approved proposals can be executed");
   if (state.version !== input.expectedVersion) throw new AnalyserServiceError(409, "VERSION_CONFLICT", "Proposal version conflict");
-  throw new AnalyserServiceError(400, "OPERATION_NOT_RECORDED", "Operation is not recorded for this proposal");
+  throw new AnalyserServiceError(400, "OPERATION_NOT_RECORDED", "Operation is not recorded as succeeded for this proposal");
 }
 
 export async function supersedeProposal(owner: string, id: string, input: ProposalSupersede): Promise<ProposalRecord> {

@@ -40,7 +40,10 @@ export interface RetentionLogger {
   error?(message: string, details?: unknown): void;
 }
 
-const SECRET_METADATA_KEY = /^(token|secret|password|authorization|cookie)$/i;
+// Substring match (not exact) so variants like accessToken, apiKey, sessionCookie,
+// x-api-key, privateKey, etc. are stripped too, not just the literal key names.
+const SECRET_METADATA_KEY = /token|secret|password|passwd|authoriz|cookie|apikey|api_key|credential|privatekey|private_key/i;
+const METADATA_KEY_LIMIT = 20;
 const WINDOW_TITLE_METADATA_KEY = /^(windowtitle|window_title)$/i;
 
 function iso(value: Date | string): string {
@@ -103,6 +106,7 @@ function sanitizeMetadata(
 ): Record<string, string | number | boolean | null> {
   const sanitized: Record<string, string | number | boolean | null> = {};
   for (const [key, value] of Object.entries(metadata ?? {})) {
+    if (Object.keys(sanitized).length >= METADATA_KEY_LIMIT) break;
     if (SECRET_METADATA_KEY.test(key)) continue;
     if (options.stripWindowTitle && WINDOW_TITLE_METADATA_KEY.test(key)) continue;
     sanitized[key] = typeof value === "string" ? value.slice(0, 2000) : value;

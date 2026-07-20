@@ -33,7 +33,13 @@ import {
   supersedeProposal,
   updateProposalContent
 } from "./stores/proposals.js";
-import { findPublication, listPublications, recordPublication } from "./stores/publications.js";
+import {
+  finalizePublication,
+  findPublication,
+  listPublications,
+  recordPublication,
+  reservePublication
+} from "./stores/publications.js";
 import {
   claimDueRoutine,
   completeRun,
@@ -59,7 +65,9 @@ import {
   proposalExecutionSchema,
   proposalInputSchema,
   proposalSupersedeSchema,
+  publicationFinalizeInputSchema,
   publicationInputSchema,
+  publicationReserveInputSchema,
   summaryInputSchema
 } from "./types.js";
 
@@ -158,6 +166,26 @@ export const observationIngestSchema = z.object({
   machineId: z.string().uuid().optional(),
   observations: z.array(observationInputSchema).max(500)
 }).strict();
+
+// workbench_change / mcp_access / ui_access observations are produced exclusively by
+// Core's own projector and access-instrumentation via the internal x-api-key route
+// (see /internal/observations/ingest); their metadata is trusted because Core built
+// it from verified server-side events, not from caller-supplied claims. Accepting
+// those sources on the bearer-token-authenticated public route would let any caller
+// forge access/change history under their own owner scope. Only genuinely
+// client-originated sources are allowed here.
+const PUBLIC_INGEST_SOURCES = ["pc_activity", "local_file", "agent_session"] as const;
+export const publicObservationIngestSchema = observationIngestSchema.superRefine((value, context) => {
+  value.observations.forEach((observation, index) => {
+    if (!(PUBLIC_INGEST_SOURCES as readonly string[]).includes(observation.source)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["observations", index, "source"],
+        message: `source must be one of ${PUBLIC_INGEST_SOURCES.join(", ")} on the public ingest route`
+      });
+    }
+  });
+});
 
 export const internalObservationIngestSchema = z.object({
   coreUserId: boundedText(2_000),
@@ -314,6 +342,8 @@ export interface AppDeps {
   listOperations: typeof listOperations;
   getOperation: typeof getOperation;
   recordPublication: typeof recordPublication;
+  reservePublication: typeof reservePublication;
+  finalizePublication: typeof finalizePublication;
   listPublications: typeof listPublications;
   findPublication: typeof findPublication;
 }
@@ -357,6 +387,8 @@ const realAppDeps: AppDeps = {
   listOperations,
   getOperation,
   recordPublication,
+  reservePublication,
+  finalizePublication,
   listPublications,
   findPublication
 };
@@ -467,7 +499,7 @@ export function buildApp(deps: AppDeps): express.Express {
   }));
 
   app.post("/observations/ingest", ...userRoute(deps, async (req, res) => {
-    const body = parse(observationIngestSchema, req.body ?? {}, res);
+    const body = parse(publicObservationIngestSchema, req.body ?? {}, res);
     if (!body) return;
     return res.json(await deps.ingestObservations(
       req.authUser!.serviceAccountId,
@@ -652,6 +684,20 @@ export function buildApp(deps: AppDeps): express.Express {
     if (!body) return;
     const result = await deps.recordPublication(req.authUser!.serviceAccountId, body);
     return res.status(result.created ? 201 : 200).json(result);
+  }));
+
+  app.post("/publications/reserve", ...userRoute(deps, async (req, res) => {
+    const body = parse(publicationReserveInputSchema, req.body ?? {}, res);
+    if (!body) return;
+    const result = await deps.reservePublication(req.authUser!.serviceAccountId, body);
+    return res.status(result.reserved ? 201 : 200).json(result);
+  }));
+
+  app.post("/publications/:id/finalize", ...userRoute(deps, async (req, res) => {
+    const params = parse(uuidParamsSchema, req.params, res);
+    const body = parse(publicationFinalizeInputSchema, req.body ?? {}, res);
+    if (!params || !body) return;
+    return res.json(await deps.finalizePublication(req.authUser!.serviceAccountId, params.id, body));
   }));
 
   app.get("/publications", ...userRoute(deps, async (req, res) => {

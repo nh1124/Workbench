@@ -14,7 +14,7 @@ import { isIP } from "node:net";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { installProcessHandlers, requestLogger } from "@workbench/logging";
-import { issueTokenBundle, verifyAccessToken, verifyRefreshToken } from "./auth.js";
+import { isOAuthScopedToken, issueTokenBundle, verifyAccessToken, verifyRefreshToken } from "./auth.js";
 import { logger } from "./logger.js";
 import { ensureCoreSchema } from "./db.js";
 import { getIntegrationManifests } from "./integrations/index.js";
@@ -1186,7 +1186,8 @@ function readBearerToken(req: express.Request): string | undefined {
 
 async function requireAuthenticatedContext(
   req: express.Request,
-  res: express.Response
+  res: express.Response,
+  options: { rejectOAuthScopedTokens?: boolean } = {}
 ): Promise<AuthenticatedContext | undefined> {
   const token = readBearerToken(req);
   if (!token) {
@@ -1196,6 +1197,10 @@ async function requireAuthenticatedContext(
 
   try {
     const claims = verifyAccessToken(token);
+    if (options.rejectOAuthScopedTokens && isOAuthScopedToken(claims)) {
+      res.status(403).json({ message: "This action requires the authenticated user, not an OAuth-scoped client token", code: "USER_ONLY" });
+      return undefined;
+    }
     const user = await findUserById(claims.sub);
     if (!user || user.username !== claims.username) {
       res.status(401).json({ message: "Invalid token user" });
@@ -3766,12 +3771,12 @@ type AnalyserFacadeDelegate = (token: string, req: express.Request) => Promise<u
 
 function analyserFacadeRoute(
   delegate: AnalyserFacadeDelegate,
-  options: { syncAccess?: boolean; status?: number } = {}
+  options: { syncAccess?: boolean; status?: number; userOnly?: boolean } = {}
 ): express.RequestHandler {
   return async (req, res) => {
     const authContext = options.syncAccess
       ? await requireSyncAccessContext(req, res)
-      : await requireAuthenticatedContext(req, res);
+      : await requireAuthenticatedContext(req, res, { rejectOAuthScopedTokens: options.userOnly });
     if (!authContext || !requireAnalyserConfigured(res)) return;
     try {
       const result = await forwardAnalyserRequest(authContext, (token) => delegate(token, req));
@@ -3798,11 +3803,11 @@ app.get(
 );
 app.put(
   "/api/analyser/settings/collection",
-  analyserFacadeRoute((token, req) => analyserClient.updateCollectionPolicy(token, req.body ?? {}))
+  analyserFacadeRoute((token, req) => analyserClient.updateCollectionPolicy(token, req.body ?? {}), { userOnly: true })
 );
 app.put(
   "/api/analyser/settings/automation",
-  analyserFacadeRoute((token, req) => analyserClient.updateAutomationPolicy(token, req.body ?? {}))
+  analyserFacadeRoute((token, req) => analyserClient.updateAutomationPolicy(token, req.body ?? {}), { userOnly: true })
 );
 app.post(
   "/api/analyser/observations/ingest",
@@ -3839,7 +3844,7 @@ app.post(
 );
 app.patch(
   "/api/analyser/routines/:key",
-  analyserFacadeRoute((token, req) => analyserClient.updateRoutine(token, String(req.params.key), req.body ?? {}))
+  analyserFacadeRoute((token, req) => analyserClient.updateRoutine(token, String(req.params.key), req.body ?? {}), { userOnly: true })
 );
 app.post(
   "/api/analyser/routines/claim",
@@ -3905,11 +3910,11 @@ app.patch(
 );
 app.post(
   "/api/analyser/proposals/:id/resolve",
-  analyserFacadeRoute((token, req) => analyserClient.resolveProposal(token, String(req.params.id), req.body ?? {}))
+  analyserFacadeRoute((token, req) => analyserClient.resolveProposal(token, String(req.params.id), req.body ?? {}), { userOnly: true })
 );
 app.post(
   "/api/analyser/proposals/:id/supersede",
-  analyserFacadeRoute((token, req) => analyserClient.supersedeProposal(token, String(req.params.id), req.body ?? {}))
+  analyserFacadeRoute((token, req) => analyserClient.supersedeProposal(token, String(req.params.id), req.body ?? {}), { userOnly: true })
 );
 app.post(
   "/api/analyser/proposals/:id/executed",
