@@ -6,7 +6,7 @@
   "scripts": {
     "dev:http": "tsx src/httpServer.ts",
     "build": "tsc -p tsconfig.json",
-    "test": "tsx --test src/__tests__/notesMaintenance.integration.test.ts",
+    "test": "tsx --test src/__tests__/notesHttpApi.integration.test.ts",
     "start": "node dist/httpServer.js"
   },
   "dependencies": {

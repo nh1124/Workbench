@@ -287,7 +287,7 @@ analyser.operations.record     analyser.publications.record
 | AW-14b | `[implemented]` | migration | 移行スクリプト 2 本 + runbook。ローカルで実行済み（service_accounts 9 件、activity はローカル空。実データ移行は cutover 時）。maintenance→proposals は Core 稼働時に実行 |
 | AW-15a | `[implemented]` | core, insights, infra | services/insights 削除、insights.*/maintenance.* MCP・HTTP・client・provisioning・usage_events・maintenance queue/lease/actions 削除（markIndexEntriesRead は indexReadTracking.ts に保存）、infra から insights-db/INSIGHTS_* 全除去。既存 DB の usage_events/maintenance_leases 表は残置（追加削除は cutover 時判断） |
 | AW-15b | `[in-progress]` | ui | 旧 UI 削除: MaintenancePage、maintenanceApi/insights api・型 |
-| AW-16 | `[pending]` | notes, projects | memory/note lifecycle fields の schema/code/UI 削除（authority 等は維持） |
+| AW-16 | `[implemented]` | notes, projects, artifacts | 旧 maintenance queue/confirm/snooze/flag endpoint と note 側 lifecycle fields を削除。**memory 側 lifecycle_state/last_confirmed_at/review_* は authority セマンティクスと不可分のため維持**（許容制約 §12 参照）。index-read-marks は維持。既存 DB の旧列は残置（非破壊） |
 | AW-17 | `[pending]` | skills, docs | Skills 4 種 + AgentSkills 正本 + materialization + README/runbook/tool-contracts |
 | AW-18 | `[pending]` | root | 統合 live smoke + Codex read-only 独立最終レビュー + 指摘対応 |
 | AW-19 | `[pending]` | server | 本番 cutover: backup → deploy → migration → restart → live smoke（**SSH mutation は実行前に Owner 確認**） |
@@ -306,4 +306,11 @@ analyser.operations.record     analyser.publications.record
 
 ## 12. 許容制約（レビューで指摘されたが受容したもの）
 
-（最終レビュー後に記録）
+- project memory の lifecycle_state / last_confirmed_at / review_after / review_reason は
+  authority（user_confirmed 昇格）や raw→verified 遷移と不可分のため列・更新パスを維持。
+  削除したのは review キュー / confirm / snooze / flag の専用 endpoint のみ。
+- 既存 DB に残る旧列・旧表（core: usage_events / maintenance_leases、artifacts:
+  artifact_maintenance_flags、notes/projects の旧 review 列）は DDL から除去済みだが
+  DROP はしない（非破壊方針）。cutover 後の任意整理は backup 取得を条件とする。
+- Core 複数インスタンス構成での projector / housekeeping 排他は in-process guard のみ
+  （単一インスタンス前提。ingest/cursor が冪等のため二重実行しても安全）。

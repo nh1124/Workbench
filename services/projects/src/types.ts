@@ -143,45 +143,6 @@ export interface ProjectMemoryListResult {
   nextCursor?: string;
 }
 
-export const MAINTENANCE_QUEUE_REASONS = [
-  "raw",
-  "expired",
-  "unconfirmed",
-  "conflict",
-  "manual",
-  "source_changed",
-  "unused",
-  "brief_unmaintained",
-  "brief_oversized"
-] as const;
-export type MaintenanceQueueReason = (typeof MAINTENANCE_QUEUE_REASONS)[number];
-export type MaintenanceQueueKind = "memory" | "brief" | "index_drift";
-
-export interface MaintenanceQueueItem {
-  id: string;
-  kind: MaintenanceQueueKind;
-  projectId: string;
-  projectName: string;
-  resourceId: string;
-  title: string;
-  excerpt: string;
-  reasons: MaintenanceQueueReason[];
-  authority?: ProjectMemoryAuthority;
-  lifecycleState?: ProjectMemoryLifecycleState;
-  lastConfirmedAt?: string | null;
-  reviewAfter?: string | null;
-  updatedAt: string;
-  suggestedActions: string[];
-}
-
-export interface MaintenanceQueueListResult {
-  items: MaintenanceQueueItem[];
-  nextCursor?: string;
-  totals: {
-    byReason: Partial<Record<MaintenanceQueueReason, number>>;
-  };
-}
-
 export const PROJECT_INDEX_ASSOCIATION_KINDS = ["primary", "secondary"] as const;
 export type ProjectIndexAssociationKind = (typeof PROJECT_INDEX_ASSOCIATION_KINDS)[number];
 export const PROJECT_INDEX_SEARCH_MODES = ["any", "all"] as const;

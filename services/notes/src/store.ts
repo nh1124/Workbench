@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { ensureNotesSchema, getNotesPool } from "./db.js";
-import type { Note, NoteInput, NoteLifecycleState, NoteProjectSummary, NoteReviewReason } from "./types.js";
+import type { Note, NoteInput, NoteProjectSummary } from "./types.js";
 
 export interface NoteListPage {
   items: Note[];
@@ -15,10 +15,6 @@ type NoteRow = {
   project_id: string;
   project_name: string | null;
   tags: unknown;
-  lifecycle_state: NoteLifecycleState;
-  review_after: string | null;
-  last_confirmed_at: string | null;
-  review_reason: NoteReviewReason | null;
   created_at: string;
   updated_at: string;
 };
@@ -31,10 +27,6 @@ function toNote(row: NoteRow): Note {
     projectId: row.project_id,
     projectName: row.project_name ?? undefined,
     tags: Array.isArray(row.tags) ? (row.tags as string[]) : [],
-    lifecycleState: row.lifecycle_state,
-    reviewAfter: row.review_after ? new Date(row.review_after).toISOString() : null,
-    lastConfirmedAt: row.last_confirmed_at ? new Date(row.last_confirmed_at).toISOString() : null,
-    reviewReason: row.review_reason,
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString()
   };
@@ -78,8 +70,7 @@ function normalizeLimit(limit: number | undefined, fallback: number): number {
 }
 
 const NOTE_RETURNING = `
-  id, owner_username, title, content, project_id, project_name, tags,
-  lifecycle_state, review_after, last_confirmed_at, review_reason, created_at, updated_at
+  id, owner_username, title, content, project_id, project_name, tags, created_at, updated_at
 `;
 
 export async function listNotes(projectId: string | undefined, limit: number | undefined, ownerUsername: string): Promise<Note[]> {
@@ -88,8 +79,7 @@ export async function listNotes(projectId: string | undefined, limit: number | u
   const owner = normalizeOwner(ownerUsername);
   const values: Array<string | number> = [owner];
   let sql = `
-    SELECT id, owner_username, title, content, project_id, project_name, tags,
-           lifecycle_state, review_after, last_confirmed_at, review_reason, created_at, updated_at
+    SELECT ${NOTE_RETURNING}
     FROM notes
     WHERE owner_username = $1
   `;
@@ -122,8 +112,7 @@ export async function listNotesPage(
   const pageSize = normalizeLimit(limit, 100);
   const values: Array<string | number> = [owner];
   let sql = `
-    SELECT id, owner_username, title, content, project_id, project_name, tags,
-           lifecycle_state, review_after, last_confirmed_at, review_reason, created_at, updated_at
+    SELECT ${NOTE_RETURNING}
     FROM notes
     WHERE owner_username = $1
   `;
@@ -160,8 +149,7 @@ export async function getNote(id: string, ownerUsername: string): Promise<Note |
   const owner = normalizeOwner(ownerUsername);
   const result = await pool.query<NoteRow>(
     `
-      SELECT id, owner_username, title, content, project_id, project_name, tags,
-             lifecycle_state, review_after, last_confirmed_at, review_reason, created_at, updated_at
+      SELECT ${NOTE_RETURNING}
       FROM notes
       WHERE id = $1 AND owner_username = $2
       LIMIT 1
@@ -176,72 +164,6 @@ export async function getNote(id: string, ownerUsername: string): Promise<Note |
   return toNote(result.rows[0]);
 }
 
-export async function confirmNote(
-  id: string,
-  input: { lifecycleState?: Extract<NoteLifecycleState, "curated" | "verified">; reviewAfter?: string | null },
-  ownerUsername: string
-): Promise<Note | undefined> {
-  const existing = await getNote(id, ownerUsername);
-  if (!existing) {
-    return undefined;
-  }
-
-  await ensureNotesSchema();
-  const pool = getNotesPool();
-  const owner = normalizeOwner(ownerUsername);
-  const result = await pool.query<NoteRow>(
-    `
-      UPDATE notes
-      SET lifecycle_state = $3,
-          last_confirmed_at = NOW(),
-          review_reason = NULL,
-          review_after = $4::timestamptz,
-          updated_at = NOW()
-      WHERE id = $1 AND owner_username = $2
-      RETURNING ${NOTE_RETURNING}
-    `,
-    [id, owner, input.lifecycleState ?? "curated", input.reviewAfter ?? null]
-  );
-
-  return result.rows[0] ? toNote(result.rows[0]) : undefined;
-}
-
-export async function snoozeNote(id: string, until: string, ownerUsername: string): Promise<Note | undefined> {
-  await ensureNotesSchema();
-  const pool = getNotesPool();
-  const owner = normalizeOwner(ownerUsername);
-  const result = await pool.query<NoteRow>(
-    `
-      UPDATE notes
-      SET review_after = $3::timestamptz,
-          updated_at = NOW()
-      WHERE id = $1 AND owner_username = $2
-      RETURNING ${NOTE_RETURNING}
-    `,
-    [id, owner, until]
-  );
-
-  return result.rows[0] ? toNote(result.rows[0]) : undefined;
-}
-
-export async function flagNote(id: string, reason: NoteReviewReason, ownerUsername: string): Promise<Note | undefined> {
-  await ensureNotesSchema();
-  const pool = getNotesPool();
-  const owner = normalizeOwner(ownerUsername);
-  const result = await pool.query<NoteRow>(
-    `
-      UPDATE notes
-      SET review_reason = $3,
-          updated_at = NOW()
-      WHERE id = $1 AND owner_username = $2
-      RETURNING ${NOTE_RETURNING}
-    `,
-    [id, owner, reason]
-  );
-
-  return result.rows[0] ? toNote(result.rows[0]) : undefined;
-}
-
 export async function createNote(input: NoteInput, ownerUsername: string): Promise<Note> {
   await ensureNotesSchema();
   const pool = getNotesPool();
@@ -251,12 +173,10 @@ export async function createNote(input: NoteInput, ownerUsername: string): Promi
   const result = await pool.query<NoteRow>(
     `
       INSERT INTO notes (
-        id, owner_username, title, content, project_id, project_name, tags,
-        lifecycle_state, review_after, review_reason
+        id, owner_username, title, content, project_id, project_name, tags
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::timestamptz, $10)
-      RETURNING id, owner_username, title, content, project_id, project_name, tags,
-                lifecycle_state, review_after, last_confirmed_at, review_reason, created_at, updated_at
+      VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+      RETURNING ${NOTE_RETURNING}
     `,
     [
       id,
@@ -265,10 +185,7 @@ export async function createNote(input: NoteInput, ownerUsername: string): Promi
       input.content,
       input.projectId,
       input.projectName ?? null,
-      JSON.stringify(input.tags ?? []),
-      input.lifecycleState ?? "triaged",
-      input.reviewAfter ?? null,
-      input.reviewReason ?? null
+      JSON.stringify(input.tags ?? [])
     ]
   );
 
@@ -293,13 +210,9 @@ export async function updateNote(id: string, updates: Partial<NoteInput>, ownerU
         project_id = $5,
         project_name = $6,
         tags = $7::jsonb,
-        lifecycle_state = $8,
-        review_after = $9::timestamptz,
-        review_reason = $10,
         updated_at = NOW()
       WHERE id = $1 AND owner_username = $2
-      RETURNING id, owner_username, title, content, project_id, project_name, tags,
-                lifecycle_state, review_after, last_confirmed_at, review_reason, created_at, updated_at
+      RETURNING ${NOTE_RETURNING}
     `,
     [
       id,
@@ -308,10 +221,7 @@ export async function updateNote(id: string, updates: Partial<NoteInput>, ownerU
       updates.content ?? existing.content,
       updates.projectId ?? existing.projectId,
       updates.projectName ?? existing.projectName ?? null,
-      JSON.stringify(updates.tags ?? existing.tags),
-      updates.lifecycleState ?? existing.lifecycleState ?? "triaged",
-      Object.hasOwn(updates, "reviewAfter") ? updates.reviewAfter ?? null : existing.reviewAfter ?? null,
-      Object.hasOwn(updates, "reviewReason") ? updates.reviewReason ?? null : existing.reviewReason ?? null
+      JSON.stringify(updates.tags ?? existing.tags)
     ]
   );
 

@@ -163,34 +163,6 @@ export async function ensureArtifactsSchema(): Promise<void> {
           ON artifact_items(owner_username, project_id, updated_at DESC);
         `);
 
-        await pool.query(`
-          CREATE TABLE IF NOT EXISTS artifact_maintenance_flags (
-            id TEXT PRIMARY KEY,
-            owner_username TEXT NOT NULL,
-            artifact_item_id TEXT NOT NULL,
-            project_id TEXT NOT NULL,
-            reason TEXT NOT NULL CHECK (reason IN ('conflict', 'manual')),
-            note TEXT,
-            status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved')),
-            flagged_by TEXT NOT NULL,
-            flagged_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            resolved_by TEXT,
-            resolved_at TIMESTAMPTZ,
-            resolution_note TEXT
-          );
-        `);
-
-        await pool.query(`
-          CREATE UNIQUE INDEX IF NOT EXISTS ux_artifact_maintenance_flags_open
-          ON artifact_maintenance_flags(owner_username, artifact_item_id)
-          WHERE status = 'open';
-        `);
-
-        await pool.query(`
-          CREATE INDEX IF NOT EXISTS idx_artifact_maintenance_flags_owner_status
-          ON artifact_maintenance_flags(owner_username, status, flagged_at DESC);
-        `);
-
         await cleanupArtifactItemProjectNameFallbacks();
       });
     })();

@@ -43,16 +43,6 @@ export type ListProjectMemoriesOptions = {
   cursor?: string;
 };
 
-export class ProjectMemoryStateConflictError extends Error {
-  readonly status = 409;
-  readonly code = "PROJECT_MEMORY_NOT_ACTIVE";
-
-  constructor() {
-    super("Project memory must be active");
-    this.name = "ProjectMemoryStateConflictError";
-  }
-}
-
 function toMemory(row: MemoryRow): ProjectMemoryEntry {
   return {
     id: row.id,
@@ -254,74 +244,3 @@ export async function updateProjectMemory(
   return result.rows[0] ? toMemory(result.rows[0]) : undefined;
 }
 
-export async function confirmProjectMemory(
-  memoryId: string,
-  input: { reviewAfter?: string | null },
-  ownerAccountId: string
-): Promise<ProjectMemoryEntry | undefined> {
-  const existing = await getMemoryForOwner(memoryId, ownerAccountId);
-  if (!existing) return undefined;
-  if (existing.status !== "active") throw new ProjectMemoryStateConflictError();
-
-  const result = await getProjectsPool().query<MemoryRow>(
-    `
-      UPDATE project_memory_entries m
-      SET authority = 'user_confirmed',
-          lifecycle_state = 'verified',
-          last_confirmed_at = NOW(),
-          review_reason = NULL,
-          review_after = $2::timestamptz,
-          updated_at = NOW()
-      WHERE m.id = $1
-        AND m.status = 'active'
-      RETURNING ${MEMORY_RETURNING}
-    `,
-    [memoryId, input.reviewAfter ?? null]
-  );
-  if (result.rows[0]) return toMemory(result.rows[0]);
-
-  const current = await getMemoryForOwner(memoryId, ownerAccountId);
-  if (!current) return undefined;
-  if (current.status !== "active") throw new ProjectMemoryStateConflictError();
-  return undefined;
-}
-
-export async function snoozeProjectMemory(
-  memoryId: string,
-  until: string,
-  ownerAccountId: string
-): Promise<ProjectMemoryEntry | undefined> {
-  await ensureProjectsSchema();
-  const result = await getProjectsPool().query<MemoryRow>(
-    `
-      UPDATE project_memory_entries m
-      SET review_after = $3::timestamptz,
-          updated_at = NOW()
-      FROM projects p
-      WHERE m.id = $1 AND m.project_id = p.id AND p.owner_account_id = $2
-      RETURNING ${MEMORY_RETURNING}
-    `,
-    [memoryId, normalizeOwner(ownerAccountId), until]
-  );
-  return result.rows[0] ? toMemory(result.rows[0]) : undefined;
-}
-
-export async function flagProjectMemory(
-  memoryId: string,
-  reason: ProjectMemoryReviewReason,
-  ownerAccountId: string
-): Promise<ProjectMemoryEntry | undefined> {
-  await ensureProjectsSchema();
-  const result = await getProjectsPool().query<MemoryRow>(
-    `
-      UPDATE project_memory_entries m
-      SET review_reason = $3,
-          updated_at = NOW()
-      FROM projects p
-      WHERE m.id = $1 AND m.project_id = p.id AND p.owner_account_id = $2
-      RETURNING ${MEMORY_RETURNING}
-    `,
-    [memoryId, normalizeOwner(ownerAccountId), reason]
-  );
-  return result.rows[0] ? toMemory(result.rows[0]) : undefined;
-}

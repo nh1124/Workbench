@@ -8,24 +8,14 @@ import { z } from "zod";
 import { requireInternalApiKey, requireUserAuth } from "./auth.js";
 import { ensureNotesSchema, upsertServiceAccount } from "./db.js";
 import {
-  confirmNote,
   createNote,
   deleteNote,
-  flagNote,
   getNote,
   listNoteProjects,
   listNotes,
   listNotesPage,
-  snoozeNote,
   updateNote
 } from "./store.js";
-import { InvalidNoteQueueCursorError, listNoteMaintenanceQueue } from "./maintenanceQueueStore.js";
-import {
-  NOTE_LIFECYCLE_STATES,
-  NOTE_MAINTENANCE_QUEUE_REASONS,
-  NOTE_REVIEW_REASONS,
-  type NoteMaintenanceQueueReason
-} from "./types.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -100,28 +90,7 @@ const noteInputSchema = z.object({
   content: z.string().default(""),
   projectId: z.string().min(1),
   projectName: z.string().optional(),
-  tags: z.array(z.string()).optional(),
-  lifecycleState: z.enum(NOTE_LIFECYCLE_STATES).optional(),
-  reviewAfter: z.string().datetime().nullable().optional(),
-  reviewReason: z.enum(NOTE_REVIEW_REASONS).nullable().optional()
-});
-
-const noteConfirmSchema = z.object({
-  lifecycleState: z.enum(["curated", "verified"]).optional(),
-  reviewAfter: z.string().datetime().nullable().optional()
-});
-
-const futureDateTimeSchema = z.string().datetime().refine((value) => Date.parse(value) > Date.now(), {
-  message: "Datetime must be in the future"
-});
-
-const noteSnoozeSchema = z.object({
-  until: futureDateTimeSchema
-});
-
-const noteFlagSchema = z.object({
-  reason: z.enum(NOTE_REVIEW_REASONS),
-  note: z.string().optional()
+  tags: z.array(z.string()).optional()
 });
 
 const internalAccountSchema = z.object({
@@ -154,46 +123,6 @@ function sanitizeLimit(value: string | undefined): number | undefined {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
-
-type QueueRouteOptions = {
-  projectId?: string;
-  reason?: NoteMaintenanceQueueReason;
-  cursor?: string;
-  limit?: number;
-};
-
-function readQueueRouteOptions(req: express.Request, res: express.Response): QueueRouteOptions | undefined {
-  if (req.query.reason !== undefined && typeof req.query.reason !== "string") {
-    res.status(400).json({ message: "Invalid maintenance reason" });
-    return undefined;
-  }
-  const reason = typeof req.query.reason === "string" ? req.query.reason : undefined;
-  if (reason && !NOTE_MAINTENANCE_QUEUE_REASONS.includes(reason as NoteMaintenanceQueueReason)) {
-    res.status(400).json({ message: "Invalid maintenance reason" });
-    return undefined;
-  }
-  return {
-    projectId: typeof req.query.projectId === "string" ? req.query.projectId : undefined,
-    reason: reason as NoteMaintenanceQueueReason | undefined,
-    cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
-    limit: sanitizeLimit(typeof req.query.limit === "string" ? req.query.limit : undefined)
-  };
-}
-
-app.get("/maintenance/note-queue", requireUserAuth, async (req, res) => {
-  const owner = req.authUser?.coreUserId;
-  if (!owner) return res.status(401).json({ message: "Missing auth context" });
-  try {
-    const options = readQueueRouteOptions(req, res);
-    if (!options) return;
-    return res.json(await listNoteMaintenanceQueue(owner, options));
-  } catch (error) {
-    if (error instanceof InvalidNoteQueueCursorError) {
-      return res.status(400).json({ code: "INVALID_CURSOR", message: error.message });
-    }
-    throw error;
-  }
-});
 
 app.get("/notes", requireUserAuth, async (req, res) => {
   const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
@@ -259,67 +188,6 @@ app.patch("/notes/:id", requireUserAuth, async (req, res) => {
   }
 
   return res.json(updated);
-});
-
-app.post("/notes/:id/confirm", requireUserAuth, async (req, res) => {
-  const parsed = noteConfirmSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(400).json({ message: parsed.error.flatten() });
-  }
-
-  const owner = req.authUser?.coreUserId;
-  if (!owner) {
-    return res.status(401).json({ message: "Missing auth context" });
-  }
-  const updated = await confirmNote(
-    String(req.params.id),
-    { lifecycleState: parsed.data.lifecycleState, reviewAfter: parsed.data.reviewAfter ?? null },
-    owner
-  );
-
-  if (!updated) {
-    return res.status(404).json({ message: "Note not found" });
-  }
-
-  return res.json(updated);
-});
-
-app.post("/notes/:id/snooze", requireUserAuth, async (req, res) => {
-  const parsed = noteSnoozeSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(400).json({ message: parsed.error.flatten() });
-  }
-
-  const owner = req.authUser?.coreUserId;
-  if (!owner) {
-    return res.status(401).json({ message: "Missing auth context" });
-  }
-  const updated = await snoozeNote(String(req.params.id), parsed.data.until, owner);
-
-  if (!updated) {
-    return res.status(404).json({ message: "Note not found" });
-  }
-
-  return res.json(updated);
-});
-
-app.post("/notes/:id/flag", requireUserAuth, async (req, res) => {
-  const parsed = noteFlagSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(400).json({ message: parsed.error.flatten() });
-  }
-
-  const owner = req.authUser?.coreUserId;
-  if (!owner) {
-    return res.status(401).json({ message: "Missing auth context" });
-  }
-  const updated = await flagNote(String(req.params.id), parsed.data.reason, owner);
-
-  if (!updated) {
-    return res.status(404).json({ message: "Note not found" });
-  }
-
-  return res.json(parsed.data.note === undefined ? updated : { ...updated, note: parsed.data.note });
 });
 
 app.delete("/notes/:id", requireUserAuth, async (req, res) => {
