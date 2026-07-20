@@ -1,5 +1,11 @@
 # Workbench Analyser migration runbook
 
+**Server cutover must be two-phase.** The maintenance→proposals script needs the legacy
+`/api/maintenance/queue` routes AND the new `/api/analyser/proposals` routes on the same
+running Core. Those coexist only in the commits between AW-14b (68ee283) and the AW-15
+deletion wave. On the server: (1) deploy/checkout the pre-deletion commit, run both
+migrations, verify; (2) then pull to final HEAD (legacy paths removed) and restart.
+
 Run this only while the legacy Insights database and maintenance queue routes still exist. Run commands from the repository root. Prerequisites are Node.js with the existing root workspace dependencies, `pg_dump`/`pg_restore`, access to both PostgreSQL databases, and a Core user whose maintenance queue is being migrated.
 
 ## 1. Back up Insights
