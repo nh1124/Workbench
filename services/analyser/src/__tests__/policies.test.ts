@@ -1,19 +1,29 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { describe, it } from "node:test";
+import type { RequestHandler } from "express";
 import { DEFAULT_AUTOMATION_POLICY, DEFAULT_COLLECTION_SETTINGS } from "../types.js";
 
+process.env.ANALYSER_SKIP_BOOTSTRAP = "1";
 process.env.ANALYSER_DB_HOST ??= "127.0.0.1";
 process.env.ANALYSER_DB_PORT ??= "5551";
 process.env.ANALYSER_DB_NAME ??= "test";
 process.env.ANALYSER_DB_USER ??= "test";
 process.env.ANALYSER_DB_PASSWORD ??= "test";
+process.env.JWT_SECRET ??= "analyser-policies-test-secret";
+process.env.JWT_ISSUER ??= "analyser-policies-tests";
+process.env.INTERNAL_API_KEY_ANALYSER ??= "analyser-policies-test-key";
 
 const {
   getEffectiveAutomationPolicyWithPool,
+  getAutomationPolicyRecordWithPool,
   getEffectiveCollectionSettingsWithPool,
   upsertAutomationPolicyWithPool,
   upsertCollectionPolicyWithPool
 } = await import("../stores/policies.js");
+const { buildApp } = await import("../httpServer.js");
+type AppDeps = import("../httpServer.js").AppDeps;
 
 type Result = { rows: unknown[]; rowCount?: number };
 type Call = { text: string; values?: unknown[] };
@@ -34,6 +44,44 @@ function fakePool(responses: Result[]) {
     }
   };
   return pool;
+}
+
+const authenticated: RequestHandler = (req, _res, next) => {
+  req.authUser = {
+    serviceAccountId: "owner-1",
+    coreUserId: "core-user-1",
+    usernameSnapshot: "route-user"
+  };
+  next();
+};
+
+const passThrough: RequestHandler = (_req, _res, next) => next();
+
+function settingsDeps(overrides: Partial<AppDeps>): AppDeps {
+  const unexpected = async (): Promise<never> => { throw new Error("Unexpected route dependency call"); };
+  return new Proxy({
+    requireUserAuth: authenticated,
+    requireInternalApiKey: passThrough,
+    ...overrides
+  }, {
+    get(target, property) {
+      return property in target ? target[property as keyof typeof target] : unexpected;
+    }
+  }) as AppDeps;
+}
+
+async function withServer(deps: AppDeps, run: (baseUrl: string) => Promise<void>): Promise<void> {
+  const server = createServer(buildApp(deps));
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    const address = server.address() as AddressInfo;
+    await run(`http://127.0.0.1:${address.port}`);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
 }
 
 describe("analyser collection policies", () => {
@@ -93,6 +141,48 @@ describe("analyser collection policies", () => {
 });
 
 describe("analyser automation policies", () => {
+  it("returns no stored record when an automation row does not exist", async () => {
+    assert.equal(await getAutomationPolicyRecordWithPool(fakePool([{ rows: [] }]), "owner-1"), undefined);
+  });
+
+  it("returns a stored automation record with its version and audit fields", async () => {
+    const record = await getAutomationPolicyRecordWithPool(fakePool([{ rows: [{
+      policy_json: DEFAULT_AUTOMATION_POLICY,
+      version: 4,
+      updated_by: "settings-user",
+      updated_at: "2026-07-20T01:02:03.000Z"
+    }] }]), "owner-1");
+    assert.deepEqual(record, {
+      policy: DEFAULT_AUTOMATION_POLICY,
+      version: 4,
+      updatedBy: "settings-user",
+      updatedAt: "2026-07-20T01:02:03.000Z"
+    });
+  });
+
+  it("exposes the stored automation version and update time from GET /settings", async () => {
+    await withServer(settingsDeps({
+      getEffectiveCollectionSettings: (async () => ({ settings: DEFAULT_COLLECTION_SETTINGS })) as AppDeps["getEffectiveCollectionSettings"],
+      getCollectionPolicyRows: (async () => []) as AppDeps["getCollectionPolicyRows"],
+      getEffectiveAutomationPolicy: (async () => DEFAULT_AUTOMATION_POLICY) as AppDeps["getEffectiveAutomationPolicy"],
+      getAutomationPolicyRecord: (async () => ({
+        policy: DEFAULT_AUTOMATION_POLICY,
+        version: 6,
+        updatedBy: "settings-user",
+        updatedAt: "2026-07-20T04:00:00.000Z"
+      })) as AppDeps["getAutomationPolicyRecord"]
+    }), async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/settings`);
+      assert.equal(response.status, 200);
+      const body = await response.json() as { automation: unknown };
+      assert.deepEqual(body.automation, {
+        policy: DEFAULT_AUTOMATION_POLICY,
+        version: 6,
+        updatedAt: "2026-07-20T04:00:00.000Z"
+      });
+    });
+  });
+
   it("returns the default and validates full replacements", async () => {
     const policy = await getEffectiveAutomationPolicyWithPool(fakePool([{ rows: [] }]), "owner-1");
     assert.deepEqual(policy, DEFAULT_AUTOMATION_POLICY);

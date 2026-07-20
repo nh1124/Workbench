@@ -1,15 +1,19 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { analyserApi, ApiError } from "../../lib/api";
 import type {
   AnalyserActivityAggregate,
+  AnalyserAutomationPolicy,
+  AnalyserCollectionSettings,
   AnalyserObservationRecord,
   AnalyserOperationRecord,
   AnalyserProposalListItem,
   AnalyserProposalRecord,
+  AnalyserRoutineRecord,
+  AnalyserSettingsResult,
   AnalyserSummaryListItem,
   AnalyserSummaryRecord,
   AnalyserStatusResult
@@ -17,6 +21,82 @@ import type {
 import { AnalyserPage } from "../AnalyserPage";
 
 const updatedAt = "2026-07-20T04:00:00.000Z";
+
+function collectionSettings(): AnalyserCollectionSettings {
+  return {
+    workbenchChanges: "metadata",
+    mcpAccess: "mutations",
+    uiAccess: "reads_and_mutations",
+    agentSessionEvents: "explicit_only",
+    foregroundAppCapture: true,
+    foregroundAppUpload: false,
+    windowTitleCapture: false,
+    windowTitleUpload: false,
+    localFileEvents: "metadata",
+    localFileUpload: false,
+    screenshots: "local_only",
+    retentionDays: {
+      workbench_change: 30,
+      mcp_access: 20,
+      ui_access: 21,
+      agent_session: 22,
+      pc_activity: 23,
+      local_file: 24
+    },
+    localScreenshotRetentionDays: 7,
+    projectAllow: ["project-a"],
+    projectDeny: [],
+    resourceTypeAllow: ["note"],
+    resourceTypeDeny: [],
+    localRootAllow: ["C:\\work"],
+    localRootDeny: [],
+    excludePatterns: ["**/node_modules/**"]
+  };
+}
+
+function automationPolicy(): AnalyserAutomationPolicy {
+  return {
+    enabled: true,
+    requireHighConfidence: true,
+    destructiveAllowed: false,
+    bulkAllowed: false,
+    allowedOperationKinds: ["artifact_move", "progress_note_upsert"]
+  };
+}
+
+function settingsResult(): AnalyserSettingsResult {
+  return {
+    effective: { settings: collectionSettings(), ownerVersion: 7 },
+    rows: [{
+      machineId: null,
+      settings: { mcpAccess: "mutations" },
+      version: 7,
+      updatedBy: "settings-user",
+      updatedAt
+    }],
+    automation: { policy: automationPolicy(), version: 9, updatedAt }
+  };
+}
+
+function analyserRoutine(overrides: Partial<AnalyserRoutineRecord> = {}): AnalyserRoutineRecord {
+  return {
+    id: "routine-1",
+    key: "daily-work-summary",
+    name: "Daily work summary",
+    skillKey: "workbench-analyser-cycle",
+    scheduleKind: "interval",
+    scheduleExpr: "15",
+    timezone: "Asia/Tokyo",
+    enabled: true,
+    committedCursor: "0",
+    maxRetries: 3,
+    backoffMinutes: 5,
+    version: 5,
+    createdAt: updatedAt,
+    updatedAt,
+    ...overrides
+  };
+}
 
 function statusResult(overrides: Partial<AnalyserStatusResult> = {}): AnalyserStatusResult {
   return {
@@ -184,6 +264,22 @@ beforeEach(() => {
   vi.spyOn(analyserApi, "resolveProposal").mockImplementation(async (id, body) => proposal(id, { status: body.status }));
   vi.spyOn(analyserApi, "supersedeProposal").mockImplementation(async (id) => proposal(id, { status: "superseded" }));
   vi.spyOn(analyserApi, "operations").mockResolvedValue({ items: [] });
+  vi.spyOn(analyserApi, "settings").mockResolvedValue(settingsResult());
+  vi.spyOn(analyserApi, "routines").mockResolvedValue({ items: [analyserRoutine()] });
+  vi.spyOn(analyserApi, "updateCollectionPolicy").mockImplementation(async (body) => ({
+    machineId: body.machineId ?? null,
+    settings: body.settings,
+    version: (body.expectedVersion ?? 0) + 1,
+    updatedBy: "settings-user",
+    updatedAt
+  }));
+  vi.spyOn(analyserApi, "updateAutomationPolicy").mockImplementation(async (body) => ({
+    policy: body.policy,
+    version: (body.expectedVersion ?? 0) + 1,
+    updatedBy: "settings-user",
+    updatedAt
+  }));
+  vi.spyOn(analyserApi, "updateRoutine").mockImplementation(async (_key, body) => analyserRoutine({ ...body, version: 6 }));
   vi.spyOn(analyserApi, "seedRoutines").mockResolvedValue(undefined);
   vi.spyOn(analyserApi, "projectorFlush").mockResolvedValue({ projected: 0, skipped: true });
 });
@@ -408,5 +504,76 @@ describe("AnalyserPage", () => {
     const exportButton = screen.getByRole("button", { name: "Export" }) as HTMLButtonElement;
     expect(exportButton.disabled).toBe(true);
     expect(exportButton.title).toBe("Export arrives with the publication pipeline");
+  });
+
+  it("renders collection settings from settings() with the local-only screenshot caption", async () => {
+    renderPage("/analyser?tab=settings");
+
+    expect(await screen.findByRole("heading", { name: "Collection" })).toBeTruthy();
+    const collection = within(screen.getByRole("region", { name: "Collection" }));
+    expect((collection.getByLabelText("MCP access") as HTMLSelectElement).value).toBe("mutations");
+    expect((collection.getByLabelText("Project allow list") as HTMLInputElement).value).toBe("project-a");
+    expect(collection.getByText("Screenshots are captured and stored on this machine only — never uploaded")).toBeTruthy();
+    expect(analyserApi.settings).toHaveBeenCalledTimes(1);
+    expect(analyserApi.machines).toHaveBeenCalledTimes(1);
+  });
+
+  it("saves the complete owner collection override with its expected version", async () => {
+    renderPage("/analyser?tab=settings");
+
+    await screen.findByRole("heading", { name: "Collection" });
+    const collection = within(screen.getByRole("region", { name: "Collection" }));
+    const workbenchChanges = collection.getByLabelText("Workbench changes") as HTMLSelectElement;
+    fireEvent.change(workbenchChanges, { target: { value: "off" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save collection settings" }));
+
+    await waitFor(() => expect(analyserApi.updateCollectionPolicy).toHaveBeenCalledWith({
+      machineId: null,
+      settings: { ...collectionSettings(), workbenchChanges: "off" },
+      expectedVersion: 7
+    }));
+  });
+
+  it("saves automation policy with the stored automation version", async () => {
+    renderPage("/analyser?tab=settings");
+
+    fireEvent.click(await screen.findByLabelText("destructive allowed"));
+    fireEvent.click(screen.getByRole("button", { name: "Save automation policy" }));
+
+    await waitFor(() => expect(analyserApi.updateAutomationPolicy).toHaveBeenCalledWith({
+      policy: { ...automationPolicy(), destructiveAllowed: true },
+      expectedVersion: 9
+    }));
+  });
+
+  it("saves only changed routine schedule fields with the routine version", async () => {
+    renderPage("/analyser?tab=settings");
+
+    const expression = await screen.findByLabelText("Daily work summary schedule expression");
+    fireEvent.change(expression, { target: { value: "30" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save routine" }));
+
+    await waitFor(() => expect(analyserApi.updateRoutine).toHaveBeenCalledWith("daily-work-summary", {
+      scheduleExpr: "30",
+      expectedVersion: 5
+    }));
+  });
+
+  it("reloads settings and shows a notice after a collection version conflict", async () => {
+    vi.mocked(analyserApi.updateCollectionPolicy).mockRejectedValue(new ApiError({
+      backend: "core",
+      method: "PUT",
+      path: "/api/analyser/settings/collection",
+      url: "http://core/api/analyser/settings/collection",
+      detail: "Collection policy version conflict",
+      status: 409,
+      code: "VERSION_CONFLICT"
+    }));
+
+    renderPage("/analyser?tab=settings");
+    fireEvent.click(await screen.findByRole("button", { name: "Save collection settings" }));
+
+    expect(await screen.findByText("Collection settings changed elsewhere — reloaded.")).toBeTruthy();
+    expect(analyserApi.settings).toHaveBeenCalledTimes(2);
   });
 });

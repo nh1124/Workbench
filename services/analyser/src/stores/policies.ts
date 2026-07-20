@@ -237,6 +237,20 @@ export async function getEffectiveAutomationPolicyWithPool(pool: AnalyserQueryPo
   return result.rows[0] ? parseAutomationPolicy(result.rows[0].policy_json, true) : { ...DEFAULT_AUTOMATION_POLICY, allowedOperationKinds: [...DEFAULT_AUTOMATION_POLICY.allowedOperationKinds] };
 }
 
+export async function getAutomationPolicyRecord(owner: string): Promise<AutomationPolicyRecord | undefined> {
+  return getAutomationPolicyRecordWithPool(getAnalyserPool(), owner);
+}
+
+export async function getAutomationPolicyRecordWithPool(
+  pool: AnalyserQueryPool,
+  owner: string
+): Promise<AutomationPolicyRecord | undefined> {
+  const result = await pool.query<AutomationPolicyRow>(`SELECT policy_json, version, updated_by, updated_at
+    FROM analyser_automation_policies
+    WHERE service_account_id = $1`, [owner]);
+  return result.rows[0] ? mapAutomationPolicy(result.rows[0]) : undefined;
+}
+
 export async function upsertAutomationPolicy(
   owner: string,
   input: { policy: unknown; expectedVersion?: number; updatedBy: string }

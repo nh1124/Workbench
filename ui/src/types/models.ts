@@ -989,11 +989,14 @@ export type AnalyserCollectionSettingsOverride = Partial<
   Omit<AnalyserCollectionSettings, "retentionDays">
 > & { retentionDays?: Partial<Record<AnalyserObservationSource, number>> };
 
-export type AnalyserOperationKind =
-  | "artifact_move"
-  | "artifact_metadata_update"
-  | "artifact_secondary_membership_add"
-  | "progress_note_upsert";
+export const ANALYSER_OPERATION_KINDS = [
+  "artifact_move",
+  "artifact_metadata_update",
+  "artifact_secondary_membership_add",
+  "progress_note_upsert"
+] as const;
+
+export type AnalyserOperationKind = (typeof ANALYSER_OPERATION_KINDS)[number];
 
 export interface AnalyserAutomationPolicy {
   enabled: boolean;
@@ -1184,7 +1187,11 @@ export interface AnalyserSettingsResult {
     machineVersion?: number;
   };
   rows: AnalyserCollectionPolicyRecord[];
-  automation: { policy: AnalyserAutomationPolicy };
+  automation: {
+    policy: AnalyserAutomationPolicy;
+    version?: number;
+    updatedAt?: string;
+  };
 }
 
 export interface AnalyserStatusResult {

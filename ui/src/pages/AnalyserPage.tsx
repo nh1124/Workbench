@@ -2,8 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { analyserApi, ApiError } from "../lib/api";
 import { formatDateTime } from "../lib/format";
+import { ANALYSER_OPERATION_KINDS } from "../types/models";
 import type {
   AnalyserActivityAggregate,
+  AnalyserAutomationPolicy,
+  AnalyserCollectionSettings,
+  AnalyserCollectionSettingsOverride,
   AnalyserMachineRecord,
   AnalyserObservationRecord,
   AnalyserObservationSource,
@@ -12,6 +16,8 @@ import type {
   AnalyserProposalRecord,
   AnalyserProposalStatus,
   AnalyserResourceRef,
+  AnalyserRoutineRecord,
+  AnalyserSettingsResult,
   AnalyserStatusResult,
   AnalyserSummaryListItem,
   AnalyserSummaryRecord
@@ -850,11 +856,444 @@ function ProposalTab() {
   );
 }
 
-function PlaceholderTab({ name }: { name: "Settings" }) {
+const COLLECTION_ENUM_FIELDS = [
+  { key: "workbenchChanges", name: "Workbench changes", options: ["off", "metadata"], caption: "Stores Workbench change action metadata and resource references on the server." },
+  { key: "mcpAccess", name: "MCP access", options: ["off", "mutations", "reads_and_mutations"], caption: "Stores allowed MCP tool names, outcomes, and resource references on the server." },
+  { key: "uiAccess", name: "UI access", options: ["off", "mutations", "reads_and_mutations"], caption: "Stores allowed UI action metadata and resource references on the server." },
+  { key: "agentSessionEvents", name: "Agent session events", options: ["off", "explicit_only"], caption: "Stores metadata only for agent session events that are explicitly emitted." },
+  { key: "localFileEvents", name: "Local file events", options: ["off", "metadata"], caption: "Captures file action and path metadata under allowed local roots; file contents are never stored." },
+  { key: "screenshots", name: "Screenshots", options: ["off", "local_only"], caption: "Screenshots are captured and stored on this machine only — never uploaded" }
+] as const;
+
+const COLLECTION_BOOLEAN_FIELDS = [
+  { key: "foregroundAppCapture", name: "Foreground app capture", caption: "Captures app name + idle flag samples on this machine." },
+  { key: "foregroundAppUpload", name: "Foreground app upload", caption: "Uploads app name + idle flag samples to the server" },
+  { key: "windowTitleCapture", name: "Window title capture", caption: "Captures the active window title on this machine when explicitly enabled." },
+  { key: "windowTitleUpload", name: "Window title upload", caption: "Uploads captured window titles to the server when explicitly enabled." },
+  { key: "localFileUpload", name: "Local file upload", caption: "Uploads local file action and path metadata to the server; file contents are never uploaded." }
+] as const;
+
+const COLLECTION_ARRAY_FIELDS = [
+  { key: "projectAllow", name: "Project allow list", caption: "Limits collection to these comma-separated project IDs when the list is not empty." },
+  { key: "projectDeny", name: "Project deny list", caption: "Excludes these comma-separated project IDs from collection." },
+  { key: "resourceTypeAllow", name: "Resource type allow list", caption: "Limits collection to these comma-separated resource types when the list is not empty." },
+  { key: "resourceTypeDeny", name: "Resource type deny list", caption: "Excludes these comma-separated resource types from collection." },
+  { key: "localRootAllow", name: "Local root allow list", caption: "Limits local file metadata capture to these comma-separated roots." },
+  { key: "localRootDeny", name: "Local root deny list", caption: "Excludes these comma-separated local roots from capture." },
+  { key: "excludePatterns", name: "Exclude patterns", caption: "Excludes paths matching these comma-separated patterns before metadata is produced." }
+] as const;
+
+const RETENTION_CAPTIONS: Record<AnalyserObservationSource, string> = {
+  workbench_change: "Keeps raw Workbench change metadata on the server for this many days.",
+  mcp_access: "Keeps raw MCP access metadata on the server for this many days.",
+  ui_access: "Keeps raw UI access metadata on the server for this many days.",
+  agent_session: "Keeps raw agent session metadata on the server for this many days.",
+  pc_activity: "Keeps uploaded foreground app metadata on the server for this many days.",
+  local_file: "Keeps uploaded local file metadata on the server for this many days."
+};
+
+type CollectionEnumField = (typeof COLLECTION_ENUM_FIELDS)[number]["key"];
+type CollectionBooleanField = (typeof COLLECTION_BOOLEAN_FIELDS)[number]["key"];
+type CollectionArrayField = (typeof COLLECTION_ARRAY_FIELDS)[number]["key"];
+
+function omitCollectionField(
+  settings: AnalyserCollectionSettingsOverride,
+  field: keyof AnalyserCollectionSettingsOverride
+): AnalyserCollectionSettingsOverride {
+  const next = { ...settings };
+  delete next[field];
+  return next;
+}
+
+function parseCommaList(value: string): string[] {
+  return value.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function CollectionSettingsForm({
+  value,
+  sparse,
+  disabled,
+  onChange
+}: {
+  value: AnalyserCollectionSettingsOverride;
+  sparse: boolean;
+  disabled: boolean;
+  onChange: (next: AnalyserCollectionSettingsOverride) => void;
+}) {
+  const changeEnum = (field: CollectionEnumField, nextValue: string) => {
+    if (sparse && nextValue === "") onChange(omitCollectionField(value, field));
+    else onChange({ ...value, [field]: nextValue });
+  };
+
+  const changeBoolean = (field: CollectionBooleanField, nextValue: string | boolean) => {
+    if (sparse && nextValue === "") onChange(omitCollectionField(value, field));
+    else onChange({ ...value, [field]: typeof nextValue === "boolean" ? nextValue : nextValue === "true" });
+  };
+
+  const changeRetention = (source: AnalyserObservationSource, raw: string) => {
+    const retentionDays = { ...(value.retentionDays ?? {}) };
+    if (sparse && raw === "") delete retentionDays[source];
+    else retentionDays[source] = Number(raw);
+    onChange(Object.keys(retentionDays).length > 0
+      ? { ...value, retentionDays }
+      : omitCollectionField(value, "retentionDays"));
+  };
+
+  const changeArray = (field: CollectionArrayField, raw: string) => {
+    if (sparse && raw.trim() === "") onChange(omitCollectionField(value, field));
+    else onChange({ ...value, [field]: parseCommaList(raw) });
+  };
+
   return (
-    <section className="analyser-placeholder" aria-label={name}>
-      <h2>{name}</h2>
-      <p>{name} are coming in this build.</p>
+    <div className="analyser-settings-form-grid">
+      {COLLECTION_ENUM_FIELDS.map((field) => (
+        <label className="analyser-setting-control" key={field.key}>
+          <span>{field.name}</span>
+          <select
+            aria-label={field.name}
+            value={String(value[field.key] ?? "")}
+            disabled={disabled}
+            onChange={(event) => changeEnum(field.key, event.target.value)}
+          >
+            {sparse ? <option value="">inherit</option> : null}
+            {field.options.map((option) => <option value={option} key={option}>{label(option)}</option>)}
+          </select>
+          <small>{field.caption}</small>
+        </label>
+      ))}
+
+      {COLLECTION_BOOLEAN_FIELDS.map((field) => (
+        <label className="analyser-setting-control" key={field.key}>
+          <span>{field.name}</span>
+          {sparse ? (
+            <select
+              aria-label={field.name}
+              value={value[field.key] === undefined ? "" : String(value[field.key])}
+              disabled={disabled}
+              onChange={(event) => changeBoolean(field.key, event.target.value)}
+            >
+              <option value="">inherit</option>
+              <option value="true">on</option>
+              <option value="false">off</option>
+            </select>
+          ) : (
+            <input
+              aria-label={field.name}
+              type="checkbox"
+              checked={Boolean(value[field.key])}
+              disabled={disabled}
+              onChange={(event) => changeBoolean(field.key, event.target.checked)}
+            />
+          )}
+          <small>{field.caption}</small>
+        </label>
+      ))}
+
+      {SOURCES.map((source) => (
+        <label className="analyser-setting-control" key={source}>
+          <span>{label(source)} retention days</span>
+          <input
+            aria-label={`${label(source)} retention days`}
+            type="number"
+            min={1}
+            max={90}
+            value={value.retentionDays?.[source] ?? ""}
+            placeholder={sparse ? "inherit" : undefined}
+            disabled={disabled}
+            onChange={(event) => changeRetention(source, event.target.value)}
+          />
+          <small>{RETENTION_CAPTIONS[source]}</small>
+        </label>
+      ))}
+
+      <label className="analyser-setting-control">
+        <span>Local screenshot retention days</span>
+        <input
+          aria-label="Local screenshot retention days"
+          type="number"
+          min={1}
+          max={30}
+          value={value.localScreenshotRetentionDays ?? ""}
+          placeholder={sparse ? "inherit" : undefined}
+          disabled={disabled}
+          onChange={(event) => {
+            if (sparse && event.target.value === "") onChange(omitCollectionField(value, "localScreenshotRetentionDays"));
+            else onChange({ ...value, localScreenshotRetentionDays: Number(event.target.value) });
+          }}
+        />
+        <small>Keeps screenshots on this machine for this many days; screenshots are never uploaded.</small>
+      </label>
+
+      {COLLECTION_ARRAY_FIELDS.map((field) => (
+        <label className="analyser-setting-control analyser-setting-wide" key={field.key}>
+          <span>{field.name}</span>
+          <input
+            aria-label={field.name}
+            value={(value[field.key] ?? []).join(", ")}
+            placeholder={sparse ? "inherit" : "Comma-separated values"}
+            disabled={disabled}
+            onChange={(event) => changeArray(field.key, event.target.value)}
+          />
+          <small>{field.caption}</small>
+        </label>
+      ))}
+    </div>
+  );
+}
+
+type RoutineDraft = Pick<AnalyserRoutineRecord,
+  "enabled" | "scheduleKind" | "scheduleExpr" | "timezone" | "maxRetries" | "backoffMinutes"
+>;
+
+function routineDraft(routine: AnalyserRoutineRecord): RoutineDraft {
+  return {
+    enabled: routine.enabled,
+    scheduleKind: routine.scheduleKind,
+    scheduleExpr: routine.scheduleExpr,
+    timezone: routine.timezone,
+    maxRetries: routine.maxRetries,
+    backoffMinutes: routine.backoffMinutes
+  };
+}
+
+function SettingsTab() {
+  const [settings, setSettings] = useState<AnalyserSettingsResult>();
+  const [machines, setMachines] = useState<AnalyserMachineRecord[]>([]);
+  const [routines, setRoutines] = useState<AnalyserRoutineRecord[]>([]);
+  const [ownerForm, setOwnerForm] = useState<AnalyserCollectionSettingsOverride>();
+  const [selectedMachineId, setSelectedMachineId] = useState("");
+  const [machineForm, setMachineForm] = useState<AnalyserCollectionSettingsOverride>({});
+  const [automationForm, setAutomationForm] = useState<AnalyserAutomationPolicy>();
+  const [routineDrafts, setRoutineDrafts] = useState<Record<string, RoutineDraft>>({});
+  const [routineErrors, setRoutineErrors] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<string>();
+  const [error, setError] = useState<string>();
+  const [notice, setNotice] = useState<string>();
+  const [notConfigured, setNotConfigured] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    setError(undefined);
+    setNotConfigured(false);
+    try {
+      const [settingsResult, machineResult, routineResult] = await Promise.all([
+        analyserApi.settings(),
+        analyserApi.machines(),
+        analyserApi.routines()
+      ]);
+      setSettings(settingsResult);
+      setMachines(machineResult.items);
+      setRoutines(routineResult.items);
+      setOwnerForm({
+        ...settingsResult.effective.settings,
+        retentionDays: { ...settingsResult.effective.settings.retentionDays }
+      });
+      setAutomationForm({
+        ...settingsResult.automation.policy,
+        allowedOperationKinds: [...settingsResult.automation.policy.allowedOperationKinds]
+      });
+      setRoutineDrafts(Object.fromEntries(routineResult.items.map((routine) => [routine.key, routineDraft(routine)])));
+      setSelectedMachineId((current) => current && machineResult.items.some((machine) => machine.id === current)
+        ? current
+        : machineResult.items[0]?.id ?? "");
+    } catch (requestError) {
+      if (isAnalyserNotConfigured(requestError)) setNotConfigured(true);
+      else setError(errorMessage(requestError, "Analyser settings are unavailable."));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { void load(); }, []);
+
+  useEffect(() => {
+    const row = settings?.rows.find((item) => item.machineId === selectedMachineId);
+    setMachineForm(row ? {
+      ...row.settings,
+      ...(row.settings.retentionDays ? { retentionDays: { ...row.settings.retentionDays } } : {})
+    } : {});
+  }, [selectedMachineId, settings]);
+
+  const reloadConflict = async (message: string) => {
+    await load();
+    setNotice(message);
+  };
+
+  const saveOwner = async () => {
+    if (!ownerForm || !settings) return;
+    setBusy("owner");
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      await analyserApi.updateCollectionPolicy({
+        machineId: null,
+        settings: ownerForm,
+        ...(settings.effective.ownerVersion === undefined ? {} : { expectedVersion: settings.effective.ownerVersion })
+      });
+      await load();
+      setNotice("Collection settings saved.");
+    } catch (requestError) {
+      if (isVersionConflict(requestError)) await reloadConflict("Collection settings changed elsewhere — reloaded.");
+      else setError(errorMessage(requestError, "Unable to save collection settings."));
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  const saveMachine = async () => {
+    if (!selectedMachineId || !settings) return;
+    const row = settings.rows.find((item) => item.machineId === selectedMachineId);
+    setBusy("machine");
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      await analyserApi.updateCollectionPolicy({
+        machineId: selectedMachineId,
+        settings: machineForm,
+        ...(row ? { expectedVersion: row.version } : {})
+      });
+      await load();
+      setNotice("Machine overrides saved.");
+    } catch (requestError) {
+      if (isVersionConflict(requestError)) await reloadConflict("Machine overrides changed elsewhere — reloaded.");
+      else setError(errorMessage(requestError, "Unable to save machine overrides."));
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  const saveAutomation = async () => {
+    if (!automationForm || !settings) return;
+    setBusy("automation");
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      await analyserApi.updateAutomationPolicy({
+        policy: automationForm,
+        ...(settings.automation.version === undefined ? {} : { expectedVersion: settings.automation.version })
+      });
+      await load();
+      setNotice("Automation policy saved.");
+    } catch (requestError) {
+      if (isVersionConflict(requestError)) await reloadConflict("Automation policy changed elsewhere — reloaded.");
+      else setError(errorMessage(requestError, "Unable to save automation policy."));
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  const updateRoutineDraft = <K extends keyof RoutineDraft>(key: string, field: K, nextValue: RoutineDraft[K]) => {
+    setRoutineDrafts((current) => ({ ...current, [key]: { ...current[key], [field]: nextValue } }));
+  };
+
+  const changedRoutineFields = (routine: AnalyserRoutineRecord, draft: RoutineDraft) => {
+    const changed: Partial<RoutineDraft> = {};
+    (Object.keys(draft) as Array<keyof RoutineDraft>).forEach((field) => {
+      if (draft[field] !== routine[field]) Object.assign(changed, { [field]: draft[field] });
+    });
+    return changed;
+  };
+
+  const saveRoutine = async (routine: AnalyserRoutineRecord) => {
+    const draft = routineDrafts[routine.key];
+    if (!draft) return;
+    const changed = changedRoutineFields(routine, draft);
+    if (Object.keys(changed).length === 0) return;
+    setBusy(`routine:${routine.key}`);
+    setRoutineErrors((current) => ({ ...current, [routine.key]: "" }));
+    setNotice(undefined);
+    try {
+      await analyserApi.updateRoutine(routine.key, { ...changed, expectedVersion: routine.version });
+      await load();
+      setNotice(`${routine.name} saved.`);
+    } catch (requestError) {
+      if (requestError instanceof ApiError && requestError.status === 400 && requestError.code === "INVALID_SCHEDULE") {
+        setRoutineErrors((current) => ({
+          ...current,
+          [routine.key]: requestError.responseMessage || requestError.message
+        }));
+      } else if (isVersionConflict(requestError)) {
+        await reloadConflict(`${routine.name} changed elsewhere — reloaded.`);
+      } else {
+        setRoutineErrors((current) => ({ ...current, [routine.key]: errorMessage(requestError, "Unable to save routine.") }));
+      }
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  if (notConfigured) return <NotConfiguredState />;
+
+  return (
+    <section className="analyser-settings" aria-label="Settings">
+      <div className="analyser-section-header">
+        <div><h2>Settings</h2><p>Control collection, per-machine overrides, automation, and routine schedules.</p></div>
+        <button type="button" onClick={() => void load()} disabled={loading || Boolean(busy)}>{loading ? "Loading..." : "Reload"}</button>
+      </div>
+      {error ? <p className="analyser-error" role="alert">{error}</p> : null}
+      {notice ? <p className="analyser-notice" role="status">{notice}</p> : null}
+      {loading && !settings ? <p className="analyser-muted">Loading Analyser settings...</p> : null}
+
+      {settings && ownerForm && automationForm ? (
+        <>
+          <section className="analyser-settings-section" aria-labelledby="collection-settings-heading">
+            <header><h2 id="collection-settings-heading">Collection</h2><p>Owner defaults applied before any machine-specific override.</p></header>
+            <CollectionSettingsForm value={ownerForm} sparse={false} disabled={Boolean(busy)} onChange={setOwnerForm} />
+            <div className="analyser-settings-actions"><button type="button" onClick={() => void saveOwner()} disabled={Boolean(busy)}>{busy === "owner" ? "Saving..." : "Save collection settings"}</button></div>
+          </section>
+
+          <section className="analyser-settings-section" aria-labelledby="machine-settings-heading">
+            <header><h2 id="machine-settings-heading">Machine overrides</h2><p>Only non-inherited fields are stored for the selected machine.</p></header>
+            {machines.length === 0 ? <p className="analyser-muted">No machines are registered.</p> : (
+              <>
+                <label className="analyser-machine-select"><span>Machine</span><select aria-label="Machine" value={selectedMachineId} onChange={(event) => setSelectedMachineId(event.target.value)}>{machines.map((machine) => <option value={machine.id} key={machine.id}>{machineName(machine)}</option>)}</select></label>
+                {!settings.rows.some((row) => row.machineId === selectedMachineId) ? <p className="analyser-muted">This machine currently inherits every owner default.</p> : null}
+                <CollectionSettingsForm value={machineForm} sparse disabled={Boolean(busy)} onChange={setMachineForm} />
+                <div className="analyser-settings-actions"><button type="button" onClick={() => void saveMachine()} disabled={Boolean(busy) || !selectedMachineId}>{busy === "machine" ? "Saving..." : "Save machine overrides"}</button></div>
+              </>
+            )}
+          </section>
+
+          <section className="analyser-settings-section" aria-labelledby="automation-settings-heading">
+            <header><h2 id="automation-settings-heading">Automation policy</h2><p>Agents can only read this policy; only you can change it here.</p></header>
+            <div className="analyser-automation-grid">
+              {(["enabled", "requireHighConfidence", "destructiveAllowed", "bulkAllowed"] as const).map((field) => (
+                <label className={field === "destructiveAllowed" || field === "bulkAllowed" ? "analyser-automation-toggle warning" : "analyser-automation-toggle"} key={field}>
+                  <input type="checkbox" checked={automationForm[field]} disabled={Boolean(busy)} onChange={(event) => setAutomationForm({ ...automationForm, [field]: event.target.checked })} />
+                  <span>{label(field.replace(/([a-z])([A-Z])/g, "$1_$2").toLowerCase())}</span>
+                </label>
+              ))}
+            </div>
+            <fieldset className="analyser-operation-kinds"><legend>Allowed operation kinds</legend>{ANALYSER_OPERATION_KINDS.map((kind) => <label key={kind}><input type="checkbox" checked={automationForm.allowedOperationKinds.includes(kind)} disabled={Boolean(busy)} onChange={(event) => setAutomationForm({ ...automationForm, allowedOperationKinds: event.target.checked ? [...automationForm.allowedOperationKinds, kind] : automationForm.allowedOperationKinds.filter((item) => item !== kind) })} /><span>{label(kind)}</span></label>)}</fieldset>
+            <div className="analyser-settings-actions"><button type="button" onClick={() => void saveAutomation()} disabled={Boolean(busy)}>{busy === "automation" ? "Saving..." : "Save automation policy"}</button></div>
+          </section>
+
+          <section className="analyser-settings-section" aria-labelledby="routine-settings-heading">
+            <header><h2 id="routine-settings-heading">Routines</h2><p>Enable routines and edit their interval or cron schedules.</p></header>
+            <div className="analyser-routine-settings-list">
+              {routines.length === 0 ? <p className="analyser-muted">No routines are configured.</p> : routines.map((routine) => {
+                const draft = routineDrafts[routine.key] ?? routineDraft(routine);
+                const changed = Object.keys(changedRoutineFields(routine, draft)).length > 0;
+                return (
+                  <article className="analyser-routine-setting" key={routine.key}>
+                    <header><div><strong>{routine.name}</strong><small>{routine.key}</small></div><label className="analyser-inline-toggle"><input aria-label={`${routine.name} enabled`} type="checkbox" checked={draft.enabled} disabled={Boolean(busy)} onChange={(event) => updateRoutineDraft(routine.key, "enabled", event.target.checked)} /><span>Enabled</span></label></header>
+                    <div className="analyser-routine-editor">
+                      <label><span>Schedule kind</span><select aria-label={`${routine.name} schedule kind`} value={draft.scheduleKind} disabled={Boolean(busy)} onChange={(event) => updateRoutineDraft(routine.key, "scheduleKind", event.target.value as RoutineDraft["scheduleKind"])}><option value="interval">interval</option><option value="cron">cron</option></select></label>
+                      <label><span>Expression</span><input aria-label={`${routine.name} schedule expression`} value={draft.scheduleExpr} disabled={Boolean(busy)} onChange={(event) => updateRoutineDraft(routine.key, "scheduleExpr", event.target.value)} /></label>
+                      <label><span>Timezone</span><input aria-label={`${routine.name} timezone`} value={draft.timezone} disabled={Boolean(busy)} onChange={(event) => updateRoutineDraft(routine.key, "timezone", event.target.value)} /></label>
+                      <label><span>Max retries</span><input aria-label={`${routine.name} max retries`} type="number" min={0} max={10} value={draft.maxRetries} disabled={Boolean(busy)} onChange={(event) => updateRoutineDraft(routine.key, "maxRetries", Number(event.target.value))} /></label>
+                      <label><span>Backoff minutes</span><input aria-label={`${routine.name} backoff minutes`} type="number" min={1} max={1440} value={draft.backoffMinutes} disabled={Boolean(busy)} onChange={(event) => updateRoutineDraft(routine.key, "backoffMinutes", Number(event.target.value))} /></label>
+                    </div>
+                    {routineErrors[routine.key] ? <p className="analyser-error analyser-routine-error" role="alert">{routineErrors[routine.key]}</p> : null}
+                    <div className="analyser-settings-actions"><button type="button" onClick={() => void saveRoutine(routine)} disabled={Boolean(busy) || !changed}>{busy === `routine:${routine.key}` ? "Saving..." : "Save routine"}</button></div>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        </>
+      ) : null}
     </section>
   );
 }
@@ -897,7 +1336,7 @@ export function AnalyserPage() {
       {activeTab === "activity" ? <ActivityTab /> : null}
       {activeTab === "summaries" ? <SummaryTab /> : null}
       {activeTab === "proposals" ? <ProposalTab /> : null}
-      {activeTab === "settings" ? <PlaceholderTab name="Settings" /> : null}
+      {activeTab === "settings" ? <SettingsTab /> : null}
     </div>
   );
 }

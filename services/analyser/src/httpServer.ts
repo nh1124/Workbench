@@ -17,6 +17,7 @@ import {
 } from "./stores/observations.js";
 import { getOperation, listOperations, recordOperation } from "./stores/operations.js";
 import {
+  getAutomationPolicyRecord,
   getCollectionPolicyRows,
   getEffectiveAutomationPolicy,
   getEffectiveCollectionSettings,
@@ -284,6 +285,7 @@ export interface AppDeps {
   getEffectiveCollectionSettings: typeof getEffectiveCollectionSettings;
   getCollectionPolicyRows: typeof getCollectionPolicyRows;
   getEffectiveAutomationPolicy: typeof getEffectiveAutomationPolicy;
+  getAutomationPolicyRecord: typeof getAutomationPolicyRecord;
   upsertCollectionPolicy: typeof upsertCollectionPolicy;
   upsertAutomationPolicy: typeof upsertAutomationPolicy;
   ingestObservations: typeof ingestObservations;
@@ -326,6 +328,7 @@ const realAppDeps: AppDeps = {
   getEffectiveCollectionSettings,
   getCollectionPolicyRows,
   getEffectiveAutomationPolicy,
+  getAutomationPolicyRecord,
   upsertCollectionPolicy,
   upsertAutomationPolicy,
   ingestObservations,
@@ -423,12 +426,20 @@ export function buildApp(deps: AppDeps): express.Express {
     const query = parse(emptyObjectSchema, req.query, res);
     if (!query) return;
     const owner = req.authUser!.serviceAccountId;
-    const [effective, rows, policy] = await Promise.all([
+    const [effective, rows, policy, automationRecord] = await Promise.all([
       deps.getEffectiveCollectionSettings(owner),
       deps.getCollectionPolicyRows(owner),
-      deps.getEffectiveAutomationPolicy(owner)
+      deps.getEffectiveAutomationPolicy(owner),
+      deps.getAutomationPolicyRecord(owner)
     ]);
-    return res.json({ effective, rows, automation: { policy } });
+    return res.json({
+      effective,
+      rows,
+      automation: {
+        policy,
+        ...(automationRecord ? { version: automationRecord.version, updatedAt: automationRecord.updatedAt } : {})
+      }
+    });
   }));
 
   app.get("/settings/effective", ...userRoute(deps, async (req, res) => {
