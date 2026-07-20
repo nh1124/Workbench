@@ -107,7 +107,7 @@ beforeEach(() => instrumentation._resetForTests());
 afterEach(() => instrumentation._resetForTests());
 
 describe("MCP access instrumentation", () => {
-  it("observes reads, mutations, and unchanged errors while excluding analyser/auth/insights tools", async () => {
+  it("observes reads, mutations, and unchanged errors while excluding analyser/auth tools", async () => {
     const { deps, ingests } = makeDeps();
     const server = instrumentFakeServer(deps);
     const expectedError = new TypeError("boom");
@@ -116,7 +116,6 @@ describe("MCP access instrumentation", () => {
     server.registerTool("tasks.fail", {}, async () => { throw expectedError; });
     server.registerTool("analyser.status.get", { annotations: { readOnlyHint: true } }, async () => ({}));
     server.registerTool("auth.login", {}, async () => ({}));
-    server.registerTool("insights.activity", {}, async () => ({}));
 
     await server.handlers.get("notes.get")?.({
       projectId: "project-1",
@@ -130,7 +129,6 @@ describe("MCP access instrumentation", () => {
     );
     await server.handlers.get("analyser.status.get")?.({});
     await server.handlers.get("auth.login")?.({});
-    await server.handlers.get("insights.activity")?.({});
     await instrumentation.flushAccessObservationsNow();
 
     const captured = observations(ingests);

@@ -19,7 +19,7 @@ function optionalEnv(name: string): string | undefined {
   return value && value.length > 0 ? value : undefined;
 }
 
-type ServiceId = "notes" | "artifacts" | "tasks" | "projects" | "lbs" | "images" | "mindmaps" | "wbs" | "insights" | "analyser";
+type ServiceId = "notes" | "artifacts" | "tasks" | "projects" | "lbs" | "images" | "mindmaps" | "wbs" | "analyser";
 
 type ServiceConfig = {
   id: ServiceId;
@@ -38,9 +38,6 @@ const projectsService: ServiceConfig | undefined = projectsBaseUrl ? { id: "proj
 const lbsBaseUrl = optionalEnv("LBS_SERVICE_URL");
 const lbsService: ServiceConfig | undefined = lbsBaseUrl ? { id: "lbs", baseUrl: lbsBaseUrl } : undefined;
 
-const insightsBaseUrl = optionalEnv("INSIGHTS_SERVICE_URL");
-const insightsService: ServiceConfig | undefined = insightsBaseUrl ? { id: "insights", baseUrl: insightsBaseUrl } : undefined;
-
 const analyserBaseUrl = optionalEnv("ANALYSER_SERVICE_URL");
 const analyserService: ServiceConfig | undefined = analyserBaseUrl ? { id: "analyser", baseUrl: analyserBaseUrl } : undefined;
 const analyserInternalApiKey = optionalEnv("INTERNAL_API_KEY_ANALYSER");
@@ -58,7 +55,6 @@ export const serviceBaseUrls = {
   wbs: wbsService.baseUrl,
   projects: projectsService?.baseUrl,
   lbs: lbsService?.baseUrl,
-  insights: insightsService?.baseUrl,
   analyser: analyserService?.baseUrl
 } as const;
 
@@ -251,29 +247,7 @@ export const notesClient = {
     }),
   remove: (token: string, id: string) =>
     serviceRequest<void>(notesService, `/notes/${encodeURIComponent(id)}`, token, { method: "DELETE" }),
-  projects: (token: string) => serviceRequest<unknown[]>(notesService, "/projects", token),
-  confirmNote: (token: string, id: string, payload: unknown) =>
-    serviceRequest<unknown>(notesService, `/notes/${encodeURIComponent(id)}/confirm`, token, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    }),
-  snoozeNote: (token: string, id: string, payload: unknown) =>
-    serviceRequest<unknown>(notesService, `/notes/${encodeURIComponent(id)}/snooze`, token, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    }),
-  flagNote: (token: string, id: string, payload: unknown) =>
-    serviceRequest<unknown>(notesService, `/notes/${encodeURIComponent(id)}/flag`, token, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    }),
-  listMaintenanceQueue: (
-    token: string,
-    options: { projectId?: string; reason?: string; cursor?: string; limit?: number } = {}
-  ) => serviceRequest<unknown>(notesService, `/maintenance/note-queue${buildQuery(options)}`, token)
+  projects: (token: string) => serviceRequest<unknown[]>(notesService, "/projects", token)
 };
 
 export const artifactsClient = {
@@ -382,22 +356,6 @@ export const artifactsClient = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }).then((result) => resolveArtifactItemProjectName(token, result)),
-  flagArtifactItemMaintenance: (token: string, id: string, payload: unknown) =>
-    serviceRequest<unknown>(artifactsService, `/artifacts/items/${encodeURIComponent(id)}/maintenance-flag`, token, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    }),
-  resolveArtifactItemMaintenance: (token: string, id: string, payload: unknown) =>
-    serviceRequest<unknown>(artifactsService, `/artifacts/items/${encodeURIComponent(id)}/maintenance-flag/resolve`, token, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    }),
-  listArtifactMaintenanceQueue: (
-    token: string,
-    options: { projectId?: string; reason?: string; cursor?: string; limit?: number } = {}
-  ) => serviceRequest<unknown>(artifactsService, `/maintenance/artifact-queue${buildQuery(options)}`, token),
   removeItem: (token: string, id: string) =>
     serviceRequest<void>(artifactsService, `/artifacts/items/${encodeURIComponent(id)}`, token, { method: "DELETE" }),
   uploadFile: async (
@@ -723,73 +681,6 @@ export const wbsClient = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     })
-};
-
-function requireInsights(): ServiceConfig {
-  if (!insightsService) throw new Error("Insights service is not configured (INSIGHTS_SERVICE_URL missing)");
-  return insightsService;
-}
-
-type InsightsSummaryQuery = {
-  machineId?: string;
-  from?: string;
-  to?: string;
-  limit?: string | number;
-  cursor?: string;
-};
-
-type InsightsActivityQuery = {
-  from?: string;
-  to?: string;
-  machineId?: string;
-};
-
-type InsightsDerivedQuery = {
-  from?: string;
-  to?: string;
-  kind?: string;
-  limit?: string | number;
-  cursor?: string;
-};
-
-export const insightsClient = {
-  registerMachine: (token: string, payload: unknown) =>
-    serviceRequest<unknown>(requireInsights(), "/machines/register", token, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    }),
-  listMachines: (token: string) => serviceRequest<unknown>(requireInsights(), "/machines", token),
-  ingestSamples: (token: string, payload: unknown) =>
-    serviceRequest<unknown>(requireInsights(), "/ingest/samples", token, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    }),
-  ingestSummaries: (token: string, payload: unknown) =>
-    serviceRequest<unknown>(requireInsights(), "/ingest/summaries", token, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    }),
-  listSummaries: (token: string, query: InsightsSummaryQuery = {}) =>
-    serviceRequest<unknown>(requireInsights(), `/summaries${buildQuery(query)}`, token),
-  getSummary: (token: string, machineId: string, date: string) =>
-    serviceRequest<unknown>(
-      requireInsights(),
-      `/summaries/${encodeURIComponent(machineId)}/${encodeURIComponent(date)}`,
-      token
-    ),
-  queryActivity: (token: string, query: InsightsActivityQuery) =>
-    serviceRequest<unknown>(requireInsights(), `/activity${buildQuery(query)}`, token),
-  createDerived: (token: string, payload: unknown) =>
-    serviceRequest<unknown>(requireInsights(), "/derived", token, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    }),
-  listDerived: (token: string, query: InsightsDerivedQuery = {}) =>
-    serviceRequest<unknown>(requireInsights(), `/derived${buildQuery(query)}`, token)
 };
 
 function requireAnalyser(): ServiceConfig {
@@ -1559,30 +1450,6 @@ export const projectsClient = {
       body: JSON.stringify(payload)
     });
   },
-  confirmMemory: (token: string, memoryId: string, payload: unknown) => {
-    if (!projectsService) throw new Error("Projects service is not configured");
-    return serviceRequest<unknown>(projectsService, `/project-memories/${encodeURIComponent(memoryId)}/confirm`, token, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-  },
-  snoozeMemory: (token: string, memoryId: string, payload: unknown) => {
-    if (!projectsService) throw new Error("Projects service is not configured");
-    return serviceRequest<unknown>(projectsService, `/project-memories/${encodeURIComponent(memoryId)}/snooze`, token, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-  },
-  flagMemory: (token: string, memoryId: string, payload: unknown) => {
-    if (!projectsService) throw new Error("Projects service is not configured");
-    return serviceRequest<unknown>(projectsService, `/project-memories/${encodeURIComponent(memoryId)}/flag`, token, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-  },
   listIndexEntries: (
     token: string,
     projectId: string,
@@ -1723,27 +1590,6 @@ export const projectsClient = {
       token,
       { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }
     );
-  },
-  listMemoryMaintenanceQueue: (
-    token: string,
-    options: { projectId?: string; reason?: string; cursor?: string; limit?: number } = {}
-  ) => {
-    if (!projectsService) throw new Error("Projects service is not configured");
-    return serviceRequest<unknown>(projectsService, `/maintenance/memory-queue${buildQuery(options)}`, token);
-  },
-  listBriefMaintenanceQueue: (
-    token: string,
-    options: { projectId?: string; reason?: string; cursor?: string; limit?: number } = {}
-  ) => {
-    if (!projectsService) throw new Error("Projects service is not configured");
-    return serviceRequest<unknown>(projectsService, `/maintenance/brief-queue${buildQuery(options)}`, token);
-  },
-  listIndexDriftMaintenanceQueue: (
-    token: string,
-    options: { projectId?: string; reason?: string; cursor?: string; limit?: number } = {}
-  ) => {
-    if (!projectsService) throw new Error("Projects service is not configured");
-    return serviceRequest<unknown>(projectsService, `/maintenance/index-drift${buildQuery(options)}`, token);
   },
   markIndexEntriesRead: (token: string, payload: unknown) => {
     if (!projectsService) throw new Error("Projects service is not configured");

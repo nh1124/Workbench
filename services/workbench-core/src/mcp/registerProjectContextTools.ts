@@ -15,10 +15,6 @@ import {
   requireProjectContextEndpoints,
   type ProjectContextChanged
 } from "../projectContextSync.js";
-import {
-  recordIndexSearchUsageBestEffort,
-  recordProjectContextUsageBestEffort
-} from "../usageInstrumentation.js";
 import { asMcpText, runWithAuth, runWithAuthContext } from "./helpers.js";
 import {
   briefMcpReadProjection,
@@ -82,17 +78,10 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
       }
     },
     async ({ projectId, include, ...options }) => {
-      const result = await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
+      const result = await runWithAuth(ctx.accessToken, async () => {
         const context = await getProjectContextWithResolvedLinks(ctx.accessToken, projectId, {
             ...options,
             include: include?.join(",")
-        });
-        recordProjectContextUsageBestEffort({
-          userId,
-          projectId,
-          context,
-          query: options.q,
-          source: "core-mcp"
         });
         return projectContextMcpReadProjection(context);
       });
@@ -247,15 +236,8 @@ export function registerProjectContextTools(server: McpServer, ctx: ToolContext)
       }
     },
     async ({ projectId, ...options }) => {
-      const result = await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
+      const result = await runWithAuth(ctx.accessToken, async () => {
         const page = await projectsClient.listIndexEntries(ctx.accessToken, projectId, options);
-        recordIndexSearchUsageBestEffort({
-          userId,
-          projectId,
-          query: options.q,
-          result: page,
-          source: "core-mcp"
-        });
         return indexListMcpReadProjection(page);
       });
       return asMcpText(result);

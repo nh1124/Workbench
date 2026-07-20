@@ -11,7 +11,6 @@ process.env.TASKS_SERVICE_URL ||= "http://tasks.test";
 process.env.IMAGES_SERVICE_URL ||= "http://images.test";
 process.env.MINDMAPS_SERVICE_URL ||= "http://mindmaps.test";
 process.env.WBS_SERVICE_URL ||= "http://wbs.test";
-process.env.INSIGHTS_SERVICE_URL ||= "http://insights.test";
 process.env.ANALYSER_SERVICE_URL ||= "http://analyser.test";
 process.env.JWT_SECRET ||= "test-secret-that-is-long-enough";
 process.env.JWT_ISSUER ||= "workbench-test";
@@ -282,7 +281,7 @@ describe("Analyser MCP contract", () => {
     ]);
   });
 
-  it("keeps analyser provisioning and both MCP registrations wired alongside Insights", () => {
+  it("keeps analyser provisioning and MCP registrations wired", () => {
     const __filename = fileURLToPath(import.meta.url);
     const sourceRoot = path.resolve(path.dirname(__filename), "..");
     const adapter = readFileSync(path.join(sourceRoot, "mcp", "registerAnalyserTools.ts"), "utf8");
@@ -292,8 +291,6 @@ describe("Analyser MCP contract", () => {
     assert.match(adapter, /await ensureAccountProvisioned\(authContext\)/);
     assert.match(adapter, /throw new Error\("Analyser service is not configured"\)/);
     assert.match(httpServer, /registerAnalyserTools\(server, injectedContext\)/);
-    assert.match(httpServer, /registerInsightsTools\(server, injectedContext\)/);
     assert.match(stdioServer, /registerAnalyserTools\(server, ctx\)/);
-    assert.match(stdioServer, /registerInsightsTools\(server, ctx\)/);
   });
 });

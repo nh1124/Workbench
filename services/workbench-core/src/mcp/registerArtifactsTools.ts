@@ -18,7 +18,7 @@ import {
 import { recordProjectContextInvalidationsBestEffort } from "../projectContextSync.js";
 import { artifactDeletionSnapshotRoot, artifactEventMetadata } from "../syncEventMetadata.js";
 import { recordSyncEvent, type SyncAction, type SyncEventMetadata } from "../syncStore.js";
-import { recordResourceReadUsageBestEffort } from "../usageInstrumentation.js";
+import { markIndexEntryReadBestEffort } from "../indexReadTracking.js";
 import { asMcpText, runWithAuth, runWithAuthContext } from "./helpers.js";
 
 export type ArtifactsToolsDependencies = {
@@ -328,13 +328,11 @@ export function registerArtifactsTools(server: McpServer, ctx?: ArtifactsToolCon
       }
     },
     async ({ id }) => {
-      const result = await runWithAuthContext(ctx.accessToken, async ({ userId }) => {
+      const result = await runWithAuth(ctx.accessToken, async () => {
         const item = await artifactsClient.getItem(ctx.accessToken, id);
-        recordResourceReadUsageBestEffort({
+        markIndexEntryReadBestEffort({
           accessToken: ctx.accessToken,
-          userId,
           sourceService: "artifacts",
-          resourceType: artifactItemResourceType(item),
           resourceId: id
         });
         return item;

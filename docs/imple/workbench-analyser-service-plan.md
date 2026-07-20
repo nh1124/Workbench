@@ -285,7 +285,8 @@ analyser.operations.record     analyser.publications.record
 | AW-13 | `[implemented]` | ui, analyser | Settings（collection/automation/machine override/retention/routines、per-control 収集内容 caption、automation version read 追加） |
 | AW-14a | `[implemented]` | core, ui | summary/proposal → Note/Artifact export orchestration（sha256 publication dedupe、approved/executed proposal のみ、UI Export dialog） |
 | AW-14b | `[implemented]` | migration | 移行スクリプト 2 本 + runbook。ローカルで実行済み（service_accounts 9 件、activity はローカル空。実データ移行は cutover 時）。maintenance→proposals は Core 稼働時に実行 |
-| AW-15 | `[pending]` | 全体 | 旧経路削除: services/insights・insights.*・usage_events・maintenance queue/lease/flag/review・旧 UI・infra rename |
+| AW-15a | `[implemented]` | core, insights, infra | services/insights 削除、insights.*/maintenance.* MCP・HTTP・client・provisioning・usage_events・maintenance queue/lease/actions 削除（markIndexEntriesRead は indexReadTracking.ts に保存）、infra から insights-db/INSIGHTS_* 全除去。既存 DB の usage_events/maintenance_leases 表は残置（追加削除は cutover 時判断） |
+| AW-15b | `[in-progress]` | ui | 旧 UI 削除: MaintenancePage、maintenanceApi/insights api・型 |
 | AW-16 | `[pending]` | notes, projects | memory/note lifecycle fields の schema/code/UI 削除（authority 等は維持） |
 | AW-17 | `[pending]` | skills, docs | Skills 4 種 + AgentSkills 正本 + materialization + README/runbook/tool-contracts |
 | AW-18 | `[pending]` | root | 統合 live smoke + Codex read-only 独立最終レビュー + 指摘対応 |

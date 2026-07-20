@@ -360,34 +360,6 @@ export async function ensureCoreSchema(): Promise<void> {
         `);
 
         await pool.query(`
-          CREATE TABLE IF NOT EXISTS maintenance_leases (
-            user_id TEXT NOT NULL REFERENCES workbench_users(id) ON DELETE CASCADE,
-            key TEXT NOT NULL,
-            holder TEXT NOT NULL,
-            expires_at TIMESTAMPTZ NOT NULL,
-            acquired_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            renewed_at TIMESTAMPTZ,
-            PRIMARY KEY (user_id, key)
-          );
-        `);
-
-        await pool.query(`
-          CREATE TABLE IF NOT EXISTS usage_events (
-            id BIGSERIAL PRIMARY KEY,
-            user_id TEXT NOT NULL REFERENCES workbench_users(id) ON DELETE CASCADE,
-            event_type TEXT NOT NULL CHECK (event_type IN ('context_truncation','index_search','resource_read')),
-            project_id TEXT,
-            source_service TEXT,
-            resource_type TEXT,
-            resource_id TEXT,
-            query_text TEXT,
-            hit_count INTEGER,
-            metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-          );
-        `);
-
-        await pool.query(`
           CREATE INDEX IF NOT EXISTS idx_sync_events_user_id
             ON sync_events (user_id, id ASC);
         `);
@@ -398,10 +370,6 @@ export async function ensureCoreSchema(): Promise<void> {
             WHERE project_id IS NOT NULL;
         `);
 
-        await pool.query(`
-          CREATE INDEX IF NOT EXISTS idx_usage_events_user_type_created
-            ON usage_events(user_id, event_type, created_at DESC);
-        `);
       });
     })();
   }

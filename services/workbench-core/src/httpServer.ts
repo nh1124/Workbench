@@ -22,8 +22,6 @@ import { registerArtifactsTools } from "./mcp/registerArtifactsTools.js";
 import { registerDeepResearchTools } from "./mcp/registerDeepResearchTools.js";
 import { registerImageTools } from "./mcp/registerImageTools.js";
 import { registerAnalyserTools } from "./mcp/registerAnalyserTools.js";
-import { registerInsightsTools } from "./mcp/registerInsightsTools.js";
-import { registerMaintenanceTools } from "./mcp/registerMaintenanceTools.js";
 import { registerMindmapTools } from "./mcp/registerMindmapTools.js";
 import { registerNotesTools } from "./mcp/registerNotesTools.js";
 import { registerProjectsTools } from "./mcp/registerProjectsTools.js";
@@ -31,18 +29,7 @@ import { registerProjectContextTools } from "./mcp/registerProjectContextTools.j
 import { registerTasksTools } from "./mcp/registerTasksTools.js";
 import { registerWbsTools } from "./mcp/registerWbsTools.js";
 import { ensureIntegrationLinked } from "./integrationLinking.js";
-import { analyserClient, artifactsClient, imagesClient, insightsClient, InternalServiceError, mindmapsClient, notesClient, projectsClient, serviceBaseUrls, tasksClient, wbsClient } from "./internalClients.js";
-import {
-  confirmMaintenanceMemory,
-  confirmMaintenanceNote,
-  flagMaintenanceTarget,
-  MAINTENANCE_FLAG_REASONS,
-  MAINTENANCE_FLAG_TARGET_TYPES,
-  resolveMaintenanceTarget,
-  snoozeMaintenanceMemory,
-  snoozeMaintenanceNote
-} from "./maintenanceActions.js";
-import { aggregateMaintenanceQueue, MaintenanceQueueInputError } from "./maintenanceQueue.js";
+import { analyserClient, artifactsClient, imagesClient, InternalServiceError, mindmapsClient, notesClient, projectsClient, serviceBaseUrls, tasksClient, wbsClient } from "./internalClients.js";
 import { projectSyncEventsForUser, startAnalyserProjector } from "./analyserProjector.js";
 import { analyserHttpAccessMiddleware, instrumentMcpServer } from "./analyserAccessInstrumentation.js";
 import { exportAnalyserRecord } from "./analyserExport.js";
@@ -54,16 +41,6 @@ import {
   SyncConsumerScopeMismatchError
 } from "./syncChanges.js";
 import { SyncConsumerCursorInputError, SyncConsumerScopeConflictError } from "./syncConsumerCursorsStore.js";
-import {
-  MaintenanceLeaseHeldError,
-  MaintenanceLeaseInputError,
-  MaintenanceLeaseNotHeldError
-} from "./maintenanceLeasesStore.js";
-import {
-  recordIndexSearchUsageBestEffort,
-  recordProjectContextUsageBestEffort
-} from "./usageInstrumentation.js";
-import { summarizeUsage } from "./usageEventsStore.js";
 import {
   createArtifactNoteWithIndex,
   cleanupDeletedMindmapBestEffort,
@@ -153,7 +130,6 @@ import {
   configuredServiceIds,
   ensureAnalyserAccountProvisioned,
   ensureImagesAccountProvisioned,
-  ensureInsightsAccountProvisioned,
   ensureMindmapsAccountProvisioned,
   ensureWbsAccountProvisioned,
   provisionAccountToServices
@@ -1190,40 +1166,6 @@ const syncBlobPutSchema = z.object({
   expectedVersion: z.number().int().positive().optional()
 });
 
-const maintenanceMemoryConfirmSchema = z.object({
-  reviewAfter: z.string().datetime().nullable().optional()
-});
-
-const maintenanceMemorySnoozeSchema = z.object({
-  until: z.string().datetime()
-});
-
-const maintenanceNoteConfirmSchema = z.object({
-  lifecycleState: z.enum(["curated", "verified"]).optional(),
-  reviewAfter: z.string().datetime().nullable().optional()
-});
-
-const maintenanceNoteSnoozeSchema = z.object({
-  until: z.string().datetime()
-});
-
-const maintenanceFlagSchema = z.object({
-  target: z.object({
-    type: z.enum(MAINTENANCE_FLAG_TARGET_TYPES),
-    id: z.string().min(1)
-  }),
-  reason: z.enum(MAINTENANCE_FLAG_REASONS),
-  note: z.string().optional()
-});
-
-const maintenanceResolveSchema = z.object({
-  target: z.object({
-    type: z.literal("artifact"),
-    id: z.string().min(1)
-  }),
-  note: z.string().optional()
-});
-
 type AuthenticatedContext = {
   userId: string;
   username: string;
@@ -1388,16 +1330,9 @@ export function respondInternalError(res: express.Response, error: unknown): exp
     return res.status(error.status).json({ message: error.message, code: error.code });
   }
 
-  if (error instanceof MaintenanceQueueInputError) {
-    return res.status(error.status).json({ message: error.message, code: error.code });
-  }
-
   if (
     error instanceof SyncConsumerScopeConflictError
     || error instanceof SyncConsumerScopeMismatchError
-    || error instanceof MaintenanceLeaseInputError
-    || error instanceof MaintenanceLeaseHeldError
-    || error instanceof MaintenanceLeaseNotHeldError
   ) {
     return res.status(error.status).json({ message: error.message, code: error.code });
   }
@@ -3812,131 +3747,6 @@ app.post("/api/mindmaps/:documentId/artifact", async (req, res) => {
   }
 });
 
-function requireInsightsConfigured(res: express.Response): boolean {
-  if (serviceBaseUrls.insights) return true;
-  res.status(503).json({ message: "Insights service is not configured", code: "INSIGHTS_NOT_CONFIGURED" });
-  return false;
-}
-
-app.post("/api/insights/machines/register", async (req, res) => {
-  const authContext = await requireSyncAccessContext(req, res);
-  if (!authContext || !requireInsightsConfigured(res)) return;
-  try {
-    await ensureInsightsAccountProvisioned(authContext);
-    return res.json(await insightsClient.registerMachine(authContext.accessToken, req.body ?? {}));
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.get("/api/insights/machines", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
-  if (!authContext || !requireInsightsConfigured(res)) return;
-  try {
-    await ensureInsightsAccountProvisioned(authContext);
-    return res.json(await insightsClient.listMachines(authContext.accessToken));
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.post("/api/insights/ingest/samples", async (req, res) => {
-  const authContext = await requireSyncAccessContext(req, res);
-  if (!authContext || !requireInsightsConfigured(res)) return;
-  try {
-    await ensureInsightsAccountProvisioned(authContext);
-    return res.json(await insightsClient.ingestSamples(authContext.accessToken, req.body ?? {}));
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.post("/api/insights/ingest/summaries", async (req, res) => {
-  const authContext = await requireSyncAccessContext(req, res);
-  if (!authContext || !requireInsightsConfigured(res)) return;
-  try {
-    await ensureInsightsAccountProvisioned(authContext);
-    return res.json(await insightsClient.ingestSummaries(authContext.accessToken, req.body ?? {}));
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.get("/api/insights/summaries", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
-  if (!authContext || !requireInsightsConfigured(res)) return;
-  try {
-    await ensureInsightsAccountProvisioned(authContext);
-    return res.json(await insightsClient.listSummaries(authContext.accessToken, {
-      machineId: typeof req.query.machineId === "string" ? req.query.machineId : undefined,
-      from: typeof req.query.from === "string" ? req.query.from : undefined,
-      to: typeof req.query.to === "string" ? req.query.to : undefined,
-      limit: typeof req.query.limit === "string" ? req.query.limit : undefined,
-      cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined
-    }));
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.get("/api/insights/summaries/:machineId/:date", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
-  if (!authContext || !requireInsightsConfigured(res)) return;
-  try {
-    await ensureInsightsAccountProvisioned(authContext);
-    return res.json(await insightsClient.getSummary(
-      authContext.accessToken,
-      String(req.params.machineId),
-      String(req.params.date)
-    ));
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.get("/api/insights/activity", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
-  if (!authContext || !requireInsightsConfigured(res)) return;
-  try {
-    await ensureInsightsAccountProvisioned(authContext);
-    return res.json(await insightsClient.queryActivity(authContext.accessToken, {
-      from: typeof req.query.from === "string" ? req.query.from : undefined,
-      to: typeof req.query.to === "string" ? req.query.to : undefined,
-      machineId: typeof req.query.machineId === "string" ? req.query.machineId : undefined
-    }));
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.post("/api/insights/derived", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
-  if (!authContext || !requireInsightsConfigured(res)) return;
-  try {
-    await ensureInsightsAccountProvisioned(authContext);
-    return res.status(201).json(await insightsClient.createDerived(authContext.accessToken, req.body ?? {}));
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.get("/api/insights/derived", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
-  if (!authContext || !requireInsightsConfigured(res)) return;
-  try {
-    await ensureInsightsAccountProvisioned(authContext);
-    return res.json(await insightsClient.listDerived(authContext.accessToken, {
-      from: typeof req.query.from === "string" ? req.query.from : undefined,
-      to: typeof req.query.to === "string" ? req.query.to : undefined,
-      kind: typeof req.query.kind === "string" ? req.query.kind : undefined,
-      limit: typeof req.query.limit === "string" ? req.query.limit : undefined,
-      cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined
-    }));
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
 export function requireAnalyserConfigured(res: express.Response): boolean {
   if (serviceBaseUrls.analyser) return true;
   res.status(503).json({ message: "Analyser service is not configured", code: "ANALYSER_NOT_CONFIGURED" });
@@ -5491,80 +5301,6 @@ app.post("/api/sync/push", async (req, res) => {
   });
 });
 
-// External facade for maintenance queue
-app.get("/api/maintenance/queue", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
-  if (!authContext) return;
-
-  const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
-  try {
-    const result = await aggregateMaintenanceQueue(authContext.accessToken, {
-      kind: typeof req.query.kind === "string" ? req.query.kind : undefined,
-      reason: typeof req.query.reason === "string" ? req.query.reason : undefined,
-      projectId: typeof req.query.projectId === "string" ? req.query.projectId : undefined,
-      cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined,
-      limit: Number.isFinite(limit) ? limit : undefined
-    });
-    return res.json(result);
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.post("/api/maintenance/flags", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
-  if (!authContext) return;
-  const parsed = maintenanceFlagSchema.safeParse(req.body ?? {});
-  if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
-
-  try {
-    const result = await flagMaintenanceTarget({
-      accessToken: authContext.accessToken,
-      userId: authContext.userId,
-      source: "core-api",
-      actor: authContext.username
-    }, parsed.data);
-    return res.json(result);
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.post("/api/maintenance/reviews/resolve", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
-  if (!authContext) return;
-  const parsed = maintenanceResolveSchema.safeParse(req.body ?? {});
-  if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
-
-  try {
-    const result = await resolveMaintenanceTarget({
-      accessToken: authContext.accessToken,
-      userId: authContext.userId,
-      source: "core-api",
-      actor: authContext.username
-    }, parsed.data);
-    return res.json(result);
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.get("/api/maintenance/usage/summary", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
-  if (!authContext) return;
-
-  try {
-    const result = await summarizeUsage(
-      authContext.userId,
-      typeof req.query.since === "string" ? req.query.since : undefined,
-      typeof req.query.until === "string" ? req.query.until : undefined
-    );
-    return res.json(result);
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
 // External facade for projects
 app.get("/api/projects", async (req, res) => {
   const authContext = await requireAuthenticatedContext(req, res);
@@ -5658,13 +5394,6 @@ app.get("/api/projects/:projectId/context", async (req, res) => {
       indexLimit: numberQuery("indexLimit"),
       relationLimit: numberQuery("relationLimit"),
       maxChars: numberQuery("maxChars")
-    });
-    recordProjectContextUsageBestEffort({
-      userId: authContext.userId,
-      projectId,
-      context: result,
-      query,
-      source: "core-api"
     });
     return res.json(result);
   } catch (error) {
@@ -5764,42 +5493,6 @@ app.patch("/api/project-memories/:memoryId", async (req, res) => {
   }
 });
 
-app.post("/api/project-memories/:memoryId/confirm", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
-  if (!authContext) return;
-  const parsed = maintenanceMemoryConfirmSchema.safeParse(req.body ?? {});
-  if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
-
-  try {
-    const result = await confirmMaintenanceMemory({
-      accessToken: authContext.accessToken,
-      userId: authContext.userId,
-      source: "core-api"
-    }, String(req.params.memoryId), parsed.data);
-    return res.json(result);
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.post("/api/project-memories/:memoryId/snooze", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
-  if (!authContext) return;
-  const parsed = maintenanceMemorySnoozeSchema.safeParse(req.body ?? {});
-  if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
-
-  try {
-    const result = await snoozeMaintenanceMemory({
-      accessToken: authContext.accessToken,
-      userId: authContext.userId,
-      source: "core-api"
-    }, String(req.params.memoryId), parsed.data);
-    return res.json(result);
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
 app.get("/api/projects/:projectId/index", async (req, res) => {
   const authContext = await requireAuthenticatedContext(req, res);
   if (!authContext) return;
@@ -5813,13 +5506,6 @@ app.get("/api/projects/:projectId/index", async (req, res) => {
       resourceType: typeof req.query.resourceType === "string" ? req.query.resourceType : undefined,
       limit: Number.isFinite(limit) ? limit : undefined,
       cursor: typeof req.query.cursor === "string" ? req.query.cursor : undefined
-    });
-    recordIndexSearchUsageBestEffort({
-      userId: authContext.userId,
-      projectId,
-      query,
-      result,
-      source: "core-api"
     });
     return res.json(result);
   } catch (error) {
@@ -6156,42 +5842,6 @@ app.patch("/api/notes/:id", async (req, res) => {
       patch: req.body as Record<string, unknown>,
       resource: result as Record<string, unknown>
     });
-    return res.json(result);
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.post("/api/notes/:noteId/confirm", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
-  if (!authContext) return;
-  const parsed = maintenanceNoteConfirmSchema.safeParse(req.body ?? {});
-  if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
-
-  try {
-    const result = await confirmMaintenanceNote({
-      accessToken: authContext.accessToken,
-      userId: authContext.userId,
-      source: "core-api"
-    }, String(req.params.noteId), parsed.data);
-    return res.json(result);
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.post("/api/notes/:noteId/snooze", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
-  if (!authContext) return;
-  const parsed = maintenanceNoteSnoozeSchema.safeParse(req.body ?? {});
-  if (!parsed.success) return res.status(400).json({ message: parsed.error.flatten() });
-
-  try {
-    const result = await snoozeMaintenanceNote({
-      accessToken: authContext.accessToken,
-      userId: authContext.userId,
-      source: "core-api"
-    }, String(req.params.noteId), parsed.data);
     return res.json(result);
   } catch (error) {
     return respondInternalError(res, error);
@@ -7359,11 +7009,9 @@ function createMcpServerInstance(injectedContext: McpInjectedContext): McpServer
   registerTasksTools(server, injectedContext);
   registerProjectsTools(server, injectedContext);
   registerProjectContextTools(server, injectedContext);
-  registerMaintenanceTools(server, injectedContext);
   registerDeepResearchTools(server, injectedContext);
   registerImageTools(server, injectedContext);
   registerAnalyserTools(server, injectedContext);
-  registerInsightsTools(server, injectedContext);
   registerMindmapTools(server, injectedContext);
   registerWbsTools(server, injectedContext);
   return server;

@@ -72,7 +72,7 @@ resolve_restart_command() {
         # Artifacts is docker-only on this host (see infra/start_services.sh):
         # rebuild its image so the pulled code is reflected, then start the
         # node stack without artifacts to avoid EADDRINUSE on 4102.
-        echo "docker compose up -d --build artifacts-db artifacts workbench-core-db notes-db tasks-db projects-db images-db mindmaps-db wbs-db insights-db && npm run dev:web:no-artifacts"
+        echo "docker compose up -d --build artifacts-db artifacts workbench-core-db notes-db tasks-db projects-db images-db mindmaps-db wbs-db analyser-db && npm run dev:web:no-artifacts"
         return
     fi
     echo "npm run dev"

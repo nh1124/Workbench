@@ -13,7 +13,7 @@ import {
 } from "../projectContext.js";
 import { recordProjectContextInvalidationsBestEffort } from "../projectContextSync.js";
 import { ensureMindmapsAccountProvisioned } from "../serviceProvisioning.js";
-import { recordResourceReadUsageBestEffort } from "../usageInstrumentation.js";
+import { markIndexEntryReadBestEffort } from "../indexReadTracking.js";
 import { asMcpText, runWithAuthContext } from "./helpers.js";
 
 type ToolContext = {
@@ -108,13 +108,11 @@ export function registerMindmapTools(server: McpServer, ctx?: ToolContext): void
       }
     },
     async ({ id }) => {
-      const result = await runWithMindmapsAccount(ctx, async ({ userId }) => {
+      const result = await runWithMindmapsAccount(ctx, async () => {
         const document = await mindmapsClient.get(ctx.accessToken, id);
-        recordResourceReadUsageBestEffort({
+        markIndexEntryReadBestEffort({
           accessToken: ctx.accessToken,
-          userId,
           sourceService: "mindmaps",
-          resourceType: MINDMAP_TARGET_RESOURCE_TYPE,
           resourceId: id
         });
         return document;

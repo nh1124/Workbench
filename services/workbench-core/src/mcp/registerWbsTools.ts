@@ -13,7 +13,7 @@ import {
 } from "../projectContext.js";
 import { recordProjectContextInvalidationsBestEffort } from "../projectContextSync.js";
 import { ensureWbsAccountProvisioned } from "../serviceProvisioning.js";
-import { recordResourceReadUsageBestEffort } from "../usageInstrumentation.js";
+import { markIndexEntryReadBestEffort } from "../indexReadTracking.js";
 import { asMcpText, runWithAuthContext } from "./helpers.js";
 
 type ToolContext = {
@@ -129,13 +129,11 @@ export function registerWbsTools(server: McpServer, ctx?: ToolContext): void {
       }
     },
     async ({ id }) => {
-      const result = await runWithWbsAccount(ctx, async ({ userId }) => {
+      const result = await runWithWbsAccount(ctx, async () => {
         const plan = await wbsClient.getPlan(ctx.accessToken, id);
-        recordResourceReadUsageBestEffort({
+        markIndexEntryReadBestEffort({
           accessToken: ctx.accessToken,
-          userId,
           sourceService: "wbs",
-          resourceType: WBS_TARGET_RESOURCE_TYPE,
           resourceId: id
         });
         return plan;

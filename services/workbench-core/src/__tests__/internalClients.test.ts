@@ -144,46 +144,4 @@ describe("internal artifact clients", () => {
     assert.equal(result[0]?.projectName, null);
   });
 
-  it("calls the Artifact maintenance flag, resolve, and queue routes", async () => {
-    const requests: Array<{ url: URL; init?: RequestInit }> = [];
-    globalThis.fetch = async (input, init) => {
-      const url = new URL(String(input));
-      requests.push({ url, init });
-      if (url.pathname.endsWith("/resolve")) return jsonResponse({ status: "resolved" });
-      if (url.pathname === "/maintenance/artifact-queue") return jsonResponse({ items: [], totals: { byReason: {} } });
-      return jsonResponse({ status: "open" });
-    };
-
-    await artifactsClient.flagArtifactItemMaintenance("token", "item/1", {
-      reason: "conflict",
-      flaggedBy: "actor"
-    });
-    await artifactsClient.resolveArtifactItemMaintenance("token", "item/1", {
-      note: "fixed",
-      resolvedBy: "actor"
-    });
-    await artifactsClient.listArtifactMaintenanceQueue("token", {
-      projectId: "project-1",
-      reason: "manual",
-      cursor: "cursor-1",
-      limit: 5
-    });
-
-    assert.equal(requests[0]?.url.pathname, "/artifacts/items/item%2F1/maintenance-flag");
-    assert.equal(requests[0]?.init?.method, "POST");
-    assert.deepEqual(JSON.parse(String(requests[0]?.init?.body)), {
-      reason: "conflict",
-      flaggedBy: "actor"
-    });
-    assert.equal(new Headers(requests[0]?.init?.headers).get("authorization"), "Bearer token");
-    assert.equal(new Headers(requests[0]?.init?.headers).get("x-workbench-core-mutation"), "1");
-    assert.equal(requests[1]?.url.pathname, "/artifacts/items/item%2F1/maintenance-flag/resolve");
-    assert.equal(requests[2]?.url.pathname, "/maintenance/artifact-queue");
-    assert.deepEqual(Object.fromEntries(requests[2]?.url.searchParams ?? []), {
-      projectId: "project-1",
-      reason: "manual",
-      cursor: "cursor-1",
-      limit: "5"
-    });
-  });
 });

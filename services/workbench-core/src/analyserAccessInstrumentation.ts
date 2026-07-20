@@ -189,7 +189,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isExcludedTool(name: string): boolean {
-  return name.startsWith("analyser.") || name.startsWith("auth.") || name.startsWith("insights.");
+  return name.startsWith("analyser.") || name.startsWith("auth.");
 }
 
 function thrownErrorClass(error: unknown): string | undefined {
@@ -272,7 +272,6 @@ export function instrumentMcpServer(
 
 const HTTP_EXCLUDED_PREFIXES = [
   "/api/analyser",
-  "/api/insights",
   "/api/sync",
   "/api/auth",
   "/api/oauth"
