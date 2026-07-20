@@ -284,7 +284,7 @@ analyser.operations.record     analyser.publications.record
 | AW-12 | `[implemented]` | ui | Summaries + Proposals（approve/reject/supersede、409 対応、実行記録 lookup。export は publication pipeline 実装後に活性化） |
 | AW-13 | `[implemented]` | ui, analyser | Settings（collection/automation/machine override/retention/routines、per-control 収集内容 caption、automation version read 追加） |
 | AW-14a | `[implemented]` | core, ui | summary/proposal → Note/Artifact export orchestration（sha256 publication dedupe、approved/executed proposal のみ、UI Export dialog） |
-| AW-14b | `[pending]` | migration | insights → analyser データ移行 + maintenance open items → proposals（idempotent, backup 前提） |
+| AW-14b | `[implemented]` | migration | 移行スクリプト 2 本 + runbook。ローカルで実行済み（service_accounts 9 件、activity はローカル空。実データ移行は cutover 時）。maintenance→proposals は Core 稼働時に実行 |
 | AW-15 | `[pending]` | 全体 | 旧経路削除: services/insights・insights.*・usage_events・maintenance queue/lease/flag/review・旧 UI・infra rename |
 | AW-16 | `[pending]` | notes, projects | memory/note lifecycle fields の schema/code/UI 削除（authority 等は維持） |
 | AW-17 | `[pending]` | skills, docs | Skills 4 種 + AgentSkills 正本 + materialization + README/runbook/tool-contracts |
