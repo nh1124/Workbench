@@ -44,6 +44,7 @@ import {
 } from "./maintenanceActions.js";
 import { aggregateMaintenanceQueue, MaintenanceQueueInputError } from "./maintenanceQueue.js";
 import { projectSyncEventsForUser, startAnalyserProjector } from "./analyserProjector.js";
+import { analyserHttpAccessMiddleware, instrumentMcpServer } from "./analyserAccessInstrumentation.js";
 import { getOAuthDynamicClient, saveOAuthDynamicClient } from "./oauthDynamicClientsStore.js";
 import {
   commitSyncChangesCursor,
@@ -937,6 +938,7 @@ app.use((req, _res, next) => {
   syncRequestContext.run({ clientOpId }, next);
 });
 app.use(requestLogger(logger));
+app.use(analyserHttpAccessMiddleware());
 
 const accountSchema = z.object({
   username: z.string().min(1),
@@ -7341,10 +7343,12 @@ app.delete("/api/tasks/schedule-items/:id", async (req, res) => {
 
 type McpInjectedContext = {
   accessToken: string;
+  coreUserId: string;
 };
 
 function createMcpServerInstance(injectedContext: McpInjectedContext): McpServer {
   const server = new McpServer({ name: "workbench-core-mcp", version: "0.2.0" });
+  instrumentMcpServer(server, injectedContext);
   registerNotesTools(server, injectedContext);
   registerArtifactsTools(server, injectedContext);
   registerTasksTools(server, injectedContext);
@@ -7440,7 +7444,7 @@ app.post("/mcp", async (req, res) => {
   }
 
   const bundle = issueTokenBundle({ userId: user.id, username: user.username });
-  injectedContext = { accessToken: bundle.accessToken };
+  injectedContext = { accessToken: bundle.accessToken, coreUserId: user.id };
   logger.info("[mcp] user context injected", { username: user.username });
 
   const server = createMcpServerInstance(injectedContext);

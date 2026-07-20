@@ -2,6 +2,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { installProcessHandlers } from "@workbench/logging";
 import { logger } from "./logger.js";
+import { verifyAccessToken } from "./auth.js";
+import { instrumentMcpServer } from "./analyserAccessInstrumentation.js";
 import { registerArtifactsTools } from "./mcp/registerArtifactsTools.js";
 import { registerAuthTools } from "./mcp/registerAuthTools.js";
 import { registerDeepResearchTools } from "./mcp/registerDeepResearchTools.js";
@@ -21,9 +23,16 @@ const server = new McpServer({
   version: "0.2.0"
 });
 
+const accessToken = process.env.WORKBENCH_MCP_ACCESS_TOKEN?.trim();
+if (accessToken) {
+  instrumentMcpServer(server, {
+    accessToken,
+    coreUserId: verifyAccessToken(accessToken).sub
+  });
+}
+
 registerAuthTools(server);
 
-const accessToken = process.env.WORKBENCH_MCP_ACCESS_TOKEN?.trim();
 if (accessToken) {
   const ctx = { accessToken };
   registerNotesTools(server, ctx);
