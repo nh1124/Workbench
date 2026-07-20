@@ -2945,6 +2945,11 @@ app.get("/.well-known/oauth-authorization-server", (req, res) => {
     authorization_endpoint: joinIssuerPath(issuer, "/authorize"),
     token_endpoint: joinIssuerPath(issuer, "/oauth/token"),
     registration_endpoint: joinIssuerPath(issuer, DYNAMIC_CLIENT_REGISTRATION_PATH),
+    // response_types_supported is REQUIRED by RFC 8414 §2 and the MCP TS SDK's
+    // OAuthMetadata schema validates it as an array. Omitting it made strict
+    // clients (Claude Code) reject the metadata while lenient ones (Codex,
+    // cowork) still connected. The authorization-code flow supports "code".
+    response_types_supported: ["code"],
     grant_types_supported: ["authorization_code", "refresh_token"],
     code_challenge_methods_supported: ["S256"],
     token_endpoint_auth_methods_supported: ["none"],
