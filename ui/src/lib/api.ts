@@ -19,6 +19,8 @@ import type {
   AnalyserAutomationPolicyRecord,
   AnalyserCollectionPolicyRecord,
   AnalyserCollectionSettingsOverride,
+  AnalyserExportInput,
+  AnalyserExportResult,
   AnalyserMachineRecord,
   AnalyserObservationRecord,
   AnalyserObservationSource,
@@ -1132,6 +1134,11 @@ export const analyserApi = {
     fetchJson(analyserApiUrl("/proposals", query)),
   proposal: (id: string): Promise<AnalyserProposalRecord> =>
     fetchJson(analyserApiUrl(`/proposals/${encodeURIComponent(id)}`)),
+  export: (body: AnalyserExportInput): Promise<AnalyserExportResult> =>
+    fetchJson(analyserApiUrl("/export"), {
+      method: "POST",
+      body: JSON.stringify(body)
+    }),
   resolveProposal: (id: string, body: {
     status: "approved" | "rejected";
     provenance: string;

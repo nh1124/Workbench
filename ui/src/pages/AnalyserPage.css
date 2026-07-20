@@ -715,6 +715,102 @@
   font-size: 0.76rem;
 }
 
+.analyser-export-dialog {
+  width: min(460px, calc(100vw - 2rem));
+  border: 1px solid rgba(71, 85, 105, 0.92);
+  border-radius: 14px;
+  background: linear-gradient(165deg, #111a30, #080e1b);
+  color: #e2e8f0;
+  box-shadow: 0 24px 70px rgba(2, 6, 23, 0.72);
+  padding: 1rem;
+}
+
+.analyser-export-dialog > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.85rem;
+}
+
+.analyser-export-dialog h3,
+.analyser-export-dialog header p {
+  margin: 0;
+}
+
+.analyser-export-dialog h3 {
+  color: #f1f5f9;
+  font-size: 1.05rem;
+  text-transform: capitalize;
+}
+
+.analyser-export-dialog header p {
+  margin-top: 0.25rem;
+  color: #94a3b8;
+  font-size: 0.76rem;
+}
+
+.analyser-export-dialog form {
+  display: grid;
+  gap: 0.72rem;
+}
+
+.analyser-export-dialog label {
+  display: grid;
+  gap: 0.28rem;
+  color: #aebed3;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.analyser-export-dialog input,
+.analyser-export-dialog select {
+  width: 100%;
+  min-height: 2.2rem;
+  box-sizing: border-box;
+  border: 1px solid rgba(71, 85, 105, 0.82);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.88);
+  color: #e2e8f0;
+  padding: 0.45rem 0.58rem;
+}
+
+.analyser-export-dialog footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding-top: 0.2rem;
+}
+
+.analyser-export-dialog button {
+  min-height: 2rem;
+  border: 1px solid rgba(103, 232, 249, 0.35);
+  border-radius: 9px;
+  background: rgba(8, 145, 178, 0.22);
+  color: #a5f3fc;
+  padding: 0.46rem 0.72rem;
+  font-weight: 800;
+}
+
+.analyser-export-dialog button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.analyser-export-dialog .ghost-button,
+.analyser-export-dialog .analyser-export-close {
+  border-color: rgba(148, 163, 184, 0.36);
+  background: rgba(30, 41, 59, 0.42);
+  color: #cbd5e1;
+}
+
+.analyser-export-dialog .analyser-export-close {
+  min-width: 2rem;
+  padding: 0.25rem;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
 .analyser-actions .analyser-reject-action {
   border-color: rgba(248, 113, 113, 0.4);
   background: rgba(127, 29, 29, 0.25);

@@ -261,6 +261,20 @@ beforeEach(() => {
   vi.spyOn(analyserApi, "summary").mockImplementation(async (id) => summary(id));
   vi.spyOn(analyserApi, "proposals").mockResolvedValue({ items: [] });
   vi.spyOn(analyserApi, "proposal").mockImplementation(async (id) => proposal(id));
+  vi.spyOn(analyserApi, "export").mockImplementation(async (body) => ({
+    publication: {
+      id: "publication-1",
+      sourceKind: body.sourceKind,
+      sourceId: body.sourceId,
+      targetKind: body.targetKind,
+      targetId: `${body.targetKind}-export-1`,
+      contentHash: "a".repeat(64),
+      provenance: "ui",
+      createdAt: updatedAt
+    },
+    created: true,
+    target: { kind: body.targetKind, id: `${body.targetKind}-export-1` }
+  }));
   vi.spyOn(analyserApi, "resolveProposal").mockImplementation(async (id, body) => proposal(id, { status: body.status }));
   vi.spyOn(analyserApi, "supersedeProposal").mockImplementation(async (id) => proposal(id, { status: "superseded" }));
   vi.spyOn(analyserApi, "operations").mockResolvedValue({ items: [] });
@@ -379,7 +393,7 @@ describe("AnalyserPage", () => {
     });
   });
 
-  it("renders summaries, fetches detail with body and metrics, and disables export", async () => {
+  it("exports a summary with the selected target kind and optional overrides", async () => {
     vi.mocked(analyserApi.summaries).mockResolvedValue({ items: [summaryListItem("summary-1", { title: "Weekly focus" })] });
     vi.mocked(analyserApi.summary).mockResolvedValue(summary("summary-1", {
       title: "Weekly focus",
@@ -395,8 +409,23 @@ describe("AnalyserPage", () => {
     expect(screen.getByText("12")).toBeTruthy();
     expect(analyserApi.summary).toHaveBeenCalledWith("summary-1");
     const exportButton = screen.getByRole("button", { name: "Export" }) as HTMLButtonElement;
-    expect(exportButton.disabled).toBe(true);
-    expect(exportButton.title).toBe("Export arrives with the publication pipeline");
+    expect(exportButton.disabled).toBe(false);
+    fireEvent.click(exportButton);
+    fireEvent.change(screen.getByLabelText("Export target kind"), { target: { value: "artifact" } });
+    fireEvent.change(screen.getByLabelText("Export title override"), { target: { value: "Focused delivery export" } });
+    fireEvent.change(screen.getByLabelText("Export project ID"), { target: { value: "project-1" } });
+    fireEvent.change(screen.getByLabelText("Export artifact path"), { target: { value: "reports/focused-delivery.md" } });
+    fireEvent.click(screen.getByRole("button", { name: "Export record" }));
+
+    await waitFor(() => expect(analyserApi.export).toHaveBeenCalledWith({
+      sourceKind: "summary",
+      sourceId: "summary-1",
+      targetKind: "artifact",
+      title: "Focused delivery export",
+      projectId: "project-1",
+      path: "reports/focused-delivery.md"
+    }));
+    expect(await screen.findByText("Exported to Artifact.")).toBeTruthy();
   });
 
   it("appends the next summaries page using nextCursor", async () => {
@@ -432,6 +461,9 @@ describe("AnalyserPage", () => {
     expect(await screen.findByText("Approve indexing fix")).toBeTruthy();
     expect(analyserApi.proposals).toHaveBeenCalledWith({ status: "open", kind: undefined, limit: 50 });
     fireEvent.click(screen.getByText("Approve indexing fix"));
+    const exportButton = await screen.findByRole("button", { name: "Export" }) as HTMLButtonElement;
+    expect(exportButton.disabled).toBe(true);
+    expect(exportButton.title).toBe("Only approved or executed proposals can be exported as durable knowledge");
     fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
     await waitFor(() => expect(analyserApi.resolveProposal).toHaveBeenCalledWith("proposal-approve", {
       status: "approved",
@@ -502,8 +534,8 @@ describe("AnalyserPage", () => {
     expect(screen.getByText("archive/item.md")).toBeTruthy();
     expect(analyserApi.operations).toHaveBeenCalledWith({ proposalId: "proposal-executed" });
     const exportButton = screen.getByRole("button", { name: "Export" }) as HTMLButtonElement;
-    expect(exportButton.disabled).toBe(true);
-    expect(exportButton.title).toBe("Export arrives with the publication pipeline");
+    expect(exportButton.disabled).toBe(false);
+    expect(exportButton.title).toBe("");
   });
 
   it("renders collection settings from settings() with the local-only screenshot caption", async () => {
@@ -557,6 +589,25 @@ describe("AnalyserPage", () => {
       scheduleExpr: "30",
       expectedVersion: 5
     }));
+  });
+
+  it("shows an invalid routine schedule message inline", async () => {
+    vi.mocked(analyserApi.updateRoutine).mockRejectedValue(new ApiError({
+      backend: "core",
+      method: "PATCH",
+      path: "/api/analyser/routines/daily-work-summary",
+      url: "http://core/api/analyser/routines/daily-work-summary",
+      detail: "Invalid cron minute",
+      responseMessage: "Invalid cron minute",
+      status: 400,
+      code: "INVALID_SCHEDULE"
+    }));
+
+    renderPage("/analyser?tab=settings");
+    fireEvent.change(await screen.findByLabelText("Daily work summary schedule expression"), { target: { value: "bad cron" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save routine" }));
+
+    expect(await screen.findByText("Invalid cron minute")).toBeTruthy();
   });
 
   it("reloads settings and shows a notice after a collection version conflict", async () => {

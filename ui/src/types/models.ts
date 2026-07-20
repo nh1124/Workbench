@@ -1165,6 +1165,25 @@ export interface AnalyserPublicationRecord {
   createdAt: string;
 }
 
+export interface AnalyserExportInput {
+  sourceKind: "summary" | "proposal";
+  sourceId: string;
+  targetKind: "note" | "artifact";
+  projectId?: string;
+  title?: string;
+  path?: string;
+}
+
+export interface AnalyserExportResult {
+  publication: AnalyserPublicationRecord;
+  created: boolean;
+  target: {
+    kind: "note" | "artifact";
+    id: string;
+    ref?: AnalyserResourceRef;
+  };
+}
+
 export interface AnalyserCollectionPolicyRecord {
   machineId: string | null;
   settings: AnalyserCollectionSettingsOverride;

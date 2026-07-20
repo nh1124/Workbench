@@ -45,6 +45,7 @@ import {
 import { aggregateMaintenanceQueue, MaintenanceQueueInputError } from "./maintenanceQueue.js";
 import { projectSyncEventsForUser, startAnalyserProjector } from "./analyserProjector.js";
 import { analyserHttpAccessMiddleware, instrumentMcpServer } from "./analyserAccessInstrumentation.js";
+import { exportAnalyserRecord } from "./analyserExport.js";
 import { getOAuthDynamicClient, saveOAuthDynamicClient } from "./oauthDynamicClientsStore.js";
 import {
   commitSyncChangesCursor,
@@ -4076,6 +4077,10 @@ app.get(
 app.get(
   "/api/analyser/summaries/:id",
   analyserFacadeRoute((token, req) => analyserClient.getSummary(token, String(req.params.id)))
+);
+app.post(
+  "/api/analyser/export",
+  analyserFacadeRoute((token, req) => exportAnalyserRecord({ accessToken: token }, req.body ?? {}))
 );
 app.post(
   "/api/analyser/proposals",
