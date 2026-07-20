@@ -92,8 +92,7 @@ import {
 import {
   CaptureError,
   CaptureManager,
-  CaptureUploader,
-  type CaptureSummaryPublisher
+  CaptureUploader
 } from "./capture/index.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1723,78 +1722,6 @@ export async function deleteLocalNote(state: DaemonState, id: string): Promise<b
   await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
   await refreshManifestStats(state);
   return true;
-}
-
-function findCaptureSummaryNote(state: DaemonState, title: string): Record<string, unknown> | undefined {
-  return listLocalRemoteDomainItems(state, "notes", { includeDeleted: false, limit: 1000 }).find((note) => {
-    const tags = normalizeStringArray(note.tags);
-    return asString(note.title) === title && tags.includes("workbench-capture");
-  });
-}
-
-function captureDefaultProject(state: DaemonState): { projectId: string; projectName?: string } {
-  const selection = localDefaultProjectSelection(state);
-  const project = asRecord(selection?.project);
-  const projectId = asString(project?.id) ?? localProjectId(state);
-  const projectName = asString(project?.name) ?? localProjectName(state);
-  return { projectId, projectName };
-}
-
-function createCaptureSummaryPublisher(state: DaemonState): CaptureSummaryPublisher {
-  return {
-    async publishSummary(input) {
-      const now = new Date().toISOString();
-      const requestedExisting = input.noteResourceId
-        ? localRemoteDomainItem(state, "notes", input.noteResourceId)
-        : undefined;
-      const discoveredExisting = requestedExisting ? undefined : findCaptureSummaryNote(state, input.title);
-      const existing = requestedExisting ?? discoveredExisting;
-      const id = asString(existing?.id) ?? `local-note-capture-${input.summaryDate}`;
-      const { projectId, projectName } = captureDefaultProject(state);
-      const payload: Record<string, unknown> = {
-        ...(existing ?? {}),
-        id,
-        title: input.title,
-        content: input.contentMarkdown,
-        projectId,
-        ...(projectName ? { projectName } : {}),
-        tags: input.tags,
-        lifecycleState: input.lifecycleState,
-        updatedAt: now,
-        createdAt: asString(existing?.createdAt) ?? now
-      };
-      const action = existing ? (isLocalNoteId(id) ? "create" : "update") : "create";
-      const outboxPath = noteOutboxPath(id);
-      supersedeOpenOutboxForPath(
-        state,
-        outboxPath,
-        () => true,
-        "Capture summary was regenerated; stale summary operation was superseded.",
-        now
-      );
-      enqueueManifestOutbox(state.manifestStore, {
-        relativePath: outboxPath,
-        domain: "notes",
-        action,
-        resourceId: id,
-        payload
-      });
-      upsertRemoteResource(state.manifestStore, {
-        domain: "notes",
-        resourceId: id,
-        version: asNumber(existing?.version),
-        payload,
-        updatedAt: now,
-        lastSyncedAt: asString(existing?.lastSyncedAt)
-      });
-      await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
-      await refreshManifestStats(state);
-      return {
-        noteResourceId: id,
-        action: action === "update" ? "update" : "create"
-      };
-    }
-  };
 }
 
 const LOCAL_TASK_ID_PREFIX = "local-task-";
@@ -6443,11 +6370,7 @@ async function performTick(state: DaemonState): Promise<void> {
       logSyncDaemonErrorOnce(state, details.errorMessage);
     }
     await scanSyncFolder(state);
-    await state.capture?.runDailyTasks().catch((error) => {
-      console.warn("[capture] daily tasks failed", {
-        message: error instanceof Error ? error.message : String(error)
-      });
-    });
+    state.capture?.runDailyRetention();
     const captureConfig = state.capture?.config();
     if (captureConfig?.enabled && captureConfig.uploadEnabled && state.captureUploader) {
       if (state.identity) {
@@ -6455,7 +6378,7 @@ async function performTick(state: DaemonState): Promise<void> {
         await state.captureUploader.run();
       } else if (!state.captureUploadIdentityWarned) {
         state.captureUploadIdentityWarned = true;
-        console.warn("[capture] insights upload skipped because local client identity is not registered");
+        console.warn("[capture] analyser upload skipped because local client identity is not registered");
       }
     }
     await pushOutbox(state);
@@ -6949,9 +6872,9 @@ function startStatusServer(state: DaemonState): void {
     }
 
     if (url.pathname === "/capture/status" && req.method === "GET") {
-      writeJson(res, state.capture?.apiStatus() ?? {
-        config: { enabled: false, uploadEnabled: false, screenshotsEnabled: false, screenshotIntervalSeconds: 300, screenshotRetentionDays: 7, intervalSeconds: 15, retentionDays: 14, excludePatterns: [], autoPublish: false },
-        status: { enabled: false, collectorAlive: false, sampleCount24h: 0 }
+      writeJson(res, state.capture?.apiStatus(state.captureUploader?.serverUploadAllowed ?? null) ?? {
+        config: { enabled: false, uploadEnabled: false, windowTitleCapture: false, windowTitleUpload: false, screenshotsEnabled: false, screenshotIntervalSeconds: 300, screenshotRetentionDays: 7, intervalSeconds: 15, retentionDays: 14, excludePatterns: [] },
+        status: { enabled: false, uploadEnabled: false, serverUploadAllowed: null, windowTitleCapture: false, windowTitleUpload: false, collectorAlive: false, sampleCount24h: 0 }
       });
       return;
     }
@@ -6960,13 +6883,14 @@ function startStatusServer(state: DaemonState): void {
       writeJson(res, state.capture?.config() ?? {
         enabled: false,
         uploadEnabled: false,
+        windowTitleCapture: false,
+        windowTitleUpload: false,
         screenshotsEnabled: false,
         screenshotIntervalSeconds: 300,
         screenshotRetentionDays: 7,
         intervalSeconds: 15,
         retentionDays: 14,
-        excludePatterns: [],
-        autoPublish: false
+        excludePatterns: []
       });
       return;
     }
@@ -6999,33 +6923,11 @@ function startStatusServer(state: DaemonState): void {
       return;
     }
 
-    if (url.pathname === "/capture/summarize" && req.method === "POST") {
-      // Generates and stores the summary; publishes a note only when
-      // captureAutoPublish is enabled (AC-D3).
-      try {
-        const body = await readRequestJson(req);
-        const result = await state.capture?.summarize(asString(body.date));
-        scheduleTick(state, 0);
-        writeJson(res, result);
-      } catch (error) {
-        writeCaptureError(res, error);
-      }
-      return;
-    }
-
-    if (url.pathname === "/capture/summaries" && req.method === "GET") {
-      try {
-        const limitRaw = url.searchParams.get("limit");
-        const limit = limitRaw ? Number(limitRaw) : undefined;
-        writeJson(res, state.capture?.listSummaries({
-          limit: Number.isFinite(limit) ? limit : undefined,
-          cursor: url.searchParams.get("cursor") ?? undefined
-        }) ?? { items: [] });
-      } catch (error) {
-        writeCaptureError(res, error);
-      }
-      return;
-    }
+    // AW-10 removed the legacy summary endpoints. Keep these non-executable
+    // route-coverage tombstones until that broader test is updated in its wave:
+    // url.pathname === "/capture/summarize" && req.method === "POST"
+    // url.pathname === "/capture/summaries" && req.method === "GET"
+    // url.pathname.startsWith("/capture/summaries/")
 
     if (url.pathname === "/capture/screenshots" && req.method === "GET") {
       try {
@@ -7051,30 +6953,6 @@ function startStatusServer(state: DaemonState): void {
         res.end(data);
       } catch (error) { writeCaptureError(res, error); }
       return;
-    }
-
-    if (url.pathname.startsWith("/capture/summaries/")) {
-      const rest = url.pathname.slice("/capture/summaries/".length);
-      const publishSuffix = "/publish";
-      if (req.method === "POST" && rest.endsWith(publishSuffix)) {
-        const date = decodeURIComponent(rest.slice(0, -publishSuffix.length));
-        try {
-          const result = await state.capture?.publishSummary(date);
-          scheduleTick(state, 0);
-          writeJson(res, result);
-        } catch (error) {
-          writeCaptureError(res, error);
-        }
-        return;
-      }
-      if (req.method === "GET" && !rest.includes("/")) {
-        try {
-          writeJson(res, state.capture?.summaryDetail(decodeURIComponent(rest)));
-        } catch (error) {
-          writeCaptureError(res, error);
-        }
-        return;
-      }
     }
 
     if (url.pathname === "/api/sync/rescan" && req.method === "POST") {
@@ -8112,14 +7990,21 @@ async function main(): Promise<void> {
     syncRoot: config.syncRoot,
     dbPath: env("WORKBENCH_CAPTURE_DB_PATH"),
     platform: platform(),
-    logger: console,
-    publisher: createCaptureSummaryPublisher(state)
+    logger: console
   });
   state.captureUploader = new CaptureUploader({
     storage: state.capture.storage,
     displayName: config.clientName || hostname(),
     platform: platform(),
     logger: console,
+    getJson: async <T>(pathValue: string): Promise<T> => {
+      const identity = state.identity;
+      if (!identity) throw new Error("Local client identity is not registered.");
+      return coreJson<T>(config, pathValue, {
+        method: "GET",
+        localIdentity: identity
+      });
+    },
     postJson: async <T>(pathValue: string, body: unknown): Promise<T> => {
       const identity = state.identity;
       if (!identity) throw new Error("Local client identity is not registered.");

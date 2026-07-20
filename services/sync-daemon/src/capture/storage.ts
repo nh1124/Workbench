@@ -9,9 +9,7 @@ import type {
   CaptureSample,
   CaptureSampleInput,
   CaptureScreenshotRecord,
-  CaptureStatus,
-  CaptureSummaryMetrics,
-  CaptureSummaryRecord
+  CaptureStatus
 } from "./types.js";
 
 export const DEFAULT_CAPTURE_INTERVAL_SECONDS = 15;
@@ -29,13 +27,14 @@ export const DEFAULT_CAPTURE_CATEGORY_MAP: Record<string, string> = {
 export const DEFAULT_CAPTURE_CONFIG: CaptureConfig = {
   enabled: false,
   uploadEnabled: false,
+  windowTitleCapture: false,
+  windowTitleUpload: false,
   screenshotsEnabled: false,
   screenshotIntervalSeconds: DEFAULT_SCREENSHOT_INTERVAL_SECONDS,
   screenshotRetentionDays: DEFAULT_SCREENSHOT_RETENTION_DAYS,
   intervalSeconds: DEFAULT_CAPTURE_INTERVAL_SECONDS,
   retentionDays: DEFAULT_CAPTURE_RETENTION_DAYS,
   excludePatterns: [],
-  autoPublish: false,
   idleThresholdSeconds: DEFAULT_CAPTURE_IDLE_THRESHOLD_SECONDS,
   categoryMap: { ...DEFAULT_CAPTURE_CATEGORY_MAP }
 };
@@ -46,7 +45,6 @@ function defaultCaptureConfig(): CaptureConfig {
 
 const CONFIG_META_KEY = "capture.config";
 const LAST_RETENTION_DATE_META_KEY = "capture.lastRetentionDate";
-const LAST_AUTO_SUMMARY_DATE_META_KEY = "capture.lastAutoSummaryDate";
 
 type CaptureStorageOptions = {
   logger?: CaptureLogger;
@@ -54,15 +52,6 @@ type CaptureStorageOptions = {
 
 type CountRow = { count: number };
 type SampleRow = { id?: number; sampled_at: string; process_name: string; window_title: string; idle?: number | null };
-type SummaryRow = {
-  summary_date: string;
-  note_resource_id: string | null;
-  generated_at: string;
-  sample_count: number;
-  summary_markdown?: string | null;
-  metrics_json?: string | null;
-};
-
 export type CaptureSampleUploadCursor = { sampledAt: string; id: number };
 export type CaptureStoredSample = CaptureSample & { id: number };
 
@@ -105,6 +94,8 @@ function normalizeConfig(value: unknown): CaptureConfig {
   return {
     enabled: typeof record.enabled === "boolean" ? record.enabled : DEFAULT_CAPTURE_CONFIG.enabled,
     uploadEnabled: typeof record.uploadEnabled === "boolean" ? record.uploadEnabled : DEFAULT_CAPTURE_CONFIG.uploadEnabled,
+    windowTitleCapture: typeof record.windowTitleCapture === "boolean" ? record.windowTitleCapture : false,
+    windowTitleUpload: typeof record.windowTitleUpload === "boolean" ? record.windowTitleUpload : false,
     screenshotsEnabled: typeof record.screenshotsEnabled === "boolean" ? record.screenshotsEnabled : false,
     screenshotIntervalSeconds: isIntegerBetween(record.screenshotIntervalSeconds, 60, 3600)
       ? record.screenshotIntervalSeconds : DEFAULT_SCREENSHOT_INTERVAL_SECONDS,
@@ -119,7 +110,6 @@ function normalizeConfig(value: unknown): CaptureConfig {
     excludePatterns: Array.isArray(record.excludePatterns)
       ? record.excludePatterns.filter((pattern): pattern is string => typeof pattern === "string")
       : [],
-    autoPublish: typeof record.autoPublish === "boolean" ? record.autoPublish : DEFAULT_CAPTURE_CONFIG.autoPublish,
     idleThresholdSeconds: isValidIdleThreshold(record.idleThresholdSeconds)
       ? record.idleThresholdSeconds
       : DEFAULT_CAPTURE_CONFIG.idleThresholdSeconds,
@@ -155,6 +145,14 @@ export function validateCaptureConfigPatch(patch: Record<string, unknown>): Capt
     if (typeof patch.uploadEnabled !== "boolean") throw new Error("uploadEnabled must be a boolean.");
     next.uploadEnabled = patch.uploadEnabled;
   }
+  if (patch.windowTitleCapture !== undefined) {
+    if (typeof patch.windowTitleCapture !== "boolean") throw new Error("windowTitleCapture must be a boolean.");
+    next.windowTitleCapture = patch.windowTitleCapture;
+  }
+  if (patch.windowTitleUpload !== undefined) {
+    if (typeof patch.windowTitleUpload !== "boolean") throw new Error("windowTitleUpload must be a boolean.");
+    next.windowTitleUpload = patch.windowTitleUpload;
+  }
   if (patch.screenshotsEnabled !== undefined) {
     if (typeof patch.screenshotsEnabled !== "boolean") throw new Error("screenshotsEnabled must be a boolean.");
     next.screenshotsEnabled = patch.screenshotsEnabled;
@@ -185,12 +183,6 @@ export function validateCaptureConfigPatch(patch: Record<string, unknown>): Capt
     }
     next.excludePatterns = patch.excludePatterns;
   }
-  if (patch.autoPublish !== undefined) {
-    if (typeof patch.autoPublish !== "boolean") {
-      throw new Error("autoPublish must be a boolean.");
-    }
-    next.autoPublish = patch.autoPublish;
-  }
   if (patch.idleThresholdSeconds !== undefined) {
     if (!isValidIdleThreshold(patch.idleThresholdSeconds)) {
       throw new Error("idleThresholdSeconds must be an integer between 60 and 3600.");
@@ -212,32 +204,6 @@ function toSample(row: SampleRow): CaptureSample {
     processName: row.process_name,
     windowTitle: row.window_title,
     idle: Boolean(row.idle)
-  };
-}
-
-function parseMetrics(value: string | null | undefined): CaptureSummaryMetrics | undefined {
-  if (!value) return undefined;
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed as CaptureSummaryMetrics
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function toSummary(row: SummaryRow, includeDetail = false): CaptureSummaryRecord {
-  return {
-    summaryDate: row.summary_date,
-    noteResourceId: row.note_resource_id ?? undefined,
-    generatedAt: row.generated_at,
-    sampleCount: Number(row.sample_count ?? 0),
-    published: Boolean(row.note_resource_id),
-    ...(includeDetail ? {
-      summaryMarkdown: row.summary_markdown ?? undefined,
-      metrics: parseMetrics(row.metrics_json)
-    } : {})
   };
 }
 
@@ -302,12 +268,6 @@ export class CaptureStorage {
         idle INTEGER NOT NULL DEFAULT 0
       );
       CREATE INDEX IF NOT EXISTS idx_capture_samples_time ON capture_samples(sampled_at);
-      CREATE TABLE IF NOT EXISTS capture_summaries (
-        summary_date TEXT PRIMARY KEY,
-        note_resource_id TEXT,
-        generated_at TEXT NOT NULL,
-        sample_count INTEGER NOT NULL
-      );
       CREATE TABLE IF NOT EXISTS capture_meta (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
@@ -321,29 +281,13 @@ export class CaptureStorage {
       );
       CREATE INDEX IF NOT EXISTS idx_capture_screenshots_time ON capture_screenshots(captured_at DESC, id DESC);
     `);
-    this.ensureSummaryMarkdownColumn();
     this.ensureSampleIdleColumn();
-    this.ensureSummaryMetricsColumn();
-  }
-
-  private ensureSummaryMarkdownColumn(): void {
-    const columns = this.db.prepare("PRAGMA table_info(capture_summaries)").all() as Array<{ name?: string }>;
-    if (!columns.some((column) => column.name === "summary_markdown")) {
-      this.db.exec("ALTER TABLE capture_summaries ADD COLUMN summary_markdown TEXT");
-    }
   }
 
   private ensureSampleIdleColumn(): void {
     const columns = this.db.prepare("PRAGMA table_info(capture_samples)").all() as Array<{ name?: string }>;
     if (!columns.some((column) => column.name === "idle")) {
       this.db.exec("ALTER TABLE capture_samples ADD COLUMN idle INTEGER NOT NULL DEFAULT 0");
-    }
-  }
-
-  private ensureSummaryMetricsColumn(): void {
-    const columns = this.db.prepare("PRAGMA table_info(capture_summaries)").all() as Array<{ name?: string }>;
-    if (!columns.some((column) => column.name === "metrics_json")) {
-      this.db.exec("ALTER TABLE capture_summaries ADD COLUMN metrics_json TEXT");
     }
   }
 
@@ -366,14 +310,6 @@ export class CaptureStorage {
 
   setLastRetentionDate(date: string): void {
     this.setMeta(LAST_RETENTION_DATE_META_KEY, date);
-  }
-
-  getLastAutoSummaryDate(): string | undefined {
-    return this.getMeta(LAST_AUTO_SUMMARY_DATE_META_KEY);
-  }
-
-  setLastAutoSummaryDate(date: string): void {
-    this.setMeta(LAST_AUTO_SUMMARY_DATE_META_KEY, date);
   }
 
   getConfig(): CaptureConfig {
@@ -405,7 +341,7 @@ export class CaptureStorage {
     this.db.prepare(`
       INSERT INTO capture_samples (sampled_at, process_name, window_title, idle)
       VALUES (?, ?, ?, ?)
-    `).run(sample.sampledAt, sample.processName, sample.windowTitle, sample.idle ? 1 : 0);
+    `).run(sample.sampledAt, sample.processName, config.windowTitleCapture ? sample.windowTitle : "", sample.idle ? 1 : 0);
     return true;
   }
 
@@ -459,17 +395,6 @@ export class CaptureStorage {
     return Number(result.changes ?? 0);
   }
 
-  listSamplesForDate(summaryDate: string): CaptureSample[] {
-    const start = `${summaryDate}T00:00:00.000Z`;
-    const end = `${nextDateString(summaryDate)}T00:00:00.000Z`;
-    return (this.db.prepare(`
-      SELECT sampled_at, process_name, window_title, idle
-      FROM capture_samples
-      WHERE sampled_at >= ? AND sampled_at < ?
-      ORDER BY sampled_at ASC, id ASC
-    `).all(start, end) as SampleRow[]).map(toSample);
-  }
-
   listSamplesAfter(cursor: CaptureSampleUploadCursor | string | undefined, limit: number): CaptureStoredSample[] {
     const boundedLimit = Math.max(1, Math.min(500, Math.floor(limit)));
     const tupleCursor = typeof cursor === "string"
@@ -507,99 +432,19 @@ export class CaptureStorage {
     return removed;
   }
 
-  getSummary(summaryDate: string): CaptureSummaryRecord | undefined {
-    const row = this.db.prepare(`
-      SELECT summary_date, note_resource_id, generated_at, sample_count, summary_markdown, metrics_json
-      FROM capture_summaries
-      WHERE summary_date = ?
-    `).get(summaryDate) as SummaryRow | undefined;
-    return row ? toSummary(row, true) : undefined;
-  }
-
-  listSummariesGeneratedAfter(generatedAtExclusive: string | undefined, limit: number): CaptureSummaryRecord[] {
-    const boundedLimit = Math.max(1, Math.min(50, Math.floor(limit)));
-    const rows = (generatedAtExclusive
-      ? this.db.prepare(`
-          SELECT summary_date, note_resource_id, generated_at, sample_count, summary_markdown, metrics_json
-          FROM capture_summaries
-          WHERE generated_at > ?
-          ORDER BY generated_at ASC, summary_date ASC
-          LIMIT ?
-        `).all(generatedAtExclusive, boundedLimit)
-      : this.db.prepare(`
-          SELECT summary_date, note_resource_id, generated_at, sample_count, summary_markdown, metrics_json
-          FROM capture_summaries
-          ORDER BY generated_at ASC, summary_date ASC
-          LIMIT ?
-        `).all(boundedLimit)) as SummaryRow[];
-    return rows.map((row) => toSummary(row, true));
-  }
-
-  listSummaries(options: { limit?: number; cursor?: string } = {}): { items: CaptureSummaryRecord[]; nextCursor?: string } {
-    const limit = Math.max(1, Math.min(100, Math.floor(options.limit ?? 30)));
-    const cursor = options.cursor?.trim();
-    const rows = (cursor
-      ? this.db.prepare(`
-          SELECT summary_date, note_resource_id, generated_at, sample_count
-          FROM capture_summaries
-          WHERE summary_date < ?
-          ORDER BY summary_date DESC
-          LIMIT ?
-        `).all(cursor, limit + 1)
-      : this.db.prepare(`
-          SELECT summary_date, note_resource_id, generated_at, sample_count
-          FROM capture_summaries
-          ORDER BY summary_date DESC
-          LIMIT ?
-        `).all(limit + 1)) as SummaryRow[];
-    const page = rows.slice(0, limit);
-    return {
-      items: page.map((row) => toSummary(row)),
-      ...(rows.length > limit && page.length > 0 ? { nextCursor: page[page.length - 1].summary_date } : {})
-    };
-  }
-
-  saveSummary(
-    summaryDate: string,
-    summaryMarkdown: string,
-    sampleCount: number,
-    metricsOrGeneratedAt?: CaptureSummaryMetrics | string,
-    generatedAt = new Date().toISOString()
-  ): CaptureSummaryRecord {
-    const metrics = typeof metricsOrGeneratedAt === "string" ? undefined : metricsOrGeneratedAt;
-    const persistedAt = typeof metricsOrGeneratedAt === "string" ? metricsOrGeneratedAt : generatedAt;
-    // Preserves note_resource_id so regeneration keeps the published-note linkage.
-    this.db.prepare(`
-      INSERT INTO capture_summaries (summary_date, note_resource_id, generated_at, sample_count, summary_markdown, metrics_json)
-      VALUES (?, NULL, ?, ?, ?, ?)
-      ON CONFLICT(summary_date) DO UPDATE SET
-        generated_at = excluded.generated_at,
-        sample_count = excluded.sample_count,
-        summary_markdown = excluded.summary_markdown,
-        metrics_json = excluded.metrics_json
-    `).run(summaryDate, persistedAt, sampleCount, summaryMarkdown, metrics ? JSON.stringify(metrics) : null);
-    const stored = this.getSummary(summaryDate);
-    if (!stored) throw new Error(`Capture summary for ${summaryDate} was not persisted.`);
-    return stored;
-  }
-
-  setSummaryNoteResourceId(summaryDate: string, noteResourceId: string): CaptureSummaryRecord | undefined {
-    this.db.prepare(`
-      UPDATE capture_summaries SET note_resource_id = ? WHERE summary_date = ?
-    `).run(noteResourceId, summaryDate);
-    return this.getSummary(summaryDate);
-  }
-
-  status(collectorAlive: boolean, now = new Date()): CaptureStatus {
+  status(collectorAlive: boolean, serverUploadAllowed: boolean | null = null, now = new Date()): CaptureStatus {
     const lastSample = this.db.prepare("SELECT MAX(sampled_at) AS sampled_at FROM capture_samples").get() as { sampled_at?: string | null };
-    const lastSummary = this.db.prepare("SELECT MAX(generated_at) AS generated_at FROM capture_summaries").get() as { generated_at?: string | null };
     const since = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
     const sampleCount = this.db.prepare("SELECT COUNT(*) AS count FROM capture_samples WHERE sampled_at >= ?").get(since) as CountRow;
+    const config = this.getConfig();
     return {
-      enabled: this.getConfig().enabled,
+      enabled: config.enabled,
+      uploadEnabled: config.uploadEnabled,
+      serverUploadAllowed,
+      windowTitleCapture: config.windowTitleCapture,
+      windowTitleUpload: config.windowTitleUpload,
       collectorAlive,
       lastSampleAt: lastSample.sampled_at ?? undefined,
-      lastSummaryAt: lastSummary.generated_at ?? undefined,
       sampleCount24h: Number(sampleCount.count ?? 0)
     };
   }
@@ -619,6 +464,10 @@ export function readCaptureStatusSnapshot(input: {
       config: defaultCaptureConfig(),
       status: {
         enabled: false,
+        uploadEnabled: false,
+        serverUploadAllowed: null,
+        windowTitleCapture: false,
+        windowTitleUpload: false,
         collectorAlive: input.collectorAlive ?? false,
         sampleCount24h: 0
       }

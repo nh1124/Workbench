@@ -10,15 +10,12 @@ import {
   CaptureUploader,
   CAPTURE_UPLOAD_META_KEYS,
   DEFAULT_CAPTURE_CONFIG,
-  analyzeCaptureSummary,
   assertCaptureDbPathAllowed,
-  buildCaptureSummaryMarkdown,
   decodeSamplerStdoutChunk,
   ingestSamplerLine,
   shouldCaptureScreenshot,
   validateCaptureConfigPatch,
-  type CaptureLogger,
-  type CaptureSummaryPublisher
+  type CaptureLogger
 } from "../capture/index.js";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
@@ -33,62 +30,72 @@ async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
 function silentLogger(warnings: unknown[] = []): CaptureLogger {
   return {
     info() {},
-    warn(...args: unknown[]) {
-      warnings.push(args);
-    },
-    error(...args: unknown[]) {
-      warnings.push(args);
-    }
+    warn(...args: unknown[]) { warnings.push(args); },
+    error(...args: unknown[]) { warnings.push(args); }
   };
 }
 
-describe("capture storage and summarization", () => {
+describe("capture storage", () => {
   it("rejects capture DB paths inside the sync root or .workbench metadata", async () => {
     await withTempDir(async (dir) => {
       const syncRoot = join(dir, "sync-root");
-      assert.throws(
-        () => assertCaptureDbPathAllowed(join(syncRoot, "capture.sqlite"), syncRoot),
-        /sync root/
-      );
-      assert.throws(
-        () => assertCaptureDbPathAllowed(join(dir, ".workbench", "capture.sqlite"), syncRoot),
-        /\.workbench/
-      );
+      assert.throws(() => assertCaptureDbPathAllowed(join(syncRoot, "capture.sqlite"), syncRoot), /sync root/);
+      assert.throws(() => assertCaptureDbPathAllowed(join(dir, ".workbench", "capture.sqlite"), syncRoot), /\.workbench/);
     });
   });
 
-  it("does not persist samples that match exclude patterns and ignores invalid patterns", async () => {
+  it("drops stored autoPublish, defaults title privacy off, and preserves existing capture flags", async () => {
+    await withTempDir(async (dir) => {
+      const storage = new CaptureStorage(join(dir, "capture.sqlite"));
+      try {
+        storage.setMeta("capture.config", JSON.stringify({
+          enabled: true,
+          uploadEnabled: true,
+          autoPublish: true,
+          retentionDays: 9
+        }));
+        const config = storage.getConfig();
+        assert.equal(config.enabled, true);
+        assert.equal(config.uploadEnabled, true);
+        assert.equal(config.windowTitleCapture, false);
+        assert.equal(config.windowTitleUpload, false);
+        assert.equal(config.retentionDays, 9);
+        assert.equal("autoPublish" in config, false);
+      } finally {
+        storage.close();
+      }
+    });
+  });
+
+  it("blanks titles at persistence time unless windowTitleCapture is enabled", async () => {
+    await withTempDir(async (dir) => {
+      const storage = new CaptureStorage(join(dir, "capture.sqlite"));
+      try {
+        storage.insertSample({ sampledAt: "2026-07-07T09:00:00.000Z", processName: "Code", windowTitle: "Private" });
+        storage.updateConfig({ windowTitleCapture: true });
+        storage.insertSample({ sampledAt: "2026-07-07T09:00:15.000Z", processName: "Code", windowTitle: "Workbench" });
+        const samples = storage.listSamplesAfter(undefined, 10);
+        assert.equal(samples[0].windowTitle, "");
+        assert.equal(samples[1].windowTitle, "Workbench");
+      } finally {
+        storage.close();
+      }
+    });
+  });
+
+  it("applies exclude patterns before title blanking and ignores invalid patterns", async () => {
     await withTempDir(async (dir) => {
       const warnings: unknown[] = [];
       const storage = new CaptureStorage(join(dir, "capture.sqlite"), { logger: silentLogger(warnings) });
       try {
         const config = storage.setConfig({
+          ...DEFAULT_CAPTURE_CONFIG,
           enabled: true,
-          uploadEnabled: false,
-          screenshotsEnabled: false,
-          screenshotIntervalSeconds: 300,
-          screenshotRetentionDays: 7,
-          intervalSeconds: 15,
-          retentionDays: 14,
-          excludePatterns: ["SecretApp", "["],
-          autoPublish: false,
-          idleThresholdSeconds: 300,
-          categoryMap: { Code: "Editor" }
+          excludePatterns: ["Private work", "["]
         });
-        const skipped = storage.insertSample({
-          sampledAt: "2026-07-07T09:00:00.000Z",
-          processName: "SecretApp",
-          windowTitle: "Private work"
-        }, config);
-        const inserted = storage.insertSample({
-          sampledAt: "2026-07-07T09:15:00.000Z",
-          processName: "Code",
-          windowTitle: "Workbench"
-        }, config);
-
-        assert.equal(skipped, false);
-        assert.equal(inserted, true);
-        assert.equal(storage.listSamplesForDate("2026-07-07").length, 1);
+        assert.equal(storage.insertSample({ sampledAt: "2026-07-07T09:00:00.000Z", processName: "Code", windowTitle: "Private work" }, config), false);
+        assert.equal(storage.insertSample({ sampledAt: "2026-07-07T09:00:15.000Z", processName: "Code", windowTitle: "Workbench" }, config), true);
+        assert.equal(storage.listSamplesAfter(undefined, 10).length, 1);
         assert.ok(warnings.length >= 1);
       } finally {
         storage.close();
@@ -100,119 +107,45 @@ describe("capture storage and summarization", () => {
     await withTempDir(async (dir) => {
       const storage = new CaptureStorage(join(dir, "capture.sqlite"));
       try {
-        assert.equal(storage.getConfig().uploadEnabled, false);
-        storage.insertSample({
-          sampledAt: "2026-06-30T23:59:00.000Z",
-          processName: "Old",
-          windowTitle: "Old"
-        });
-        storage.insertSample({
-          sampledAt: "2026-07-02T00:00:00.000Z",
-          processName: "Current",
-          windowTitle: "Current"
-        });
-
-        const removed = storage.deleteSamplesOlderThan(14, new Date("2026-07-15T00:00:00.000Z"));
-
-        assert.equal(removed, 1);
-        assert.deepEqual(storage.listSamplesForDate("2026-06-30"), []);
-        assert.equal(storage.listSamplesForDate("2026-07-02").length, 1);
+        storage.insertSample({ sampledAt: "2026-06-30T23:59:00.000Z", processName: "Old", windowTitle: "Old" });
+        storage.insertSample({ sampledAt: "2026-07-02T00:00:00.000Z", processName: "Current", windowTitle: "Current" });
+        assert.equal(storage.deleteSamplesOlderThan(14, new Date("2026-07-15T00:00:00.000Z")), 1);
+        assert.deepEqual(storage.listSamplesAfter(undefined, 10).map((sample) => sample.processName), ["Current"]);
       } finally {
         storage.close();
       }
     });
   });
 
-  it("builds deterministic markdown from fixed samples", () => {
-    const markdown = buildCaptureSummaryMarkdown("2026-07-07", [
-      { sampledAt: "2026-07-07T09:00:00.000Z", processName: "Code", windowTitle: "Workbench", idle: false },
-      { sampledAt: "2026-07-07T09:15:00.000Z", processName: "Code", windowTitle: "Workbench", idle: false },
-      { sampledAt: "2026-07-07T10:00:00.000Z", processName: "Browser", windowTitle: "Docs", idle: false }
-    ], 15);
-
-    assert.equal(markdown, [
-      "# Capture Daily Summary 2026-07-07",
-      "",
-      "## App Activity",
-      "",
-      "| App | Active Time | Samples |",
-      "|---|---:|---:|",
-      "| Code | 30s | 2 |",
-      "| Browser | 15s | 1 |",
-      "",
-      "## Top Window Titles",
-      "",
-      "| Window Title | Count |",
-      "|---|---:|",
-      "| Workbench | 2 |",
-      "| Docs | 1 |",
-      "",
-      "## Timeline",
-      "",
-      "| Hour | Primary App | Samples |",
-      "|---|---|---:|",
-      "| 09:00 | Code | 2 |",
-      "| 10:00 | Browser | 1 |",
-      "",
-      "## Focus Blocks",
-      "",
-      "| Start - End | App | Window Title | Active Time |",
-      "|---|---|---|---:|",
-      "",
-      "## Context Switches",
-      "",
-      "1",
-      "",
-      "## Categories",
-      "",
-      "| Category | Active Time |",
-      "|---|---:|",
-      "| Editor | 30s |",
-      "| Other | 15s |",
-      "",
-      "## Idle Time",
-      "",
-      "0s",
-      ""
-    ].join("\n"));
-    assert.equal(
-      buildCaptureSummaryMarkdown("2026-07-08", [], 15),
-      "# Capture Daily Summary 2026-07-08\n\nNo samples recorded.\n"
-    );
-  });
-
-  it("validates screenshot config defaults and patch bounds", async () => {
-    await withTempDir(async (dir) => {
-      const storage = new CaptureStorage(join(dir, "capture.sqlite"));
-      try {
-        assert.equal(storage.getConfig().screenshotsEnabled, false);
-        assert.equal(storage.getConfig().screenshotIntervalSeconds, 300);
-        assert.equal(storage.getConfig().screenshotRetentionDays, 7);
-      } finally { storage.close(); }
+  it("validates title, upload, screenshot, idle, and category settings", () => {
+    assert.deepEqual(validateCaptureConfigPatch({
+      uploadEnabled: true,
+      windowTitleCapture: true,
+      windowTitleUpload: true,
+      screenshotsEnabled: true,
+      screenshotIntervalSeconds: 60,
+      screenshotRetentionDays: 90,
+      idleThresholdSeconds: 60,
+      categoryMap: { CODE: "Coding" }
+    }), {
+      uploadEnabled: true,
+      windowTitleCapture: true,
+      windowTitleUpload: true,
+      screenshotsEnabled: true,
+      screenshotIntervalSeconds: 60,
+      screenshotRetentionDays: 90,
+      idleThresholdSeconds: 60,
+      categoryMap: { CODE: "Coding" }
     });
-    assert.deepEqual(validateCaptureConfigPatch({ screenshotsEnabled: true, screenshotIntervalSeconds: 60, screenshotRetentionDays: 90 }), {
-      screenshotsEnabled: true, screenshotIntervalSeconds: 60, screenshotRetentionDays: 90
-    });
+    assert.deepEqual(validateCaptureConfigPatch({ autoPublish: true }), {});
+    assert.throws(() => validateCaptureConfigPatch({ windowTitleCapture: "yes" }), /windowTitleCapture/);
     assert.throws(() => validateCaptureConfigPatch({ screenshotIntervalSeconds: 59 }), /between 60 and 3600/);
     assert.throws(() => validateCaptureConfigPatch({ screenshotRetentionDays: 91 }), /between 1 and 90/);
-    assert.deepEqual(validateCaptureConfigPatch({ uploadEnabled: true }), { uploadEnabled: true });
-    assert.throws(() => validateCaptureConfigPatch({ uploadEnabled: "yes" }), /uploadEnabled must be a boolean/);
+    assert.throws(() => validateCaptureConfigPatch({ idleThresholdSeconds: 59 }), /between 60 and 3600/);
+    assert.throws(() => validateCaptureConfigPatch({ categoryMap: { Code: "" } }), /categoryMap/);
   });
 
-  it("stores and lists screenshot metadata without exposing file paths", async () => {
-    await withTempDir(async (dir) => {
-      const storage = new CaptureStorage(join(dir, "capture.sqlite"));
-      try {
-        const id = storage.insertScreenshot({ capturedAt: "2026-07-10T10:20:30.000Z", filePath: join(storage.screenshotsDir, "2026-07-10", "102030.png"), processName: "Code", windowTitle: "Workbench" });
-        storage.insertScreenshot({ capturedAt: "2026-07-09T10:20:30.000Z", filePath: join(storage.screenshotsDir, "2026-07-09", "102030.png") });
-        const result = storage.listScreenshots({ date: "2026-07-10" });
-        assert.deepEqual(result.items, [{ id, capturedAt: "2026-07-10T10:20:30.000Z", processName: "Code", windowTitle: "Workbench" }]);
-        assert.equal("filePath" in result.items[0], false);
-      } finally { storage.close(); }
-    });
-  });
-
-  it("deletes retained screenshot rows, files, and empty date directories", async () => {
+  it("stores screenshot metadata without exposing paths and removes retained files", async () => {
     await withTempDir(async (dir) => {
       const storage = new CaptureStorage(join(dir, "capture.sqlite"));
       try {
@@ -220,196 +153,23 @@ describe("capture storage and summarization", () => {
         const filePath = join(dayDir, "120000.png");
         await mkdir(dayDir, { recursive: true });
         await writeFile(filePath, "png");
-        storage.insertScreenshot({ capturedAt: "2026-07-01T12:00:00.000Z", filePath });
+        const id = storage.insertScreenshot({ capturedAt: "2026-07-01T12:00:00.000Z", filePath, processName: "Code", windowTitle: "Workbench" });
+        assert.deepEqual(storage.listScreenshots().items, [{ id, capturedAt: "2026-07-01T12:00:00.000Z", processName: "Code", windowTitle: "Workbench" }]);
+        assert.equal("filePath" in storage.listScreenshots().items[0], false);
         assert.equal(storage.deleteScreenshotsOlderThan(7, new Date("2026-07-10T12:00:00.000Z")), 1);
         await assert.rejects(access(filePath));
         await assert.rejects(access(dayDir));
-        assert.deepEqual(storage.listScreenshots().items, []);
-      } finally { storage.close(); }
+      } finally {
+        storage.close();
+      }
     });
   });
 
-  it("skips screenshots without a foreground sample or while excluded", () => {
+  it("keeps screenshot exclusion behavior unchanged", () => {
     const config = { ...DEFAULT_CAPTURE_CONFIG, enabled: true, screenshotsEnabled: true, excludePatterns: ["Secret"] };
     assert.equal(shouldCaptureScreenshot(config), false);
     assert.equal(shouldCaptureScreenshot(config, { sampledAt: "2026-07-10T00:00:00.000Z", processName: "SecretApp", windowTitle: "private" }), false);
     assert.equal(shouldCaptureScreenshot(config, { sampledAt: "2026-07-10T00:00:00.000Z", processName: "Code", windowTitle: "Workbench" }), true);
-  });
-
-  it("aggregates focus blocks, switches, categories, and idle time deterministically", () => {
-    const start = new Date("2026-07-09T09:00:00.000Z").getTime();
-    const codeSamples = Array.from({ length: 60 }, (_, index) => ({
-      sampledAt: new Date(start + index * 15_000).toISOString(),
-      processName: "Code",
-      windowTitle: "Workbench",
-      idle: false
-    }));
-    const analysis = analyzeCaptureSummary("2026-07-09", [
-      ...codeSamples,
-      { sampledAt: "2026-07-09T09:15:00.000Z", processName: "msedge", windowTitle: "Docs", idle: false },
-      { sampledAt: "2026-07-09T09:15:15.000Z", processName: "msedge", windowTitle: "Docs", idle: false },
-      { sampledAt: "2026-07-09T09:15:30.000Z", processName: "Code", windowTitle: "Workbench", idle: true },
-      { sampledAt: "2026-07-09T09:15:45.000Z", processName: "Code", windowTitle: "Workbench", idle: false }
-    ], 15, { CODE: "Coding", MSEDGE: "Web" });
-
-    assert.deepEqual(analysis.metrics, {
-      activeSeconds: 945,
-      idleSeconds: 15,
-      contextSwitches: 2,
-      focusBlocks: [{
-        startAt: "2026-07-09T09:00:00.000Z",
-        endAt: "2026-07-09T09:15:00.000Z",
-        app: "Code",
-        title: "Workbench",
-        activeSeconds: 900
-      }],
-      categories: { Coding: 915, Web: 30 },
-      apps: { Code: 915, msedge: 30 }
-    });
-    assert.match(analysis.markdown, /\| 09:00 - 09:15 \| Code \| Workbench \| 15m 0s \|/);
-    assert.match(analysis.markdown, /## Context Switches\n\n2/);
-    assert.match(analysis.markdown, /## Idle Time\n\n15s/);
-  });
-
-  it("splits a same-window session when a sample gap exceeds two intervals", () => {
-    const start = new Date("2026-07-10T09:00:00.000Z").getTime();
-    const samples = Array.from({ length: 59 }, (_, index) => ({
-      sampledAt: new Date(start + index * 15_000).toISOString(),
-      processName: "Code",
-      windowTitle: "Workbench",
-      idle: false
-    }));
-    samples.push({
-      sampledAt: new Date(start + 61 * 15_000).toISOString(),
-      processName: "Code",
-      windowTitle: "Workbench",
-      idle: false
-    });
-
-    const analysis = analyzeCaptureSummary("2026-07-10", samples, 15);
-
-    assert.equal(analysis.metrics.activeSeconds, 900);
-    assert.deepEqual(analysis.metrics.focusBlocks, []);
-  });
-
-  it("validates idle threshold and category map config patches", () => {
-    assert.deepEqual(validateCaptureConfigPatch({
-      idleThresholdSeconds: 60,
-      categoryMap: { CODE: "Coding" }
-    }), {
-      idleThresholdSeconds: 60,
-      categoryMap: { CODE: "Coding" }
-    });
-    assert.throws(() => validateCaptureConfigPatch({ idleThresholdSeconds: 59 }), /between 60 and 3600/);
-    assert.throws(() => validateCaptureConfigPatch({ categoryMap: { Code: "" } }), /categoryMap/);
-  });
-
-  it("updates the same daily summary on regeneration", async () => {
-    await withTempDir(async (dir) => {
-      const calls: Array<{ noteResourceId?: string; title: string }> = [];
-      const publisher: CaptureSummaryPublisher = {
-        async publishSummary(input) {
-          calls.push({ noteResourceId: input.noteResourceId, title: input.title });
-          return {
-            noteResourceId: input.noteResourceId ?? "note-capture-2026-07-07",
-            action: input.noteResourceId ? "update" : "create"
-          };
-        }
-      };
-      const manager = new CaptureManager({
-        syncRoot: join(dir, "sync-root"),
-        dbPath: join(dir, "capture.sqlite"),
-        platform: "win32",
-        logger: silentLogger(),
-        publisher
-      });
-      try {
-        manager.storage.updateConfig({ autoPublish: true });
-        manager.storage.insertSample({
-          sampledAt: "2026-07-07T09:00:00.000Z",
-          processName: "Code",
-          windowTitle: "Workbench"
-        });
-
-        const first = await manager.summarize("2026-07-07", new Date("2026-07-07T12:00:00.000Z"));
-        const second = await manager.summarize("2026-07-07", new Date("2026-07-07T12:05:00.000Z"));
-
-        assert.equal(first.action, "create");
-        assert.equal(second.action, "update");
-        assert.deepEqual(calls, [
-          { noteResourceId: undefined, title: "Capture Daily Summary 2026-07-07" },
-          { noteResourceId: "note-capture-2026-07-07", title: "Capture Daily Summary 2026-07-07" }
-        ]);
-      } finally {
-        manager.close();
-      }
-    });
-  });
-
-  it("stores summaries without publishing by default and publishes on demand", async () => {
-    await withTempDir(async (dir) => {
-      const calls: Array<{ noteResourceId?: string; contentMarkdown: string }> = [];
-      const publisher: CaptureSummaryPublisher = {
-        async publishSummary(input) {
-          calls.push({ noteResourceId: input.noteResourceId, contentMarkdown: input.contentMarkdown });
-          return {
-            noteResourceId: input.noteResourceId ?? "note-capture-2026-07-08",
-            action: input.noteResourceId ? "update" : "create"
-          };
-        }
-      };
-      const manager = new CaptureManager({
-        syncRoot: join(dir, "sync-root"),
-        dbPath: join(dir, "capture.sqlite"),
-        platform: "win32",
-        logger: silentLogger(),
-        publisher
-      });
-      try {
-        manager.storage.insertSample({
-          sampledAt: "2026-07-08T09:00:00.000Z",
-          processName: "Code",
-          windowTitle: "Workbench"
-        });
-
-        const saved = await manager.summarize("2026-07-08", new Date("2026-07-08T12:00:00.000Z"));
-        assert.equal(saved.action, "saved");
-        assert.equal(saved.published, false);
-        assert.equal(calls.length, 0);
-
-        const detail = manager.summaryDetail("2026-07-08");
-        assert.match(String(detail.summaryMarkdown), /Capture Daily Summary 2026-07-08/);
-        assert.deepEqual(detail.metrics, {
-          activeSeconds: 15,
-          idleSeconds: 0,
-          contextSwitches: 0,
-          focusBlocks: [],
-          categories: { Editor: 15 },
-          apps: { Code: 15 }
-        });
-
-        const listed = manager.listSummaries();
-        const items = listed.items as Array<Record<string, unknown>>;
-        assert.equal(items.length, 1);
-        assert.equal(items[0].summaryDate, "2026-07-08");
-        assert.equal(items[0].published, false);
-        assert.equal("summaryMarkdown" in items[0], false);
-        assert.equal("metrics" in items[0], false);
-
-        const first = await manager.publishSummary("2026-07-08");
-        assert.equal(first.action, "create");
-        assert.equal(first.published, true);
-        const second = await manager.publishSummary("2026-07-08");
-        assert.equal(second.action, "update");
-        assert.equal(calls.length, 2);
-        assert.equal(calls[1].noteResourceId, "note-capture-2026-07-08");
-        assert.equal(calls[0].contentMarkdown, calls[1].contentMarkdown);
-
-        await assert.rejects(() => manager.publishSummary("2026-01-01"), /No capture summary exists/);
-      } finally {
-        manager.close();
-      }
-    });
   });
 
   it("rejects enable on unsupported OS", async () => {
@@ -418,12 +178,7 @@ describe("capture storage and summarization", () => {
         syncRoot: join(dir, "sync-root"),
         dbPath: join(dir, "capture.sqlite"),
         platform: "linux",
-        logger: silentLogger(),
-        publisher: {
-          async publishSummary() {
-            throw new Error("not used");
-          }
-        }
+        logger: silentLogger()
       });
       try {
         await assert.rejects(() => manager.enable(), /only supported on Windows/);
@@ -434,57 +189,35 @@ describe("capture storage and summarization", () => {
     });
   });
 
-  it("skips malformed sampler JSON lines", async () => {
+  it("skips malformed sampler lines and decodes split UTF-8 output", async () => {
     const warnings: unknown[] = [];
     const samples: unknown[] = [];
-    const skipped = await ingestSamplerLine("{bad json", (sample) => {
-      samples.push(sample);
-    }, silentLogger(warnings));
-    const accepted = await ingestSamplerLine(JSON.stringify({
+    assert.equal(await ingestSamplerLine("{bad json", (sample) => { samples.push(sample); }, silentLogger(warnings)), false);
+    assert.equal(await ingestSamplerLine(JSON.stringify({
       sampledAt: "2026-07-07T09:00:00.000Z",
       processName: "Code",
       windowTitle: "Workbench",
       idleSeconds: 300
-    }), (sample) => {
-      samples.push(sample);
-    }, silentLogger(warnings), 300);
+    }), (sample) => { samples.push(sample); }, silentLogger(warnings), 300), true);
+    assert.deepEqual(samples, [{ sampledAt: "2026-07-07T09:00:00.000Z", processName: "Code", windowTitle: "Workbench", idle: true }]);
 
-    assert.equal(skipped, false);
-    assert.equal(accepted, true);
-    assert.equal(samples.length, 1);
-    assert.deepEqual(samples, [{
-      sampledAt: "2026-07-07T09:00:00.000Z",
-      processName: "Code",
-      windowTitle: "Workbench",
-      idle: true
-    }]);
-    assert.ok(warnings.length >= 1);
-  });
-
-  it("decodes sampler stdout when UTF-8 characters span chunks", () => {
     const decoder = new StringDecoder("utf8");
-    const line = `${JSON.stringify({
-      sampledAt: "2026-07-07T09:00:00.000Z",
-      processName: "Code",
-      windowTitle: "日本語タイトル"
-    })}\n`;
+    const line = `${JSON.stringify({ sampledAt: "2026-07-07T09:00:00.000Z", processName: "Code", windowTitle: "日本語タイトル" })}\n`;
     const bytes = Buffer.from(line, "utf8");
     const splitAt = bytes.indexOf(Buffer.from("本", "utf8")) + 1;
-
-    const first = decodeSamplerStdoutChunk(decoder, bytes.subarray(0, splitAt));
-    const second = decodeSamplerStdoutChunk(decoder, bytes.subarray(splitAt));
-
-    assert.equal(first + second, line);
+    assert.equal(decodeSamplerStdoutChunk(decoder, bytes.subarray(0, splitAt)) + decodeSamplerStdoutChunk(decoder, bytes.subarray(splitAt)), line);
   });
 });
 
-describe("capture insights uploader", () => {
-  it("registers once, splits sample batches, and advances its tuple cursor", async () => {
+describe("capture analyser uploader", () => {
+  it("registers through analyser, maps exact observations, batches, and advances the new tuple cursor", async () => {
     await withTempDir(async (dir) => {
       const storage = new CaptureStorage(join(dir, "capture.sqlite"));
-      const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
+      const posts: Array<{ path: string; body: Record<string, unknown> }> = [];
+      const gets: string[] = [];
       try {
-        storage.setConfig({ ...DEFAULT_CAPTURE_CONFIG, enabled: true, uploadEnabled: true });
+        storage.setMeta("capture.machineId", "legacy-machine");
+        storage.setConfig({ ...DEFAULT_CAPTURE_CONFIG, enabled: true, uploadEnabled: true, windowTitleCapture: true, intervalSeconds: 20 });
         for (let index = 0; index < 501; index += 1) {
           storage.insertSample({
             sampledAt: new Date(Date.parse("2026-07-01T00:00:00.000Z") + index * 1000).toISOString(),
@@ -498,21 +231,34 @@ describe("capture insights uploader", () => {
           displayName: "Test daemon",
           platform: "win32",
           createMachineKey: () => "machine-key-1",
+          getJson: async <T>(path: string): Promise<T> => {
+            gets.push(path);
+            return { settings: { foregroundAppUpload: true } } as T;
+          },
           postJson: async <T>(path: string, body: unknown): Promise<T> => {
-            calls.push({ path, body: body as Record<string, unknown> });
+            posts.push({ path, body: body as Record<string, unknown> });
             return (path.endsWith("/register") ? { id: "machine-1" } : { ingested: 1 }) as T;
           }
         });
 
         await uploader.run();
-        await uploader.run();
 
-        assert.equal(calls.filter((call) => call.path.endsWith("/register")).length, 1);
-        const sampleCalls = calls.filter((call) => call.path.endsWith("/ingest/samples"));
-        assert.equal(sampleCalls.length, 2);
-        assert.equal((sampleCalls[0].body.samples as unknown[]).length, 500);
-        assert.equal((sampleCalls[1].body.samples as unknown[]).length, 1);
-        assert.equal(storage.getMeta(CAPTURE_UPLOAD_META_KEYS.machineKey), "machine-key-1");
+        assert.deepEqual(posts[0], {
+          path: "/api/analyser/machines/register",
+          body: { machineKey: "machine-key-1", displayName: "Test daemon", platform: "win32" }
+        });
+        assert.equal(storage.getMeta(CAPTURE_UPLOAD_META_KEYS.machineId), "machine-1");
+        assert.equal(gets[0], "/api/analyser/settings/effective?machineId=machine-1");
+        const ingestPosts = posts.filter((call) => call.path === "/api/analyser/observations/ingest");
+        assert.deepEqual(ingestPosts.map((call) => (call.body.observations as unknown[]).length), [500, 1]);
+        assert.deepEqual((ingestPosts[0].body.observations as Array<Record<string, unknown>>)[0], {
+          source: "pc_activity",
+          action: "foreground_sample",
+          actorKind: "user",
+          occurredAt: "2026-07-01T00:00:00.000Z",
+          metadata: { app: "Code", idle: true, intervalSeconds: 20 },
+          dedupeKey: "pc:machine-1:2026-07-01T00:00:00.000Z"
+        });
         assert.deepEqual(JSON.parse(storage.getMeta(CAPTURE_UPLOAD_META_KEYS.samplesCursor) ?? "{}"), {
           sampledAt: "2026-07-01T00:08:20.000Z",
           id: 501
@@ -523,87 +269,105 @@ describe("capture insights uploader", () => {
     });
   });
 
-  it("does not advance the sample cursor after a failed batch", async () => {
+  it("includes a captured title only when windowTitleUpload is true", async () => {
     await withTempDir(async (dir) => {
       const storage = new CaptureStorage(join(dir, "capture.sqlite"));
-      let failIngest = true;
-      let registrations = 0;
-      const warnings: unknown[] = [];
+      let observation: Record<string, unknown> | undefined;
       try {
-        storage.setConfig({ ...DEFAULT_CAPTURE_CONFIG, enabled: true, uploadEnabled: true });
+        storage.setConfig({ ...DEFAULT_CAPTURE_CONFIG, enabled: true, uploadEnabled: true, windowTitleCapture: true, windowTitleUpload: true });
         storage.insertSample({ sampledAt: "2026-07-02T09:00:00.000Z", processName: "Code", windowTitle: "Workbench" });
         const uploader = new CaptureUploader({
           storage,
           displayName: "Test daemon",
           platform: "win32",
-          logger: silentLogger(warnings),
-          postJson: async <T>(path: string): Promise<T> => {
-            if (path.endsWith("/register")) { registrations += 1; return { id: "machine-1" } as T; }
-            if (path.endsWith("/ingest/samples") && failIngest) throw new Error("offline");
+          getJson: async <T>(): Promise<T> => ({ settings: { foregroundAppUpload: true } }) as T,
+          postJson: async <T>(path: string, body: unknown): Promise<T> => {
+            if (path.endsWith("/register")) return { id: "machine-1" } as T;
+            observation = ((body as { observations: Array<Record<string, unknown>> }).observations)[0];
             return { ingested: 1 } as T;
           }
         });
-
         await uploader.run();
-        assert.equal(storage.getMeta(CAPTURE_UPLOAD_META_KEYS.samplesCursor), undefined);
-        failIngest = false;
-        await uploader.run();
-
-        assert.equal(registrations, 1);
-        assert.ok(storage.getMeta(CAPTURE_UPLOAD_META_KEYS.samplesCursor));
-        assert.equal(warnings.length, 1);
+        assert.deepEqual(observation?.metadata, { app: "Code", idle: false, intervalSeconds: 15, windowTitle: "Workbench" });
       } finally {
         storage.close();
       }
     });
   });
 
-  it("uploads regenerated summaries when generatedAt moves past the watermark", async () => {
+  it("advances the cursor only after a successful ingest", async () => {
     await withTempDir(async (dir) => {
       const storage = new CaptureStorage(join(dir, "capture.sqlite"));
-      const summaryBodies: Array<Record<string, unknown>> = [];
+      let failIngest = true;
       try {
         storage.setConfig({ ...DEFAULT_CAPTURE_CONFIG, enabled: true, uploadEnabled: true });
-        storage.saveSummary("2026-07-03", "first", 1, undefined, "2026-07-03T12:00:00.000Z");
+        storage.insertSample({ sampledAt: "2026-07-03T09:00:00.000Z", processName: "Code", windowTitle: "Workbench" });
         const uploader = new CaptureUploader({
           storage,
           displayName: "Test daemon",
           platform: "win32",
-          postJson: async <T>(path: string, body: unknown): Promise<T> => {
+          logger: silentLogger(),
+          getJson: async <T>(): Promise<T> => ({ settings: { foregroundAppUpload: true } }) as T,
+          postJson: async <T>(path: string): Promise<T> => {
             if (path.endsWith("/register")) return { id: "machine-1" } as T;
-            if (path.endsWith("/ingest/summaries")) summaryBodies.push(body as Record<string, unknown>);
+            if (failIngest) throw new Error("offline");
             return { ingested: 1 } as T;
           }
         });
-
         await uploader.run();
-        storage.saveSummary("2026-07-03", "regenerated", 2, undefined, "2026-07-03T12:05:00.000Z");
+        assert.equal(storage.getMeta(CAPTURE_UPLOAD_META_KEYS.samplesCursor), undefined);
+        failIngest = false;
         await uploader.run();
-
-        assert.equal(summaryBodies.length, 2);
-        const first = (summaryBodies[0].summaries as Array<Record<string, unknown>>)[0];
-        const second = (summaryBodies[1].summaries as Array<Record<string, unknown>>)[0];
-        assert.equal(first.generatedAt, "2026-07-03T12:00:00.000Z");
-        assert.equal(second.generatedAt, "2026-07-03T12:05:00.000Z");
-        assert.equal(second.summaryMarkdown, "regenerated");
-        assert.equal(storage.getMeta(CAPTURE_UPLOAD_META_KEYS.summariesWatermark), "2026-07-03T12:05:00.000Z");
+        assert.ok(storage.getMeta(CAPTURE_UPLOAD_META_KEYS.samplesCursor));
       } finally {
         storage.close();
       }
     });
   });
 
-  it("does nothing while uploadEnabled is false", async () => {
+  it("fails closed when the effective gate is false or cannot be fetched", async () => {
+    for (const policy of ["false", "error"] as const) {
+      await withTempDir(async (dir) => {
+        const storage = new CaptureStorage(join(dir, "capture.sqlite"));
+        const postPaths: string[] = [];
+        try {
+          storage.setConfig({ ...DEFAULT_CAPTURE_CONFIG, enabled: true, uploadEnabled: true });
+          storage.insertSample({ sampledAt: "2026-07-04T09:00:00.000Z", processName: "Code", windowTitle: "Workbench" });
+          const uploader = new CaptureUploader({
+            storage,
+            displayName: "Test daemon",
+            platform: "win32",
+            logger: silentLogger(),
+            getJson: async <T>(): Promise<T> => {
+              if (policy === "error") throw new Error("policy unavailable");
+              return { settings: { foregroundAppUpload: false } } as T;
+            },
+            postJson: async <T>(path: string): Promise<T> => {
+              postPaths.push(path);
+              return { id: "machine-1" } as T;
+            }
+          });
+          await uploader.run();
+          assert.equal(postPaths.includes("/api/analyser/observations/ingest"), false);
+          assert.equal(uploader.serverUploadAllowed, policy === "false" ? false : null);
+        } finally {
+          storage.close();
+        }
+      });
+    }
+  });
+
+  it("does nothing while local uploadEnabled is false", async () => {
     await withTempDir(async (dir) => {
       const storage = new CaptureStorage(join(dir, "capture.sqlite"));
       let calls = 0;
       try {
         storage.setConfig({ ...DEFAULT_CAPTURE_CONFIG, enabled: true, uploadEnabled: false });
-        storage.insertSample({ sampledAt: "2026-07-04T09:00:00.000Z", processName: "Code", windowTitle: "Workbench" });
         const uploader = new CaptureUploader({
           storage,
           displayName: "Test daemon",
           platform: "win32",
+          getJson: async <T>(): Promise<T> => { calls += 1; return {} as T; },
           postJson: async <T>(): Promise<T> => { calls += 1; return {} as T; }
         });
         await uploader.run();

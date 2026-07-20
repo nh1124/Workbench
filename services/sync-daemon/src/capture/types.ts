@@ -1,26 +1,31 @@
 export type CaptureConfig = {
+  // Server policy mapping:
+  // enabled -> foregroundAppCapture
+  // uploadEnabled -> foregroundAppUpload
   enabled: boolean;
   uploadEnabled: boolean;
+  windowTitleCapture: boolean;
+  windowTitleUpload: boolean;
   screenshotsEnabled: boolean;
   screenshotIntervalSeconds: number;
   screenshotRetentionDays: number;
   intervalSeconds: number;
   retentionDays: number;
   excludePatterns: string[];
-  autoPublish: boolean;
   idleThresholdSeconds: number;
   categoryMap: Record<string, string>;
 };
 
 export type CaptureConfigPatch = {
   uploadEnabled?: boolean;
+  windowTitleCapture?: boolean;
+  windowTitleUpload?: boolean;
   screenshotsEnabled?: boolean;
   screenshotIntervalSeconds?: number;
   screenshotRetentionDays?: number;
   intervalSeconds?: number;
   retentionDays?: number;
   excludePatterns?: string[];
-  autoPublish?: boolean;
   idleThresholdSeconds?: number;
   categoryMap?: Record<string, string>;
 };
@@ -41,63 +46,15 @@ export type CaptureSample = {
 
 export type CaptureSampleInput = CaptureSample;
 
-export type CaptureFocusBlock = {
-  startAt: string;
-  endAt: string;
-  app: string;
-  title: string;
-  activeSeconds: number;
-};
-
-export type CaptureSummaryMetrics = {
-  activeSeconds: number;
-  idleSeconds: number;
-  contextSwitches: number;
-  focusBlocks: CaptureFocusBlock[];
-  categories: Record<string, number>;
-  apps: Record<string, number>;
-};
-
-export type CaptureSummaryRecord = {
-  summaryDate: string;
-  noteResourceId?: string;
-  generatedAt: string;
-  sampleCount: number;
-  published: boolean;
-  summaryMarkdown?: string;
-  metrics?: CaptureSummaryMetrics;
-};
-
-export type CaptureSummaryListResult = {
-  items: CaptureSummaryRecord[];
-  nextCursor?: string;
-};
-
 export type CaptureStatus = {
   enabled: boolean;
+  uploadEnabled: boolean;
+  serverUploadAllowed: boolean | null;
+  windowTitleCapture: boolean;
+  windowTitleUpload: boolean;
   collectorAlive: boolean;
   lastSampleAt?: string;
-  lastSummaryAt?: string;
   sampleCount24h: number;
-};
-
-export type CaptureSummaryPublishInput = {
-  summaryDate: string;
-  noteResourceId?: string;
-  title: string;
-  contentMarkdown: string;
-  tags: string[];
-  lifecycleState: "raw";
-  sampleCount: number;
-};
-
-export type CaptureSummaryPublishResult = {
-  noteResourceId: string;
-  action: "create" | "update";
-};
-
-export type CaptureSummaryPublisher = {
-  publishSummary(input: CaptureSummaryPublishInput): Promise<CaptureSummaryPublishResult>;
 };
 
 export type CaptureLogger = Pick<Console, "warn" | "error" | "info">;
