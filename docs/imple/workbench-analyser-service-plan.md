@@ -1,6 +1,6 @@
 # Workbench Analyser Service Plan (2026-07)
 
-Status: `[in-progress]` — 2026-07-20 着手（Owner 指示による insights → analyser 全面再設計）
+Status: `[done]` — 2026-07-20 完了（insights → analyser 全面再設計・実装・本番 cutover・正本反映・OAuth 修正すべて完了）
 Last updated: 2026-07-20
 
 背景: Analyser を「Workbench 内の知識と PC 上の作業活動を観測し、改善候補を抽出し、
@@ -286,12 +286,13 @@ analyser.operations.record     analyser.publications.record
 | AW-14a | `[implemented]` | core, ui | summary/proposal → Note/Artifact export orchestration（sha256 publication dedupe、approved/executed proposal のみ、UI Export dialog） |
 | AW-14b | `[implemented]` | migration | 移行スクリプト 2 本 + runbook。ローカルで実行済み（service_accounts 9 件、activity はローカル空。実データ移行は cutover 時）。maintenance→proposals は Core 稼働時に実行 |
 | AW-15a | `[implemented]` | core, insights, infra | services/insights 削除、insights.*/maintenance.* MCP・HTTP・client・provisioning・usage_events・maintenance queue/lease/actions 削除（markIndexEntriesRead は indexReadTracking.ts に保存）、infra から insights-db/INSIGHTS_* 全除去。既存 DB の usage_events/maintenance_leases 表は残置（追加削除は cutover 時判断） |
-| AW-15b | `[in-progress]` | ui | 旧 UI 削除: MaintenancePage、maintenanceApi/insights api・型 |
+| AW-15b | `[implemented]` | ui | 旧 UI 削除: MaintenancePage、maintenanceApi/insights api・型（commit 02dcda1、/maintenance は /analyser へ redirect のみ） |
 | AW-16 | `[implemented]` | notes, projects, artifacts | 旧 maintenance queue/confirm/snooze/flag endpoint と note 側 lifecycle fields を削除。**memory 側 lifecycle_state/last_confirmed_at/review_* は authority セマンティクスと不可分のため維持**（許容制約 §12 参照）。index-read-marks は維持。既存 DB の旧列は残置（非破壊） |
-| AW-17 | `[implemented]` | skills, docs | ローカル Skills 4 種（analyser-cycle 新設・maintenance 全面改稿・project 境界追記・materialize 新設）+ tool-contracts 18-tool 契約 + README + 運用 runbook + CLAUDE.md 導線。**AgentSkills 正本（Workbench artifacts）への反映は cutover 後（AW-19 内）に実施**（本番が新コードになるまで新契約の材料化を防ぐため） |
+| AW-17 | `[implemented]` | skills, docs | ローカル Skills 4 種（analyser-cycle 新設・maintenance 全面改稿・project 境界追記・materialize 新設）+ tool-contracts 18-tool 契約 + README + 運用 runbook + CLAUDE.md 導線 |
+| AW-17b | `[implemented]` | AgentSkills 正本 | 正本反映完了（2026-07-20、別セッション）。正本の実規約に合わせ `skills/engineering/workbench-operations/` 配下に「1 skill=1 マージノート」で 4 ノート新規作成 + capability `00_INDEX.md` + 親 index 更新。tool-contracts は各ノートに内包、per-agent `openai.yaml` アダプタは agent-neutral のため正本から除外。旧正本コピーは存在せず全て新規。cowork の定期ルーチンは analyser polling へ更新済み |
 | AW-18 | `[implemented]` | root | 統合 live smoke **51/51 合格**（2026-07-20、quota 復旧後に再実施）。Codex read-only 独立最終レビュー実施 → 5 major + 1 minor の実欠陥を検出、全件修正・live smoke で検証済み（詳細は §12A） |
 | AW-19 | `[implemented]` | server | 本番 cutover 完了（2026-07-20）。backup 5DB → 2 段階 deploy（pre-deletion tag で migration 実行 → 最終 HEAD）→ 全サービス再起動 → live smoke 合格。running commit 777525e で origin と一致。**副作用**: 調査中の `tmux capture-pane` が既知 tmux 3.3a バグでサーバー再現し tmux server が 2 度クラッシュ（詳細は完了報告）。復旧のため systemd --user scope（`workbench-web.scope`）でサービスを起動し直し、tmux 依存を切り離した |
-| AW-R | `[in-progress]` | root | 実装指揮・レビュー・commit・進捗ボード維持 |
+| AW-R | `[done]` | root | 実装指揮・レビュー・commit・進捗ボード維持。全 wave 完了。cutover 後の OAuth 2 バグ（`response_types_supported` 欠落 3d4f548 / loopback ephemeral port 4de5ac0）も修正・反映済み |
 
 ## 11. サーバー cutover 手順（AW-19）
 
