@@ -17,7 +17,12 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
     server: {
       host,
-      port: Number(portRaw)
+      port: Number(portRaw),
+      // Cloudflare quick tunnels mint a new random subdomain on every restart
+      // (see docs/imple/workbench-analyser-migration-runbook.md and CLAUDE.md
+      // notes on the ephemeral trycloudflare.com URL); allow the whole suffix
+      // instead of pinning one hostname that will go stale on the next tunnel.
+      allowedHosts: [".trycloudflare.com"]
     }
   };
 });
