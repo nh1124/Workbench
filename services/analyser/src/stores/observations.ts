@@ -308,7 +308,7 @@ export async function pullObservationsAfterWithPool(
 
 export async function aggregateActivity(
   owner: string,
-  options: { from: string; to: string; machineId?: string }
+  options: { from: string; to: string; machineId?: string; timezone?: string }
 ): Promise<ActivityAggregate> {
   return aggregateActivityWithPool(getAnalyserPool(), owner, options);
 }
@@ -316,18 +316,19 @@ export async function aggregateActivity(
 export async function aggregateActivityWithPool(
   pool: AnalyserQueryPool,
   owner: string,
-  options: { from: string; to: string; machineId?: string }
+  options: { from: string; to: string; machineId?: string; timezone?: string }
 ): Promise<ActivityAggregate> {
+  const timezone = options.timezone ?? "UTC";
   const result = await pool.query<{ aggregate: ActivityAggregate }>(`WITH filtered AS (
-      SELECT occurred_at::date AS activity_date, machine_id,
+      SELECT (occurred_at AT TIME ZONE $5)::date AS activity_date, machine_id,
         COALESCE(metadata->>'idle' = 'true', FALSE) AS idle,
         NULLIF(metadata->>'app', '') AS app
       FROM analyser_observations
       WHERE service_account_id = $1
         AND source = 'pc_activity'
         AND expires_at > NOW()
-        AND occurred_at >= $2::date
-        AND occurred_at < ($3::date + INTERVAL '1 day')
+        AND occurred_at >= ($2::date::timestamp AT TIME ZONE $5)
+        AND occurred_at < (($3::date + INTERVAL '1 day')::timestamp AT TIME ZONE $5)
         AND ($4::uuid IS NULL OR machine_id = $4::uuid)
     ), day_counts AS (
       SELECT activity_date, machine_id,
@@ -363,7 +364,7 @@ export async function aggregateActivityWithPool(
         'activeCount', COALESCE((SELECT SUM(active_count)::integer FROM day_counts), 0),
         'apps', COALESCE((SELECT jsonb_object_agg(app, app_count ORDER BY app) FROM total_app_counts), '{}'::jsonb)
       )
-    ) AS aggregate`, [owner, options.from, options.to, options.machineId ?? null]);
+    ) AS aggregate`, [owner, options.from, options.to, options.machineId ?? null, timezone]);
   return result.rows[0]?.aggregate ?? { days: [], totals: { sampleCount: 0, idleCount: 0, activeCount: 0, apps: {} } };
 }
 

@@ -244,10 +244,20 @@ export const observationListQuerySchema = z.object({
   }
 });
 
+const ianaTimezoneSchema = z.string().refine((value) => {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}, { message: "Expected a valid IANA timezone" });
+
 export const activityAggregateQuerySchema = z.object({
   from: dateSchema,
   to: dateSchema,
-  machineId: z.string().uuid().optional()
+  machineId: z.string().uuid().optional(),
+  timezone: ianaTimezoneSchema.optional()
 }).strict().refine((value) => value.from <= value.to, {
   path: ["to"],
   message: "to must be on or after from"

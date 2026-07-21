@@ -8,7 +8,7 @@ process.env.ANALYSER_DB_NAME ??= "test";
 process.env.ANALYSER_DB_USER ??= "test";
 process.env.ANALYSER_DB_PASSWORD ??= "test";
 
-const { ingestObservationsWithPool } = await import("../stores/observations.js");
+const { aggregateActivityWithPool, ingestObservationsWithPool } = await import("../stores/observations.js");
 
 type Result = { rows: unknown[]; rowCount?: number };
 type Call = { text: string; values?: unknown[] };
@@ -36,6 +36,24 @@ function input(overrides: Partial<ObservationInput> = {}): ObservationInput {
 }
 
 describe("analyser observation gating", () => {
+  it("buckets activity with the requested timezone and defaults to UTC", async () => {
+    const tokyoPool = fakePool([{ rows: [] }]);
+    await aggregateActivityWithPool(tokyoPool, "owner-1", {
+      from: "2026-07-20",
+      to: "2026-07-21",
+      timezone: "Asia/Tokyo"
+    });
+    assert.match(tokyoPool.calls[0].text, /AT TIME ZONE/);
+    assert.ok(tokyoPool.calls[0].values?.includes("Asia/Tokyo"));
+
+    const utcPool = fakePool([{ rows: [] }]);
+    await aggregateActivityWithPool(utcPool, "owner-1", {
+      from: "2026-07-20",
+      to: "2026-07-21"
+    });
+    assert.ok(utcPool.calls[0].values?.includes("UTC"));
+  });
+
   it("rejects pc activity without upload opt-in and local files by default", async () => {
     const pool = fakePool([{ rows: [] }]);
     const result = await ingestObservationsWithPool(pool, "owner-1", [

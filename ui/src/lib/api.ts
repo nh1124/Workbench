@@ -1080,6 +1080,7 @@ export const analyserApi = {
     from: string;
     to: string;
     machineId?: string;
+    timezone?: string;
   }): Promise<AnalyserActivityAggregate> =>
     fetchJson(analyserApiUrl("/observations/aggregate", query)),
   routines: (): Promise<{ items: AnalyserRoutineRecord[] }> =>

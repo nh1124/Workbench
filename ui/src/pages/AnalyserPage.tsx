@@ -60,6 +60,20 @@ function activityRange(period: ActivityPeriod): { from: string; to: string } {
   return { from: localDateString(from), to: localDateString(to) };
 }
 
+function resolveTimezone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
+function localDayStartInstant(dateStr: string): string {
+  const [year, month, day] = dateStr.split("-").map(Number);
+  return new Date(year, month - 1, day, 0, 0, 0, 0).toISOString();
+}
+
+function localDayEndInstant(dateStr: string): string {
+  const [year, month, day] = dateStr.split("-").map(Number);
+  return new Date(year, month - 1, day, 23, 59, 59, 999).toISOString();
+}
+
 function optionalDate(value: string | undefined): string {
   return value ? formatDateTime(value) : "—";
 }
@@ -280,9 +294,9 @@ function ActivityTab() {
   const [error, setError] = useState<string>();
   const [notConfigured, setNotConfigured] = useState(false);
   const range = useMemo(() => activityRange(period), [period]);
-  const derivedRange = useMemo(() => ({
-    from: `${range.from}T00:00:00.000Z`,
-    to: `${range.to}T23:59:59.999Z`
+  const instantRange = useMemo(() => ({
+    from: localDayStartInstant(range.from),
+    to: localDayEndInstant(range.to)
   }), [range]);
 
   useEffect(() => {
@@ -303,7 +317,8 @@ function ActivityTab() {
     setError(undefined);
     void analyserApi.activityAggregate({
       ...range,
-      machineId: machineId || undefined
+      machineId: machineId || undefined,
+      timezone: resolveTimezone()
     }).then((result) => {
       if (!cancelled) setAggregate(result);
     }).catch((requestError: unknown) => {
@@ -323,7 +338,7 @@ function ActivityTab() {
     setNextCursor(undefined);
     setError(undefined);
     void analyserApi.observations({
-      ...range,
+      ...instantRange,
       machineId: machineId || undefined,
       source: source || undefined,
       limit: OBSERVATION_PAGE_SIZE
@@ -339,7 +354,7 @@ function ActivityTab() {
       if (!cancelled) setObservationLoading(false);
     });
     return () => { cancelled = true; };
-  }, [machineId, range, source]);
+  }, [instantRange, machineId, source]);
 
   useEffect(() => {
     let cancelled = false;
@@ -348,7 +363,7 @@ function ActivityTab() {
     setDerivedNextCursor(undefined);
     setError(undefined);
     void analyserApi.derivedCaptures({
-      ...derivedRange,
+      ...instantRange,
       machineId: machineId || undefined,
       limit: ANALYSER_PAGE_SIZE
     }).then((result) => {
@@ -363,7 +378,7 @@ function ActivityTab() {
       if (!cancelled) setDerivedLoading(false);
     });
     return () => { cancelled = true; };
-  }, [derivedRange, machineId]);
+  }, [instantRange, machineId]);
 
   const loadMore = async () => {
     if (!nextCursor) return;
@@ -371,7 +386,7 @@ function ActivityTab() {
     setError(undefined);
     try {
       const result = await analyserApi.observations({
-        ...range,
+        ...instantRange,
         machineId: machineId || undefined,
         source: source || undefined,
         limit: OBSERVATION_PAGE_SIZE,
@@ -393,7 +408,7 @@ function ActivityTab() {
     setError(undefined);
     try {
       const result = await analyserApi.derivedCaptures({
-        ...derivedRange,
+        ...instantRange,
         machineId: machineId || undefined,
         limit: ANALYSER_PAGE_SIZE,
         cursor: derivedNextCursor

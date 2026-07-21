@@ -3869,7 +3869,7 @@ app.get(
   "/api/analyser/observations/aggregate",
   analyserFacadeRoute((token, req) => analyserClient.aggregateActivity(
     token,
-    pickAnalyserQuery(req.query, ["from", "to", "machineId"])
+    pickAnalyserQuery(req.query, ["from", "to", "machineId", "timezone"])
   ))
 );
 app.get("/api/analyser/routines", analyserFacadeRoute((token) => analyserClient.listRoutines(token)));

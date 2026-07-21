@@ -363,11 +363,22 @@ describe("AnalyserPage", () => {
     expect(await screen.findByRole("heading", { name: "Server aggregate" })).toBeTruthy();
     expect(screen.getByTestId("location").textContent).toBe("/analyser?tab=activity");
     await waitFor(() => {
-      expect(analyserApi.activityAggregate).toHaveBeenCalledWith({ ...range, machineId: undefined });
-      expect(analyserApi.observations).toHaveBeenCalledWith({
+      expect(analyserApi.activityAggregate).toHaveBeenCalledWith({
         ...range,
         machineId: undefined,
+        timezone: expect.any(String)
+      });
+      expect(analyserApi.observations).toHaveBeenCalledWith({
+        from: expect.stringMatching(/T.*Z$/),
+        to: expect.stringMatching(/T.*Z$/),
+        machineId: undefined,
         source: undefined,
+        limit: 50
+      });
+      expect(analyserApi.derivedCaptures).toHaveBeenCalledWith({
+        from: expect.stringMatching(/T.*Z$/),
+        to: expect.stringMatching(/T.*Z$/),
+        machineId: undefined,
         limit: 50
       });
     });
@@ -392,15 +403,14 @@ describe("AnalyserPage", () => {
   });
 
   it("renders derived capture text and requests the selected activity range", async () => {
-    const range = currentRange(7);
     renderPage("/analyser?tab=activity");
 
     expect(await screen.findByText("Derived capture 1")).toBeTruthy();
     expect(screen.getByText(/Completed a captured workflow/)).toBeTruthy();
     expect(screen.getByText(/Images stay on the machine and are never uploaded/)).toBeTruthy();
     expect(analyserApi.derivedCaptures).toHaveBeenCalledWith({
-      from: `${range.from}T00:00:00.000Z`,
-      to: `${range.to}T23:59:59.999Z`,
+      from: expect.stringMatching(/T.*Z$/),
+      to: expect.stringMatching(/T.*Z$/),
       machineId: undefined,
       limit: 50
     });
@@ -410,8 +420,6 @@ describe("AnalyserPage", () => {
     vi.mocked(analyserApi.observations)
       .mockResolvedValueOnce({ items: [observation("1", { action: "first.action" })], nextCursor: "cursor-2" })
       .mockResolvedValueOnce({ items: [observation("2", { action: "second.action" })] });
-    const range = currentRange(7);
-
     renderPage("/analyser?tab=activity");
 
     expect(await screen.findByText("first.action")).toBeTruthy();
@@ -420,7 +428,8 @@ describe("AnalyserPage", () => {
     expect(await screen.findByText("second.action")).toBeTruthy();
     expect(screen.getByText("first.action")).toBeTruthy();
     expect(analyserApi.observations).toHaveBeenLastCalledWith({
-      ...range,
+      from: expect.stringMatching(/T.*Z$/),
+      to: expect.stringMatching(/T.*Z$/),
       machineId: undefined,
       source: undefined,
       limit: 50,
