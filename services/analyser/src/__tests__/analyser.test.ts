@@ -18,6 +18,7 @@ describe("analyser collection settings", () => {
     assert.equal(DEFAULT_COLLECTION_SETTINGS.localFileEvents, "off");
     assert.equal(DEFAULT_COLLECTION_SETTINGS.localFileUpload, false);
     assert.equal(DEFAULT_COLLECTION_SETTINGS.screenshots, "off");
+    assert.equal(DEFAULT_COLLECTION_SETTINGS.screenshotDerivedUpload, false);
     assert.deepEqual(DEFAULT_COLLECTION_SETTINGS.retentionDays, {
       workbench_change: 30,
       mcp_access: 30,
@@ -37,6 +38,7 @@ describe("analyser collection settings", () => {
   });
 
   it("rejects unknown fields", () => {
+    assert.equal(collectionSettingsSchema.safeParse({ screenshotDerivedUpload: true }).success, true);
     assert.equal(collectionSettingsSchema.safeParse({ unexpected: true }).success, false);
     assert.equal(collectionSettingsSchema.safeParse({ retentionDays: { unknown_source: 30 } }).success, false);
   });

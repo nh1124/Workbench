@@ -8,6 +8,11 @@ import { z } from "zod";
 import { requireInternalApiKey, requireUserAuth } from "./auth.js";
 import { ensureAnalyserSchema, findServiceAccountByCoreUserId, provisionServiceAccount } from "./db.js";
 import { AnalyserServiceError } from "./serviceError.js";
+import {
+  getDerivedCapture,
+  ingestDerivedCapture,
+  listDerivedCaptures
+} from "./stores/derivedCaptures.js";
 import { listMachines, registerMachine } from "./stores/machines.js";
 import {
   aggregateActivity,
@@ -59,6 +64,7 @@ import {
   automationPolicySchema,
   collectionSettingsSchema,
   dateSchema,
+  derivedCaptureInputSchema,
   isoDateTimeSchema,
   observationInputSchema,
   OBSERVATION_SOURCES,
@@ -310,6 +316,18 @@ export const summaryListQuerySchema = z.object({
   message: "to must be on or after from"
 });
 
+export const derivedCaptureListQuerySchema = z.object({
+  kind: boundedText(100).optional(),
+  machineId: z.string().uuid().optional(),
+  from: isoDateTimeSchema.optional(),
+  to: isoDateTimeSchema.optional(),
+  ...paginationSchema
+}).strict().superRefine((value, context) => {
+  if (value.from && value.to && new Date(value.from).getTime() > new Date(value.to).getTime()) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["to"], message: "to must be on or after from" });
+  }
+});
+
 export const proposalListQuerySchema = z.object({
   status: z.enum(["open", "approved", "rejected", "executed", "superseded"]).optional(),
   kind: boundedText(100).optional(),
@@ -373,6 +391,9 @@ export interface AppDeps {
   upsertSummary: typeof upsertSummary;
   listSummaries: typeof listSummaries;
   getSummary: typeof getSummary;
+  ingestDerivedCapture: typeof ingestDerivedCapture;
+  listDerivedCaptures: typeof listDerivedCaptures;
+  getDerivedCapture: typeof getDerivedCapture;
   createProposal: typeof createProposal;
   listProposals: typeof listProposals;
   getProposal: typeof getProposal;
@@ -420,6 +441,9 @@ const realAppDeps: AppDeps = {
   upsertSummary,
   listSummaries,
   getSummary,
+  ingestDerivedCapture,
+  listDerivedCaptures,
+  getDerivedCapture,
   createProposal,
   listProposals,
   getProposal,
@@ -665,6 +689,30 @@ export function buildApp(deps: AppDeps): express.Express {
     const params = parse(uuidParamsSchema, req.params, res);
     if (!params) return;
     return res.json(await deps.getSummary(req.authUser!.serviceAccountId, params.id));
+  }));
+
+  app.post("/captures/derived", ...userRoute(deps, async (req, res) => {
+    const body = parse(derivedCaptureInputSchema, req.body ?? {}, res);
+    if (!body) return;
+    const owner = req.authUser!.serviceAccountId;
+    const settings = await deps.getEffectiveCollectionSettings(owner, body.machineId);
+    if (settings.settings.screenshotDerivedUpload !== true) {
+      throw new AnalyserServiceError(403, "DERIVED_CAPTURE_DISABLED", "Derived capture upload is disabled");
+    }
+    const result = await deps.ingestDerivedCapture(owner, body);
+    return res.status(result.created ? 201 : 200).json(result);
+  }));
+
+  app.get("/captures/derived", ...userRoute(deps, async (req, res) => {
+    const query = parse(derivedCaptureListQuerySchema, req.query, res);
+    if (!query) return;
+    return res.json(await deps.listDerivedCaptures(req.authUser!.serviceAccountId, query));
+  }));
+
+  app.get("/captures/derived/:id", ...userRoute(deps, async (req, res) => {
+    const params = parse(uuidParamsSchema, req.params, res);
+    if (!params) return;
+    return res.json(await deps.getDerivedCapture(req.authUser!.serviceAccountId, params.id));
   }));
 
   app.post("/proposals", ...userRoute(deps, async (req, res) => {

@@ -48,6 +48,7 @@ export interface CollectionSettings {
   localFileEvents: "off" | "metadata";
   localFileUpload: boolean;
   screenshots: "off" | "local_only";
+  screenshotDerivedUpload: boolean;
   retentionDays: Record<ObservationSource, number>;
   localScreenshotRetentionDays: number;
   projectAllow: string[];
@@ -71,6 +72,7 @@ export const DEFAULT_COLLECTION_SETTINGS: CollectionSettings = {
   localFileEvents: "off",
   localFileUpload: false,
   screenshots: "off",
+  screenshotDerivedUpload: false,
   retentionDays: {
     workbench_change: 30,
     mcp_access: 30,
@@ -112,6 +114,7 @@ export const collectionSettingsSchema = z.object({
   localFileEvents: z.enum(["off", "metadata"]).optional(),
   localFileUpload: z.boolean().optional(),
   screenshots: z.enum(["off", "local_only"]).optional(),
+  screenshotDerivedUpload: z.boolean().optional(),
   retentionDays: retentionDaysSchema.optional(),
   localScreenshotRetentionDays: z.number().int().min(1).max(30).optional(),
   projectAllow: stringArraySchema.optional(),
@@ -197,6 +200,38 @@ export interface ObservationRecord extends ObservationInput {
   id: string;
   receivedAt: string;
   expiresAt: string;
+}
+
+export interface DerivedCaptureInput {
+  machineId?: string;
+  kind: string;
+  title: string;
+  summaryMarkdown: string;
+  evidenceRefs?: ResourceRef[];
+  occurredAt: string;
+  dedupeKey: string;
+}
+
+export const derivedCaptureInputSchema = z.object({
+  machineId: z.string().uuid().optional(),
+  kind: z.string().trim().min(1).max(100),
+  title: z.string().trim().min(1).max(500),
+  summaryMarkdown: z.string().max(20_000),
+  evidenceRefs: z.array(resourceRefSchema).max(50).optional(),
+  occurredAt: isoDateTimeSchema,
+  dedupeKey: z.string().trim().min(1).max(500)
+}).strict();
+
+export interface DerivedCaptureRecord {
+  id: string;
+  machineId?: string;
+  kind: string;
+  title: string;
+  summaryMarkdown: string;
+  evidenceRefs: ResourceRef[];
+  occurredAt: string;
+  receivedAt: string;
+  createdAt: string;
 }
 
 export interface ActivityAggregateDay {

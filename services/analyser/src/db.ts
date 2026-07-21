@@ -130,6 +130,25 @@ export async function ensureAnalyserSchema(): Promise<void> {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_analyser_observations_expires_at
       ON analyser_observations(expires_at)`);
 
+    await pool.query(`CREATE TABLE IF NOT EXISTS analyser_derived_captures (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      service_account_id TEXT NOT NULL REFERENCES service_accounts(id) ON DELETE CASCADE,
+      machine_id UUID NULL,
+      kind TEXT NOT NULL,
+      title TEXT NOT NULL,
+      summary_markdown TEXT NOT NULL,
+      evidence_refs JSONB NOT NULL DEFAULT '[]',
+      occurred_at TIMESTAMPTZ NOT NULL,
+      received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      dedupe_key TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(service_account_id, dedupe_key)
+    )`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_analyser_derived_captures_owner_occurred
+      ON analyser_derived_captures(service_account_id, occurred_at DESC, id DESC)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_analyser_derived_captures_owner_machine
+      ON analyser_derived_captures(service_account_id, machine_id)`);
+
     await pool.query(`CREATE TABLE IF NOT EXISTS analyser_routines (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       service_account_id TEXT NOT NULL REFERENCES service_accounts(id) ON DELETE CASCADE,
