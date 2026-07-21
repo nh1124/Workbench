@@ -23,6 +23,13 @@ type AccessLogger = {
   error(message: string, details?: Record<string, unknown>): void;
 };
 
+export type ResourceRef = {
+  service: string;
+  resourceType: string;
+  resourceId: string;
+  pathSnapshot?: string;
+};
+
 export interface AnalyserAccessInstrumentationDeps {
   getEffectiveSettings(query: { coreUserId: string }): Promise<EffectiveAccessSettingsResult>;
   ingestObservations(body: {
@@ -188,6 +195,63 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+type ResourceRefExtractor = (args: unknown) => ResourceRef[];
+
+function resourceRefExtractor(
+  service: string,
+  resourceType: string,
+  idField: string,
+  pathField?: string
+): ResourceRefExtractor {
+  return (args) => {
+    if (!isRecord(args)) return [];
+    const resourceId = args[idField];
+    if (typeof resourceId !== "string" || resourceId.trim().length === 0) return [];
+    const pathSnapshot = pathField === undefined ? undefined : args[pathField];
+    return [{
+      service,
+      resourceType,
+      resourceId,
+      ...(typeof pathSnapshot === "string" && pathSnapshot.trim().length > 0 ? { pathSnapshot } : {})
+    }];
+  };
+}
+
+const noteRef = resourceRefExtractor("notes", "note", "id");
+const artifactItemRef = resourceRefExtractor("artifacts", "artifact_item", "id", "path");
+const projectIdRef = resourceRefExtractor("projects", "project", "projectId");
+const projectRef = resourceRefExtractor("projects", "project", "id");
+const taskRef = resourceRefExtractor("tasks", "task", "id");
+const mindmapRef = resourceRefExtractor("mindmaps", "mindmap", "id");
+const wbsRef = resourceRefExtractor("wbs", "wbs", "id");
+
+const MCP_RESOURCE_REF_EXTRACTORS: Readonly<Record<string, ResourceRefExtractor>> = {
+  "notes.get": noteRef,
+  "notes.update": noteRef,
+  "notes.delete": noteRef,
+  "artifacts.item.get": artifactItemRef,
+  "artifacts.item.update": artifactItemRef,
+  "artifacts.item.move": artifactItemRef,
+  "artifacts.item.delete": artifactItemRef,
+  "artifacts.item.metadata.update": artifactItemRef,
+  "projects.get": projectRef,
+  "projects.context.get": projectIdRef,
+  "projects.index.search": projectIdRef,
+  "projects.brief.get": projectIdRef,
+  "projects.brief.update": projectIdRef,
+  "tasks.get": taskRef,
+  "tasks.update": taskRef,
+  "tasks.delete": taskRef,
+  "mindmaps.get": mindmapRef,
+  "mindmaps.update": mindmapRef,
+  "wbs.get": wbsRef,
+  "wbs.update": wbsRef
+};
+
+export function resourceRefsForTool(toolName: string, args: unknown): ResourceRef[] {
+  return MCP_RESOURCE_REF_EXTRACTORS[toolName]?.(args) ?? [];
+}
+
 function isExcludedTool(name: string): boolean {
   return name.startsWith("analyser.") || name.startsWith("auth.");
 }
@@ -256,7 +320,7 @@ export function instrumentMcpServer(
               ...(errorClass === undefined ? {} : { errorClass })
             },
             ...(projectId === undefined ? {} : { projectId }),
-            resourceRefs: [],
+            resourceRefs: resourceRefsForTool(name, args),
             dedupeKey: `mcp:${deps.randomUUID()}`
           }
         }, deps), deps);
@@ -277,6 +341,56 @@ const HTTP_EXCLUDED_PREFIXES = [
   "/api/oauth"
 ];
 const UUID_SEGMENT = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+type HttpResourceRefPattern = {
+  pattern: RegExp;
+  service: string;
+  resourceType: string;
+};
+
+const HTTP_RESOURCE_REF_PATTERNS: readonly HttpResourceRefPattern[] = [
+  { pattern: /^\/api\/artifacts\/items\/([^/?#]+)(?:\/|$)/i, service: "artifacts", resourceType: "artifact_item" },
+  { pattern: /^\/api\/wbs\/plans\/([^/?#]+)(?:\/|$)/i, service: "wbs", resourceType: "wbs" },
+  { pattern: /^\/api\/tasks\/today\/([^/?#]+)(?:\/|$)/i, service: "tasks", resourceType: "task" },
+  { pattern: /^\/api\/notes\/([^/?#]+)(?:\/|$)/i, service: "notes", resourceType: "note" },
+  { pattern: /^\/api\/projects\/([^/?#]+)(?:\/|$)/i, service: "projects", resourceType: "project" },
+  { pattern: /^\/api\/tasks\/([^/?#]+)(?:\/|$)/i, service: "tasks", resourceType: "task" },
+  { pattern: /^\/api\/mindmaps\/([^/?#]+)(?:\/|$)/i, service: "mindmaps", resourceType: "mindmap" },
+  { pattern: /^\/api\/wbs\/([^/?#]+)(?:\/|$)/i, service: "wbs", resourceType: "wbs" }
+];
+
+const HTTP_RESERVED_ID_SEGMENTS = new Set([
+  ":id",
+  "bulk",
+  "default",
+  "dependencies",
+  "export",
+  "import",
+  "items",
+  "lbs",
+  "plans",
+  "pins",
+  "projects",
+  "schedule",
+  "schedule-calendar",
+  "schedule-items",
+  "today"
+]);
+
+function isResourceIdSegment(segment: string): boolean {
+  return segment.length > 0 && !HTTP_RESERVED_ID_SEGMENTS.has(segment.toLowerCase());
+}
+
+export function resourceRefsForHttp(method: string, pathname: string): ResourceRef[] {
+  void method;
+  const pathWithoutQuery = pathname.split(/[?#]/, 1)[0] ?? pathname;
+  for (const { pattern, service, resourceType } of HTTP_RESOURCE_REF_PATTERNS) {
+    const resourceId = pattern.exec(pathWithoutQuery)?.[1];
+    if (!resourceId || !isResourceIdSegment(resourceId)) continue;
+    return [{ service, resourceType, resourceId }];
+  }
+  return [];
+}
 
 function shouldObserveHttp(method: string, pathname: string): boolean {
   const lowerPath = pathname.toLowerCase();
@@ -331,7 +445,7 @@ export function analyserHttpAccessMiddleware(
               ok: res.statusCode < 400,
               durationMs
             },
-            resourceRefs: [],
+            resourceRefs: resourceRefsForHttp(method, pathname),
             dedupeKey: `http:${deps.randomUUID()}`
           }
         }, deps);

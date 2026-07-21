@@ -106,6 +106,44 @@ function observations(ingests: IngestBody[]): Record<string, unknown>[] {
 beforeEach(() => instrumentation._resetForTests());
 afterEach(() => instrumentation._resetForTests());
 
+describe("resource ref extractors", () => {
+  it("extracts only mapped MCP resource ids and paths", () => {
+    assert.deepEqual(instrumentation.resourceRefsForTool("notes.get", { id: "n1" }), [
+      { service: "notes", resourceType: "note", resourceId: "n1" }
+    ]);
+    assert.deepEqual(instrumentation.resourceRefsForTool("artifacts.item.move", {
+      id: "a1",
+      path: "x/y.md"
+    }), [
+      {
+        service: "artifacts",
+        resourceType: "artifact_item",
+        resourceId: "a1",
+        pathSnapshot: "x/y.md"
+      }
+    ]);
+    assert.deepEqual(instrumentation.resourceRefsForTool("projects.context.get", {
+      projectId: "p1"
+    }), [
+      { service: "projects", resourceType: "project", resourceId: "p1" }
+    ]);
+    assert.deepEqual(instrumentation.resourceRefsForTool("unknown.tool", { id: "hidden" }), []);
+    assert.deepEqual(instrumentation.resourceRefsForTool("notes.get", { body: "not an id" }), []);
+  });
+
+  it("extracts primary HTTP resource ids without collection-route false positives", () => {
+    const noteId = "11111111-1111-4111-8111-111111111111";
+    assert.deepEqual(instrumentation.resourceRefsForHttp("POST", `/api/notes/${noteId}`), [
+      { service: "notes", resourceType: "note", resourceId: noteId }
+    ]);
+    assert.deepEqual(instrumentation.resourceRefsForHttp("GET", "/api/notes"), []);
+    assert.deepEqual(instrumentation.resourceRefsForHttp("GET", "/api/projects/p1/memories"), [
+      { service: "projects", resourceType: "project", resourceId: "p1" }
+    ]);
+    assert.deepEqual(instrumentation.resourceRefsForHttp("GET", "/api/projects/default"), []);
+  });
+});
+
 describe("MCP access instrumentation", () => {
   it("observes reads, mutations, and unchanged errors while excluding analyser/auth tools", async () => {
     const { deps, ingests } = makeDeps();
@@ -118,6 +156,7 @@ describe("MCP access instrumentation", () => {
     server.registerTool("auth.login", {}, async () => ({}));
 
     await server.handlers.get("notes.get")?.({
+      id: "note-1",
       projectId: "project-1",
       body: "must not be observed",
       token: "secret"
@@ -139,6 +178,9 @@ describe("MCP access instrumentation", () => {
       "tool:tasks.fail"
     ]);
     assert.equal(captured[0].projectId, "project-1");
+    assert.deepEqual(captured[0].resourceRefs, [
+      { service: "notes", resourceType: "note", resourceId: "note-1" }
+    ]);
     const readMetadata = captured[0].metadata as Record<string, unknown>;
     assert.equal(readMetadata.kind, "read");
     assert.deepEqual(Object.keys(readMetadata).sort(), ["durationMs", "kind", "ok", "tool"]);
