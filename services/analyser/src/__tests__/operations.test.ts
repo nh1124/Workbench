@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { DEFAULT_AUTOMATION_POLICY, publicationInputSchema } from "../types.js";
+import { DEFAULT_AUTOMATION_POLICY, publicationInputSchema, type AnalyserOperationKind } from "../types.js";
 
 process.env.ANALYSER_DB_HOST ??= "127.0.0.1";
 process.env.ANALYSER_DB_PORT ??= "5551";
@@ -96,15 +96,52 @@ describe("analyser operations", () => {
     assert.match(pool.calls[3].text, /idempotency_key = \$2/);
   });
 
-  it("strips secret detail keys before insert", async () => {
-    const pool = fakePool([
-      { rows: [] }, { rows: [policyRow()] }, { rows: [{ ...operationRow, detail: { message: "ok" } }] }, { rows: [] }
-    ]);
-    await recordOperationWithPool(pool, "owner-1", {
-      operationKind: "artifact_move", approvalBasis: "policy", result: "succeeded", idempotencyKey: "op-1",
-      detail: { token: "secret", Cookie: "secret", message: "ok" }
-    });
-    assert.deepEqual(JSON.parse(String(pool.calls[2].values?.[7])), { message: "ok" });
+  it("allowlists detail independently for every operation kind", async () => {
+    const cases: Array<{
+      operationKind: AnalyserOperationKind;
+      detail: Record<string, string>;
+      expected: Record<string, string>;
+    }> = [
+      {
+        operationKind: "artifact_move",
+        detail: {
+          fromPath: "inbox/a.md", toPath: "archive/a.md", projectId: "project-1",
+          content: "drop", token: "drop"
+        },
+        expected: { fromPath: "inbox/a.md", toPath: "archive/a.md", projectId: "project-1" }
+      },
+      {
+        operationKind: "artifact_metadata_update",
+        detail: { field: "title", projectId: "project-1", documentBody: "drop", Cookie: "drop" },
+        expected: { field: "title", projectId: "project-1" }
+      },
+      {
+        operationKind: "artifact_secondary_membership_add",
+        detail: { projectId: "project-2", requestBody: "drop", authorization: "drop" },
+        expected: { projectId: "project-2" }
+      },
+      {
+        operationKind: "progress_note_upsert",
+        detail: { noteId: "note-1", projectId: "project-1", content: "drop", secret: "drop" },
+        expected: { noteId: "note-1", projectId: "project-1" }
+      }
+    ];
+
+    for (const [index, testCase] of cases.entries()) {
+      const pool = fakePool([
+        { rows: [] }, { rows: [policyRow()] },
+        { rows: [{ ...operationRow, operation_kind: testCase.operationKind, detail: testCase.expected }] },
+        { rows: [] }
+      ]);
+      await recordOperationWithPool(pool, "owner-1", {
+        operationKind: testCase.operationKind,
+        approvalBasis: "policy",
+        result: "succeeded",
+        idempotencyKey: `op-detail-${index}`,
+        detail: testCase.detail
+      });
+      assert.deepEqual(JSON.parse(String(pool.calls[2].values?.[7])), testCase.expected, testCase.operationKind);
+    }
   });
 });
 

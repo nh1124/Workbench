@@ -140,42 +140,89 @@ describe("analyser observation gating", () => {
     }
   });
 
-  it("allowlists local file metadata while leaving other-source metadata behavior unchanged", async () => {
-    const localPool = fakePool([{
+  it("allowlists metadata independently for every observation source", async () => {
+    const pool = fakePool([{
       rows: [{
         machine_id: null,
-        settings_json: { localFileEvents: "metadata", localFileUpload: true, localRootAllow: ["C:/work"] },
+        settings_json: {
+          foregroundAppUpload: true,
+          windowTitleUpload: true,
+          localFileEvents: "metadata",
+          localFileUpload: true,
+          localRootAllow: ["C:/work"]
+        },
         version: 1
       }]
-    }, { rows: [], rowCount: 1 }]);
-    await ingestObservationsWithPool(localPool, "owner-1", [input({
-      source: "local_file",
-      dedupeKey: "file-metadata",
-      metadata: {
-        eventType: "modify",
-        root: "C:/work",
-        relativePath: "src/index.ts",
-        mtime: "2026-07-21T03:04:00.000Z",
-        size: 42,
-        content: "must not be stored"
-      }
-    })]);
-    const localBatch = JSON.parse(String(localPool.calls[1].values?.[1])) as Array<{ metadata: Record<string, unknown> }>;
-    assert.deepEqual(localBatch[0].metadata, {
-      eventType: "modify",
-      root: "C:/work",
-      relativePath: "src/index.ts",
-      mtime: "2026-07-21T03:04:00.000Z",
-      size: 42
-    });
+    }, { rows: [], rowCount: 6 }]);
+    await ingestObservationsWithPool(pool, "owner-1", [
+      input({
+        source: "workbench_change",
+        dedupeKey: "workbench-metadata",
+        metadata: {
+          domain: "artifacts", action: "move", resourceType: "artifact", path: "inbox/a.md",
+          previousPath: "drafts/a.md", version: 2, content: "drop", prompt: "drop", token: "drop"
+        }
+      }),
+      input({
+        source: "mcp_access",
+        dedupeKey: "mcp-metadata",
+        metadata: {
+          tool: "projects.context.get", kind: "read", ok: true, durationMs: 25,
+          errorClass: null, documentBody: "drop", requestBody: "drop", apiKey: "drop"
+        }
+      }),
+      input({
+        source: "ui_access",
+        dedupeKey: "ui-metadata",
+        metadata: {
+          route: "/projects", method: "GET", kind: "navigation", status: 200, ok: true,
+          durationMs: 12, content: "drop", requestBody: "drop", Cookie: "drop"
+        }
+      }),
+      input({
+        source: "pc_activity",
+        dedupeKey: "pc-metadata",
+        metadata: {
+          app: "code", idle: false, intervalSeconds: 30, windowTitle: "visible",
+          content: "drop", documentBody: "drop", password: "drop"
+        }
+      }),
+      input({
+        source: "local_file",
+        dedupeKey: "file-metadata",
+        metadata: {
+          eventType: "modify", root: "C:/work", relativePath: "src/index.ts",
+          mtime: "2026-07-21T03:04:00.000Z", size: 42, content: "drop", prompt: "drop", secret: "drop"
+        }
+      }),
+      input({
+        source: "agent_session",
+        dedupeKey: "agent-metadata",
+        metadata: {
+          event: "completed", milestone: "verified", resourceCount: 4,
+          content: "drop", requestBody: "drop", credential: "drop"
+        }
+      })
+    ]);
 
-    const otherPool = fakePool([{ rows: [] }, { rows: [], rowCount: 1 }]);
-    await ingestObservationsWithPool(otherPool, "owner-1", [input({
-      dedupeKey: "other-metadata",
-      metadata: { content: "existing behavior", custom: true }
-    })]);
-    const otherBatch = JSON.parse(String(otherPool.calls[1].values?.[1])) as Array<{ metadata: Record<string, unknown> }>;
-    assert.deepEqual(otherBatch[0].metadata, { content: "existing behavior", custom: true });
+    const batch = JSON.parse(String(pool.calls[1].values?.[1])) as Array<{
+      source: ObservationInput["source"];
+      metadata: Record<string, unknown>;
+    }>;
+    assert.deepEqual(Object.fromEntries(batch.map((item) => [item.source, item.metadata])), {
+      workbench_change: {
+        domain: "artifacts", action: "move", resourceType: "artifact", path: "inbox/a.md",
+        previousPath: "drafts/a.md", version: 2
+      },
+      mcp_access: { tool: "projects.context.get", kind: "read", ok: true, durationMs: 25, errorClass: null },
+      ui_access: { route: "/projects", method: "GET", kind: "navigation", status: 200, ok: true, durationMs: 12 },
+      pc_activity: { app: "code", idle: false, intervalSeconds: 30, windowTitle: "visible" },
+      local_file: {
+        eventType: "modify", root: "C:/work", relativePath: "src/index.ts",
+        mtime: "2026-07-21T03:04:00.000Z", size: 42
+      },
+      agent_session: { event: "completed", milestone: "verified", resourceCount: 4 }
+    });
   });
 
   it("strips secret metadata, caps strings, computes retention, and counts dedupe conflicts", async () => {
@@ -188,7 +235,7 @@ describe("analyser observation gating", () => {
       { rows: [], rowCount: 0 }
     ]);
     const result = await ingestObservationsWithPool(pool, "owner-1", [input({
-      metadata: { token: "do-not-store", Cookie: "also-secret", app: "a".repeat(2100), idle: false }
+      metadata: { token: "do-not-store", Cookie: "also-secret", path: "a".repeat(2100), content: "drop" }
     })]);
 
     assert.equal(result.ingested, 0);
@@ -201,7 +248,8 @@ describe("analyser observation gating", () => {
     }>;
     assert.equal(batch[0].metadata.token, undefined);
     assert.equal(batch[0].metadata.Cookie, undefined);
-    assert.equal(String(batch[0].metadata.app).length, 2000);
+    assert.equal(String(batch[0].metadata.path).length, 2000);
+    assert.equal(batch[0].metadata.content, undefined);
     assert.equal(batch[0].expiresAt, "2026-07-22T00:00:00.000Z");
   });
 

@@ -29,6 +29,12 @@ type OperationRow = {
 const OPERATION_COLUMNS = `id, operation_kind, approval_basis, proposal_id, before_refs,
   after_refs, result, detail, run_id, agent_label, idempotency_key, created_at`;
 const SECRET_DETAIL_KEY = /^(token|secret|password|authorization|cookie)$/i;
+const OPERATION_DETAIL_KEYS = {
+  artifact_move: new Set(["fromPath", "toPath", "projectId"]),
+  artifact_metadata_update: new Set(["field", "projectId"]),
+  artifact_secondary_membership_add: new Set(["projectId"]),
+  progress_note_upsert: new Set(["noteId", "projectId"])
+} satisfies Record<AnalyserOperationKind, ReadonlySet<string>>;
 
 function iso(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
@@ -61,9 +67,16 @@ function parseInput(value: unknown): OperationInput {
   return parsed.data;
 }
 
-function sanitizeDetail(detail: OperationInput["detail"]): Record<string, string | number | boolean | null> | undefined {
+function sanitizeDetail(
+  detail: OperationInput["detail"],
+  operationKind: AnalyserOperationKind
+): Record<string, string | number | boolean | null> | undefined {
   if (detail === undefined) return undefined;
-  return Object.fromEntries(Object.entries(detail).filter(([key]) => !SECRET_DETAIL_KEY.test(key)));
+  const allowedKeys = (OPERATION_DETAIL_KEYS as Partial<Record<AnalyserOperationKind, ReadonlySet<string>>>)[operationKind];
+  if (!allowedKeys) return {};
+  return Object.fromEntries(Object.entries(detail)
+    .filter(([key]) => allowedKeys.has(key) && !SECRET_DETAIL_KEY.test(key))
+    .map(([key, value]) => [key, typeof value === "string" ? value.slice(0, 2000) : value]));
 }
 
 function encodeCursor(createdAt: string, id: string): string {
@@ -97,7 +110,7 @@ export async function recordOperationWithPool(
   rawInput: OperationInput
 ): Promise<{ operation: OperationRecord; created: boolean }> {
   const input = parseInput(rawInput);
-  const detail = sanitizeDetail(input.detail);
+  const detail = sanitizeDetail(input.detail, input.operationKind);
   const client = await pool.connect();
   try {
     await client.query("BEGIN");

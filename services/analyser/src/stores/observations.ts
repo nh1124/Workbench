@@ -45,7 +45,14 @@ export interface RetentionLogger {
 const SECRET_METADATA_KEY = /token|secret|password|passwd|authoriz|cookie|apikey|api_key|credential|privatekey|private_key/i;
 const METADATA_KEY_LIMIT = 20;
 const WINDOW_TITLE_METADATA_KEY = /^(windowtitle|window_title)$/i;
-const LOCAL_FILE_METADATA_KEYS = new Set(["eventType", "root", "relativePath", "mtime", "size"]);
+const OBSERVATION_METADATA_KEYS = {
+  workbench_change: new Set(["domain", "action", "resourceType", "path", "previousPath", "version"]),
+  mcp_access: new Set(["tool", "kind", "ok", "durationMs", "errorClass"]),
+  ui_access: new Set(["route", "method", "kind", "status", "ok", "durationMs"]),
+  pc_activity: new Set(["app", "idle", "intervalSeconds", "windowTitle"]),
+  local_file: new Set(["eventType", "root", "relativePath", "mtime", "size"]),
+  agent_session: new Set(["event", "milestone", "resourceCount"])
+} satisfies Record<ObservationSource, ReadonlySet<string>>;
 
 function iso(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
@@ -138,9 +145,11 @@ function sanitizeMetadata(
   options: { stripWindowTitle: boolean }
 ): Record<string, string | number | boolean | null> {
   const sanitized: Record<string, string | number | boolean | null> = {};
+  const allowedKeys = (OBSERVATION_METADATA_KEYS as Partial<Record<ObservationSource, ReadonlySet<string>>>)[source];
+  if (!allowedKeys) return sanitized;
   for (const [key, value] of Object.entries(metadata ?? {})) {
     if (Object.keys(sanitized).length >= METADATA_KEY_LIMIT) break;
-    if (source === "local_file" && !LOCAL_FILE_METADATA_KEYS.has(key)) continue;
+    if (!allowedKeys.has(key)) continue;
     if (SECRET_METADATA_KEY.test(key)) continue;
     if (options.stripWindowTitle && WINDOW_TITLE_METADATA_KEY.test(key)) continue;
     sanitized[key] = typeof value === "string" ? value.slice(0, 2000) : value;
