@@ -29,6 +29,7 @@ export const DEFAULT_CAPTURE_CONFIG: CaptureConfig = {
   uploadEnabled: false,
   windowTitleCapture: false,
   windowTitleUpload: false,
+  localFileEnabled: false,
   screenshotsEnabled: false,
   screenshotIntervalSeconds: DEFAULT_SCREENSHOT_INTERVAL_SECONDS,
   screenshotRetentionDays: DEFAULT_SCREENSHOT_RETENTION_DAYS,
@@ -96,6 +97,7 @@ function normalizeConfig(value: unknown): CaptureConfig {
     uploadEnabled: typeof record.uploadEnabled === "boolean" ? record.uploadEnabled : DEFAULT_CAPTURE_CONFIG.uploadEnabled,
     windowTitleCapture: typeof record.windowTitleCapture === "boolean" ? record.windowTitleCapture : false,
     windowTitleUpload: typeof record.windowTitleUpload === "boolean" ? record.windowTitleUpload : false,
+    localFileEnabled: typeof record.localFileEnabled === "boolean" ? record.localFileEnabled : false,
     screenshotsEnabled: typeof record.screenshotsEnabled === "boolean" ? record.screenshotsEnabled : false,
     screenshotIntervalSeconds: isIntegerBetween(record.screenshotIntervalSeconds, 60, 3600)
       ? record.screenshotIntervalSeconds : DEFAULT_SCREENSHOT_INTERVAL_SECONDS,
@@ -152,6 +154,10 @@ export function validateCaptureConfigPatch(patch: Record<string, unknown>): Capt
   if (patch.windowTitleUpload !== undefined) {
     if (typeof patch.windowTitleUpload !== "boolean") throw new Error("windowTitleUpload must be a boolean.");
     next.windowTitleUpload = patch.windowTitleUpload;
+  }
+  if (patch.localFileEnabled !== undefined) {
+    if (typeof patch.localFileEnabled !== "boolean") throw new Error("localFileEnabled must be a boolean.");
+    next.localFileEnabled = patch.localFileEnabled;
   }
   if (patch.screenshotsEnabled !== undefined) {
     if (typeof patch.screenshotsEnabled !== "boolean") throw new Error("screenshotsEnabled must be a boolean.");

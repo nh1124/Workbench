@@ -9,6 +9,7 @@ import { CaptureStorage, validateCaptureConfigPatch } from "./storage.js";
 import { CaptureError, CaptureSupervisor, type CaptureSupervisorOptions } from "./supervisor.js";
 import { ScreenshotScheduler, type ScreenshotSchedulerOptions } from "./screenshotScheduler.js";
 import type { ServerCapturePolicy } from "./serverPolicy.js";
+import { FileWatcher, type LocalFileEvent } from "./fileWatcher.js";
 
 export type CaptureManagerOptions = {
   syncRoot: string;
@@ -45,6 +46,7 @@ export class CaptureManager {
   private readonly supervisor: CaptureSupervisor;
   private readonly logger?: CaptureLogger;
   private readonly screenshotScheduler: ScreenshotScheduler;
+  private readonly fileWatcher: FileWatcher;
   private readonly getServerPolicy?: () => ServerCapturePolicy | null;
   private lastForeground?: CaptureSample;
 
@@ -75,6 +77,15 @@ export class CaptureManager {
       getLastForeground: () => this.lastForeground,
       onCaptured: (input) => { this.storage.insertScreenshot(input); }
     });
+    this.fileWatcher = new FileWatcher({
+      getPolicy: () => this.serverPolicy(),
+      getEnabled: () => this.effectiveConfig().localFileEnabled,
+      logger: options.logger
+    });
+  }
+
+  private serverPolicy(): ServerCapturePolicy | null {
+    return this.getServerPolicy?.() ?? null;
   }
 
   /**
@@ -83,7 +94,7 @@ export class CaptureManager {
    */
   private effectiveConfig(): CaptureConfig {
     const local = this.storage.getConfig();
-    const policy = this.getServerPolicy?.() ?? null;
+    const policy = this.serverPolicy();
     if (!policy) return local;
     return {
       ...local,
@@ -116,11 +127,15 @@ export class CaptureManager {
     } else if (!wantScreenshots && this.screenshotScheduler.active) {
       this.screenshotScheduler.stop();
     }
+    // sync() internally checks getEnabled() (= effectiveConfig().localFileEnabled)
+    // and getPolicy().localRootAllow, starting/stopping watchers accordingly.
+    this.fileWatcher.sync();
   }
 
   close(): void {
     this.supervisor.stop();
     this.screenshotScheduler.stop();
+    this.fileWatcher.stop();
     this.storage.close();
   }
 
@@ -151,6 +166,10 @@ export class CaptureManager {
 
   config(): CaptureConfig {
     return this.storage.getConfig();
+  }
+
+  drainFileEvents(): LocalFileEvent[] {
+    return this.fileWatcher.drain();
   }
 
   async enable(): Promise<CaptureApiStatus> {

@@ -9,15 +9,18 @@ import {
   CaptureServerPolicyProvider,
   CaptureStorage,
   CaptureUploader,
+  FileWatcher,
   CAPTURE_UPLOAD_META_KEYS,
   DEFAULT_CAPTURE_CONFIG,
   assertCaptureDbPathAllowed,
   decodeSamplerStdoutChunk,
   ingestSamplerLine,
+  isLocalFilePathAllowed,
   normalizeServerCapturePolicy,
   shouldCaptureScreenshot,
   validateCaptureConfigPatch,
-  type CaptureLogger
+  type CaptureLogger,
+  type LocalFileEvent
 } from "../capture/index.js";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
@@ -36,6 +39,113 @@ function silentLogger(warnings: unknown[] = []): CaptureLogger {
     error(...args: unknown[]) { warnings.push(args); }
   };
 }
+
+describe("local file watcher", () => {
+  it("denies configured roots and exclude matches, allows other paths, and ignores invalid regexes", () => {
+    const root = join(tmpdir(), "workbench-local-file-root");
+    const warnings: unknown[] = [];
+    const policy = { localRootDeny: [join(root, "private")], excludePatterns: ["node_modules", "["] };
+    assert.equal(isLocalFilePathAllowed(root, join("private", "secret.txt"), policy, silentLogger(warnings)), false);
+    assert.equal(isLocalFilePathAllowed(root, join("node_modules", "package.json"), policy, silentLogger(warnings)), false);
+    assert.equal(isLocalFilePathAllowed(root, join("src", "index.ts"), policy, silentLogger(warnings)), true);
+    assert.ok(warnings.length >= 1);
+  });
+
+  it("emits allowed file metadata, filters deny/exclude, detects deletes, and clears on drain", async () => {
+    await withTempDir(async (root) => {
+      // Real files: the watcher stats the resolved path (statSync is not injected).
+      await mkdir(join(root, "src"), { recursive: true });
+      await mkdir(join(root, "private"), { recursive: true });
+      await writeFile(join(root, "src", "index.ts"), "content", "utf8");
+      await writeFile(join(root, "private", "secret.txt"), "secret", "utf8");
+      await writeFile(join(root, "cache.tmp"), "tmp", "utf8");
+
+      type WatchCallback = (eventType: "rename" | "change", filename: string | null) => void;
+      const callbacks = new Map<string, WatchCallback>();
+      const watchImpl = ((watchedRoot: string, _options: unknown, callback: WatchCallback) => {
+        callbacks.set(watchedRoot, callback);
+        return { close() {} };
+      }) as unknown as typeof import("node:fs").watch;
+
+      const policy = normalizeServerCapturePolicy({
+        localRootAllow: [root],
+        localRootDeny: [join(root, "private")],
+        excludePatterns: ["\\.tmp$", "["]
+      });
+      const warnings: unknown[] = [];
+      const watcher = new FileWatcher({
+        getPolicy: () => policy,
+        getEnabled: () => true,
+        watchImpl,
+        now: () => new Date("2026-07-21T03:04:05.000Z"),
+        logger: silentLogger(warnings)
+      });
+      watcher.sync();
+      const callback = callbacks.get(root);
+      assert.ok(callback);
+      callback("change", "src/index.ts");
+      callback("change", "private/secret.txt");
+      callback("change", "cache.tmp");
+      callback("rename", "removed.txt");
+
+      const events = watcher.drain();
+      assert.equal(events.length, 2);
+      const [modified, deleted] = events;
+      assert.equal(modified.eventType, "modified");
+      assert.equal(modified.relativePath, "src/index.ts");
+      assert.equal(modified.observedAt, "2026-07-21T03:04:05.000Z");
+      assert.equal(typeof modified.size, "number");
+      assert.equal(typeof modified.mtime, "string");
+      assert.equal(deleted.eventType, "deleted");
+      assert.equal(deleted.relativePath, "removed.txt");
+      assert.equal(deleted.mtime, undefined);
+      assert.deepEqual(watcher.drain(), []);
+      assert.ok(warnings.length >= 1); // the invalid "[" exclude pattern is detected and logged
+      watcher.stop();
+    });
+  });
+
+  it("adds new roots, closes removed roots on sync, and stops all watchers", () => {
+    const roots = [join(tmpdir(), "watch-a"), join(tmpdir(), "watch-b"), join(tmpdir(), "watch-c")];
+    const watched: string[] = [];
+    const closed: string[] = [];
+    const watchImpl = ((root: string) => {
+      watched.push(root);
+      return { close: () => { closed.push(root); } };
+    }) as unknown as typeof import("node:fs").watch;
+    let allow = [roots[0], roots[1]];
+    const watcher = new FileWatcher({
+      getPolicy: () => normalizeServerCapturePolicy({ localRootAllow: allow }),
+      getEnabled: () => true,
+      watchImpl
+    });
+    watcher.sync();
+    watcher.sync(); // idempotent — no new watchers for unchanged roots
+    assert.deepEqual(watched, [roots[0], roots[1]]);
+
+    allow = [roots[1], roots[2]];
+    watcher.sync();
+    assert.deepEqual(watched, [roots[0], roots[1], roots[2]]);
+    assert.deepEqual(closed, [roots[0]]);
+    watcher.stop();
+    assert.deepEqual(closed.sort(), [roots[0], roots[1], roots[2]].sort());
+  });
+
+  it("stops watching when the local opt-in is off", () => {
+    const closed: string[] = [];
+    const watchImpl = ((root: string) => ({ close: () => { closed.push(root); } })) as unknown as typeof import("node:fs").watch;
+    let enabled = true;
+    const watcher = new FileWatcher({
+      getPolicy: () => normalizeServerCapturePolicy({ localRootAllow: [join(tmpdir(), "watch-x")] }),
+      getEnabled: () => enabled,
+      watchImpl
+    });
+    watcher.sync();
+    enabled = false;
+    watcher.sync();
+    assert.equal(closed.length, 1);
+  });
+});
 
 describe("capture storage", () => {
   it("rejects capture DB paths inside the sync root or .workbench metadata", async () => {
@@ -61,6 +171,7 @@ describe("capture storage", () => {
         assert.equal(config.uploadEnabled, true);
         assert.equal(config.windowTitleCapture, false);
         assert.equal(config.windowTitleUpload, false);
+        assert.equal(config.localFileEnabled, false);
         assert.equal(config.retentionDays, 9);
         assert.equal("autoPublish" in config, false);
       } finally {
@@ -119,11 +230,12 @@ describe("capture storage", () => {
     });
   });
 
-  it("validates title, upload, screenshot, idle, and category settings", () => {
+  it("validates title, upload, local file, screenshot, idle, and category settings", () => {
     assert.deepEqual(validateCaptureConfigPatch({
       uploadEnabled: true,
       windowTitleCapture: true,
       windowTitleUpload: true,
+      localFileEnabled: true,
       screenshotsEnabled: true,
       screenshotIntervalSeconds: 60,
       screenshotRetentionDays: 90,
@@ -133,6 +245,7 @@ describe("capture storage", () => {
       uploadEnabled: true,
       windowTitleCapture: true,
       windowTitleUpload: true,
+      localFileEnabled: true,
       screenshotsEnabled: true,
       screenshotIntervalSeconds: 60,
       screenshotRetentionDays: 90,
@@ -141,6 +254,7 @@ describe("capture storage", () => {
     });
     assert.deepEqual(validateCaptureConfigPatch({ autoPublish: true }), {});
     assert.throws(() => validateCaptureConfigPatch({ windowTitleCapture: "yes" }), /windowTitleCapture/);
+    assert.throws(() => validateCaptureConfigPatch({ localFileEnabled: "yes" }), /localFileEnabled/);
     assert.throws(() => validateCaptureConfigPatch({ screenshotIntervalSeconds: 59 }), /between 60 and 3600/);
     assert.throws(() => validateCaptureConfigPatch({ screenshotRetentionDays: 91 }), /between 1 and 90/);
     assert.throws(() => validateCaptureConfigPatch({ idleThresholdSeconds: 59 }), /between 60 and 3600/);
@@ -291,6 +405,70 @@ describe("capture storage", () => {
 });
 
 describe("capture analyser uploader", () => {
+  it("maps local file metadata observations, gates on localFileUpload, and batches at 500", async () => {
+    await withTempDir(async (dir) => {
+      const storage = new CaptureStorage(join(dir, "capture.sqlite"));
+      const ingestPosts: Array<{ machineId: string; observations: Array<Record<string, unknown>> }> = [];
+      let uploadAllowed = false;
+      try {
+        const uploader = new CaptureUploader({
+          storage,
+          displayName: "Test daemon",
+          platform: "win32",
+          createMachineKey: () => "machine-key-1",
+          getServerPolicy: () => normalizeServerCapturePolicy({ localFileUpload: uploadAllowed }),
+          getJson: async <T>(): Promise<T> => ({} as T),
+          postJson: async <T>(path: string, body: unknown): Promise<T> => {
+            if (path === "/api/analyser/machines/register") return { id: "machine-1" } as T;
+            ingestPosts.push(body as { machineId: string; observations: Array<Record<string, unknown>> });
+            return { ingested: 1 } as T;
+          }
+        });
+        const first: LocalFileEvent = {
+          eventType: "modified",
+          root: "C:\\work",
+          relativePath: "src/index.ts",
+          observedAt: "2026-07-21T03:04:05.000Z",
+          mtime: "2026-07-21T03:04:00.000Z",
+          size: 42
+        };
+        const events = [first, ...Array.from({ length: 500 }, (_, index): LocalFileEvent => ({
+          eventType: "deleted",
+          root: "C:\\work",
+          relativePath: `removed-${index}.txt`,
+          observedAt: "2026-07-21T03:04:05.000Z"
+        }))];
+
+        // localFileUpload=false → no upload at all.
+        await uploader.uploadFileEvents(events);
+        assert.equal(ingestPosts.length, 0);
+
+        uploadAllowed = true;
+        await uploader.uploadFileEvents(events);
+
+        assert.deepEqual(ingestPosts.map((post) => post.observations.length), [500, 1]);
+        assert.equal(ingestPosts.every((post) => post.machineId === "machine-1"), true);
+        assert.deepEqual(ingestPosts[0].observations[0], {
+          source: "local_file",
+          action: "file_modified",
+          actorKind: "user",
+          occurredAt: "2026-07-21T03:04:05.000Z",
+          resourceRefs: [{ service: "local", resourceType: "file", resourceId: "src/index.ts", pathSnapshot: "C:\\work" }],
+          metadata: {
+            eventType: "modified",
+            root: "C:\\work",
+            relativePath: "src/index.ts",
+            mtime: "2026-07-21T03:04:00.000Z",
+            size: 42
+          },
+          dedupeKey: "local_file:machine-1:C:\\work:src/index.ts:modified:2026-07-21T03:04:00.000Z"
+        });
+      } finally {
+        storage.close();
+      }
+    });
+  });
+
   it("registers through analyser, maps exact observations, batches, and advances the new tuple cursor", async () => {
     await withTempDir(async (dir) => {
       const storage = new CaptureStorage(join(dir, "capture.sqlite"));

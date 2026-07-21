@@ -45,6 +45,7 @@ export interface RetentionLogger {
 const SECRET_METADATA_KEY = /token|secret|password|passwd|authoriz|cookie|apikey|api_key|credential|privatekey|private_key/i;
 const METADATA_KEY_LIMIT = 20;
 const WINDOW_TITLE_METADATA_KEY = /^(windowtitle|window_title)$/i;
+const LOCAL_FILE_METADATA_KEYS = new Set(["eventType", "root", "relativePath", "mtime", "size"]);
 
 function iso(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
@@ -91,7 +92,37 @@ function incrementRejected(rejected: Record<string, number>, source: string): vo
   rejected[source] = (rejected[source] ?? 0) + 1;
 }
 
+function normalizeFsPath(value: string): string {
+  return value.replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+// True when `path` is `root` itself or lives under it, matching on a path-
+// separator boundary so "C:/work" does not match "C:/workshop".
+function isUnderRoot(path: string, root: string): boolean {
+  const normalizedPath = normalizeFsPath(path);
+  const normalizedRoot = normalizeFsPath(root);
+  return normalizedPath === normalizedRoot || normalizedPath.startsWith(`${normalizedRoot}/`);
+}
+
 function passesFilters(input: ObservationInput, settings: CollectionSettings): boolean {
+  if (input.source === "local_file") {
+    const metadata = input.metadata ?? {};
+    const root = String(metadata.root ?? "");
+    const relativePath = String(metadata.relativePath ?? "");
+    const fullPath = normalizeFsPath(`${root}/${relativePath}`);
+    // Deny wins, evaluated against the full path so a denied subdirectory of an
+    // allowed root is caught here too (defense in depth; the daemon also filters).
+    if (settings.localRootDeny.some((deniedRoot) => isUnderRoot(fullPath, deniedRoot) || isUnderRoot(root, deniedRoot))) return false;
+    if (settings.localRootAllow.length > 0
+      && !settings.localRootAllow.some((allowedRoot) => isUnderRoot(root, allowedRoot))) return false;
+    for (const pattern of settings.excludePatterns) {
+      try {
+        if (new RegExp(pattern, "i").test(relativePath)) return false;
+      } catch {
+        // Invalid exclusion patterns are ignored.
+      }
+    }
+  }
   if (input.projectId && settings.projectDeny.includes(input.projectId)) return false;
   if (settings.projectAllow.length > 0 && (!input.projectId || !settings.projectAllow.includes(input.projectId))) return false;
   const resourceTypes = (input.resourceRefs ?? []).map((ref) => ref.resourceType);
@@ -102,11 +133,13 @@ function passesFilters(input: ObservationInput, settings: CollectionSettings): b
 
 function sanitizeMetadata(
   metadata: ObservationInput["metadata"],
+  source: ObservationSource,
   options: { stripWindowTitle: boolean }
 ): Record<string, string | number | boolean | null> {
   const sanitized: Record<string, string | number | boolean | null> = {};
   for (const [key, value] of Object.entries(metadata ?? {})) {
     if (Object.keys(sanitized).length >= METADATA_KEY_LIMIT) break;
+    if (source === "local_file" && !LOCAL_FILE_METADATA_KEYS.has(key)) continue;
     if (SECRET_METADATA_KEY.test(key)) continue;
     if (options.stripWindowTitle && WINDOW_TITLE_METADATA_KEY.test(key)) continue;
     sanitized[key] = typeof value === "string" ? value.slice(0, 2000) : value;
@@ -156,7 +189,7 @@ export async function ingestObservationsWithPool(
       projectId: input.projectId ?? null,
       occurredAt: input.occurredAt,
       resourceRefs: input.resourceRefs ?? [],
-      metadata: sanitizeMetadata(input.metadata, {
+      metadata: sanitizeMetadata(input.metadata, input.source, {
         stripWindowTitle: input.source === "pc_activity" && settings.windowTitleUpload !== true
       }),
       sourceEventId: input.sourceEventId ?? null,

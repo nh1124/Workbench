@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { CaptureConfig, CaptureLogger } from "./types.js";
 import { CaptureStorage, type CaptureSampleUploadCursor } from "./storage.js";
+import type { LocalFileEvent } from "./fileWatcher.js";
+import type { ServerCapturePolicy } from "./serverPolicy.js";
 
 const MACHINE_KEY_META = "capture.machineKey";
 const MACHINE_ID_META = "analyser.machineId";
@@ -19,6 +21,7 @@ export type CaptureUploaderOptions = {
   logger?: CaptureLogger;
   createMachineKey?: () => string;
   now?: () => number;
+  getServerPolicy?: () => ServerCapturePolicy | null;
 };
 
 function parseSampleCursor(value: string | undefined): CaptureSampleUploadCursor | undefined {
@@ -43,6 +46,7 @@ export class CaptureUploader {
   private readonly logger?: CaptureLogger;
   private readonly createMachineKey: () => string;
   private readonly now: () => number;
+  private readonly getServerPolicy?: () => ServerCapturePolicy | null;
   private lastWarning?: string;
   private policyFetchedAt = 0;
   private serverUploadAllowedState: boolean | null = null;
@@ -56,6 +60,7 @@ export class CaptureUploader {
     this.logger = options.logger;
     this.createMachineKey = options.createMachineKey ?? randomUUID;
     this.now = options.now ?? Date.now;
+    this.getServerPolicy = options.getServerPolicy;
   }
 
   get serverUploadAllowed(): boolean | null {
@@ -81,6 +86,32 @@ export class CaptureUploader {
         this.lastWarning = message;
         this.logger?.warn("[capture] analyser upload failed", { message });
       }
+    }
+  }
+
+  async uploadFileEvents(events: LocalFileEvent[]): Promise<void> {
+    if (events.length === 0 || this.getServerPolicy?.()?.localFileUpload !== true) return;
+    const machineId = await this.ensureMachine();
+    for (let offset = 0; offset < events.length; offset += 500) {
+      const batch = events.slice(offset, offset + 500);
+      await this.postJson("/api/analyser/observations/ingest", {
+        machineId,
+        observations: batch.map((event) => ({
+          source: "local_file",
+          action: `file_${event.eventType}`,
+          actorKind: "user",
+          occurredAt: event.observedAt,
+          resourceRefs: [{ service: "local", resourceType: "file", resourceId: event.relativePath, pathSnapshot: event.root }],
+          metadata: {
+            eventType: event.eventType,
+            root: event.root,
+            relativePath: event.relativePath,
+            ...(event.mtime ? { mtime: event.mtime } : {}),
+            ...(event.size === undefined ? {} : { size: event.size })
+          },
+          dedupeKey: `local_file:${machineId}:${event.root}:${event.relativePath}:${event.eventType}:${event.mtime ?? "na"}`
+        }))
+      });
     }
   }
 

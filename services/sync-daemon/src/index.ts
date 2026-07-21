@@ -177,6 +177,7 @@ export type DaemonState = {
   captureUploader?: CaptureUploader;
   capturePolicy?: CaptureServerPolicyProvider;
   captureUploadIdentityWarned?: boolean;
+  captureFileUploadWarned?: boolean;
   identity?: ClientIdentity;
   lastHeartbeatAt?: string;
   lastClaimAt?: string;
@@ -6390,6 +6391,22 @@ async function performTick(state: DaemonState): Promise<void> {
         console.warn("[capture] analyser upload skipped because local client identity is not registered");
       }
     }
+    if (state.identity && state.capture && state.captureUploader) {
+      const events = state.capture.drainFileEvents();
+      if (events.length > 0) {
+        try {
+          await state.captureUploader.uploadFileEvents(events);
+          state.captureFileUploadWarned = false;
+        } catch (error) {
+          if (!state.captureFileUploadWarned) {
+            state.captureFileUploadWarned = true;
+            console.warn("[capture] analyser local file upload failed", {
+              message: error instanceof Error ? error.message : String(error)
+            });
+          }
+        }
+      }
+    }
     await pushOutbox(state);
     await heartbeat(state);
     if (!recoverablePullError) {
@@ -8017,6 +8034,7 @@ async function main(): Promise<void> {
     displayName: config.clientName || hostname(),
     platform: platform(),
     logger: console,
+    getServerPolicy: () => state.capturePolicy?.get() ?? null,
     getJson: async <T>(pathValue: string): Promise<T> => {
       const identity = state.identity;
       if (!identity) throw new Error("Local client identity is not registered.");

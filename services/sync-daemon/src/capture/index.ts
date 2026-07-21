@@ -26,6 +26,7 @@ export type { CaptureSampleUploadCursor, CaptureStoredSample } from "./storage.j
 export { CaptureError, CaptureManager } from "./manager.js";
 export { CaptureSupervisor, decodeSamplerStdoutChunk, ingestSamplerLine } from "./supervisor.js";
 export { ScreenshotScheduler, shouldCaptureScreenshot } from "./screenshotScheduler.js";
+export { FileWatcher, isLocalFilePathAllowed, type FileWatcherOptions, type LocalFileEvent } from "./fileWatcher.js";
 export { CAPTURE_UPLOAD_META_KEYS, CaptureUploader, type CaptureGetJson, type CapturePostJson, type CaptureUploaderOptions } from "./uploader.js";
 export { CaptureServerPolicyProvider, normalizeServerCapturePolicy, type ServerCapturePolicy } from "./serverPolicy.js";
 
