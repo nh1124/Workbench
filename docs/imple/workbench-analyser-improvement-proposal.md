@@ -276,6 +276,25 @@ Owner 承認により **A2 / A4（local_file 実装）/ 派生テキスト集約
   title, summary_markdown(要点・size 制限), evidence_refs, occurred_at）。画像・
   OCR 全文・secret は保存しない。解析ルーチンが参照可能に。UI に一覧表示。
 
+## 6.6 二重最終レビュー結果（2026-07-21）
+
+IW-1..3 完了後、Claude + Codex(read-only) の二重最終レビューを実施。Codex が 7 major +
+4 minor を検出、Claude が committed コードで全件妥当性判定し、**実欠陥 10 件を修正**
+（commit 82a2aa8、F1..F10b）。daemon 130 / analyser 89 テスト通過。修正の要点は commit
+メッセージ参照。
+
+**許容制約（今回は修正せず記録）:**
+- **F10a**: `fs.watch` は created と modified を区別できないため、既存ファイルは常に
+  `modified` として emit（`created` は type に残すが未使用）。OS の制約。
+- **F11 / A5**: Activity タブの日付範囲が UTC 基準でローカル日付とずれる問題は
+  derived-capture セクションにも共通。**A5（別 P2 wave）**として timezone 対応時に
+  Activity タブ全体で一括修正する。
+- **F4 の残**: derived summaryMarkdown の OCR 全文・秘密テキストは、agent 生成の
+  分析コンテンツとして summaries と同様 convention に委ねる（画像 base64 のみ構造的に
+  reject）。
+- **F5 の残 / A6**: derived ingest は machineId 提供時に requireMachine で検証するが、
+  observation 全体の machine FK / stale ID 対策は **A6（別 P2 wave）**。
+
 ## 7. 次アクション
 
 Owner 承認後、フェーズ単位で着手する。着手順・粒度（例: まず P1-a のみ / P1 一括 / 柱 B
