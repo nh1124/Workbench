@@ -6,7 +6,7 @@ import type { CaptureLogger } from "./types.js";
  * BOTH the local opt-in AND the server policy allow it (stricter-wins).
  */
 export type ServerCapturePolicy = {
-  foregroundAppCapture: "off" | "metadata";
+  foregroundAppCapture: boolean;
   foregroundAppUpload: boolean;
   windowTitleCapture: boolean;
   windowTitleUpload: boolean;
@@ -26,7 +26,7 @@ function stringArray(value: unknown): string[] {
 
 export function normalizeServerCapturePolicy(raw: RawSettings | undefined): ServerCapturePolicy {
   return {
-    foregroundAppCapture: raw?.foregroundAppCapture === "metadata" ? "metadata" : "off",
+    foregroundAppCapture: raw?.foregroundAppCapture === true,
     foregroundAppUpload: raw?.foregroundAppUpload === true,
     windowTitleCapture: raw?.windowTitleCapture === true,
     windowTitleUpload: raw?.windowTitleUpload === true,

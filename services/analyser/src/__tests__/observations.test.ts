@@ -70,7 +70,7 @@ describe("analyser observation gating", () => {
     const cases = [
       {
         name: "deny prefix",
-        settings: { localRootDeny: ["C:/work/private"] },
+        settings: { localRootAllow: ["C:/work"], localRootDeny: ["C:/work/private"] },
         metadata: { root: "C:/work/private/nested", relativePath: "secret.txt" },
         accepted: false
       },
@@ -93,8 +93,20 @@ describe("analyser observation gating", () => {
         accepted: false
       },
       {
+        name: "parent traversal",
+        settings: { localRootAllow: ["C:/work/public"], localRootDeny: ["C:/work/private"] },
+        metadata: { root: "C:/work/public", relativePath: "../private/secret.txt" },
+        accepted: false
+      },
+      {
+        name: "empty allow list",
+        settings: { localRootAllow: [] },
+        metadata: { root: "C:/work", relativePath: "notes.txt" },
+        accepted: false
+      },
+      {
         name: "sibling directory is not a prefix match",
-        settings: { localRootDeny: ["C:/work"] },
+        settings: { localRootAllow: ["C:/workshop"], localRootDeny: ["C:/work"] },
         metadata: { root: "C:/workshop", relativePath: "notes.txt" },
         accepted: true
       },
@@ -132,7 +144,7 @@ describe("analyser observation gating", () => {
     const localPool = fakePool([{
       rows: [{
         machine_id: null,
-        settings_json: { localFileEvents: "metadata", localFileUpload: true },
+        settings_json: { localFileEvents: "metadata", localFileUpload: true, localRootAllow: ["C:/work"] },
         version: 1
       }]
     }, { rows: [], rowCount: 1 }]);
@@ -246,7 +258,7 @@ describe("analyser observation gating", () => {
     const pool = fakePool([
       { rows: [{
         machine_id: null,
-        settings_json: { localFileEvents: "metadata", localFileUpload: true },
+        settings_json: { localFileEvents: "metadata", localFileUpload: true, localRootAllow: ["/allowed"] },
         version: 1
       }] },
       { rows: [{ id: "observation-1" }], rowCount: 1 }

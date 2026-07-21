@@ -6398,6 +6398,7 @@ async function performTick(state: DaemonState): Promise<void> {
           await state.captureUploader.uploadFileEvents(events);
           state.captureFileUploadWarned = false;
         } catch (error) {
+          state.capture.requeueFileEvents(events);
           if (!state.captureFileUploadWarned) {
             state.captureFileUploadWarned = true;
             console.warn("[capture] analyser local file upload failed", {

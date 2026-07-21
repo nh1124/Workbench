@@ -109,7 +109,7 @@ export class CaptureUploader {
             ...(event.mtime ? { mtime: event.mtime } : {}),
             ...(event.size === undefined ? {} : { size: event.size })
           },
-          dedupeKey: `local_file:${machineId}:${event.root}:${event.relativePath}:${event.eventType}:${event.mtime ?? "na"}`
+          dedupeKey: `local_file:${machineId}:${event.root}:${event.relativePath}:${event.eventType}:${event.mtime ?? event.observedAt}`
         }))
       });
     }

@@ -90,17 +90,26 @@ export class CaptureManager {
 
   /**
    * Local config narrowed by the server policy (stricter-wins). Until the first
-   * successful server fetch the policy is null and the local opt-in governs.
+   * successful server fetch the policy is null and server-gated sources remain off.
    */
   private effectiveConfig(): CaptureConfig {
     const local = this.storage.getConfig();
     const policy = this.serverPolicy();
-    if (!policy) return local;
+    if (!policy) {
+      return {
+        ...local,
+        enabled: false,
+        screenshotsEnabled: false,
+        windowTitleCapture: false,
+        localFileEnabled: false
+      };
+    }
     return {
       ...local,
-      enabled: local.enabled && policy.foregroundAppCapture !== "off",
+      enabled: local.enabled && policy.foregroundAppCapture === true,
       screenshotsEnabled: local.screenshotsEnabled && policy.screenshots !== "off",
-      windowTitleCapture: local.windowTitleCapture && policy.windowTitleCapture === true
+      windowTitleCapture: local.windowTitleCapture && policy.windowTitleCapture === true,
+      localFileEnabled: local.localFileEnabled && policy.localFileEvents === "metadata"
     };
   }
 
@@ -170,6 +179,10 @@ export class CaptureManager {
 
   drainFileEvents(): LocalFileEvent[] {
     return this.fileWatcher.drain();
+  }
+
+  requeueFileEvents(events: LocalFileEvent[]): void {
+    this.fileWatcher.requeue(events);
   }
 
   async enable(): Promise<CaptureApiStatus> {

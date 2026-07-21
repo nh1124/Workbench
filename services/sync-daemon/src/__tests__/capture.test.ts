@@ -99,6 +99,8 @@ describe("local file watcher", () => {
       assert.equal(deleted.eventType, "deleted");
       assert.equal(deleted.relativePath, "removed.txt");
       assert.equal(deleted.mtime, undefined);
+      watcher.requeue(events);
+      assert.deepEqual(watcher.drain(), events);
       assert.deepEqual(watcher.drain(), []);
       assert.ok(warnings.length >= 1); // the invalid "[" exclude pattern is detected and logged
       watcher.stop();
@@ -144,6 +146,38 @@ describe("local file watcher", () => {
     enabled = false;
     watcher.sync();
     assert.equal(closed.length, 1);
+  });
+
+  it("handles async watcher errors and removes the failed root", () => {
+    const root = join(tmpdir(), "watch-error");
+    const warnings: unknown[] = [];
+    let errorHandler: ((error: Error) => void) | undefined;
+    let watched = 0;
+    let closed = 0;
+    const watchImpl = (() => {
+      watched += 1;
+      return {
+        on(event: string, handler: (error: Error) => void) {
+          if (event === "error") errorHandler = handler;
+        },
+        close() { closed += 1; }
+      };
+    }) as unknown as typeof import("node:fs").watch;
+    const watcher = new FileWatcher({
+      getPolicy: () => normalizeServerCapturePolicy({ localRootAllow: [root] }),
+      getEnabled: () => true,
+      watchImpl,
+      logger: silentLogger(warnings)
+    });
+
+    watcher.sync();
+    assert.ok(errorHandler);
+    assert.doesNotThrow(() => errorHandler?.(new Error("watch failed")));
+    assert.equal(closed, 1);
+    assert.equal(warnings.length, 1);
+    watcher.sync();
+    assert.equal(watched, 2);
+    watcher.stop();
   });
 });
 
@@ -294,7 +328,8 @@ describe("capture storage", () => {
         syncRoot: join(dir, "sync-root"),
         dbPath: join(dir, "capture.sqlite"),
         platform: "linux",
-        logger: silentLogger()
+        logger: silentLogger(),
+        getServerPolicy: () => normalizeServerCapturePolicy({ foregroundAppCapture: true })
       });
       try {
         await assert.rejects(() => manager.enable(), /only supported on Windows/);
@@ -308,11 +343,7 @@ describe("capture storage", () => {
   it("narrows local capture config by the server effective policy (stricter-wins)", async () => {
     await withTempDir(async (dir) => {
       // Local opts everything in; the server policy is the acquisition gate.
-      let policy = normalizeServerCapturePolicy({
-        foregroundAppCapture: "off",
-        screenshots: "off",
-        windowTitleCapture: false
-      });
+      let policy: ReturnType<typeof normalizeServerCapturePolicy> | null = null;
       const manager = new CaptureManager({
         syncRoot: join(dir, "sync-root"),
         dbPath: join(dir, "capture.sqlite"),
@@ -323,23 +354,38 @@ describe("capture storage", () => {
       try {
         manager.storage.updateConfig({ uploadEnabled: true });
         manager.storage.setEnabled(true);
-        manager.storage.updateConfig({ screenshotsEnabled: true, windowTitleCapture: true } as never);
+        manager.storage.updateConfig({ screenshotsEnabled: true, windowTitleCapture: true, localFileEnabled: true } as never);
+        const unknownPolicy = (manager as unknown as { effectiveConfig(): Record<string, unknown> }).effectiveConfig();
+        assert.equal(unknownPolicy.enabled, false);
+        assert.equal(unknownPolicy.screenshotsEnabled, false);
+        assert.equal(unknownPolicy.localFileEnabled, false);
+        policy = normalizeServerCapturePolicy({
+          foregroundAppCapture: false,
+          screenshots: "off",
+          windowTitleCapture: false,
+          localFileEvents: "off"
+        });
         // Server says off → effective config disables both, and window titles are
         // blanked at persistence even though the local opt-in is on.
         manager.storage.insertSample(
           { sampledAt: "2026-07-10T00:00:00.000Z", processName: "Code", windowTitle: "secret doc" },
           (manager as unknown as { effectiveConfig(): { windowTitleCapture: boolean } }).effectiveConfig() as never
         );
+        const disabled = (manager as unknown as { effectiveConfig(): Record<string, unknown> }).effectiveConfig();
+        assert.equal(disabled.enabled, false);
+        assert.equal(disabled.localFileEnabled, false);
         // Flip the server policy on; effective config now permits capture.
         policy = normalizeServerCapturePolicy({
-          foregroundAppCapture: "metadata",
+          foregroundAppCapture: true,
           screenshots: "local_only",
-          windowTitleCapture: true
+          windowTitleCapture: true,
+          localFileEvents: "metadata"
         });
         const effective = (manager as unknown as { effectiveConfig(): Record<string, unknown> }).effectiveConfig();
         assert.equal(effective.enabled, true);
         assert.equal(effective.screenshotsEnabled, true);
         assert.equal(effective.windowTitleCapture, true);
+        assert.equal(effective.localFileEnabled, true);
       } finally {
         manager.close();
       }
@@ -379,7 +425,7 @@ describe("capture storage", () => {
   it("normalizes partial server settings to safe defaults", () => {
     const policy = normalizeServerCapturePolicy({ screenshots: "banana", localRootAllow: ["C:/work", 5] });
     assert.equal(policy.screenshots, "off");
-    assert.equal(policy.foregroundAppCapture, "off");
+    assert.equal(policy.foregroundAppCapture, false);
     assert.deepEqual(policy.localRootAllow, ["C:/work"]);
     assert.equal(policy.windowTitleCapture, false);
   });
@@ -463,6 +509,10 @@ describe("capture analyser uploader", () => {
           },
           dedupeKey: "local_file:machine-1:C:\\work:src/index.ts:modified:2026-07-21T03:04:00.000Z"
         });
+        assert.equal(
+          ingestPosts[0].observations[1]?.dedupeKey,
+          "local_file:machine-1:C:\\work:removed-0.txt:deleted:2026-07-21T03:04:05.000Z"
+        );
       } finally {
         storage.close();
       }

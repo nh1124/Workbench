@@ -6,7 +6,7 @@ import {
   type DerivedCaptureRecord,
   type ResourceRef
 } from "../types.js";
-import type { AnalyserQueryPool } from "./machines.js";
+import { requireMachineWithPool, type AnalyserQueryPool } from "./machines.js";
 
 type DerivedCaptureRow = {
   id: string;
@@ -84,6 +84,7 @@ export async function ingestDerivedCaptureWithPool(
   rawInput: DerivedCaptureInput
 ): Promise<{ capture: DerivedCaptureRecord; created: boolean }> {
   const input = parseInput(rawInput);
+  if (input.machineId) await requireMachineWithPool(pool, owner, input.machineId);
   const records = [{
     machineId: input.machineId ?? null,
     kind: input.kind,
@@ -137,14 +138,14 @@ export async function listDerivedCapturesWithPool(
   if (options.cursor) {
     const [occurredAt, id] = decodeCursor(options.cursor);
     values.push(occurredAt, id);
-    where.push(`(occurred_at, id) < ($${values.length - 1}::timestamptz, $${values.length}::uuid)`);
+    where.push(`(date_trunc('milliseconds', occurred_at), id) < ($${values.length - 1}::timestamptz, $${values.length}::uuid)`);
   }
   const limit = boundedLimit(options.limit);
   values.push(limit + 1);
   const result = await pool.query<DerivedCaptureRow>(`SELECT ${DERIVED_CAPTURE_COLUMNS}
     FROM analyser_derived_captures
     WHERE ${where.join(" AND ")}
-    ORDER BY occurred_at DESC, id DESC
+    ORDER BY date_trunc('milliseconds', occurred_at) DESC, id DESC
     LIMIT $${values.length}`, values);
   const hasMore = result.rows.length > limit;
   const rows = result.rows.slice(0, limit);

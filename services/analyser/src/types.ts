@@ -216,7 +216,10 @@ export const derivedCaptureInputSchema = z.object({
   machineId: z.string().uuid().optional(),
   kind: z.string().trim().min(1).max(100),
   title: z.string().trim().min(1).max(500),
-  summaryMarkdown: z.string().max(20_000),
+  summaryMarkdown: z.string().max(20_000).refine(
+    (value) => !/data:image\/[a-z0-9.+-]+;base64,/i.test(value),
+    { message: "summaryMarkdown must not embed image data" }
+  ),
   evidenceRefs: z.array(resourceRefSchema).max(50).optional(),
   occurredAt: isoDateTimeSchema,
   dedupeKey: z.string().trim().min(1).max(500)

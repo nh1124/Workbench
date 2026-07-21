@@ -109,12 +109,13 @@ function passesFilters(input: ObservationInput, settings: CollectionSettings): b
     const metadata = input.metadata ?? {};
     const root = String(metadata.root ?? "");
     const relativePath = String(metadata.relativePath ?? "");
+    if (relativePath.split(/[\\/]/).includes("..")) return false;
     const fullPath = normalizeFsPath(`${root}/${relativePath}`);
     // Deny wins, evaluated against the full path so a denied subdirectory of an
     // allowed root is caught here too (defense in depth; the daemon also filters).
     if (settings.localRootDeny.some((deniedRoot) => isUnderRoot(fullPath, deniedRoot) || isUnderRoot(root, deniedRoot))) return false;
-    if (settings.localRootAllow.length > 0
-      && !settings.localRootAllow.some((allowedRoot) => isUnderRoot(root, allowedRoot))) return false;
+    if (settings.localRootAllow.length === 0
+      || !settings.localRootAllow.some((allowedRoot) => isUnderRoot(root, allowedRoot))) return false;
     for (const pattern of settings.excludePatterns) {
       try {
         if (new RegExp(pattern, "i").test(relativePath)) return false;

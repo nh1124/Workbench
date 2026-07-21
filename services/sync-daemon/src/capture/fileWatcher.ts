@@ -80,6 +80,18 @@ export class FileWatcher {
           this.handleRawEvent(root, filename);
         });
         this.watchers.set(root, watcher);
+        if (typeof (watcher as { on?: unknown }).on === "function") {
+          watcher.on("error", (error) => {
+            this.options.logger?.warn("[capture] file watcher error", {
+              root,
+              message: error instanceof Error ? error.message : String(error)
+            });
+            try {
+              watcher.close();
+            } catch {}
+            this.watchers.delete(root);
+          });
+        }
       } catch (error) {
         this.options.logger?.warn("[capture] local file root could not be watched", {
           root,
@@ -93,6 +105,14 @@ export class FileWatcher {
     const events = this.buffer.splice(0);
     this.lastObservedAt.clear();
     return events;
+  }
+
+  requeue(events: LocalFileEvent[]): void {
+    if (events.length === 0) return;
+    this.buffer.unshift(...events);
+    if (this.buffer.length > this.maxBufferedEvents) {
+      this.buffer.splice(0, this.buffer.length - this.maxBufferedEvents);
+    }
   }
 
   stop(): void {

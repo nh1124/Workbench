@@ -57,14 +57,14 @@ const input = {
 
 describe("analyser derived captures", () => {
   it("ingests through jsonb_to_recordset with the owner dedupe conflict target", async () => {
-    const pool = fakePool([{ rows: [firstRow], rowCount: 1 }]);
+    const pool = fakePool([{ rows: [{ exists: 1 }] }, { rows: [firstRow], rowCount: 1 }]);
     const result = await ingestDerivedCaptureWithPool(pool, "owner-1", input);
 
     assert.equal(result.created, true);
     assert.equal(result.capture.kind, "screenshot_summary");
-    assert.match(pool.calls[0].text, /jsonb_to_recordset/);
-    assert.match(pool.calls[0].text, /ON CONFLICT \(service_account_id, dedupe_key\) DO NOTHING/);
-    const records = JSON.parse(String(pool.calls[0].values?.[1])) as Array<Record<string, unknown>>;
+    assert.match(pool.calls[1].text, /jsonb_to_recordset/);
+    assert.match(pool.calls[1].text, /ON CONFLICT \(service_account_id, dedupe_key\) DO NOTHING/);
+    const records = JSON.parse(String(pool.calls[1].values?.[1])) as Array<Record<string, unknown>>;
     assert.deepEqual(records[0], {
       machineId: firstRow.machine_id,
       kind: "screenshot_summary",
@@ -77,16 +77,16 @@ describe("analyser derived captures", () => {
   });
 
   it("reads back a duplicate and reports created false", async () => {
-    const pool = fakePool([{ rows: [], rowCount: 0 }, { rows: [firstRow] }]);
+    const pool = fakePool([{ rows: [{ exists: 1 }] }, { rows: [], rowCount: 0 }, { rows: [firstRow] }]);
     const result = await ingestDerivedCaptureWithPool(pool, "owner-1", input);
 
     assert.equal(result.created, false);
     assert.equal(result.capture.id, firstRow.id);
-    assert.match(pool.calls[1].text, /WHERE service_account_id = \$1 AND dedupe_key = \$2/);
-    assert.deepEqual(pool.calls[1].values, ["owner-1", "capture:1"]);
+    assert.match(pool.calls[2].text, /WHERE service_account_id = \$1 AND dedupe_key = \$2/);
+    assert.deepEqual(pool.calls[2].values, ["owner-1", "capture:1"]);
   });
 
-  it("rejects an empty kind and an oversized summary", async () => {
+  it("rejects an empty kind, oversized summary, and embedded image data", async () => {
     const assertInvalid = async (value: typeof input): Promise<void> => {
       await assert.rejects(
         ingestDerivedCaptureWithPool(fakePool([]), "owner-1", value),
@@ -97,6 +97,15 @@ describe("analyser derived captures", () => {
 
     await assertInvalid({ ...input, kind: " " });
     await assertInvalid({ ...input, summaryMarkdown: "x".repeat(20_001) });
+    await assertInvalid({ ...input, summaryMarkdown: "![capture](data:image/png;base64,AAAA)" });
+  });
+
+  it("rejects a derived capture for an unknown machine", async () => {
+    await assert.rejects(
+      ingestDerivedCaptureWithPool(fakePool([{ rows: [] }]), "owner-1", input),
+      (error: unknown) => (error as { status: number; code: string }).status === 404
+        && (error as { code: string }).code === "MACHINE_NOT_FOUND"
+    );
   });
 
   it("lists in descending keyset order and accepts the returned cursor", async () => {
@@ -106,12 +115,13 @@ describe("analyser derived captures", () => {
 
     assert.equal(firstPage.items.length, 1);
     assert.equal(firstPage.nextCursor, expectedCursor);
-    assert.match(firstPool.calls[0].text, /ORDER BY occurred_at DESC, id DESC/);
+    assert.match(firstPool.calls[0].text, /ORDER BY date_trunc\('milliseconds', occurred_at\) DESC, id DESC/);
     assert.deepEqual(firstPool.calls[0].values, ["owner-1", 2]);
 
     const nextPool = fakePool([{ rows: [] }]);
     await listDerivedCapturesWithPool(nextPool, "owner-1", { cursor: expectedCursor });
-    assert.match(nextPool.calls[0].text, /\(occurred_at, id\) < \(\$2::timestamptz, \$3::uuid\)/);
+    assert.match(nextPool.calls[0].text, /\(date_trunc\('milliseconds', occurred_at\), id\) < \(\$2::timestamptz, \$3::uuid\)/);
+    assert.match(nextPool.calls[0].text, /ORDER BY date_trunc\('milliseconds', occurred_at\) DESC, id DESC/);
     assert.deepEqual(nextPool.calls[0].values, ["owner-1", firstRow.occurred_at, firstRow.id, 51]);
   });
 
