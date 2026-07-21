@@ -248,7 +248,7 @@ Owner 承認により **A2 / A4（local_file 実装）/ 派生テキスト集約
 | Wave | 内容 | 対象 | 状態 |
 |---|---|---|---|
 | IW-1 | A2: daemon に共有 ServerPolicyProvider を導入し、foreground/windowTitle/screenshot を「ローカル設定 AND サーバー effective policy」で取得段階 gate（stricter-wins） | sync-daemon | `[implemented]` (137861b) |
-| IW-2 | A4: local_file watcher producer（明示 root のみ・metadata のみ）+ analyser ingest filter に localRoot allow/deny・excludePatterns 評価を追加 + local_file の metadata allowlist | sync-daemon, analyser | `[pending]` |
+| IW-2 | A4: local_file watcher producer（明示 root のみ・metadata のみ）+ analyser ingest filter に localRoot allow/deny・excludePatterns 評価を追加 + local_file の metadata allowlist | sync-daemon, analyser | `[implemented]` (cfed072) |
 | IW-3 | 派生テキスト集約: analyser に derived-capture store + ingest route + MCP tool（agent-facing）、collection 設定に `screenshotDerivedUpload`(既定 false・明示 opt-in) 追加、UI に表示/設定 | analyser, core, ui | `[pending]` |
 
 ### 設計メモ
