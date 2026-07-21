@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { AnalyserServiceError } from "../serviceError.js";
 import { observationInputSchema, type ObservationInput } from "../types.js";
 
 process.env.ANALYSER_DB_HOST ??= "127.0.0.1";
@@ -24,6 +25,25 @@ function fakePool(responses: Result[]) {
   };
 }
 
+function fakeMachineIngestPool(knownIds: string[]) {
+  const calls: Call[] = [];
+  return {
+    calls,
+    async query<Row = never>(text: string, values?: unknown[]) {
+      calls.push({ text, values });
+      if (/FROM analyser_machines/.test(text)) {
+        const requestedIds = (values?.[1] ?? []) as string[];
+        return { rows: requestedIds.filter((id) => knownIds.includes(id)).map((id) => ({ id })) } as { rows: Row[] };
+      }
+      if (/FROM analyser_collection_policies/.test(text)) return { rows: [] } as { rows: Row[] };
+      if (/INSERT INTO analyser_observations/.test(text)) {
+        return { rows: [{ id: "observation-1" }], rowCount: 1 } as { rows: Row[]; rowCount: number };
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    }
+  };
+}
+
 function input(overrides: Partial<ObservationInput> = {}): ObservationInput {
   return {
     source: "workbench_change",
@@ -36,6 +56,51 @@ function input(overrides: Partial<ObservationInput> = {}): ObservationInput {
 }
 
 describe("analyser observation gating", () => {
+  it("rejects an unknown context machine before policy lookup or insert", async () => {
+    const machineId = "11111111-1111-4111-8111-111111111111";
+    const pool = fakeMachineIngestPool([]);
+
+    await assert.rejects(
+      () => ingestObservationsWithPool(pool, "owner-1", [input()], { machineId }),
+      (error: unknown) => {
+        assert.ok(error instanceof AnalyserServiceError);
+        assert.equal(error.status, 409);
+        assert.equal(error.code, "MACHINE_UNKNOWN");
+        return true;
+      }
+    );
+
+    assert.equal(pool.calls.length, 1);
+    assert.match(pool.calls[0].text, /FROM analyser_machines/);
+    assert.equal(pool.calls.some((call) => /INSERT INTO analyser_observations/.test(call.text)), false);
+  });
+
+  it("stores a known context machine id", async () => {
+    const machineId = "22222222-2222-4222-8222-222222222222";
+    const pool = fakeMachineIngestPool([machineId]);
+
+    const result = await ingestObservationsWithPool(pool, "owner-1", [input()], { machineId });
+
+    assert.equal(result.ingested, 1);
+    const insert = pool.calls.find((call) => /INSERT INTO analyser_observations/.test(call.text));
+    assert.ok(insert);
+    const batch = JSON.parse(String(insert.values?.[1])) as Array<{ machineId: string | null }>;
+    assert.equal(batch[0].machineId, machineId);
+  });
+
+  it("accepts an unknown per-observation machine id as null", async () => {
+    const machineId = "33333333-3333-4333-8333-333333333333";
+    const pool = fakeMachineIngestPool([]);
+
+    const result = await ingestObservationsWithPool(pool, "owner-1", [input({ machineId })]);
+
+    assert.equal(result.ingested, 1);
+    const insert = pool.calls.find((call) => /INSERT INTO analyser_observations/.test(call.text));
+    assert.ok(insert);
+    const batch = JSON.parse(String(insert.values?.[1])) as Array<{ machineId: string | null }>;
+    assert.equal(batch[0].machineId, null);
+  });
+
   it("buckets activity with the requested timezone and defaults to UTC", async () => {
     const tokyoPool = fakePool([{ rows: [] }]);
     await aggregateActivityWithPool(tokyoPool, "owner-1", {

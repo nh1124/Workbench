@@ -72,13 +72,14 @@ export class CaptureUploader {
     if (!config.enabled || !config.uploadEnabled) return;
 
     try {
-      const machineId = await this.ensureMachine();
-      const allowed = await this.effectiveUploadAllowed(machineId);
-      if (allowed !== true) {
-        if (allowed === false) this.lastWarning = undefined;
-        return;
-      }
-      await this.uploadSamples(machineId, config);
+      await this.withFreshMachine(async (machineId) => {
+        const allowed = await this.effectiveUploadAllowed(machineId);
+        if (allowed !== true) {
+          if (allowed === false) this.lastWarning = undefined;
+          return;
+        }
+        await this.uploadSamples(machineId, config);
+      });
       this.lastWarning = undefined;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -91,28 +92,29 @@ export class CaptureUploader {
 
   async uploadFileEvents(events: LocalFileEvent[]): Promise<void> {
     if (events.length === 0 || this.getServerPolicy?.()?.localFileUpload !== true) return;
-    const machineId = await this.ensureMachine();
-    for (let offset = 0; offset < events.length; offset += 500) {
-      const batch = events.slice(offset, offset + 500);
-      await this.postJson("/api/analyser/observations/ingest", {
-        machineId,
-        observations: batch.map((event) => ({
-          source: "local_file",
-          action: `file_${event.eventType}`,
-          actorKind: "user",
-          occurredAt: event.observedAt,
-          resourceRefs: [{ service: "local", resourceType: "file", resourceId: event.relativePath, pathSnapshot: event.root }],
-          metadata: {
-            eventType: event.eventType,
-            root: event.root,
-            relativePath: event.relativePath,
-            ...(event.mtime ? { mtime: event.mtime } : {}),
-            ...(event.size === undefined ? {} : { size: event.size })
-          },
-          dedupeKey: `local_file:${machineId}:${event.root}:${event.relativePath}:${event.eventType}:${event.mtime ?? event.observedAt}`
-        }))
-      });
-    }
+    await this.withFreshMachine(async (machineId) => {
+      for (let offset = 0; offset < events.length; offset += 500) {
+        const batch = events.slice(offset, offset + 500);
+        await this.postJson("/api/analyser/observations/ingest", {
+          machineId,
+          observations: batch.map((event) => ({
+            source: "local_file",
+            action: `file_${event.eventType}`,
+            actorKind: "user",
+            occurredAt: event.observedAt,
+            resourceRefs: [{ service: "local", resourceType: "file", resourceId: event.relativePath, pathSnapshot: event.root }],
+            metadata: {
+              eventType: event.eventType,
+              root: event.root,
+              relativePath: event.relativePath,
+              ...(event.mtime ? { mtime: event.mtime } : {}),
+              ...(event.size === undefined ? {} : { size: event.size })
+            },
+            dedupeKey: `local_file:${machineId}:${event.root}:${event.relativePath}:${event.eventType}:${event.mtime ?? event.observedAt}`
+          }))
+        });
+      }
+    });
   }
 
   private machineKey(): string {
@@ -136,6 +138,30 @@ export class CaptureUploader {
     }
     this.storage.setMeta(MACHINE_ID_META, machine.id);
     return machine.id;
+  }
+
+  private isUnknownMachineError(error: unknown): boolean {
+    return typeof error === "object"
+      && error !== null
+      && (error as { status?: unknown }).status === 409
+      && (error as { code?: unknown }).code === "MACHINE_UNKNOWN";
+  }
+
+  private resetMachineId(): void {
+    this.storage.setMeta(MACHINE_ID_META, "");
+  }
+
+  private async withFreshMachine<T>(fn: (machineId: string) => Promise<T>): Promise<T> {
+    const machineId = await this.ensureMachine();
+    try {
+      return await fn(machineId);
+    } catch (error) {
+      if (!this.isUnknownMachineError(error)) throw error;
+      this.logger?.warn("[capture] analyser machine unknown; re-registering", {});
+      this.resetMachineId();
+      const fresh = await this.ensureMachine();
+      return await fn(fresh);
+    }
   }
 
   private setServerUploadAllowed(value: boolean | null): void {

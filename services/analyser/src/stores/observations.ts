@@ -9,7 +9,7 @@ import {
   type ObservationSource,
   type ResourceRef
 } from "../types.js";
-import type { AnalyserQueryPool } from "./machines.js";
+import { listKnownMachineIdsWithPool, type AnalyserQueryPool } from "./machines.js";
 import { getEffectiveCollectionSettingsWithPool } from "./policies.js";
 
 type ObservationRow = {
@@ -45,6 +45,7 @@ export interface RetentionLogger {
 const SECRET_METADATA_KEY = /token|secret|password|passwd|authoriz|cookie|apikey|api_key|credential|privatekey|private_key/i;
 const METADATA_KEY_LIMIT = 20;
 const WINDOW_TITLE_METADATA_KEY = /^(windowtitle|window_title)$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const OBSERVATION_METADATA_KEYS = {
   workbench_change: new Set(["domain", "action", "resourceType", "path", "previousPath", "version"]),
   mcp_access: new Set(["tool", "kind", "ok", "durationMs", "errorClass"]),
@@ -175,6 +176,18 @@ export async function ingestObservationsWithPool(
   inputs: ObservationInput[],
   options: { machineId?: string } = {}
 ): Promise<IngestObservationsResult> {
+  const rawMachineIds = new Set<string>();
+  if (options.machineId && UUID.test(options.machineId)) rawMachineIds.add(options.machineId);
+  for (const rawInput of inputs as unknown[]) {
+    if (!rawInput || typeof rawInput !== "object") continue;
+    const machineId = (rawInput as { machineId?: unknown }).machineId;
+    if (typeof machineId === "string" && UUID.test(machineId)) rawMachineIds.add(machineId);
+  }
+  const knownMachineIds = await listKnownMachineIdsWithPool(pool, owner, [...rawMachineIds]);
+  if (options.machineId && !knownMachineIds.has(options.machineId)) {
+    throw new AnalyserServiceError(409, "MACHINE_UNKNOWN", "Machine is not registered for this account");
+  }
+
   const { settings } = await getEffectiveCollectionSettingsWithPool(pool, owner, options.machineId);
   const rejected: Record<string, number> = {};
   const accepted: Array<Record<string, unknown>> = [];
@@ -191,11 +204,12 @@ export async function ingestObservationsWithPool(
       incrementRejected(rejected, input.source);
       continue;
     }
+    const effectiveMachineId = options.machineId ?? input.machineId ?? null;
     accepted.push({
       source: input.source,
       action: input.action,
       actorKind: input.actorKind,
-      machineId: options.machineId ?? input.machineId ?? null,
+      machineId: effectiveMachineId && knownMachineIds.has(effectiveMachineId) ? effectiveMachineId : null,
       projectId: input.projectId ?? null,
       occurredAt: input.occurredAt,
       resourceRefs: input.resourceRefs ?? [],

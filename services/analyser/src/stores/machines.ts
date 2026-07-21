@@ -71,6 +71,18 @@ export async function listMachinesWithPool(pool: AnalyserQueryPool, owner: strin
   return result.rows.map(mapMachine);
 }
 
+export async function listKnownMachineIdsWithPool(
+  pool: AnalyserQueryPool,
+  owner: string,
+  ids: string[]
+): Promise<Set<string>> {
+  if (ids.length === 0) return new Set();
+  const result = await pool.query<{ id: string }>(`SELECT id
+    FROM analyser_machines
+    WHERE service_account_id = $1 AND id = ANY($2::uuid[])`, [owner, ids]);
+  return new Set(result.rows.map((row) => row.id));
+}
+
 export async function touchMachine(owner: string, machineId: string): Promise<void> {
   return touchMachineWithPool(getAnalyserPool(), owner, machineId);
 }
