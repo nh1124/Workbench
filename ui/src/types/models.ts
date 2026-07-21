@@ -890,6 +890,7 @@ export interface AnalyserCollectionSettings {
   localFileEvents: "off" | "metadata";
   localFileUpload: boolean;
   screenshots: "off" | "local_only";
+  screenshotDerivedUpload: boolean;
   retentionDays: Record<AnalyserObservationSource, number>;
   localScreenshotRetentionDays: number;
   projectAllow: string[];
@@ -946,6 +947,18 @@ export interface AnalyserObservationRecord {
   dedupeKey: string;
   receivedAt: string;
   expiresAt: string;
+}
+
+export interface AnalyserDerivedCapture {
+  id: string;
+  machineId?: string;
+  kind: string;
+  title: string;
+  summaryMarkdown: string;
+  evidenceRefs: AnalyserResourceRef[];
+  occurredAt: string;
+  receivedAt: string;
+  createdAt: string;
 }
 
 export interface AnalyserActivityAggregateDay {

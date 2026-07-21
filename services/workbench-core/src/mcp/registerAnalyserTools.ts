@@ -103,6 +103,29 @@ const observationListSchema = z.object({
   }
 });
 
+const derivedCaptureInputSchema = z.object({
+  machineId: z.string().uuid().optional(),
+  kind: boundedText(100),
+  title: boundedText(500),
+  summaryMarkdown: z.string().max(20_000),
+  evidenceRefs: evidenceRefsSchema,
+  occurredAt: isoDateTimeSchema,
+  dedupeKey: boundedText(500)
+}).strict();
+
+const derivedCaptureListSchema = z.object({
+  kind: boundedText(100).optional(),
+  machineId: z.string().uuid().optional(),
+  from: isoDateTimeSchema.optional(),
+  to: isoDateTimeSchema.optional(),
+  limit: limitSchema,
+  cursor: cursorSchema
+}).strict().superRefine((value, context) => {
+  if (value.from && value.to && new Date(value.from).getTime() > new Date(value.to).getTime()) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["to"], message: "to must be on or after from" });
+  }
+});
+
 const summaryListSchema = z.object({
   kind: boundedText(100).optional(),
   from: dateSchema.optional(),
@@ -294,6 +317,34 @@ export function registerAnalyserTools(server: McpServer, ctx: ToolContext): void
     async ({ runId, ...payload }) => asMcpText(await runWithAnalyserAccount(
       ctx,
       () => client.pullRun(ctx.accessToken, runId, payload)
+    ))
+  );
+
+  server.registerTool(
+    "analyser.captures.derived.ingest",
+    {
+      title: "Ingest Analyser Derived Capture",
+      description: "Ingest TEXT that a local agent derived from screenshots/captures on the capture machine; the screenshot image is never uploaded. Requires the owner to have enabled screenshotDerivedUpload in Analyser Settings; otherwise the call is rejected.",
+      inputSchema: derivedCaptureInputSchema,
+      annotations: idempotentWriteAnnotations
+    },
+    async (payload) => asMcpText(await runWithAnalyserAccount(
+      ctx,
+      () => client.ingestDerivedCapture(ctx.accessToken, payload)
+    ))
+  );
+
+  server.registerTool(
+    "analyser.captures.derived.list",
+    {
+      title: "List Analyser Derived Captures",
+      description: "List text derived from local captures using kind, machine, time, and pagination filters.",
+      inputSchema: derivedCaptureListSchema,
+      annotations: readAnnotations
+    },
+    async (query) => asMcpText(await runWithAnalyserAccount(
+      ctx,
+      () => client.listDerivedCaptures(ctx.accessToken, query)
     ))
   );
 

@@ -8,6 +8,7 @@ import type {
   AnalyserActivityAggregate,
   AnalyserAutomationPolicy,
   AnalyserCollectionSettings,
+  AnalyserDerivedCapture,
   AnalyserObservationRecord,
   AnalyserOperationRecord,
   AnalyserProposalListItem,
@@ -35,6 +36,7 @@ function collectionSettings(): AnalyserCollectionSettings {
     localFileEvents: "metadata",
     localFileUpload: false,
     screenshots: "local_only",
+    screenshotDerivedUpload: false,
     retentionDays: {
       workbench_change: 30,
       mcp_access: 20,
@@ -157,6 +159,20 @@ function observation(id: string, overrides: Partial<AnalyserObservationRecord> =
   };
 }
 
+function derivedCapture(id: string, overrides: Partial<AnalyserDerivedCapture> = {}): AnalyserDerivedCapture {
+  return {
+    id,
+    kind: "screen_summary",
+    title: `Derived capture ${id}`,
+    summaryMarkdown: `## Derived insight ${id}\nCompleted a captured workflow.`,
+    evidenceRefs: [{ service: "notes", resourceType: "note", resourceId: `derived-note-${id}` }],
+    occurredAt: updatedAt,
+    receivedAt: updatedAt,
+    createdAt: updatedAt,
+    ...overrides
+  };
+}
+
 function summary(id: string, overrides: Partial<AnalyserSummaryRecord> = {}): AnalyserSummaryRecord {
   return {
     id,
@@ -257,6 +273,7 @@ beforeEach(() => {
   vi.spyOn(analyserApi, "machines").mockResolvedValue({ items: statusResult().machines });
   vi.spyOn(analyserApi, "activityAggregate").mockResolvedValue(aggregateResult());
   vi.spyOn(analyserApi, "observations").mockResolvedValue({ items: [] });
+  vi.spyOn(analyserApi, "derivedCaptures").mockResolvedValue({ items: [derivedCapture("1")] });
   vi.spyOn(analyserApi, "summaries").mockResolvedValue({ items: [] });
   vi.spyOn(analyserApi, "summary").mockImplementation(async (id) => summary(id));
   vi.spyOn(analyserApi, "proposals").mockResolvedValue({ items: [] });
@@ -372,6 +389,21 @@ describe("AnalyserPage", () => {
     expect(screen.getByRole("link", { name: "notes/note/note-1" }).getAttribute("href")).toBe("/notes?noteId=note-1");
     expect(screen.queryByText("Sensitive prose must not render")).toBeNull();
     expect(screen.getByText(/bodies are never stored/i)).toBeTruthy();
+  });
+
+  it("renders derived capture text and requests the selected activity range", async () => {
+    const range = currentRange(7);
+    renderPage("/analyser?tab=activity");
+
+    expect(await screen.findByText("Derived capture 1")).toBeTruthy();
+    expect(screen.getByText(/Completed a captured workflow/)).toBeTruthy();
+    expect(screen.getByText(/Images stay on the machine and are never uploaded/)).toBeTruthy();
+    expect(analyserApi.derivedCaptures).toHaveBeenCalledWith({
+      from: `${range.from}T00:00:00.000Z`,
+      to: `${range.to}T23:59:59.999Z`,
+      machineId: undefined,
+      limit: 50
+    });
   });
 
   it("appends the next observation page using nextCursor", async () => {
@@ -549,6 +581,8 @@ describe("AnalyserPage", () => {
     expect((collection.getByLabelText("MCP access") as HTMLSelectElement).value).toBe("mutations");
     expect((collection.getByLabelText("Project allow list") as HTMLInputElement).value).toBe("project-a");
     expect(collection.getByText("Screenshots are captured and stored on this machine only — never uploaded")).toBeTruthy();
+    expect((collection.getByLabelText("Screenshot-derived text upload") as HTMLInputElement).checked).toBe(false);
+    expect(collection.getByText("Lets a local agent upload TEXT it derived from screenshots/captures to the server. The screenshot image itself is never uploaded.")).toBeTruthy();
     expect(analyserApi.settings).toHaveBeenCalledTimes(1);
     expect(analyserApi.machines).toHaveBeenCalledTimes(1);
   });

@@ -8,6 +8,7 @@ import type {
   AnalyserAutomationPolicy,
   AnalyserCollectionSettings,
   AnalyserCollectionSettingsOverride,
+  AnalyserDerivedCapture,
   AnalyserMachineRecord,
   AnalyserObservationRecord,
   AnalyserObservationSource,
@@ -269,12 +270,20 @@ function ActivityTab() {
   const [aggregate, setAggregate] = useState<AnalyserActivityAggregate>();
   const [observations, setObservations] = useState<AnalyserObservationRecord[]>([]);
   const [nextCursor, setNextCursor] = useState<string>();
+  const [derivedCaptures, setDerivedCaptures] = useState<AnalyserDerivedCapture[]>([]);
+  const [derivedNextCursor, setDerivedNextCursor] = useState<string>();
   const [aggregateLoading, setAggregateLoading] = useState(true);
   const [observationLoading, setObservationLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [derivedLoading, setDerivedLoading] = useState(true);
+  const [derivedLoadingMore, setDerivedLoadingMore] = useState(false);
   const [error, setError] = useState<string>();
   const [notConfigured, setNotConfigured] = useState(false);
   const range = useMemo(() => activityRange(period), [period]);
+  const derivedRange = useMemo(() => ({
+    from: `${range.from}T00:00:00.000Z`,
+    to: `${range.to}T23:59:59.999Z`
+  }), [range]);
 
   useEffect(() => {
     let cancelled = false;
@@ -332,6 +341,30 @@ function ActivityTab() {
     return () => { cancelled = true; };
   }, [machineId, range, source]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setDerivedLoading(true);
+    setDerivedCaptures([]);
+    setDerivedNextCursor(undefined);
+    setError(undefined);
+    void analyserApi.derivedCaptures({
+      ...derivedRange,
+      machineId: machineId || undefined,
+      limit: ANALYSER_PAGE_SIZE
+    }).then((result) => {
+      if (cancelled) return;
+      setDerivedCaptures(result.items);
+      setDerivedNextCursor(result.nextCursor);
+    }).catch((requestError: unknown) => {
+      if (cancelled) return;
+      if (isAnalyserNotConfigured(requestError)) setNotConfigured(true);
+      else setError(errorMessage(requestError, "Derived captures are unavailable."));
+    }).finally(() => {
+      if (!cancelled) setDerivedLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [derivedRange, machineId]);
+
   const loadMore = async () => {
     if (!nextCursor) return;
     setLoadingMore(true);
@@ -351,6 +384,27 @@ function ActivityTab() {
       else setError(errorMessage(requestError, "More observations could not be loaded."));
     } finally {
       setLoadingMore(false);
+    }
+  };
+
+  const loadMoreDerived = async () => {
+    if (!derivedNextCursor) return;
+    setDerivedLoadingMore(true);
+    setError(undefined);
+    try {
+      const result = await analyserApi.derivedCaptures({
+        ...derivedRange,
+        machineId: machineId || undefined,
+        limit: ANALYSER_PAGE_SIZE,
+        cursor: derivedNextCursor
+      });
+      setDerivedCaptures((current) => [...current, ...result.items]);
+      setDerivedNextCursor(result.nextCursor);
+    } catch (requestError) {
+      if (isAnalyserNotConfigured(requestError)) setNotConfigured(true);
+      else setError(errorMessage(requestError, "More derived captures could not be loaded."));
+    } finally {
+      setDerivedLoadingMore(false);
     }
   };
 
@@ -475,6 +529,42 @@ function ActivityTab() {
           <div className="analyser-load-more">
             <button type="button" onClick={() => void loadMore()} disabled={loadingMore}>
               {loadingMore ? "Loading..." : "Load more"}
+            </button>
+          </div>
+        ) : null}
+      </section>
+
+      <section aria-labelledby="derived-captures-heading">
+        <div className="analyser-section-header">
+          <div>
+            <h2 id="derived-captures-heading">Derived captures</h2>
+            <p>Text a local agent derived from screenshots/captures. Images stay on the machine and are never uploaded.</p>
+          </div>
+        </div>
+        {derivedLoading ? <p className="analyser-muted">Loading derived captures...</p> : null}
+        {!derivedLoading && derivedCaptures.length === 0 ? (
+          <div className="analyser-empty-card compact">
+            <h2>No derived captures found</h2>
+            <p>No screenshot-derived text matches the selected period and machine.</p>
+          </div>
+        ) : null}
+        <div className="analyser-observation-list">
+          {derivedCaptures.map((capture) => (
+            <article className="analyser-observation-row" key={capture.id} aria-label={`${capture.kind} ${capture.title}`}>
+              <div className="analyser-observation-top">
+                <time>{formatDateTime(capture.occurredAt)}</time>
+                <span className="analyser-state analyser-kind-badge">{label(capture.kind)}</span>
+                <strong>{capture.title}</strong>
+              </div>
+              <pre className="analyser-markdown">{capture.summaryMarkdown || "No derived text is available."}</pre>
+              <ReferenceList refs={capture.evidenceRefs} labelText="Evidence references" />
+            </article>
+          ))}
+        </div>
+        {derivedNextCursor ? (
+          <div className="analyser-load-more">
+            <button type="button" onClick={() => void loadMoreDerived()} disabled={derivedLoadingMore}>
+              {derivedLoadingMore ? "Loading..." : "Load more"}
             </button>
           </div>
         ) : null}
@@ -957,6 +1047,7 @@ const COLLECTION_ENUM_FIELDS = [
 ] as const;
 
 const COLLECTION_BOOLEAN_FIELDS = [
+  { key: "screenshotDerivedUpload", name: "Screenshot-derived text upload", caption: "Lets a local agent upload TEXT it derived from screenshots/captures to the server. The screenshot image itself is never uploaded." },
   { key: "foregroundAppCapture", name: "Foreground app capture", caption: "Captures app name + idle flag samples on this machine." },
   { key: "foregroundAppUpload", name: "Foreground app upload", caption: "Uploads app name + idle flag samples to the server" },
   { key: "windowTitleCapture", name: "Window title capture", caption: "Captures the active window title on this machine when explicitly enabled." },

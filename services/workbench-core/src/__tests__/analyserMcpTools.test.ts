@@ -34,6 +34,8 @@ const FROZEN_TOOL_NAMES = [
   "analyser.settings.get",
   "analyser.observations.list",
   "analyser.observations.pull",
+  "analyser.captures.derived.ingest",
+  "analyser.captures.derived.list",
   "analyser.routines.list",
   "analyser.routines.claim",
   "analyser.routines.heartbeat",
@@ -54,6 +56,7 @@ const READ_TOOL_NAMES = new Set([
   "analyser.status.get",
   "analyser.settings.get",
   "analyser.observations.list",
+  "analyser.captures.derived.list",
   "analyser.routines.list",
   "analyser.summaries.list",
   "analyser.summaries.get",
@@ -63,6 +66,7 @@ const READ_TOOL_NAMES = new Set([
 
 const IDEMPOTENT_WRITE_TOOL_NAMES = new Set([
   "analyser.routines.heartbeat",
+  "analyser.captures.derived.ingest",
   "analyser.summaries.upsert",
   "analyser.operations.record",
   "analyser.publications.record"
@@ -117,10 +121,10 @@ function testDependencies(analyserClient: Record<string, unknown>): Record<strin
 }
 
 describe("Analyser MCP contract", () => {
-  it("registers exactly the frozen 18-tool public surface", () => {
+  it("registers exactly the frozen 20-tool public surface", () => {
     const tools = captureTools();
     assert.deepEqual([...tools.keys()], [...FROZEN_TOOL_NAMES]);
-    assert.equal(tools.size, 18);
+    assert.equal(tools.size, 20);
     for (const [name, { definition }] of tools) {
       assert.match(name, /^analyser(?:\.[a-z_]+)+$/);
       assert.ok(definition.description?.trim(), `${name} must have an agent-facing description`);
@@ -128,7 +132,7 @@ describe("Analyser MCP contract", () => {
     }
   });
 
-  it("marks only the eight pure reads as read-only and declares closed-world write safety", () => {
+  it("marks only the nine pure reads as read-only and declares closed-world write safety", () => {
     const tools = captureTools();
     for (const [name, { definition }] of tools) {
       const annotations = definition.annotations;
@@ -169,6 +173,51 @@ describe("Analyser MCP contract", () => {
       method: "getEffectiveSettings",
       args: ["test-token", { machineId }]
     }]);
+  });
+
+  it("forwards derived capture ingest and list arguments with the correct annotations", async () => {
+    const calls: Array<{ method: string; args: unknown[] }> = [];
+    const tools = captureTools(testDependencies({
+      async ingestDerivedCapture(...args: unknown[]) {
+        calls.push({ method: "ingestDerivedCapture", args });
+        return { created: true };
+      },
+      async listDerivedCaptures(...args: unknown[]) {
+        calls.push({ method: "listDerivedCaptures", args });
+        return { items: [] };
+      }
+    }));
+    const machineId = "123e4567-e89b-42d3-a456-426614174000";
+    const input = {
+      machineId,
+      kind: "screen_summary",
+      title: "Capture summary",
+      summaryMarkdown: "Observed a completed workflow.",
+      evidenceRefs: [{ service: "tasks", resourceType: "task", resourceId: "task-1" }],
+      occurredAt: "2026-07-20T04:00:00.000Z",
+      dedupeKey: "capture:2026-07-20T04:00:00.000Z"
+    };
+    const query = {
+      kind: "screen_summary",
+      machineId,
+      from: "2026-07-20T00:00:00.000Z",
+      to: "2026-07-20T23:59:59.999Z",
+      limit: 25,
+      cursor: "next-cursor"
+    };
+
+    assert.equal(schemaFor(tools, "analyser.captures.derived.ingest").safeParse(input).success, true);
+    assert.equal(schemaFor(tools, "analyser.captures.derived.list").safeParse(query).success, true);
+    assert.equal(tools.get("analyser.captures.derived.ingest")?.definition.annotations?.readOnlyHint, false);
+    assert.equal(tools.get("analyser.captures.derived.list")?.definition.annotations?.readOnlyHint, true);
+
+    await tools.get("analyser.captures.derived.ingest")?.handler(input);
+    await tools.get("analyser.captures.derived.list")?.handler(query);
+
+    assert.deepEqual(calls, [
+      { method: "ingestDerivedCapture", args: ["test-token", input] },
+      { method: "listDerivedCaptures", args: ["test-token", query] }
+    ]);
   });
 
   it("uses a strict discriminated union for proposal updates", () => {

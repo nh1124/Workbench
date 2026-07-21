@@ -19,6 +19,7 @@ import type {
   AnalyserAutomationPolicyRecord,
   AnalyserCollectionPolicyRecord,
   AnalyserCollectionSettingsOverride,
+  AnalyserDerivedCapture,
   AnalyserExportInput,
   AnalyserExportResult,
   AnalyserMachineRecord,
@@ -1136,6 +1137,17 @@ export const analyserApi = {
     fetchJson(analyserApiUrl("/summaries", query)),
   summary: (id: string): Promise<AnalyserSummaryRecord> =>
     fetchJson(analyserApiUrl(`/summaries/${encodeURIComponent(id)}`)),
+  derivedCaptures: (query: {
+    kind?: string;
+    machineId?: string;
+    from?: string;
+    to?: string;
+    limit?: number;
+    cursor?: string;
+  } = {}): Promise<{ items: AnalyserDerivedCapture[]; nextCursor?: string }> =>
+    fetchJson(analyserApiUrl("/captures/derived", query)),
+  derivedCapture: (id: string): Promise<AnalyserDerivedCapture> =>
+    fetchJson(analyserApiUrl(`/captures/derived/${encodeURIComponent(id)}`)),
   proposals: (query: {
     status?: AnalyserProposalStatus;
     kind?: string;

@@ -3926,6 +3926,21 @@ app.get(
   analyserFacadeRoute((token, req) => analyserClient.getSummary(token, String(req.params.id)))
 );
 app.post(
+  "/api/analyser/captures/derived",
+  analyserFacadeRoute((token, req) => analyserClient.ingestDerivedCapture(token, req.body ?? {}))
+);
+app.get(
+  "/api/analyser/captures/derived",
+  analyserFacadeRoute((token, req) => analyserClient.listDerivedCaptures(
+    token,
+    pickAnalyserQuery(req.query, ["kind", "machineId", "from", "to", "limit", "cursor"])
+  ))
+);
+app.get(
+  "/api/analyser/captures/derived/:id",
+  analyserFacadeRoute((token, req) => analyserClient.getDerivedCapture(token, String(req.params.id)))
+);
+app.post(
   "/api/analyser/export",
   analyserFacadeRoute((token, req) => exportAnalyserRecord({ accessToken: token }, req.body ?? {}))
 );

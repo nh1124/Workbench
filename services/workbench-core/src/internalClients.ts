@@ -761,6 +761,15 @@ type AnalyserSummaryQuery = {
   cursor?: string;
 };
 
+type AnalyserDerivedCaptureQuery = {
+  kind?: string;
+  machineId?: string;
+  from?: string;
+  to?: string;
+  limit?: string | number;
+  cursor?: string;
+};
+
 type AnalyserProposalQuery = {
   status?: string;
   kind?: string;
@@ -898,6 +907,16 @@ export const analyserClient = {
     serviceRequest<unknown>(requireAnalyser(), `/summaries${buildQuery(query)}`, token),
   getSummary: (token: string, id: string) =>
     serviceRequest<unknown>(requireAnalyser(), `/summaries/${encodeURIComponent(id)}`, token),
+  ingestDerivedCapture: (token: string, payload: unknown) =>
+    serviceRequest<unknown>(requireAnalyser(), "/captures/derived", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  listDerivedCaptures: (token: string, query: AnalyserDerivedCaptureQuery = {}) =>
+    serviceRequest<unknown>(requireAnalyser(), `/captures/derived${buildQuery(query)}`, token),
+  getDerivedCapture: (token: string, id: string) =>
+    serviceRequest<unknown>(requireAnalyser(), `/captures/derived/${encodeURIComponent(id)}`, token),
   createProposal: (token: string, payload: unknown) =>
     serviceRequest<unknown>(requireAnalyser(), "/proposals", token, {
       method: "POST",
