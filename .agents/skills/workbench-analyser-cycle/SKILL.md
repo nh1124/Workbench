@@ -33,6 +33,15 @@ Tool shapes are frozen in
    - `analyser.summaries.upsert` — periodic findings (work summaries, digests). Idempotent per
      `(kind, periodStart, periodEnd)`; always attach `evidenceRefs`; never embed large source
      bodies, secrets, or private content unrelated to the finding.
+     - **Compute `periodStart`/`periodEnd` as calendar dates in the OWNER's timezone**
+       (the routine's `timezone`, e.g. `Asia/Tokyo`) — never from a UTC `Date`. A daily
+       summary for local day `D` must send `periodStart = periodEnd = D` in that timezone.
+       Deriving the date in UTC lands it a day early (e.g. JST 00:00–08:59 → previous day),
+       and because the key is exactly `(kind, periodStart, periodEnd)` the upsert then
+       **silently overwrites the previous day's summary**. Format the local date yourself
+       (e.g. `Intl.DateTimeFormat("en-CA", { timeZone })`), do not slice a UTC ISO string.
+     - When you intend to UPDATE a specific existing summary (not create a new period), pass
+       its `expectedVersion` so an unexpected version mismatch surfaces instead of clobbering.
    - `analyser.proposals.create` — every change to Workbench resources you are NOT allowed to
      perform directly (see below). Use a stable `dedupeKey` so re-runs do not duplicate. Fill
      `proposedAction { kind, params }` and `confidenceEvidence` honestly.
