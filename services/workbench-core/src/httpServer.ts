@@ -34,6 +34,7 @@ import { projectSyncEventsForUser, startAnalyserProjector } from "./analyserProj
 import { analyserHttpAccessMiddleware, instrumentMcpServer } from "./analyserAccessInstrumentation.js";
 import { exportAnalyserRecord } from "./analyserExport.js";
 import { fetchSkillCatalog } from "./analyserSkillCatalog.js";
+import { runSkillIntegrityCheck } from "./analyserSkillIntegrity.js";
 import { getOAuthDynamicClient, saveOAuthDynamicClient } from "./oauthDynamicClientsStore.js";
 import {
   commitSyncChangesCursor,
@@ -3886,6 +3887,16 @@ app.get(
       return { skills: [], unavailable: true };
     }
   })
+);
+app.post(
+  "/api/analyser/skills/integrity/run",
+  analyserFacadeRoute((token) => runSkillIntegrityCheck(token, {
+    treeList: artifactsClient.treeList,
+    listRoutines: analyserClient.listRoutines,
+    listSkillSnapshots: analyserClient.listSkillSnapshots,
+    setRoutineSkillFlags: analyserClient.setRoutineSkillFlags,
+    createProposal: analyserClient.createProposal
+  }))
 );
 app.post(
   "/api/analyser/skills/snapshots",

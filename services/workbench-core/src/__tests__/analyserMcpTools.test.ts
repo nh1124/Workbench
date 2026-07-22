@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,6 +39,7 @@ const FROZEN_TOOL_NAMES = [
   "analyser.captures.derived.list",
   "analyser.skills.snapshot.upsert",
   "analyser.skills.snapshot.list",
+  "analyser.skills.integrity.run",
   "analyser.routines.list",
   "analyser.routines.claim",
   "analyser.routines.heartbeat",
@@ -125,10 +127,10 @@ function testDependencies(analyserClient: Record<string, unknown>): Record<strin
 }
 
 describe("Analyser MCP contract", () => {
-  it("registers exactly the frozen 22-tool public surface", () => {
+  it("registers exactly the frozen 23-tool public surface", () => {
     const tools = captureTools();
     assert.deepEqual([...tools.keys()], [...FROZEN_TOOL_NAMES]);
-    assert.equal(tools.size, 22);
+    assert.equal(tools.size, 23);
     for (const [name, { definition }] of tools) {
       assert.match(name, /^analyser(?:\.[a-z_]+)+$/);
       assert.ok(definition.description?.trim(), `${name} must have an agent-facing description`);
@@ -256,6 +258,57 @@ describe("Analyser MCP contract", () => {
       { method: "upsertSkillSnapshot", args: ["test-token", input] },
       { method: "listSkillSnapshots", args: ["test-token", query] }
     ]);
+  });
+
+  it("runs skill integrity through canonical artifacts and analyser state clients", async () => {
+    const calls: Array<{ method: string; args: unknown[] }> = [];
+    const canonicalHash = createHash("sha256").update("CHANGED", "utf8").digest("hex");
+    const dependencies = testDependencies({
+      async listRoutines(...args: unknown[]) {
+        calls.push({ method: "listRoutines", args });
+        return { items: [{ skillKey: "skill-drift" }] };
+      },
+      async listSkillSnapshots(...args: unknown[]) {
+        calls.push({ method: "listSkillSnapshots", args });
+        return { items: [{ skillKey: "skill-drift", contentHash: "old-hash" }] };
+      },
+      async setRoutineSkillFlags(...args: unknown[]) {
+        calls.push({ method: "setRoutineSkillFlags", args });
+        return {};
+      },
+      async createProposal(...args: unknown[]) {
+        calls.push({ method: "createProposal", args });
+        return { created: true };
+      }
+    });
+    dependencies.artifactsClient = {
+      async treeList(...args: unknown[]) {
+        calls.push({ method: "treeList", args });
+        return [{ path: "skills/skill-drift/SKILL.md", contentMarkdown: "CHANGED" }];
+      }
+    };
+    const tools = captureTools(dependencies);
+
+    assert.equal(schemaFor(tools, "analyser.skills.integrity.run").safeParse({}).success, true);
+    assert.equal(schemaFor(tools, "analyser.skills.integrity.run").safeParse({ extra: true }).success, false);
+    await tools.get("analyser.skills.integrity.run")?.handler({});
+
+    assert.equal(calls[0].method, "treeList");
+    assert.deepEqual(calls[1], { method: "listRoutines", args: ["test-token"] });
+    assert.deepEqual(calls[2], { method: "listSkillSnapshots", args: ["test-token"] });
+    assert.deepEqual(calls[3], {
+      method: "setRoutineSkillFlags",
+      args: ["test-token", { missingSkillKeys: [] }]
+    });
+    assert.deepEqual(calls[4], {
+      method: "createProposal",
+      args: ["test-token", {
+        kind: "skill_drift",
+        title: "Skill drift detected: skill-drift",
+        bodyMarkdown: "## Skill drift\n\n- Skill key: `skill-drift`\n- The canonical AgentSkills body changed from the stored Analyser snapshot.\n\nReview the change and re-snapshot the skill if it is accepted.",
+        dedupeKey: `skill-drift:skill-drift:${canonicalHash}`
+      }]
+    });
   });
 
   it("uses a strict discriminated union for proposal updates", () => {

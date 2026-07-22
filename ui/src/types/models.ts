@@ -992,6 +992,7 @@ export interface AnalyserRoutineRecord {
   scheduleExpr: string;
   timezone: string;
   enabled: boolean;
+  skillMissing?: boolean;
   nextRunAt?: string;
   committedCursor: string;
   maxRetries: number;

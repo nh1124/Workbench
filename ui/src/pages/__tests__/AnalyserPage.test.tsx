@@ -298,6 +298,12 @@ beforeEach(() => {
   vi.spyOn(analyserApi, "settings").mockResolvedValue(settingsResult());
   vi.spyOn(analyserApi, "routines").mockResolvedValue({ items: [analyserRoutine()] });
   vi.spyOn(analyserApi, "skillCatalog").mockResolvedValue({ skills: ["workbench-analyser-cycle"] });
+  vi.spyOn(analyserApi, "runSkillIntegrity").mockResolvedValue({
+    checkedRoutines: 1,
+    missing: [],
+    drifted: [],
+    proposalsCreated: 0
+  });
   vi.spyOn(analyserApi, "routineStatus").mockResolvedValue({ items: statusResult().routines });
   vi.spyOn(analyserApi, "createRoutine").mockImplementation(async (body) => analyserRoutine({ ...body, version: 1 }));
   vi.spyOn(analyserApi, "deleteRoutine").mockResolvedValue(undefined);
@@ -636,6 +642,50 @@ describe("AnalyserPage", () => {
       scheduleExpr: "30",
       expectedVersion: 5
     }));
+  });
+
+  it("runs skill integrity and reloads routines and the canonical catalog", async () => {
+    vi.mocked(analyserApi.runSkillIntegrity).mockResolvedValue({
+      checkedRoutines: 1,
+      missing: ["skill-gone"],
+      drifted: ["skill-changed"],
+      proposalsCreated: 1
+    });
+    renderPage("/analyser?tab=routines");
+
+    const routinesTab = await screen.findByRole("region", { name: "Routines" });
+    await waitFor(() => {
+      expect(analyserApi.routines).toHaveBeenCalledTimes(1);
+      expect(analyserApi.skillCatalog).toHaveBeenCalledTimes(1);
+    });
+    fireEvent.click(within(routinesTab).getByRole("button", { name: "Run skill integrity check" }));
+
+    await waitFor(() => expect(analyserApi.runSkillIntegrity).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(analyserApi.routines).toHaveBeenCalledTimes(2);
+      expect(analyserApi.skillCatalog).toHaveBeenCalledTimes(2);
+    });
+    expect(within(routinesTab).getByText("Skill integrity: blocked 1, drift 1, proposals 1.")).toBeTruthy();
+  });
+
+  it("shows the authoritative blocked badge only when skillMissing is true", async () => {
+    vi.mocked(analyserApi.routines).mockResolvedValue({
+      items: [
+        analyserRoutine({ key: "blocked-routine", name: "Blocked routine", skillKey: "deleted-skill", skillMissing: true }),
+        analyserRoutine({ id: "routine-2", key: "unblocked-routine", name: "Unblocked routine", skillMissing: false })
+      ]
+    });
+    vi.mocked(analyserApi.skillCatalog).mockResolvedValue({ skills: ["workbench-analyser-cycle"] });
+
+    renderPage("/analyser?tab=routines");
+
+    const blockedRoutine = (await screen.findByText("Blocked routine")).closest("article");
+    const unblockedRoutine = screen.getByText("Unblocked routine").closest("article");
+    expect(blockedRoutine).toBeTruthy();
+    expect(unblockedRoutine).toBeTruthy();
+    expect(within(blockedRoutine as HTMLElement).getByText("blocked · skill missing")).toBeTruthy();
+    expect(within(blockedRoutine as HTMLElement).queryByText("skill missing")).toBeNull();
+    expect(within(unblockedRoutine as HTMLElement).queryByText("blocked · skill missing")).toBeNull();
   });
 
   it("shows a warning only for routines whose skill is missing from the canonical catalog", async () => {

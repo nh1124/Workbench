@@ -1478,23 +1478,20 @@ function RoutinesTab() {
 
   useEffect(() => { void load(); }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    void analyserApi.skillCatalog()
-      .then((result) => {
-        if (cancelled) return;
-        setSkillCatalog({
-          skills: new Set(result.skills),
-          loaded: true,
-          unavailable: Boolean(result.unavailable)
-        });
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setSkillCatalog({ skills: new Set<string>(), loaded: false, unavailable: false });
+  const loadSkillCatalog = async () => {
+    try {
+      const result = await analyserApi.skillCatalog();
+      setSkillCatalog({
+        skills: new Set(result.skills),
+        loaded: true,
+        unavailable: Boolean(result.unavailable)
       });
-    return () => { cancelled = true; };
-  }, []);
+    } catch {
+      setSkillCatalog({ skills: new Set<string>(), loaded: false, unavailable: false });
+    }
+  };
+
+  useEffect(() => { void loadSkillCatalog(); }, []);
 
   const reloadConflict = async (message: string) => {
     await load();
@@ -1523,6 +1520,21 @@ function RoutinesTab() {
       setNotice("Default routines seeded.");
     } catch (requestError) {
       setError(errorMessage(requestError, "Unable to seed routines."));
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  const runIntegrity = async () => {
+    setBusy("integrity");
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      const result = await analyserApi.runSkillIntegrity();
+      await Promise.all([load(), loadSkillCatalog()]);
+      setNotice(`Skill integrity: blocked ${result.missing.length}, drift ${result.drifted.length}, proposals ${result.proposalsCreated}.`);
+    } catch (requestError) {
+      setError(errorMessage(requestError, "Unable to run the skill integrity check."));
     } finally {
       setBusy(undefined);
     }
@@ -1614,6 +1626,7 @@ function RoutinesTab() {
         <div><h2>Routines</h2><p>Scheduled analysis work. Workbench holds the schedule; agents only claim due routines.</p></div>
         <div className="analyser-header-actions">
           <button type="button" onClick={() => setShowCreate((value) => !value)} disabled={Boolean(busy)}>{showCreate ? "Cancel new" : "New routine"}</button>
+          <button type="button" onClick={() => void runIntegrity()} disabled={Boolean(busy)}>{busy === "integrity" ? "Running integrity..." : "Run skill integrity check"}</button>
           <button type="button" onClick={() => void load()} disabled={loading || Boolean(busy)}>{loading ? "Loading..." : "Reload"}</button>
         </div>
       </div>
@@ -1653,7 +1666,8 @@ function RoutinesTab() {
           const draft = drafts[routine.key] ?? routineDraft(routine);
           const changed = Object.keys(changedFields(routine, draft)).length > 0;
           const routineStatus = statuses[routine.key];
-          const skillMissing = skillCatalog.loaded
+          const catalogSkillMissing = !routine.skillMissing
+            && skillCatalog.loaded
             && !skillCatalog.unavailable
             && !skillCatalog.skills.has(routine.skillKey);
           return (
@@ -1663,7 +1677,24 @@ function RoutinesTab() {
                   <strong>{routine.name}</strong>
                   <small>
                     {routine.key} · {routine.skillKey}
-                    {skillMissing ? (
+                    {routine.skillMissing ? (
+                      <span
+                        role="status"
+                        title="Claiming is blocked because this routine's canonical skill is missing."
+                        style={{
+                          display: "inline-flex",
+                          marginLeft: "0.4rem",
+                          padding: "0.08rem 0.4rem",
+                          border: "1px solid #ef4444",
+                          borderRadius: "999px",
+                          color: "#ffffff",
+                          background: "#b91c1c",
+                          fontWeight: 700
+                        }}
+                      >
+                        blocked · skill missing
+                      </span>
+                    ) : catalogSkillMissing ? (
                       <span
                         role="status"
                         title="This routine's skill was not found in the canonical AgentSkills store."

@@ -1087,6 +1087,15 @@ export const analyserApi = {
     fetchJson(analyserApiUrl("/routines")),
   skillCatalog: (): Promise<{ skills: string[]; unavailable?: boolean }> =>
     fetchJson(analyserApiUrl("/skills/catalog")),
+  runSkillIntegrity: (): Promise<{
+    checkedRoutines: number;
+    missing: string[];
+    drifted: string[];
+    proposalsCreated: number;
+  }> => fetchJson(analyserApiUrl("/skills/integrity/run"), {
+    method: "POST",
+    body: JSON.stringify({})
+  }),
   routineStatus: (): Promise<{ items: AnalyserRoutineStatusSummary[] }> =>
     fetchJson(analyserApiUrl("/routines/status")),
   seedRoutines: (): Promise<void> =>

@@ -234,6 +234,7 @@ const SEEDED_ROUTINES = [
   ["artifact-classification", "Artifact classification", "workbench-analyser-cycle", "0 7 * * *"],
   ["workbench-knowledge-maintenance", "Workbench knowledge maintenance", "workbench-maintenance", "0 5 * * *"],
   ["weekly-workbench-digest", "Weekly Workbench digest", "workbench-maintenance", "0 8 * * 0"],
+  ["skill-integrity-check", "Skill integrity check", "workbench-analyser-cycle", "0 4 * * *"],
   ["agent-skills-materialization", "Agent skills materialization", "workbench-agent-skills-materialize", "15 6 * * *"]
 ] as const;
 

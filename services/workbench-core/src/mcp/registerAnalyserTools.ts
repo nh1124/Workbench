@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { analyserClient, serviceBaseUrls } from "../internalClients.js";
+import { analyserClient, artifactsClient, serviceBaseUrls } from "../internalClients.js";
+import { runSkillIntegrityCheck } from "../analyserSkillIntegrity.js";
 import { ensureAnalyserAccountProvisioned } from "../serviceProvisioning.js";
 import { asMcpText, runWithAuthContext } from "./helpers.js";
 
@@ -8,6 +9,7 @@ type ToolContext = {
   accessToken: string;
   dependencies?: {
     analyserClient?: Partial<typeof analyserClient>;
+    artifactsClient?: Pick<typeof artifactsClient, "treeList">;
     ensureAnalyserAccountProvisioned?: typeof ensureAnalyserAccountProvisioned;
     requireAnalyserConfigured?: () => void;
     runWithAuthContext?: typeof runWithAuthContext;
@@ -273,6 +275,7 @@ async function runWithAnalyserAccount<T>(ctx: ToolContext, operation: () => Prom
 
 export function registerAnalyserTools(server: McpServer, ctx: ToolContext): void {
   const client = { ...analyserClient, ...ctx.dependencies?.analyserClient };
+  const artifactClient = { ...artifactsClient, ...ctx.dependencies?.artifactsClient };
 
   server.registerTool(
     "analyser.status.get",
@@ -384,6 +387,26 @@ export function registerAnalyserTools(server: McpServer, ctx: ToolContext): void
     async (query) => asMcpText(await runWithAnalyserAccount(
       ctx,
       () => client.listSkillSnapshots(ctx.accessToken, query)
+    ))
+  );
+
+  server.registerTool(
+    "analyser.skills.integrity.run",
+    {
+      title: "Run Skill Integrity Check",
+      description: "Compare canonical AgentSkills bodies against Analyser skill snapshots: block routines whose skill was removed (fail-safe) and open a proposal for drifted skills.",
+      inputSchema: z.object({}).strict(),
+      annotations: writeAnnotations
+    },
+    async () => asMcpText(await runWithAnalyserAccount(
+      ctx,
+      () => runSkillIntegrityCheck(ctx.accessToken, {
+        treeList: artifactClient.treeList,
+        listRoutines: client.listRoutines,
+        listSkillSnapshots: client.listSkillSnapshots,
+        setRoutineSkillFlags: client.setRoutineSkillFlags,
+        createProposal: client.createProposal
+      })
     ))
   );
 

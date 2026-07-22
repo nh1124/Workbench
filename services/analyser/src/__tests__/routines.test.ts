@@ -17,6 +17,7 @@ const {
   heartbeatRunWithPool,
   pullForRunWithPool,
   routineStatusSummariesWithPool,
+  seedRoutinesWithPool,
   updateRoutineWithPool
 } = await import("../stores/routines.js");
 
@@ -116,6 +117,19 @@ function lockedRow(overrides: Record<string, unknown> = {}) {
     ...overrides
   };
 }
+
+describe("seedRoutinesWithPool", () => {
+  it("includes the dedicated skill integrity routine and remains conflict-idempotent", async () => {
+    const pool = fakePool([{ rows: [] }]);
+    await seedRoutinesWithPool(pool, "owner-1", {
+      now: new Date(timestamp),
+      computeNext: () => new Date(timestamp)
+    });
+
+    assert.ok(pool.calls[0].values?.includes("skill-integrity-check"));
+    assert.match(pool.calls[0].text, /ON CONFLICT \(service_account_id, key\) DO NOTHING/);
+  });
+});
 
 describe("analyser routine claiming", () => {
   it("expires stale leases before locking due routines and commits a null claim", async () => {
