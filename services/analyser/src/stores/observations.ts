@@ -302,6 +302,14 @@ export async function pullObservationsAfter(
   return pullObservationsAfterWithPool(getAnalyserPool(), owner, afterSeq, limit);
 }
 
+// Access observations produced by an agent (actorKind "agent") are the analyser
+// poller's own reads while executing a routine (e.g. projects.list). They are
+// still recorded for audit, but they must not feed the NEXT routine's analysis
+// window, otherwise the maintenance loop analyses its own activity. We drop them
+// from the returned items while still advancing the cursor past them (maxSeq is
+// taken from the full scanned window), so they are skipped exactly once.
+const AGENT_SELF_ACCESS_SOURCES: ReadonlySet<ObservationSource> = new Set(["mcp_access", "ui_access"]);
+
 export async function pullObservationsAfterWithPool(
   pool: AnalyserQueryPool,
   owner: string,
@@ -316,8 +324,12 @@ export async function pullObservationsAfterWithPool(
     WHERE service_account_id = $1 AND seq > $2::bigint AND expires_at > NOW()
     ORDER BY seq ASC
     LIMIT $3`, [owner, afterSeq, bounded]);
-  const items = result.rows.map(mapObservation);
-  return { items, maxSeq: items.at(-1)?.seq ?? afterSeq };
+  const scanned = result.rows.map(mapObservation);
+  const maxSeq = scanned.at(-1)?.seq ?? afterSeq;
+  const items = scanned.filter(
+    (observation) => !(observation.actorKind === "agent" && AGENT_SELF_ACCESS_SOURCES.has(observation.source))
+  );
+  return { items, maxSeq };
 }
 
 export async function aggregateActivity(

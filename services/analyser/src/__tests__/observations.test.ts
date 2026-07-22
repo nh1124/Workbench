@@ -9,7 +9,7 @@ process.env.ANALYSER_DB_NAME ??= "test";
 process.env.ANALYSER_DB_USER ??= "test";
 process.env.ANALYSER_DB_PASSWORD ??= "test";
 
-const { aggregateActivityWithPool, ingestObservationsWithPool } = await import("../stores/observations.js");
+const { aggregateActivityWithPool, ingestObservationsWithPool, pullObservationsAfterWithPool } = await import("../stores/observations.js");
 
 type Result = { rows: unknown[]; rowCount?: number };
 type Call = { text: string; values?: unknown[] };
@@ -423,5 +423,40 @@ describe("analyser observation gating", () => {
     const invalid = input({ resourceRefs: [{ service: "core", resourceType: "note", resourceId: "" }] });
     const result = await ingestObservationsWithPool(pool, "owner-1", [invalid]);
     assert.deepEqual(result.rejected, { workbench_change: 1 });
+  });
+});
+
+describe("analyser routine observation pull", () => {
+  function row(seq: number, source: string, actorKind: string, id: string): Record<string, unknown> {
+    return {
+      seq, id, source, action: "x", actor_kind: actorKind,
+      machine_id: null, project_id: null,
+      occurred_at: "2026-07-22T00:00:00.000Z", received_at: "2026-07-22T00:00:00.000Z",
+      resource_refs: [], metadata: {}, source_event_id: null, dedupe_key: `d-${id}`,
+      expires_at: "2026-08-22T00:00:00.000Z"
+    };
+  }
+
+  it("excludes agent self-access reads but advances the cursor past them", async () => {
+    const rows = [
+      row(90, "workbench_change", "user", "o1"),   // kept
+      row(91, "mcp_access", "agent", "o2"),         // excluded (agent read)
+      row(92, "ui_access", "agent", "o3"),          // excluded (agent read)
+      row(93, "workbench_change", "agent", "o4"),   // kept (agent write, not an access read)
+      row(94, "mcp_access", "user", "o5")           // kept (user read)
+    ];
+    const pool = fakePool([{ rows }]);
+    const result = await pullObservationsAfterWithPool(pool, "owner-1", "89", 200);
+    assert.deepEqual(result.items.map((observation) => observation.id), ["o1", "o4", "o5"]);
+    // Cursor advances to the last scanned seq so the excluded 91/92 are skipped exactly once.
+    assert.equal(result.maxSeq, "94");
+  });
+
+  it("advances the cursor even when the whole window is agent self-access", async () => {
+    const rows = [row(95, "mcp_access", "agent", "o6"), row(96, "ui_access", "agent", "o7")];
+    const pool = fakePool([{ rows }]);
+    const result = await pullObservationsAfterWithPool(pool, "owner-1", "94", 200);
+    assert.deepEqual(result.items, []);
+    assert.equal(result.maxSeq, "96");
   });
 });
