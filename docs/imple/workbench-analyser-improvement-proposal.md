@@ -295,6 +295,27 @@ IW-1..3 完了後、Claude + Codex(read-only) の二重最終レビューを実�
 - **F5 の残 / A6**: derived ingest は machineId 提供時に requireMachine で検証するが、
   observation 全体の machine FK / stale ID 対策は **A6（別 P2 wave）**。
 
+## 6.7 追加改善 wave（2026-07-22）実装結果
+
+Owner 指示「残りの提案項目を順次・分割 commit で実装、最後にまとめレビュー」に基づき、
+柱 A データ活用〜横断〜柱 B stage 1 を実装。各 commit は codex 実装 + Claude レビュー。
+
+| 項目 | 内容 | 対象 | 状態 |
+|---|---|---|---|
+| A1 | アクセス観測に resource-ref extractor（MCP tool / HTTP route → note/artifact/project/task 等の id・path のみ抽出） | core | `[implemented]` (ebaf016) |
+| A3 | metadata を per-source allowlist・operation detail を per-kind allowlist に変更（本文混入を構造的に遮断、unknown source/kind は fail-closed） | analyser | `[implemented]` (b5eb519) |
+| A5 | Activity 集計を viewer の IANA timezone で `AT TIME ZONE` バケット化、UI は observations/derived へ UTC instant を送信（UTC 既定で後方互換） | analyser, ui | `[implemented]` (b7e15a2) |
+| A6 | ingest で machine 所有権検証。未知 context machine は 409 `MACHINE_UNKNOWN` で reject、未知 per-observation machine は null 強制。daemon は 409 で再登録（machine_key 冪等）→ 1 回リトライで自己修復。FK は範囲外 | analyser, sync-daemon | `[implemented]` (5c29035) |
+| C1 | export dedupe hash に canonicalized destination（targetKind + projectId + 正規化 path）を混入。別 Project/別 path への再 export が新規 target を作成。migration 不要（既存 unique 制約を hash 経由で destination-aware 化） | core | `[implemented]` (a47837c) |
+| B1-(1) | skill 参照健全性: `GET /api/analyser/skills/catalog`（AgentSkills artifacts tree から skill key 集合、artifacts 障害時は 200 + `unavailable`）+ Routines タブに advisory「skill missing」バッジ | core, ui | `[implemented]` (b98416e) |
+| B1-(2) | skill snapshot 独自保持（新表 `analyser_skill_snapshots` + 捕捉パイプライン + content_hash 差分検知 → proposal 化 + 正本消失時の実行継続/明示ブロック選択） | analyser, core, (ui) | `[pending: 設計判断待ち]` |
+
+**B1-(2) 未着手の理由**: 新規テーブル + migration + snapshot 捕捉パイプライン + 差分→proposal
+化に加え、proposal §3 B1-(2) が「正本消失時も実行継続 or 明示ブロックを選択可能に」と
+**方針を明示的に未決**としている。fail-safe 既定（block）か continue-with-last-snapshot 既定か、
+snapshot 更新契機（materialization routine 実行時のみ / 明示操作）の粒度は Owner の設計判断。
+まとめレビューで方針確定後に着手する。
+
 ## 7. 次アクション
 
 Owner 承認後、フェーズ単位で着手する。着手順・粒度（例: まず P1-a のみ / P1 一括 / 柱 B
