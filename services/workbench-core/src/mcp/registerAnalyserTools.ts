@@ -91,6 +91,13 @@ const confidenceEvidenceSchema = z.object({
   notes: z.string().trim().max(2_000).optional()
 }).strict();
 
+// NOTE: keep these MCP tool input schemas as plain ZodObjects (no trailing
+// .refine/.superRefine/discriminatedUnion). The MCP SDK derives the advertised
+// JSON Schema from a schema's `.shape`; a ZodEffects/ZodUnion has no `.shape`,
+// so the SDK publishes empty `properties: {}` and clients then stringify every
+// structured argument (arrays/objects/numbers), which the server rejects. The
+// cross-field rules below are still enforced downstream by the analyser service,
+// which re-validates every payload with its own refined schemas.
 const observationListSchema = z.object({
   source: z.enum(OBSERVATION_SOURCES).optional(),
   machineId: z.string().uuid().optional(),
@@ -99,11 +106,7 @@ const observationListSchema = z.object({
   to: isoDateTimeSchema.optional(),
   limit: limitSchema,
   cursor: cursorSchema
-}).strict().superRefine((value, context) => {
-  if (value.from && value.to && new Date(value.from).getTime() > new Date(value.to).getTime()) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ["to"], message: "to must be on or after from" });
-  }
-});
+}).strict();
 
 const derivedCaptureInputSchema = z.object({
   machineId: z.string().uuid().optional(),
@@ -146,10 +149,7 @@ const summaryListSchema = z.object({
   routineKey: boundedText(2_000).optional(),
   limit: limitSchema,
   cursor: cursorSchema
-}).strict().refine((value) => !value.from || !value.to || value.from <= value.to, {
-  path: ["to"],
-  message: "to must be on or after from"
-});
+}).strict();
 
 const summaryInputSchema = z.object({
   kind: boundedText(100),
@@ -162,15 +162,7 @@ const summaryInputSchema = z.object({
   routineKey: boundedText(2_000).optional(),
   runId: boundedText(2_000).optional(),
   expectedVersion: z.number().int().positive().optional()
-}).strict().superRefine((value, context) => {
-  if (value.periodStart > value.periodEnd) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["periodEnd"],
-      message: "periodEnd must be on or after periodStart"
-    });
-  }
-});
+}).strict();
 
 const proposalListSchema = z.object({
   status: z.enum(["open", "approved", "rejected", "executed", "superseded"]).optional(),
@@ -192,33 +184,20 @@ const proposalInputSchema = z.object({
   dedupeKey: boundedText(2_000).optional()
 }).strict();
 
-const proposalUpdateSchema = z.discriminatedUnion("action", [
-  z.object({
-    id: z.string().uuid(),
-    action: z.literal("update_content"),
-    title: boundedText(500).optional(),
-    bodyMarkdown: z.string().trim().max(200_000).optional(),
-    evidenceRefs: evidenceRefsSchema,
-    proposedAction: proposedActionSchema.optional(),
-    confidenceEvidence: confidenceEvidenceSchema.optional(),
-    expectedVersion: z.number().int().positive()
-  }).strict(),
-  z.object({
-    id: z.string().uuid(),
-    action: z.literal("mark_executed"),
-    operationId: z.string().uuid(),
-    expectedVersion: z.number().int().positive()
-  }).strict()
-]).superRefine((value, context) => {
-  if (value.action === "update_content"
-    && !value.title
-    && value.bodyMarkdown === undefined
-    && value.evidenceRefs === undefined
-    && value.proposedAction === undefined
-    && value.confidenceEvidence === undefined) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: "At least one content field is required" });
-  }
-});
+// Flattened to a single ZodObject (not a discriminatedUnion) so the MCP SDK can
+// publish a non-empty JSON Schema; the analyser service enforces the per-action
+// requirements (mark_executed needs operationId; update_content needs >=1 field).
+const proposalUpdateSchema = z.object({
+  id: z.string().uuid(),
+  action: z.enum(["update_content", "mark_executed"]),
+  title: boundedText(500).optional(),
+  bodyMarkdown: z.string().trim().max(200_000).optional(),
+  evidenceRefs: evidenceRefsSchema,
+  proposedAction: proposedActionSchema.optional(),
+  confidenceEvidence: confidenceEvidenceSchema.optional(),
+  operationId: z.string().uuid().optional(),
+  expectedVersion: z.number().int().positive()
+}).strict();
 
 const operationInputSchema = z.object({
   operationKind: z.enum(OPERATION_KINDS),
@@ -231,22 +210,7 @@ const operationInputSchema = z.object({
   runId: boundedText(2_000).optional(),
   agentLabel: boundedText(2_000).optional(),
   idempotencyKey: boundedText(2_000)
-}).strict().superRefine((value, context) => {
-  if (value.approvalBasis === "proposal" && !value.proposalId) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["proposalId"],
-      message: "proposalId is required for proposal approval"
-    });
-  }
-  if (value.approvalBasis === "policy" && value.proposalId !== undefined) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["proposalId"],
-      message: "proposalId is only valid for proposal approval"
-    });
-  }
-});
+}).strict();
 
 const publicationInputSchema = z.object({
   sourceKind: z.enum(["summary", "proposal"]),

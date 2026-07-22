@@ -311,43 +311,47 @@ describe("Analyser MCP contract", () => {
     });
   });
 
-  it("uses a strict discriminated union for proposal updates", () => {
+  it("publishes a flat object schema for proposal updates (per-action rules enforced by analyser)", () => {
     const tools = captureTools();
     const schema = schemaFor(tools, "analyser.proposals.update");
     const id = "123e4567-e89b-42d3-a456-426614174000";
     const operationId = "123e4567-e89b-42d3-a456-426614174001";
 
-    assert.equal(schema.safeParse({
-      id,
-      action: "update_content",
-      title: "Updated proposal",
-      expectedVersion: 1
-    }).success, true);
-    assert.equal(schema.safeParse({
-      id,
-      action: "mark_executed",
-      operationId,
-      expectedVersion: 1
-    }).success, true);
-    assert.equal(schema.safeParse({
-      id,
-      action: "update_content",
-      title: "Mixed branch",
-      operationId,
-      expectedVersion: 1
-    }).success, false);
-    assert.equal(schema.safeParse({
-      id,
-      action: "mark_executed",
-      operationId,
-      title: "Mixed branch",
-      expectedVersion: 1
-    }).success, false);
-    assert.equal(schema.safeParse({
-      id,
-      action: "approve",
-      expectedVersion: 1
-    }).success, false);
+    // Must be a ZodObject (has .shape) so the MCP SDK publishes non-empty
+    // properties instead of stringifying structured arguments.
+    const shape = (schema as unknown as { shape?: Record<string, unknown> }).shape;
+    assert.ok(shape && typeof shape === "object", "proposals.update must be a ZodObject");
+    for (const key of ["id", "action", "title", "evidenceRefs", "operationId", "expectedVersion"]) {
+      assert.ok(key in shape, `proposals.update must expose property ${key}`);
+    }
+
+    assert.equal(schema.safeParse({ id, action: "update_content", title: "Updated proposal", expectedVersion: 1 }).success, true);
+    assert.equal(schema.safeParse({ id, action: "mark_executed", operationId, expectedVersion: 1 }).success, true);
+    // Unknown action and unknown keys are still rejected at the MCP layer.
+    assert.equal(schema.safeParse({ id, action: "approve", expectedVersion: 1 }).success, false);
+    assert.equal(schema.safeParse({ id, action: "update_content", title: "x", expectedVersion: 1, extra: true }).success, false);
+    // Per-action field exclusivity is now enforced downstream by the analyser
+    // service, so the flat MCP schema accepts a mixed shape here.
+    assert.equal(schema.safeParse({ id, action: "mark_executed", operationId, title: "Mixed", expectedVersion: 1 }).success, true);
+  });
+
+  it("publishes non-empty object schemas for structured-argument tools (no empty-properties regression)", () => {
+    // A ZodEffects/ZodUnion has no `.shape`, so the MCP SDK would publish an
+    // empty JSON Schema and clients would stringify arrays/objects/numbers.
+    // Every structured-argument tool must therefore stay a plain ZodObject.
+    const tools = captureTools();
+    const expected: Record<string, string[]> = {
+      "analyser.summaries.upsert": ["periodStart", "periodEnd", "evidenceRefs", "metrics"],
+      "analyser.summaries.list": ["limit", "from", "to"],
+      "analyser.operations.record": ["beforeRefs", "afterRefs", "detail"],
+      "analyser.observations.list": ["from", "to", "limit"]
+    };
+    for (const [name, keys] of Object.entries(expected)) {
+      const schema = schemaFor(tools, name);
+      const shape = (schema as unknown as { shape?: Record<string, unknown> }).shape;
+      assert.ok(shape && typeof shape === "object", `${name} inputSchema must be a ZodObject so the MCP SDK publishes properties`);
+      for (const key of keys) assert.ok(key in shape, `${name} must expose property ${key}`);
+    }
   });
 
   it("rejects caller-supplied publication provenance and always records agent provenance", async () => {
