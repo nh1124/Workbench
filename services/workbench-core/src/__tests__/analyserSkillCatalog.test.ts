@@ -7,16 +7,23 @@ import {
 } from "../analyserSkillCatalog.js";
 
 const skillItems = [
-  { path: "skills/workbench-analyser-cycle/SKILL.md" },
-  { path: "skills/workbench-maintenance/SKILL.md" },
-  { path: "skills/workbench-analyser-cycle/extra.md" },
-  { path: "skills/" },
-  { path: "README.md" },
+  { kind: "note", path: "skills/engineering/workbench-operations/workbench-analyser-cycle.md" },
+  { kind: "note", path: "skills/engineering/workbench-operations/workbench-maintenance.md" },
+  { kind: "note", path: "skills/learning/note-processing/personal-annotation-normalizer.md" },
+  { kind: "note", path: "skills/00_INDEX.md" },
+  { kind: "note", path: "skills/engineering/00_INDEX.md" },
+  { kind: "folder", path: "skills/engineering" },
+  { kind: "folder", path: "skills" },
+  { kind: "note", path: "README.md" },
   { path: 42 },
   null
 ];
 
-const expectedSkills = ["workbench-analyser-cycle", "workbench-maintenance"];
+const expectedSkills = [
+  "personal-annotation-normalizer",
+  "workbench-analyser-cycle",
+  "workbench-maintenance"
+];
 
 describe("Analyser skill catalog", () => {
   it("extracts distinct sorted skill keys and ignores malformed or unrelated paths", () => {

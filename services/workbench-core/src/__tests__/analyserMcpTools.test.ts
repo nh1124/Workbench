@@ -242,7 +242,7 @@ describe("Analyser MCP contract", () => {
       skillKey: "workbench-analyser-cycle",
       skillVersion: "1",
       bodyMarkdown: "# Workbench Analyser Cycle\n",
-      sourceRef: "skills/workbench-analyser-cycle/SKILL.md"
+      sourceRef: "skills/engineering/workbench-operations/workbench-analyser-cycle.md"
     };
     const query = { limit: 25 };
 
@@ -284,7 +284,7 @@ describe("Analyser MCP contract", () => {
     dependencies.artifactsClient = {
       async treeList(...args: unknown[]) {
         calls.push({ method: "treeList", args });
-        return [{ path: "skills/skill-drift/SKILL.md", contentMarkdown: "CHANGED" }];
+        return [{ kind: "note", path: "skills/learning/skill-drift.md", contentMarkdown: "CHANGED" }];
       }
     };
     const tools = captureTools(dependencies);

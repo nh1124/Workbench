@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { AGENT_SKILLS_PROJECT_ID, extractSkillKeys } from "./analyserSkillCatalog.js";
+import { AGENT_SKILLS_PROJECT_ID, extractSkillKeys, skillKeyFromPath } from "./analyserSkillCatalog.js";
 import type { analyserClient, artifactsClient } from "./internalClients.js";
 
 export interface SkillIntegrityDeps {
@@ -55,21 +55,15 @@ export async function runSkillIntegrityCheck(
     limit: 1000
   });
   const items = itemsFrom(treeResult);
-  const safePathItems = items.flatMap((item) => {
-    const path = stringProperty(item, "path");
-    return path === undefined ? [] : [{ path }];
-  });
-  const catalogKeys = new Set(extractSkillKeys(safePathItems));
+  const catalogKeys = new Set(extractSkillKeys(items));
   const canonicalBody = new Map<string, string>();
 
   for (const item of items) {
     const path = stringProperty(item, "path");
     const contentMarkdown = stringProperty(item, "contentMarkdown");
     if (path === undefined || contentMarkdown === undefined) continue;
-    const match = /^(?:\.\/|\/)?skills\/([^/]+)\/([^/]+)$/.exec(path);
-    const skillKey = match?.[1]?.trim();
-    const fileName = match?.[2];
-    if (!skillKey || fileName?.toLowerCase() !== "skill.md") continue;
+    const skillKey = skillKeyFromPath(path);
+    if (!skillKey) continue;
     canonicalBody.set(skillKey, contentMarkdown);
   }
 

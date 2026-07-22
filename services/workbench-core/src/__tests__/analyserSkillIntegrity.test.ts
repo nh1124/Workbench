@@ -17,9 +17,11 @@ describe("Analyser skill integrity", () => {
       treeList: async (_token, options) => {
         treeOptions = options;
         return [
-          { path: "skills/skill-ok/SKILL.md", contentMarkdown: "A" },
-          { path: "skills/skill-drift/skill.MD", contentMarkdown: "CHANGED" },
-          { path: "skills/malformed/SKILL.md", contentMarkdown: 42 },
+          { kind: "note", path: "skills/engineering/workbench-operations/skill-ok.md", contentMarkdown: "A" },
+          { kind: "note", path: "skills/learning/skill-drift.md", contentMarkdown: "CHANGED" },
+          { kind: "note", path: "skills/engineering/00_INDEX.md", contentMarkdown: "index" },
+          { kind: "folder", path: "skills/engineering" },
+          { kind: "note", path: "skills/engineering/malformed.md", contentMarkdown: 42 },
           null
         ];
       },
