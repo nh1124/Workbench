@@ -13,6 +13,11 @@ import {
   ingestDerivedCapture,
   listDerivedCaptures
 } from "./stores/derivedCaptures.js";
+import {
+  getSkillSnapshot,
+  listSkillSnapshots,
+  upsertSkillSnapshot
+} from "./stores/skillSnapshots.js";
 import { listMachines, registerMachine } from "./stores/machines.js";
 import {
   aggregateActivity,
@@ -55,6 +60,7 @@ import {
   listRoutines,
   pullForRun,
   routineStatusSummaries,
+  setRoutineSkillMissingByKeys,
   seedRoutines,
   updateRoutine
 } from "./stores/routines.js";
@@ -76,6 +82,8 @@ import {
   publicationFinalizeInputSchema,
   publicationInputSchema,
   publicationReserveInputSchema,
+  skillSnapshotInputSchema,
+  skillSnapshotListQuerySchema,
   summaryInputSchema
 } from "./types.js";
 
@@ -338,6 +346,14 @@ export const derivedCaptureListQuerySchema = z.object({
   }
 });
 
+export const skillSnapshotParamsSchema = z.object({
+  key: boundedText(200)
+}).strict();
+
+export const routineSkillFlagsSchema = z.object({
+  missingSkillKeys: z.array(boundedText(200))
+}).strict();
+
 export const proposalListQuerySchema = z.object({
   status: z.enum(["open", "approved", "rejected", "executed", "superseded"]).optional(),
   kind: boundedText(100).optional(),
@@ -404,6 +420,10 @@ export interface AppDeps {
   ingestDerivedCapture: typeof ingestDerivedCapture;
   listDerivedCaptures: typeof listDerivedCaptures;
   getDerivedCapture: typeof getDerivedCapture;
+  upsertSkillSnapshot: typeof upsertSkillSnapshot;
+  listSkillSnapshots: typeof listSkillSnapshots;
+  getSkillSnapshot: typeof getSkillSnapshot;
+  setRoutineSkillMissingByKeys: typeof setRoutineSkillMissingByKeys;
   createProposal: typeof createProposal;
   listProposals: typeof listProposals;
   getProposal: typeof getProposal;
@@ -454,6 +474,10 @@ const realAppDeps: AppDeps = {
   ingestDerivedCapture,
   listDerivedCaptures,
   getDerivedCapture,
+  upsertSkillSnapshot,
+  listSkillSnapshots,
+  getSkillSnapshot,
+  setRoutineSkillMissingByKeys,
   createProposal,
   listProposals,
   getProposal,
@@ -723,6 +747,35 @@ export function buildApp(deps: AppDeps): express.Express {
     const params = parse(uuidParamsSchema, req.params, res);
     if (!params) return;
     return res.json(await deps.getDerivedCapture(req.authUser!.serviceAccountId, params.id));
+  }));
+
+  app.post("/skills/snapshots", ...userRoute(deps, async (req, res) => {
+    const body = parse(skillSnapshotInputSchema, req.body ?? {}, res);
+    if (!body) return;
+    return res.status(201).json(await deps.upsertSkillSnapshot(req.authUser!.serviceAccountId, body));
+  }));
+
+  app.get("/skills/snapshots", ...userRoute(deps, async (req, res) => {
+    const query = parse(skillSnapshotListQuerySchema, req.query, res);
+    if (!query) return;
+    return res.json(await deps.listSkillSnapshots(req.authUser!.serviceAccountId, query));
+  }));
+
+  app.get("/skills/snapshots/:key", ...userRoute(deps, async (req, res) => {
+    const params = parse(skillSnapshotParamsSchema, req.params, res);
+    if (!params) return;
+    const snapshot = await deps.getSkillSnapshot(req.authUser!.serviceAccountId, params.key);
+    if (!snapshot) {
+      throw new AnalyserServiceError(404, "SKILL_SNAPSHOT_NOT_FOUND", "Skill snapshot not found");
+    }
+    return res.json(snapshot);
+  }));
+
+  app.post("/skills/routine-flags", ...userRoute(deps, async (req, res) => {
+    const body = parse(routineSkillFlagsSchema, req.body ?? {}, res);
+    if (!body) return;
+    await deps.setRoutineSkillMissingByKeys(req.authUser!.serviceAccountId, body.missingSkillKeys);
+    return res.json({ updated: true });
   }));
 
   app.post("/proposals", ...userRoute(deps, async (req, res) => {

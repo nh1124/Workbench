@@ -126,6 +126,17 @@ const derivedCaptureListSchema = z.object({
   }
 });
 
+const skillSnapshotInputSchema = z.object({
+  skillKey: boundedText(200),
+  skillVersion: z.string().max(100).optional(),
+  bodyMarkdown: z.string().max(200_000),
+  sourceRef: z.string().max(500).optional()
+}).strict();
+
+const skillSnapshotListSchema = z.object({
+  limit: limitSchema
+}).strict();
+
 const summaryListSchema = z.object({
   kind: boundedText(100).optional(),
   from: dateSchema.optional(),
@@ -345,6 +356,34 @@ export function registerAnalyserTools(server: McpServer, ctx: ToolContext): void
     async (query) => asMcpText(await runWithAnalyserAccount(
       ctx,
       () => client.listDerivedCaptures(ctx.accessToken, query)
+    ))
+  );
+
+  server.registerTool(
+    "analyser.skills.snapshot.upsert",
+    {
+      title: "Upsert Analyser Skill Snapshot",
+      description: "Store Analyser's own copy (snapshot) of a canonical AgentSkills skill body so drift/removal can be detected; call explicitly after reading the canonical skill. Bodies only, no secrets.",
+      inputSchema: skillSnapshotInputSchema,
+      annotations: idempotentWriteAnnotations
+    },
+    async (payload) => asMcpText(await runWithAnalyserAccount(
+      ctx,
+      () => client.upsertSkillSnapshot(ctx.accessToken, payload)
+    ))
+  );
+
+  server.registerTool(
+    "analyser.skills.snapshot.list",
+    {
+      title: "List Analyser Skill Snapshots",
+      description: "List stored Analyser skill snapshots without returning their bodies.",
+      inputSchema: skillSnapshotListSchema,
+      annotations: readAnnotations
+    },
+    async (query) => asMcpText(await runWithAnalyserAccount(
+      ctx,
+      () => client.listSkillSnapshots(ctx.accessToken, query)
     ))
   );
 

@@ -3888,6 +3888,25 @@ app.get(
   })
 );
 app.post(
+  "/api/analyser/skills/snapshots",
+  analyserFacadeRoute((token, req) => analyserClient.upsertSkillSnapshot(token, req.body ?? {}), { status: 201 })
+);
+app.get(
+  "/api/analyser/skills/snapshots",
+  analyserFacadeRoute((token, req) => analyserClient.listSkillSnapshots(
+    token,
+    pickAnalyserQuery(req.query, ["limit"])
+  ))
+);
+app.get(
+  "/api/analyser/skills/snapshots/:key",
+  analyserFacadeRoute((token, req) => analyserClient.getSkillSnapshot(token, String(req.params.key)))
+);
+app.post(
+  "/api/analyser/skills/routine-flags",
+  analyserFacadeRoute((token, req) => analyserClient.setRoutineSkillFlags(token, req.body ?? {}))
+);
+app.post(
   "/api/analyser/routines/seed",
   analyserFacadeRoute((token) => analyserClient.seedRoutines(token), { status: 204 })
 );

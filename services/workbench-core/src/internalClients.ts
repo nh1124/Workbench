@@ -770,6 +770,10 @@ type AnalyserDerivedCaptureQuery = {
   cursor?: string;
 };
 
+type AnalyserSkillSnapshotQuery = {
+  limit?: string | number;
+};
+
 type AnalyserProposalQuery = {
   status?: string;
   kind?: string;
@@ -917,6 +921,22 @@ export const analyserClient = {
     serviceRequest<unknown>(requireAnalyser(), `/captures/derived${buildQuery(query)}`, token),
   getDerivedCapture: (token: string, id: string) =>
     serviceRequest<unknown>(requireAnalyser(), `/captures/derived/${encodeURIComponent(id)}`, token),
+  upsertSkillSnapshot: (token: string, payload: unknown) =>
+    serviceRequest<unknown>(requireAnalyser(), "/skills/snapshots", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
+  listSkillSnapshots: (token: string, query: AnalyserSkillSnapshotQuery = {}) =>
+    serviceRequest<unknown>(requireAnalyser(), `/skills/snapshots${buildQuery(query)}`, token),
+  getSkillSnapshot: (token: string, key: string) =>
+    serviceRequest<unknown>(requireAnalyser(), `/skills/snapshots/${encodeURIComponent(key)}`, token),
+  setRoutineSkillFlags: (token: string, payload: unknown) =>
+    serviceRequest<unknown>(requireAnalyser(), "/skills/routine-flags", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
   createProposal: (token: string, payload: unknown) =>
     serviceRequest<unknown>(requireAnalyser(), "/proposals", token, {
       method: "POST",

@@ -149,6 +149,19 @@ export async function ensureAnalyserSchema(): Promise<void> {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_analyser_derived_captures_owner_machine
       ON analyser_derived_captures(service_account_id, machine_id)`);
 
+    await pool.query(`CREATE TABLE IF NOT EXISTS analyser_skill_snapshots (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      service_account_id TEXT NOT NULL REFERENCES service_accounts(id) ON DELETE CASCADE,
+      skill_key TEXT NOT NULL,
+      skill_version TEXT NULL,
+      content_hash TEXT NOT NULL,
+      body_markdown TEXT NOT NULL,
+      source_ref TEXT NULL,
+      captured_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(service_account_id, skill_key)
+    )`);
+
     await pool.query(`CREATE TABLE IF NOT EXISTS analyser_routines (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       service_account_id TEXT NOT NULL REFERENCES service_accounts(id) ON DELETE CASCADE,
@@ -169,6 +182,8 @@ export async function ensureAnalyserSchema(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE(service_account_id, key)
     )`);
+    await pool.query(`ALTER TABLE analyser_routines
+      ADD COLUMN IF NOT EXISTS skill_missing BOOLEAN NOT NULL DEFAULT FALSE`);
 
     await pool.query(`CREATE TABLE IF NOT EXISTS analyser_runs (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

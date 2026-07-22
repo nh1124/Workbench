@@ -16,6 +16,7 @@ const {
   failRunWithPool,
   heartbeatRunWithPool,
   pullForRunWithPool,
+  routineStatusSummariesWithPool,
   updateRoutineWithPool
 } = await import("../stores/routines.js");
 
@@ -50,6 +51,7 @@ function routineRow(overrides: Record<string, unknown> = {}) {
     schedule_expr: "0 9 * * *",
     timezone: "Asia/Tokyo",
     enabled: true,
+    skill_missing: false,
     next_run_at: timestamp,
     committed_cursor: "7",
     max_retries: 3,
@@ -103,6 +105,7 @@ function lockedRow(overrides: Record<string, unknown> = {}) {
     routine_schedule_expr: routine.schedule_expr,
     routine_timezone: routine.timezone,
     routine_enabled: routine.enabled,
+    routine_skill_missing: routine.skill_missing,
     routine_next_run_at: routine.next_run_at,
     routine_committed_cursor: routine.committed_cursor,
     routine_max_retries: routine.max_retries,
@@ -123,7 +126,19 @@ describe("analyser routine claiming", () => {
     assert.match(pool.calls[1].text, /lease_expires_at <= NOW\(\)/);
     assert.match(pool.calls[2].text, /FOR UPDATE SKIP LOCKED/);
     assert.match(pool.calls[2].text, /NOT EXISTS/);
+    assert.match(pool.calls[2].text, /skill_missing = FALSE/);
     assert.equal(pool.calls.at(-1)?.text, "COMMIT");
+  });
+
+  it("does not claim a due routine blocked by a missing skill", async () => {
+    const pool = fakePool([{ rows: [] }, { rows: [] }, { rows: [] }, { rows: [] }]);
+    const result = await claimDueRoutineWithPool(pool, "owner-1", {
+      key: "daily-work-summary",
+      holder: "holder-1"
+    });
+    assert.equal(result, null);
+    const dueSelect = pool.calls.find((call) => /FROM analyser_routines/.test(call.text));
+    assert.match(dueSelect?.text ?? "", /skill_missing = FALSE/);
   });
 
   it("initializes the run pending cursor from the committed cursor", async () => {
@@ -144,6 +159,27 @@ describe("analyser routine claiming", () => {
     assert.equal(insert?.values?.[5], "7");
     assert.deepEqual(result?.collectionSettings, DEFAULT_COLLECTION_SETTINGS);
     assert.deepEqual(result?.automationPolicy, DEFAULT_AUTOMATION_POLICY);
+    assert.equal(result?.routine.skillMissing, false);
+  });
+});
+
+describe("analyser routine status", () => {
+  it("includes the skillMissing flag", async () => {
+    const pool = fakePool([{ rows: [{
+      key: "daily-work-summary",
+      enabled: true,
+      skill_missing: true,
+      next_run_at: timestamp,
+      last_completed_at: null,
+      last_failed_at: null,
+      last_error_summary: null,
+      active_run_id: null,
+      active_holder: null,
+      active_lease_expires_at: null
+    }] }]);
+    const [status] = await routineStatusSummariesWithPool(pool, "owner-1");
+    assert.equal(status.skillMissing, true);
+    assert.match(pool.calls[0].text, /routine\.skill_missing/);
   });
 });
 

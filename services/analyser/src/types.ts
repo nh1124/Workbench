@@ -237,6 +237,34 @@ export interface DerivedCaptureRecord {
   createdAt: string;
 }
 
+export const skillSnapshotInputSchema = z.object({
+  skillKey: z.string().trim().min(1).max(200),
+  skillVersion: z.string().max(100).optional(),
+  bodyMarkdown: z.string().max(200_000),
+  sourceRef: z.string().max(500).optional()
+}).strict();
+
+export type SkillSnapshotInput = z.infer<typeof skillSnapshotInputSchema>;
+
+export const skillSnapshotListQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).optional()
+}).strict();
+
+export type SkillSnapshotListQuery = z.infer<typeof skillSnapshotListQuerySchema>;
+
+export interface SkillSnapshotRecord {
+  id: string;
+  skillKey: string;
+  skillVersion?: string;
+  contentHash: string;
+  bodyMarkdown: string;
+  sourceRef?: string;
+  capturedAt: string;
+  updatedAt: string;
+}
+
+export type SkillSnapshotListItem = Omit<SkillSnapshotRecord, "bodyMarkdown">;
+
 export interface ActivityAggregateDay {
   date: string;
   machineId: string | null;
@@ -268,6 +296,7 @@ export interface RoutineRecord {
   scheduleExpr: string;
   timezone: string;
   enabled: boolean;
+  skillMissing: boolean;
   nextRunAt?: string;
   committedCursor: string;
   maxRetries: number;

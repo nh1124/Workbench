@@ -36,6 +36,8 @@ const FROZEN_TOOL_NAMES = [
   "analyser.observations.pull",
   "analyser.captures.derived.ingest",
   "analyser.captures.derived.list",
+  "analyser.skills.snapshot.upsert",
+  "analyser.skills.snapshot.list",
   "analyser.routines.list",
   "analyser.routines.claim",
   "analyser.routines.heartbeat",
@@ -57,6 +59,7 @@ const READ_TOOL_NAMES = new Set([
   "analyser.settings.get",
   "analyser.observations.list",
   "analyser.captures.derived.list",
+  "analyser.skills.snapshot.list",
   "analyser.routines.list",
   "analyser.summaries.list",
   "analyser.summaries.get",
@@ -67,6 +70,7 @@ const READ_TOOL_NAMES = new Set([
 const IDEMPOTENT_WRITE_TOOL_NAMES = new Set([
   "analyser.routines.heartbeat",
   "analyser.captures.derived.ingest",
+  "analyser.skills.snapshot.upsert",
   "analyser.summaries.upsert",
   "analyser.operations.record",
   "analyser.publications.record"
@@ -121,10 +125,10 @@ function testDependencies(analyserClient: Record<string, unknown>): Record<strin
 }
 
 describe("Analyser MCP contract", () => {
-  it("registers exactly the frozen 20-tool public surface", () => {
+  it("registers exactly the frozen 22-tool public surface", () => {
     const tools = captureTools();
     assert.deepEqual([...tools.keys()], [...FROZEN_TOOL_NAMES]);
-    assert.equal(tools.size, 20);
+    assert.equal(tools.size, 22);
     for (const [name, { definition }] of tools) {
       assert.match(name, /^analyser(?:\.[a-z_]+)+$/);
       assert.ok(definition.description?.trim(), `${name} must have an agent-facing description`);
@@ -132,7 +136,7 @@ describe("Analyser MCP contract", () => {
     }
   });
 
-  it("marks only the nine pure reads as read-only and declares closed-world write safety", () => {
+  it("marks only the ten pure reads as read-only and declares closed-world write safety", () => {
     const tools = captureTools();
     for (const [name, { definition }] of tools) {
       const annotations = definition.annotations;
@@ -217,6 +221,40 @@ describe("Analyser MCP contract", () => {
     assert.deepEqual(calls, [
       { method: "ingestDerivedCapture", args: ["test-token", input] },
       { method: "listDerivedCaptures", args: ["test-token", query] }
+    ]);
+  });
+
+  it("forwards explicit skill snapshot upsert and light-list arguments", async () => {
+    const calls: Array<{ method: string; args: unknown[] }> = [];
+    const tools = captureTools(testDependencies({
+      async upsertSkillSnapshot(...args: unknown[]) {
+        calls.push({ method: "upsertSkillSnapshot", args });
+        return { skillKey: "workbench-analyser-cycle" };
+      },
+      async listSkillSnapshots(...args: unknown[]) {
+        calls.push({ method: "listSkillSnapshots", args });
+        return { items: [] };
+      }
+    }));
+    const input = {
+      skillKey: "workbench-analyser-cycle",
+      skillVersion: "1",
+      bodyMarkdown: "# Workbench Analyser Cycle\n",
+      sourceRef: "skills/workbench-analyser-cycle/SKILL.md"
+    };
+    const query = { limit: 25 };
+
+    assert.equal(schemaFor(tools, "analyser.skills.snapshot.upsert").safeParse(input).success, true);
+    assert.equal(schemaFor(tools, "analyser.skills.snapshot.list").safeParse(query).success, true);
+    assert.equal(tools.get("analyser.skills.snapshot.upsert")?.definition.annotations?.idempotentHint, true);
+    assert.equal(tools.get("analyser.skills.snapshot.list")?.definition.annotations?.readOnlyHint, true);
+
+    await tools.get("analyser.skills.snapshot.upsert")?.handler(input);
+    await tools.get("analyser.skills.snapshot.list")?.handler(query);
+
+    assert.deepEqual(calls, [
+      { method: "upsertSkillSnapshot", args: ["test-token", input] },
+      { method: "listSkillSnapshots", args: ["test-token", query] }
     ]);
   });
 

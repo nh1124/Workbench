@@ -27,6 +27,7 @@ type RoutineRow = {
   schedule_expr: string;
   timezone: string;
   enabled: boolean;
+  skill_missing: boolean;
   next_run_at: Date | string | null;
   committed_cursor: string | number | bigint;
   max_retries: number;
@@ -73,6 +74,7 @@ type LockedRunRoutineRow = {
   routine_schedule_expr: string;
   routine_timezone: string;
   routine_enabled: boolean;
+  routine_skill_missing: boolean;
   routine_next_run_at: Date | string | null;
   routine_committed_cursor: string | number | bigint;
   routine_max_retries: number;
@@ -97,6 +99,7 @@ export interface UpdateRoutinePatch {
 export interface RoutineStatusSummary {
   key: string;
   enabled: boolean;
+  skillMissing: boolean;
   nextRunAt?: string;
   lastCompletedAt?: string;
   lastFailedAt?: string;
@@ -110,7 +113,7 @@ type SchedulerOptions = {
 };
 
 const ROUTINE_COLUMNS = `id, key, name, skill_key, skill_version, schedule_kind, schedule_expr,
-  timezone, enabled, next_run_at, committed_cursor, max_retries, backoff_minutes,
+  timezone, enabled, skill_missing, next_run_at, committed_cursor, max_retries, backoff_minutes,
   version, created_at, updated_at`;
 const RUN_COLUMNS = `id, routine_id, status, holder, lease_expires_at, policy_snapshot,
   pending_read_cursor, attempt, error_summary, started_at, finished_at`;
@@ -130,6 +133,7 @@ function mapRoutine(row: RoutineRow): RoutineRecord {
     scheduleExpr: row.schedule_expr,
     timezone: row.timezone,
     enabled: row.enabled,
+    skillMissing: row.skill_missing,
     ...(row.next_run_at === null ? {} : { nextRunAt: iso(row.next_run_at) }),
     committedCursor: String(row.committed_cursor),
     maxRetries: row.max_retries,
@@ -169,6 +173,7 @@ function routineFromLocked(row: LockedRunRoutineRow): RoutineRecord {
     schedule_expr: row.routine_schedule_expr,
     timezone: row.routine_timezone,
     enabled: row.routine_enabled,
+    skill_missing: row.routine_skill_missing,
     next_run_at: row.routine_next_run_at,
     committed_cursor: row.routine_committed_cursor,
     max_retries: row.routine_max_retries,
@@ -432,6 +437,7 @@ export async function claimDueRoutineWithPool(
     const due = await client.query<RoutineRow>(`SELECT ${ROUTINE_COLUMNS}
       FROM analyser_routines
       WHERE service_account_id = $1 AND enabled AND next_run_at IS NOT NULL
+        AND skill_missing = FALSE
         AND next_run_at <= ${dueClock}
         AND ($2::text IS NULL OR key = $2)
         AND NOT EXISTS (
@@ -553,6 +559,7 @@ function lockedRunRoutineSql(clock: string): string {
       routine.skill_key AS routine_skill_key, routine.skill_version AS routine_skill_version,
       routine.schedule_kind AS routine_schedule_kind, routine.schedule_expr AS routine_schedule_expr,
       routine.timezone AS routine_timezone, routine.enabled AS routine_enabled,
+      routine.skill_missing AS routine_skill_missing,
       routine.next_run_at AS routine_next_run_at, routine.committed_cursor AS routine_committed_cursor,
       routine.max_retries AS routine_max_retries, routine.backoff_minutes AS routine_backoff_minutes,
       routine.version AS routine_version, routine.created_at AS routine_created_at,
@@ -672,6 +679,7 @@ export async function routineStatusSummariesWithPool(
   const result = await pool.query<{
     key: string;
     enabled: boolean;
+    skill_missing: boolean;
     next_run_at: Date | string | null;
     last_completed_at: Date | string | null;
     last_failed_at: Date | string | null;
@@ -679,7 +687,7 @@ export async function routineStatusSummariesWithPool(
     active_run_id: string | null;
     active_holder: string | null;
     active_lease_expires_at: Date | string | null;
-  }>(`SELECT routine.key, routine.enabled, routine.next_run_at,
+  }>(`SELECT routine.key, routine.enabled, routine.skill_missing, routine.next_run_at,
       completed.finished_at AS last_completed_at,
       failed.finished_at AS last_failed_at, failed.error_summary AS last_error_summary,
       active.id AS active_run_id, active.holder AS active_holder,
@@ -705,6 +713,7 @@ export async function routineStatusSummariesWithPool(
   return result.rows.map((row) => ({
     key: row.key,
     enabled: row.enabled,
+    skillMissing: row.skill_missing,
     ...(row.next_run_at === null ? {} : { nextRunAt: iso(row.next_run_at) }),
     ...(row.last_completed_at === null ? {} : { lastCompletedAt: iso(row.last_completed_at) }),
     ...(row.last_failed_at === null ? {} : { lastFailedAt: iso(row.last_failed_at) }),
@@ -713,4 +722,21 @@ export async function routineStatusSummariesWithPool(
       ? { id: row.active_run_id, holder: row.active_holder, leaseExpiresAt: iso(row.active_lease_expires_at) }
       : null
   }));
+}
+
+export async function setRoutineSkillMissingByKeys(
+  owner: string,
+  missingSkillKeys: string[]
+): Promise<void> {
+  return setRoutineSkillMissingByKeysWithPool(getAnalyserPool(), owner, missingSkillKeys);
+}
+
+export async function setRoutineSkillMissingByKeysWithPool(
+  pool: AnalyserQueryPool,
+  owner: string,
+  missingSkillKeys: string[]
+): Promise<void> {
+  await pool.query(`UPDATE analyser_routines
+    SET skill_missing = (skill_key = ANY($2::text[])), updated_at = NOW()
+    WHERE service_account_id = $1`, [owner, missingSkillKeys]);
 }
