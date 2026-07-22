@@ -308,13 +308,14 @@ Owner 指示「残りの提案項目を順次・分割 commit で実装、最後
 | A6 | ingest で machine 所有権検証。未知 context machine は 409 `MACHINE_UNKNOWN` で reject、未知 per-observation machine は null 強制。daemon は 409 で再登録（machine_key 冪等）→ 1 回リトライで自己修復。FK は範囲外 | analyser, sync-daemon | `[implemented]` (5c29035) |
 | C1 | export dedupe hash に canonicalized destination（targetKind + projectId + 正規化 path）を混入。別 Project/別 path への再 export が新規 target を作成。migration 不要（既存 unique 制約を hash 経由で destination-aware 化） | core | `[implemented]` (a47837c) |
 | B1-(1) | skill 参照健全性: `GET /api/analyser/skills/catalog`（AgentSkills artifacts tree から skill key 集合、artifacts 障害時は 200 + `unavailable`）+ Routines タブに advisory「skill missing」バッジ | core, ui | `[implemented]` (b98416e) |
-| B1-(2) | skill snapshot 独自保持（新表 `analyser_skill_snapshots` + 捕捉パイプライン + content_hash 差分検知 → proposal 化 + 正本消失時の実行継続/明示ブロック選択） | analyser, core, (ui) | `[pending: 設計判断待ち]` |
+| B1-(2a) | skill snapshot 独自保持: 新表 `analyser_skill_snapshots`(owner, skill_key unique) + **明示 upsert**（`analyser.skills.snapshot.upsert` MCP tool / `POST /skills/snapshots`、自動捕捉なし）+ 共有 `normalizeSkillBody`/`hashSkillBody` + routine `skill_missing` ブロックフラグ + `setRoutineSkillMissingByKeys` + claim gate（`skill_missing=TRUE` は claim されず due のまま留まる） | analyser, core | `[implemented]` (5c159af) |
+| B1-(2b) | skill 整合性判定: `runSkillIntegrityCheck`（正本 `skills/<key>/SKILL.md` を content 付きで読み snapshot と hash 比較）→ **missing は fail-safe でフラグ reconcile**、**drift は dedupe 付き `skill_drift` proposal 自動生成（非ブロック）**。`POST /api/analyser/skills/integrity/run` + `analyser.skills.integrity.run` MCP tool + 専用 seed routine `skill-integrity-check`(0 4 * * *) + Routines タブ手動ボタン + 「blocked · skill missing」バッジ | core, analyser, ui | `[implemented]` (4e0e31c) |
 
-**B1-(2) 未着手の理由**: 新規テーブル + migration + snapshot 捕捉パイプライン + 差分→proposal
-化に加え、proposal §3 B1-(2) が「正本消失時も実行継続 or 明示ブロックを選択可能に」と
-**方針を明示的に未決**としている。fail-safe 既定（block）か continue-with-last-snapshot 既定か、
-snapshot 更新契機（materialization routine 実行時のみ / 明示操作）の粒度は Owner の設計判断。
-まとめレビューで方針確定後に着手する。
+**B1-(2) の Owner 決定（2026-07-22 反映）**: (1) fail-safe = **消失のみブロック**（drift は proposal 化のみ・非ブロック）、(2) 整合性判定は**専用 routine `skill-integrity-check`**、(3) drift は**自動 proposal 化**。snapshot 更新は**明示操作**（自動捕捉なし）。fail-safe なので snapshot 本文は復元・監査用に保持し、実行継続には使わない（＝正本消失時は継続せずブロック）。
+
+**設計メモ / 既知の制約**:
+- 整合性ロジックの `normalizeSkillBody`/`hashSkillBody` は core と analyser に**意図的に二重定義**（サービス跨ぎで import 不可）。パリティテストで一致を保証。
+- `skill-integrity-check` routine の skill_key は `workbench-analyser-cycle`。実行主体はエージェント claim（既存 routine と同様）で `analyser.skills.integrity.run` を呼ぶ。UI 手動ボタンでも即時実行可。サーバー完全自律の定期実行が必要なら Core scheduler 化が follow-up 候補。
 
 ## 7. 次アクション
 
