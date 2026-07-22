@@ -102,6 +102,27 @@ function fakePublicationsStore() {
   };
 }
 
+function fakeArtifactExportDependencies() {
+  const store = fakePublicationsStore();
+  const artifactPayloads: Array<Record<string, unknown>> = [];
+  const deps = {
+    analyserClient: {
+      getSummary: async () => summary(),
+      getProposal: unexpected,
+      ...store
+    },
+    notesClient: { create: unexpected },
+    artifactsClient: {
+      createNote: async (_token: string, payload: unknown) => {
+        const artifactPayload = payload as Record<string, unknown>;
+        artifactPayloads.push(artifactPayload);
+        return { id: `artifact-export-${artifactPayloads.length}`, path: artifactPayload.path };
+      }
+    }
+  } as AnalyserExportDependencies;
+  return { store, artifactPayloads, deps };
+}
+
 describe("Core Analyser export orchestration", () => {
   it("deduplicates an identical second Note export and records UI provenance with the target ref", async () => {
     const store = fakePublicationsStore();
@@ -249,6 +270,133 @@ describe("Core Analyser export orchestration", () => {
       resourceId: "artifact-export-1",
       pathSnapshot: artifactPayload?.path
     });
+  });
+
+  it("creates distinct Artifacts for identical content exported to different Projects", async () => {
+    const { store, artifactPayloads, deps } = fakeArtifactExportDependencies();
+    const first = await exportAnalyserRecord(authContext, {
+      sourceKind: "summary",
+      sourceId: summaryId,
+      targetKind: "artifact",
+      projectId: "project-1",
+      path: "reports/weekly.md"
+    }, deps);
+    const second = await exportAnalyserRecord(authContext, {
+      sourceKind: "summary",
+      sourceId: summaryId,
+      targetKind: "artifact",
+      projectId: "project-2",
+      path: "reports/weekly.md"
+    }, deps);
+
+    assert.equal(first.created, true);
+    assert.equal(second.created, true);
+    assert.notEqual(first.target.id, second.target.id);
+    assert.equal(artifactPayloads.length, 2);
+    assert.equal(store.rows.length, 2);
+  });
+
+  it("creates distinct Artifacts for identical content exported to different paths", async () => {
+    const { store, artifactPayloads, deps } = fakeArtifactExportDependencies();
+    const first = await exportAnalyserRecord(authContext, {
+      sourceKind: "summary",
+      sourceId: summaryId,
+      targetKind: "artifact",
+      projectId: "project-1",
+      path: "reports/weekly.md"
+    }, deps);
+    const second = await exportAnalyserRecord(authContext, {
+      sourceKind: "summary",
+      sourceId: summaryId,
+      targetKind: "artifact",
+      projectId: "project-1",
+      path: "archive/weekly.md"
+    }, deps);
+
+    assert.equal(first.created, true);
+    assert.equal(second.created, true);
+    assert.notEqual(first.target.id, second.target.id);
+    assert.equal(artifactPayloads.length, 2);
+    assert.equal(store.rows.length, 2);
+  });
+
+  it("deduplicates identical Artifact exports to the same destination", async () => {
+    const { store, artifactPayloads, deps } = fakeArtifactExportDependencies();
+    const input = {
+      sourceKind: "summary",
+      sourceId: summaryId,
+      targetKind: "artifact",
+      projectId: "project-1",
+      path: "reports/weekly.md"
+    } as const;
+    const first = await exportAnalyserRecord(authContext, input, deps);
+    const second = await exportAnalyserRecord(authContext, input, deps);
+
+    assert.equal(first.created, true);
+    assert.equal(second.created, false);
+    assert.equal(second.target.id, first.target.id);
+    assert.equal(artifactPayloads.length, 1);
+    assert.equal(store.rows.length, 1);
+  });
+
+  it("deduplicates structurally equivalent Artifact paths", async () => {
+    const { store, artifactPayloads, deps } = fakeArtifactExportDependencies();
+    const first = await exportAnalyserRecord(authContext, {
+      sourceKind: "summary",
+      sourceId: summaryId,
+      targetKind: "artifact",
+      projectId: "project-1",
+      path: " ./reports//weekly.md/ "
+    }, deps);
+    const second = await exportAnalyserRecord(authContext, {
+      sourceKind: "summary",
+      sourceId: summaryId,
+      targetKind: "artifact",
+      projectId: "project-1",
+      path: "\\reports\\weekly.md"
+    }, deps);
+
+    assert.equal(first.created, true);
+    assert.equal(second.created, false);
+    assert.equal(second.target.id, first.target.id);
+    assert.equal(artifactPayloads.length, 1);
+    assert.equal(artifactPayloads[0]?.path, "./reports//weekly.md/");
+    assert.equal(store.rows.length, 1);
+  });
+
+  it("creates distinct Notes for identical content exported to different Projects", async () => {
+    const store = fakePublicationsStore();
+    let noteCreates = 0;
+    const deps = {
+      analyserClient: {
+        getSummary: async () => summary(),
+        getProposal: unexpected,
+        ...store
+      },
+      notesClient: {
+        create: async () => ({ id: `note-${++noteCreates}` })
+      },
+      artifactsClient: { createNote: unexpected }
+    } as AnalyserExportDependencies;
+
+    const first = await exportAnalyserRecord(authContext, {
+      sourceKind: "summary",
+      sourceId: summaryId,
+      targetKind: "note",
+      projectId: "project-1"
+    }, deps);
+    const second = await exportAnalyserRecord(authContext, {
+      sourceKind: "summary",
+      sourceId: summaryId,
+      targetKind: "note",
+      projectId: "project-2"
+    }, deps);
+
+    assert.equal(first.created, true);
+    assert.equal(second.created, true);
+    assert.notEqual(first.target.id, second.target.id);
+    assert.equal(noteCreates, 2);
+    assert.equal(store.rows.length, 2);
   });
 
   it("does not create a duplicate target when two identical exports race concurrently", async () => {

@@ -152,6 +152,15 @@ function defaultArtifactPath(title: string): string {
   return `analyser/exports/${new Date().toISOString().slice(0, 10)}-${slug(title)}.md`;
 }
 
+function normalizeDedupePath(path: string): string {
+  return path
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/\/+/g, "/")
+    .replace(/^\.\//, "")
+    .replace(/^\/+|\/+$/g, "");
+}
+
 function targetId(value: unknown, service: "notes" | "artifacts"): string {
   const direct = value && typeof value === "object" ? (value as { id?: unknown }).id : undefined;
   if (typeof direct === "string" && direct.trim()) return direct;
@@ -207,7 +216,13 @@ export async function exportAnalyserRecord(
 
   const title = input.title ?? source.title;
   const content = buildContent(title, source.bodyMarkdown, source.evidenceRefs ?? [], input.sourceKind, input.sourceId);
-  const contentHash = createHash("sha256").update(`${input.targetKind}\n${content}`).digest("hex");
+  const resolvedPath = input.targetKind === "note" ? undefined : (input.path ?? defaultArtifactPath(title));
+  const destinationKey = [
+    input.targetKind,
+    input.projectId ?? "",
+    resolvedPath ? normalizeDedupePath(resolvedPath) : ""
+  ].join("\n");
+  const contentHash = createHash("sha256").update(`${destinationKey}\n${content}`).digest("hex");
 
   // Reserve the dedupe slot BEFORE creating anything: whichever concurrent export request
   // wins the reservation is the only one allowed to create a Note/Artifact and finalize the
@@ -243,10 +258,9 @@ export async function exportAnalyserRecord(
     createdTargetId = targetId(createdTarget, "notes");
     ref = { service: "notes", resourceType: "note", resourceId: createdTargetId };
   } else {
-    const path = input.path ?? defaultArtifactPath(title);
     createdTarget = await deps.artifactsClient.createNote(token, {
       title,
-      path,
+      path: resolvedPath,
       contentMarkdown: content,
       ...(input.projectId ? { projectId: input.projectId } : {})
     });
@@ -255,7 +269,7 @@ export async function exportAnalyserRecord(
       service: "artifacts",
       resourceType: "artifact_item",
       resourceId: createdTargetId,
-      pathSnapshot: targetPath(createdTarget) ?? path
+      pathSnapshot: targetPath(createdTarget) ?? resolvedPath
     };
   }
 
