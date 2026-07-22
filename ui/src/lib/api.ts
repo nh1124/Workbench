@@ -1085,6 +1085,8 @@ export const analyserApi = {
     fetchJson(analyserApiUrl("/observations/aggregate", query)),
   routines: (): Promise<{ items: AnalyserRoutineRecord[] }> =>
     fetchJson(analyserApiUrl("/routines")),
+  skillCatalog: (): Promise<{ skills: string[]; unavailable?: boolean }> =>
+    fetchJson(analyserApiUrl("/skills/catalog")),
   routineStatus: (): Promise<{ items: AnalyserRoutineStatusSummary[] }> =>
     fetchJson(analyserApiUrl("/routines/status")),
   seedRoutines: (): Promise<void> =>

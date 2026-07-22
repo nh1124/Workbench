@@ -1440,6 +1440,11 @@ const EMPTY_ROUTINE_FORM = {
 function RoutinesTab() {
   const [routines, setRoutines] = useState<AnalyserRoutineRecord[]>([]);
   const [statuses, setStatuses] = useState<Record<string, AnalyserRoutineStatusSummary>>({});
+  const [skillCatalog, setSkillCatalog] = useState<{
+    skills: Set<string>;
+    loaded: boolean;
+    unavailable: boolean;
+  }>({ skills: new Set<string>(), loaded: false, unavailable: false });
   const [drafts, setDrafts] = useState<Record<string, RoutineDraft>>({});
   const [routineErrors, setRoutineErrors] = useState<Record<string, string>>({});
   const [createForm, setCreateForm] = useState({ ...EMPTY_ROUTINE_FORM });
@@ -1472,6 +1477,24 @@ function RoutinesTab() {
   };
 
   useEffect(() => { void load(); }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void analyserApi.skillCatalog()
+      .then((result) => {
+        if (cancelled) return;
+        setSkillCatalog({
+          skills: new Set(result.skills),
+          loaded: true,
+          unavailable: Boolean(result.unavailable)
+        });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSkillCatalog({ skills: new Set<string>(), loaded: false, unavailable: false });
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   const reloadConflict = async (message: string) => {
     await load();
@@ -1630,10 +1653,35 @@ function RoutinesTab() {
           const draft = drafts[routine.key] ?? routineDraft(routine);
           const changed = Object.keys(changedFields(routine, draft)).length > 0;
           const routineStatus = statuses[routine.key];
+          const skillMissing = skillCatalog.loaded
+            && !skillCatalog.unavailable
+            && !skillCatalog.skills.has(routine.skillKey);
           return (
             <article className="analyser-routine-setting" key={routine.key}>
               <header>
-                <div><strong>{routine.name}</strong><small>{routine.key} · {routine.skillKey}</small></div>
+                <div>
+                  <strong>{routine.name}</strong>
+                  <small>
+                    {routine.key} · {routine.skillKey}
+                    {skillMissing ? (
+                      <span
+                        role="status"
+                        title="This routine's skill was not found in the canonical AgentSkills store."
+                        style={{
+                          display: "inline-flex",
+                          marginLeft: "0.4rem",
+                          padding: "0.05rem 0.35rem",
+                          border: "1px solid rgba(248, 113, 113, 0.45)",
+                          borderRadius: "999px",
+                          color: "#fca5a5",
+                          background: "rgba(127, 29, 29, 0.2)"
+                        }}
+                      >
+                        skill missing
+                      </span>
+                    ) : null}
+                  </small>
+                </div>
                 <label className="analyser-inline-toggle"><input aria-label={`${routine.name} enabled`} type="checkbox" checked={draft.enabled} disabled={Boolean(busy)} onChange={(event) => updateDraft(routine.key, "enabled", event.target.checked)} /><span>Enabled</span></label>
               </header>
               {routineStatus ? (

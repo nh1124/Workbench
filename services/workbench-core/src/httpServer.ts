@@ -33,6 +33,7 @@ import { analyserClient, artifactsClient, imagesClient, InternalServiceError, mi
 import { projectSyncEventsForUser, startAnalyserProjector } from "./analyserProjector.js";
 import { analyserHttpAccessMiddleware, instrumentMcpServer } from "./analyserAccessInstrumentation.js";
 import { exportAnalyserRecord } from "./analyserExport.js";
+import { fetchSkillCatalog } from "./analyserSkillCatalog.js";
 import { getOAuthDynamicClient, saveOAuthDynamicClient } from "./oauthDynamicClientsStore.js";
 import {
   commitSyncChangesCursor,
@@ -3874,6 +3875,18 @@ app.get(
 );
 app.get("/api/analyser/routines", analyserFacadeRoute((token) => analyserClient.listRoutines(token)));
 app.get("/api/analyser/routines/status", analyserFacadeRoute((token) => analyserClient.routineStatus(token)));
+app.get(
+  "/api/analyser/skills/catalog",
+  analyserFacadeRoute(async (token) => {
+    try {
+      return await fetchSkillCatalog(token, {
+        treeList: (treeToken, options) => artifactsClient.treeList(treeToken, options)
+      });
+    } catch {
+      return { skills: [], unavailable: true };
+    }
+  })
+);
 app.post(
   "/api/analyser/routines/seed",
   analyserFacadeRoute((token) => analyserClient.seedRoutines(token), { status: 204 })

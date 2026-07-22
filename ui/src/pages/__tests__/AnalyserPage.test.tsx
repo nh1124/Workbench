@@ -297,6 +297,7 @@ beforeEach(() => {
   vi.spyOn(analyserApi, "operations").mockResolvedValue({ items: [] });
   vi.spyOn(analyserApi, "settings").mockResolvedValue(settingsResult());
   vi.spyOn(analyserApi, "routines").mockResolvedValue({ items: [analyserRoutine()] });
+  vi.spyOn(analyserApi, "skillCatalog").mockResolvedValue({ skills: ["workbench-analyser-cycle"] });
   vi.spyOn(analyserApi, "routineStatus").mockResolvedValue({ items: statusResult().routines });
   vi.spyOn(analyserApi, "createRoutine").mockImplementation(async (body) => analyserRoutine({ ...body, version: 1 }));
   vi.spyOn(analyserApi, "deleteRoutine").mockResolvedValue(undefined);
@@ -635,6 +636,53 @@ describe("AnalyserPage", () => {
       scheduleExpr: "30",
       expectedVersion: 5
     }));
+  });
+
+  it("shows a warning only for routines whose skill is missing from the canonical catalog", async () => {
+    vi.mocked(analyserApi.routines).mockResolvedValue({
+      items: [
+        analyserRoutine({ key: "available-routine", name: "Available routine" }),
+        analyserRoutine({ id: "routine-2", key: "missing-routine", name: "Missing routine", skillKey: "deleted-skill" })
+      ]
+    });
+    vi.mocked(analyserApi.skillCatalog).mockResolvedValue({ skills: ["workbench-analyser-cycle"] });
+
+    renderPage("/analyser?tab=routines");
+
+    const availableRoutine = (await screen.findByText("Available routine")).closest("article");
+    const missingRoutine = screen.getByText("Missing routine").closest("article");
+    expect(availableRoutine).toBeTruthy();
+    expect(missingRoutine).toBeTruthy();
+    expect(within(availableRoutine as HTMLElement).queryByText("skill missing")).toBeNull();
+    expect(within(missingRoutine as HTMLElement).getByText("skill missing")).toBeTruthy();
+  });
+
+  it("does not show missing-skill warnings when the catalog request fails", async () => {
+    vi.mocked(analyserApi.routines).mockResolvedValue({
+      items: [analyserRoutine({ name: "Unchecked routine", skillKey: "deleted-skill" })]
+    });
+    vi.mocked(analyserApi.skillCatalog).mockRejectedValue(new Error("catalog unavailable"));
+
+    renderPage("/analyser?tab=routines");
+
+    const routine = (await screen.findByText("Unchecked routine")).closest("article");
+    expect(routine).toBeTruthy();
+    await waitFor(() => expect(analyserApi.skillCatalog).toHaveBeenCalled());
+    expect(within(routine as HTMLElement).queryByText("skill missing")).toBeNull();
+  });
+
+  it("does not show missing-skill warnings when the catalog reports itself unavailable", async () => {
+    vi.mocked(analyserApi.routines).mockResolvedValue({
+      items: [analyserRoutine({ name: "Unavailable catalog routine", skillKey: "deleted-skill" })]
+    });
+    vi.mocked(analyserApi.skillCatalog).mockResolvedValue({ skills: [], unavailable: true });
+
+    renderPage("/analyser?tab=routines");
+
+    const routine = (await screen.findByText("Unavailable catalog routine")).closest("article");
+    expect(routine).toBeTruthy();
+    await waitFor(() => expect(analyserApi.skillCatalog).toHaveBeenCalled());
+    expect(within(routine as HTMLElement).queryByText("skill missing")).toBeNull();
   });
 
   it("creates a routine from the Routines tab form", async () => {
