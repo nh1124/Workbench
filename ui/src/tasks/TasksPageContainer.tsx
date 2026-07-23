@@ -532,17 +532,21 @@ export function TasksPageContainer({
     [quickFilter, calendarStatusFilter, sidebarMode, tasks, today, todayTaskIds, todayMembershipKeys, sortMode]
   );
 
-  const counters = useMemo(
-    () => computeTaskCounters(tasks, {
-      todayMembershipKeys, todayTaskIds, today,
-      plannedCount, overdueCount, inboxUpcomingCount: inboxUpcomingRows.length,
-    }),
-    [tasks, today, todayTaskIds, todayMembershipKeys, plannedCount, overdueCount, inboxUpcomingRows]
-  );
-
   const pinnedTaskIds = useMemo(
     () => new Set(tasks.filter((t) => t.isPinned === true).map((t) => t.id)),
     [tasks]
+  );
+
+  const counters = useMemo(
+    () => computeTaskCounters(tasks, {
+      todayMembershipKeys, todayTaskIds, today,
+      todayRows, pinnedTaskIds,
+      plannedCount, overdueCount, inboxUpcomingCount: inboxUpcomingRows.length,
+    }),
+    [
+      tasks, today, todayTaskIds, todayMembershipKeys, todayRows, pinnedTaskIds,
+      plannedCount, overdueCount, inboxUpcomingRows
+    ]
   );
 
   const todayOccurrenceRowsOrdered = useMemo(

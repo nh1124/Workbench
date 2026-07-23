@@ -11,7 +11,7 @@
 
 import type { Task } from "../../types/models";
 import type {
-  CalendarStatusFilter, QuickFilter, SidebarMode, SortMode
+  CalendarStatusFilter, QuickFilter, SidebarMode, SortMode, TaskOccurrenceRow
 } from "../types";
 
 // ── Task filter ───────────────────────────────────────────────────────────────
@@ -114,6 +114,8 @@ export interface TaskCounterOpts {
   todayMembershipKeys: Set<string>;
   todayTaskIds: Set<string>;
   today: Date;
+  todayRows: TaskOccurrenceRow[];
+  pinnedTaskIds: Set<string>;
   plannedCount: number;
   overdueCount: number;
   inboxUpcomingCount: number;
@@ -134,10 +136,15 @@ export function computeTaskCounters(
   tasks: Task[],
   opts: TaskCounterOpts
 ): TaskCounters {
-  const { todayMembershipKeys, plannedCount, overdueCount, inboxUpcomingCount } = opts;
+  const {
+    todayRows, pinnedTaskIds,
+    plannedCount, overdueCount, inboxUpcomingCount
+  } = opts;
   return {
-    today: todayMembershipKeys.size,
-    myday: tasks.filter((t) => t.isPinned === true).length,
+    today: todayRows.filter((row) => row.status !== "done").length,
+    myday: todayRows.filter(
+      (row) => pinnedTaskIds.has(row.taskId) && row.status !== "done"
+    ).length,
     planned: plannedCount,
     overdue: overdueCount,
     inbox: inboxUpcomingCount,

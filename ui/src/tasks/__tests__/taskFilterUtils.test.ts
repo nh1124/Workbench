@@ -19,6 +19,7 @@ import {
 } from "../lib/taskFilterUtils";
 import { occurrenceMembershipKey } from "../lib/taskOccurrenceIdentity";
 import type { Task } from "../../types/models";
+import type { TaskOccurrenceRow } from "../types";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -36,6 +37,19 @@ function makeTask(overrides: Partial<Task> & { id: string }): Task {
     active: true,
     createdAt: NOW,
     updatedAt: NOW,
+    ...overrides,
+  };
+}
+
+function makeOccurrenceRow(
+  overrides: Partial<TaskOccurrenceRow> & { taskId: string }
+): TaskOccurrenceRow {
+  return {
+    key: `occurrence:${overrides.taskId}`,
+    date: "2026-03-30",
+    title: "Task occurrence",
+    context: "inbox",
+    status: "todo",
     ...overrides,
   };
 }
@@ -214,51 +228,69 @@ describe("filterAndSortTasks", () => {
 // ─── computeTaskCounters ──────────────────────────────────────────────────────
 
 describe("computeTaskCounters", () => {
-  it("returns Today membership key size as today count", () => {
-    const counters = computeTaskCounters([], {
+  it("counts non-done Today rows and pinned non-done My Day rows", () => {
+    const tasks = [
+      makeTask({ id: "generated-pinned", isPinned: true }),
+      makeTask({ id: "explicit-done", isPinned: true, status: "done" }),
+      makeTask({ id: "outside-today", isPinned: true }),
+    ];
+    const todayRows = [
+      makeOccurrenceRow({
+        key: "schedule:1",
+        scheduleId: 1,
+        taskId: "explicit-open",
+      }),
+      makeOccurrenceRow({
+        key: "occurrence:generated-open",
+        taskId: "generated-open",
+      }),
+      makeOccurrenceRow({
+        key: "occurrence:generated-pinned",
+        taskId: "generated-pinned",
+      }),
+      makeOccurrenceRow({
+        key: "schedule:2",
+        scheduleId: 2,
+        taskId: "explicit-done",
+        status: "done",
+      }),
+    ];
+
+    const counters = computeTaskCounters(tasks, {
       todayMembershipKeys: new Set([
-        occurrenceMembershipKey("a", "2026-03-30", "2026-03-30"),
-        occurrenceMembershipKey("b", "2026-03-30", "2026-03-30"),
-        occurrenceMembershipKey("c", "2026-03-30", "2026-03-30"),
+        occurrenceMembershipKey("explicit-open", "2026-03-30", "2026-03-30"),
+        occurrenceMembershipKey("explicit-done", "2026-03-30", "2026-03-30"),
       ]),
-      todayTaskIds: new Set(["x"]),
+      todayTaskIds: new Set(["explicit-open", "explicit-done"]),
       today: TODAY,
+      todayRows,
+      pinnedTaskIds: new Set(["generated-pinned", "explicit-done", "outside-today"]),
       plannedCount: 4,
       overdueCount: 2,
       inboxUpcomingCount: 7,
     });
-    expect(counters.today).toBe(3);
+
+    expect(counters).toEqual({
+      today: 3,
+      myday: 1,
+      planned: 4,
+      overdue: 2,
+      inbox: 7,
+    });
   });
 
-  it("returns 0 for today count when Today membership is empty", () => {
+  it("returns zero Today and My Day counts when Today rows are empty", () => {
     const counters = computeTaskCounters([], {
       todayMembershipKeys: new Set(),
       todayTaskIds: new Set(["x", "y"]),
       today: TODAY,
+      todayRows: [],
+      pinnedTaskIds: new Set(["x", "y"]),
       plannedCount: 0,
       overdueCount: 0,
       inboxUpcomingCount: 0,
     });
     expect(counters.today).toBe(0);
-  });
-
-  it("counts pinned tasks as myday", () => {
-    const tasks = [
-      makeTask({ id: "a", isPinned: true }),
-      makeTask({ id: "b", isPinned: false }),
-      makeTask({ id: "c", isPinned: true }),
-    ];
-    const counters = computeTaskCounters(tasks, {
-      todayMembershipKeys: new Set(),
-      todayTaskIds: new Set(),
-      today: TODAY,
-      plannedCount: 1,
-      overdueCount: 5,
-      inboxUpcomingCount: 3,
-    });
-    expect(counters.myday).toBe(2);
-    expect(counters.planned).toBe(1);
-    expect(counters.overdue).toBe(5);
-    expect(counters.inbox).toBe(3);
+    expect(counters.myday).toBe(0);
   });
 });
