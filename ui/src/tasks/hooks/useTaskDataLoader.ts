@@ -17,7 +17,7 @@ import {
   mergeProjectOptions,
   type ProjectOption
 } from "../../lib/taskDisplayUtils";
-import type { ScheduleCalendarDay, Task, TaskScheduleDay, TaskStatus, TodayTask } from "../../types/models";
+import type { Task, TaskScheduleDay, TaskStatus, TodayTask } from "../../types/models";
 import {
   OCCURRENCE_PAGE_DAYS,
   type TaskOccurrenceRow,
@@ -41,6 +41,7 @@ export interface TaskDataState {
   /** date-key ↁEtaskId ↁETaskStatus (for calendar per-date display) */
   calendarStatusMap: Map<string, Map<string, TaskStatus>>;
   isLoading: boolean;
+  isSecondaryLoading: boolean;
   error: string | null;
 }
 
@@ -84,11 +85,13 @@ export function useTaskDataLoader(
   const [overdueCount, setOverdueCount] = useState(0);
   const [calendarStatusMap, setCalendarStatusMap] = useState<Map<string, Map<string, TaskStatus>>>(new Map());
   const [isLoading, setIsLoading] = useState(true);
+  const [isSecondaryLoading, setIsSecondaryLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const selectedTaskIdRef = useRef<string | null>(selectedTaskId);
   const onTaskGoneRef = useRef(onTaskGone);
   const loadInFlightCountRef = useRef(0);
   const visibleLoadCountRef = useRef(0);
+  const visibleSecondaryLoadCountRef = useRef(0);
   const loadRequestSequenceRef = useRef(0);
 
   useEffect(() => {
@@ -105,140 +108,177 @@ export function useTaskDataLoader(
     loadInFlightCountRef.current += 1;
     if (!silent) {
       visibleLoadCountRef.current += 1;
+      visibleSecondaryLoadCountRef.current += 1;
       setIsLoading(true);
+      setIsSecondaryLoading(true);
       setError(null);
     }
-    try {
-      const todayDate = startOfDay(new Date());
-      const todayKey = toDateKey(todayDate);
-      const compositionDateKey = normalizeDateKey(dayCompositionDate) ?? todayKey;
-      const countFrom = toDateKey(addDays(todayDate, -(OCCURRENCE_PAGE_DAYS - 1)));
-      const countTo = toDateKey(addDays(todayDate, OCCURRENCE_PAGE_DAYS - 1));
 
-      const [
-        taskList,
-        taskProjects,
-        projectsResult,
-        todaySchedule,
-        countSchedule,
-        countScheduleCalendar,
-        myDayTasks
-      ] = await Promise.all([
-        tasksApi.list(contextFilter || undefined),
-        tasksApi.projects(),
-        projectsApi.list(undefined, "active", 200)
-          .then((result) => ({ ok: true as const, result }))
-          .catch(() => ({ ok: false as const, result: { items: [] } })),
-        tasksApi.schedule(compositionDateKey, compositionDateKey, contextFilter || undefined).catch(() => [] as TaskScheduleDay[]),
-        tasksApi.schedule(countFrom, countTo, contextFilter || undefined).catch(() => [] as TaskScheduleDay[]),
-        tasksApi.scheduleCalendar(countFrom, countTo).catch(() => [] as ScheduleCalendarDay[]),
-        tasksApi.todayList(compositionDateKey).catch(() => [] as TodayTask[])
-      ]);
+    const todayDate = startOfDay(new Date());
+    const todayKey = toDateKey(todayDate);
+    const compositionDateKey = normalizeDateKey(dayCompositionDate) ?? todayKey;
+    const countFrom = toDateKey(addDays(todayDate, -(OCCURRENCE_PAGE_DAYS - 1)));
+    const countTo = toDateKey(addDays(todayDate, OCCURRENCE_PAGE_DAYS - 1));
 
-      // Build Today status map from LBS schedule (used to merge live status into task list)
-      const todayIds = new Set<string>();
-      const todayStatusMap = new Map<string, TaskStatus>();
-      const todayOccurrenceStatuses = new Map<string, TaskStatus>();
-      for (const day of todaySchedule) {
-        for (const item of day.tasks) {
-          const status = toTaskStatus(item.status);
-          todayIds.add(item.taskId);
-          todayStatusMap.set(item.taskId, status);
-          todayOccurrenceStatuses.set(taskOccurrenceRowKey({
-            taskId: item.taskId,
-            occurrenceDate: day.date
-          }), status);
+    const phaseAPromise = (async () => {
+      try {
+        const [
+          taskList,
+          taskProjects,
+          projectsResult,
+          todaySchedule,
+          myDayTasks
+        ] = await Promise.all([
+          tasksApi.list(contextFilter || undefined),
+          tasksApi.projects(),
+          projectsApi.list(undefined, "active", 200)
+            .then((result) => ({ ok: true as const, result }))
+            .catch(() => ({ ok: false as const, result: { items: [] } })),
+          tasksApi.schedule(compositionDateKey, compositionDateKey, contextFilter || undefined).catch(() => [] as TaskScheduleDay[]),
+          tasksApi.todayList(compositionDateKey).catch(() => [] as TodayTask[])
+        ]);
+
+        // Build Today status map from LBS schedule (used to merge live status into task list)
+        const todayIds = new Set<string>();
+        const todayStatusMap = new Map<string, TaskStatus>();
+        const todayOccurrenceStatuses = new Map<string, TaskStatus>();
+        for (const day of todaySchedule) {
+          for (const item of day.tasks) {
+            const status = toTaskStatus(item.status);
+            todayIds.add(item.taskId);
+            todayStatusMap.set(item.taskId, status);
+            todayOccurrenceStatuses.set(taskOccurrenceRowKey({
+              taskId: item.taskId,
+              occurrenceDate: day.date
+            }), status);
+          }
         }
-      }
 
-      const {
-        rows: builtTodayRows,
-        membershipKeys: todayMemberships
-      } = buildTodayRows(taskList, myDayTasks, todaySchedule, compositionDateKey);
-      const nextPlannedCount = countDistinctPlannedTasks(countScheduleCalendar, todayKey, contextFilter);
-      const nextOverdueCount = countDistinctOverdueTasks(countSchedule, todayKey, contextFilter);
+        const {
+          rows: builtTodayRows,
+          membershipKeys: todayMemberships
+        } = buildTodayRows(taskList, myDayTasks, todaySchedule, compositionDateKey);
 
-      const { upcomingRows: builtInboxUpcoming, doneRows: builtInboxDone } =
-        buildInboxRows(taskList, {
-          countSchedule,
-          scheduleCalendar: countScheduleCalendar,
-          todayKey
+        // Merge live today-status into the task list
+        const mergedTasks = taskList.map((task) => {
+          const status = todayStatusMap.get(task.id);
+          if (!status) return task;
+          return { ...task, status };
         });
 
-      // Build per-date execution status map for calendar display
-      const csMap = new Map<string, Map<string, TaskStatus>>();
-      for (const day of countSchedule) {
-        for (const item of day.tasks) {
-          if (!csMap.has(day.date)) csMap.set(day.date, new Map());
-          csMap.get(day.date)!.set(item.taskId, toTaskStatus(item.status));
+        const serviceProjects = projectsResult.result.items.map((project) => ({
+          projectId: project.id,
+          projectName: project.name
+        }));
+        const activeProjectIds = new Set(serviceProjects.map((project) => project.projectId));
+        const taskProjectOptions = taskProjects.map((p) => ({
+          projectId: p.projectId,
+          projectName: p.projectName
+        }));
+
+        if (requestId !== loadRequestSequenceRef.current) {
+          return { applied: false as const };
+        }
+        if (silent && options.shouldApply && !options.shouldApply()) {
+          return { applied: false as const };
+        }
+
+        setError(null);
+        setTasks(mergedTasks);
+        setTodayRows(builtTodayRows);
+        setTodayTaskIds(todayIds);
+        setTodayScheduleOccurrenceStatuses(todayOccurrenceStatuses);
+        setTodayMembershipKeys(todayMemberships);
+        setProjectOptions(
+          projectsResult.ok
+            ? mergeProjectOptions(
+                filterProjectOptionsByAllowedIds(taskProjectOptions, activeProjectIds),
+                serviceProjects
+              )
+            : mergeProjectOptions(taskProjectOptions)
+        );
+
+        const currentSelectedTaskId = selectedTaskIdRef.current;
+        if (currentSelectedTaskId && !mergedTasks.find((t) => t.id === currentSelectedTaskId)) {
+          onTaskGoneRef.current();
+        }
+        return { applied: true as const, taskList };
+      } catch (e) {
+        if (requestId !== loadRequestSequenceRef.current) {
+          return { applied: false as const };
+        }
+        const message = e instanceof Error ? e.message : "Failed to load tasks.";
+        if (!silent) {
+          setTodayTaskIds(new Set());
+          setTodayScheduleOccurrenceStatuses(new Map());
+          setTodayMembershipKeys(new Set());
+        }
+        if (isAuthErrorMessage(message)) {
+          setError(message);
+        } else {
+          pushErrorNotification(message, "Failed to load tasks");
+        }
+        return { applied: false as const };
+      } finally {
+        loadInFlightCountRef.current = Math.max(0, loadInFlightCountRef.current - 1);
+        if (!silent) {
+          visibleLoadCountRef.current = Math.max(0, visibleLoadCountRef.current - 1);
+          if (visibleLoadCountRef.current === 0) setIsLoading(false);
         }
       }
-      // Merge live today-status into the task list
-      const mergedTasks = taskList.map((task) => {
-        const status = todayStatusMap.get(task.id);
-        if (!status) return task;
-        return { ...task, status };
-      });
+    })();
 
-      const serviceProjects = projectsResult.result.items.map((project) => ({
-        projectId: project.id,
-        projectName: project.name
-      }));
-      const activeProjectIds = new Set(serviceProjects.map((project) => project.projectId));
-      const taskProjectOptions = taskProjects.map((p) => ({
-        projectId: p.projectId,
-        projectName: p.projectName
-      }));
+    void (async () => {
+      try {
+        const [countSchedule, countScheduleCalendar] = await Promise.all([
+          tasksApi.schedule(countFrom, countTo, contextFilter || undefined),
+          tasksApi.scheduleCalendar(countFrom, countTo)
+        ]);
+        const phaseAResult = await phaseAPromise;
+        if (!phaseAResult.applied) return;
+        if (requestId !== loadRequestSequenceRef.current) return;
+        if (silent && options.shouldApply && !options.shouldApply()) return;
 
-      if (requestId !== loadRequestSequenceRef.current) return false;
-      if (silent && options.shouldApply && !options.shouldApply()) return false;
+        const nextPlannedCount = countDistinctPlannedTasks(countScheduleCalendar, todayKey, contextFilter);
+        const nextOverdueCount = countDistinctOverdueTasks(countSchedule, todayKey, contextFilter);
+        const { upcomingRows: builtInboxUpcoming, doneRows: builtInboxDone } =
+          buildInboxRows(phaseAResult.taskList, {
+            countSchedule,
+            scheduleCalendar: countScheduleCalendar,
+            todayKey
+          });
 
-      setError(null);
-      setTasks(mergedTasks);
-      setTodayRows(builtTodayRows);
-      setPlannedCount(nextPlannedCount);
-      setOverdueCount(nextOverdueCount);
-      setInboxUpcomingRows(builtInboxUpcoming);
-      setInboxDoneRows(builtInboxDone);
-      setCalendarStatusMap(csMap);
-      setTodayTaskIds(todayIds);
-      setTodayScheduleOccurrenceStatuses(todayOccurrenceStatuses);
-      setTodayMembershipKeys(todayMemberships);
-      setProjectOptions(
-        projectsResult.ok
-          ? mergeProjectOptions(
-              filterProjectOptionsByAllowedIds(taskProjectOptions, activeProjectIds),
-              serviceProjects
-            )
-          : mergeProjectOptions(taskProjectOptions)
-      );
+        // Build per-date execution status map for calendar display
+        const csMap = new Map<string, Map<string, TaskStatus>>();
+        for (const day of countSchedule) {
+          for (const item of day.tasks) {
+            if (!csMap.has(day.date)) csMap.set(day.date, new Map());
+            csMap.get(day.date)!.set(item.taskId, toTaskStatus(item.status));
+          }
+        }
 
-      const currentSelectedTaskId = selectedTaskIdRef.current;
-      if (currentSelectedTaskId && !mergedTasks.find((t) => t.id === currentSelectedTaskId)) {
-        onTaskGoneRef.current();
+        setPlannedCount(nextPlannedCount);
+        setOverdueCount(nextOverdueCount);
+        setInboxUpcomingRows(builtInboxUpcoming);
+        setInboxDoneRows(builtInboxDone);
+        setCalendarStatusMap(csMap);
+      } catch {
+        // Preserve the previous secondary data when a wide-range request fails.
+      } finally {
+        if (!silent) {
+          visibleSecondaryLoadCountRef.current = Math.max(
+            0,
+            visibleSecondaryLoadCountRef.current - 1
+          );
+          if (visibleSecondaryLoadCountRef.current === 0) {
+            setIsSecondaryLoading(false);
+          }
+        }
       }
-      return true;
-    } catch (e) {
-      if (requestId !== loadRequestSequenceRef.current) return false;
-      const message = e instanceof Error ? e.message : "Failed to load tasks.";
-      if (!silent) {
-        setTodayTaskIds(new Set());
-        setTodayScheduleOccurrenceStatuses(new Map());
-        setTodayMembershipKeys(new Set());
-      }
-      if (isAuthErrorMessage(message)) {
-        setError(message);
-      } else {
-        pushErrorNotification(message, "Failed to load tasks");
-      }
-      return false;
-    } finally {
-      loadInFlightCountRef.current = Math.max(0, loadInFlightCountRef.current - 1);
-      if (!silent) {
-        visibleLoadCountRef.current = Math.max(0, visibleLoadCountRef.current - 1);
-        if (visibleLoadCountRef.current === 0) setIsLoading(false);
-      }
-    }
+    })();
+
+    const phaseAResult = await phaseAPromise;
+    return phaseAResult.applied;
   }, [contextFilter, dayCompositionDate]);
 
   return {
@@ -254,6 +294,7 @@ export function useTaskDataLoader(
     overdueCount,
     calendarStatusMap,
     isLoading,
+    isSecondaryLoading,
     error,
     load,
     isLoadInFlight: () => loadInFlightCountRef.current > 0,

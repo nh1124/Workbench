@@ -191,7 +191,7 @@ export function TasksPageContainer({
     inboxUpcomingRows, inboxDoneRows,
     plannedCount, overdueCount,
     calendarStatusMap,
-    isLoading, error,
+    isLoading, isSecondaryLoading, error,
     load, isLoadInFlight,
     setTasks, setProjectOptions,
     setTodayRows, setTodayMembershipKeys,
@@ -1276,7 +1276,7 @@ export function TasksPageContainer({
               <TaskListContent
                 quickFilter={quickFilter}
                 sortMode={sortMode}
-                isLoading={isLoading}
+                isLoading={isLoading || (quickFilter === "inbox" && isSecondaryLoading)}
                 activeOccurrenceRows={activeOccurrenceRows}
                 tasks={tasks}
                 inboxUpcomingRows={inboxUpcomingRows}
