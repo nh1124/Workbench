@@ -5,6 +5,7 @@
  *   - filterTasksByMode: calendar/list mode filter rules
  *   - sortTasks: load | due | project sort correctness
  *   - filterAndSortTasks: combined pipeline (smoke test)
+ *   - searchTasks: global text/project/status search
  *   - computeTaskCounters: badge counter values
  *
  * Safety: pure functions → zero side effects → no mocks needed.
@@ -15,6 +16,7 @@ import {
   computeTaskCounters,
   filterAndSortTasks,
   filterTasksByMode,
+  searchTasks,
   sortTasks,
 } from "../lib/taskFilterUtils";
 import { occurrenceMembershipKey } from "../lib/taskOccurrenceIdentity";
@@ -222,6 +224,83 @@ describe("filterAndSortTasks", () => {
       sortMode: "load",
     });
     expect(result.map((t) => t.id)).toEqual(["pinned-lo", "pinned-hi"]);
+  });
+});
+
+// ─── searchTasks ──────────────────────────────────────────────────────────────
+
+describe("searchTasks", () => {
+  const tasks = [
+    makeTask({
+      id: "title",
+      title: "Prepare Launch Brief",
+      context: "marketing",
+      contextName: "Marketing",
+    }),
+    makeTask({
+      id: "notes",
+      title: "Follow up",
+      notes: "Confirm the Zebra contract",
+      context: "sales",
+      contextName: "Sales",
+      status: "done",
+    }),
+    makeTask({
+      id: "context",
+      title: "Review queue",
+      context: "customer-success",
+      contextName: "Client Care",
+      status: "skipped",
+    }),
+    makeTask({
+      id: "other",
+      title: "Archive receipts",
+      context: "finance",
+      contextName: "Finance",
+    }),
+  ];
+
+  it("matches text across title, notes, context, and contextName", () => {
+    expect(searchTasks(tasks, { query: "launch" }).map((task) => task.id)).toEqual(["title"]);
+    expect(searchTasks(tasks, { query: "zebra" }).map((task) => task.id)).toEqual(["notes"]);
+    expect(searchTasks(tasks, { query: "customer-success" }).map((task) => task.id)).toEqual(["context"]);
+    expect(searchTasks(tasks, { query: "client care" }).map((task) => task.id)).toEqual(["context"]);
+  });
+
+  it("filters by project", () => {
+    expect(searchTasks(tasks, { query: "", projectId: "sales" }).map((task) => task.id))
+      .toEqual(["notes"]);
+  });
+
+  it("filters by status", () => {
+    expect(searchTasks(tasks, { query: "", status: "skipped" }).map((task) => task.id))
+      .toEqual(["context"]);
+  });
+
+  it("combines text, project, and status filters", () => {
+    expect(searchTasks(tasks, {
+      query: "contract",
+      projectId: "sales",
+      status: "done",
+    }).map((task) => task.id)).toEqual(["notes"]);
+    expect(searchTasks(tasks, {
+      query: "contract",
+      projectId: "marketing",
+      status: "done",
+    })).toEqual([]);
+  });
+
+  it("treats an empty query as no text filter while respecting other filters", () => {
+    expect(searchTasks(tasks, {
+      query: "   ",
+      projectId: "marketing",
+      status: "todo",
+    }).map((task) => task.id)).toEqual(["title"]);
+  });
+
+  it("normalizes query case and surrounding whitespace", () => {
+    expect(searchTasks(tasks, { query: "  PREPARE launch  " }).map((task) => task.id))
+      .toEqual(["title"]);
   });
 });
 

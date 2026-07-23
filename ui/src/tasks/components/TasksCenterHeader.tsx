@@ -1,6 +1,6 @@
 import type { ChangeEvent, RefObject } from "react";
 import type { CalendarMode, SidebarMode, SortMode } from "../types";
-import { IcoCal, IcoDownload, IcoList, IcoRefresh, IcoUpload } from "./icons";
+import { IcoCal, IcoDownload, IcoList, IcoRefresh, IcoSearch, IcoUpload } from "./icons";
 
 interface TasksCenterHeaderProps {
   sidebarMode: SidebarMode;
@@ -14,6 +14,7 @@ interface TasksCenterHeaderProps {
   onRefreshSchedule: () => void;
   sortMode: SortMode;
   onSetSortMode: (mode: SortMode) => void;
+  onOpenSearch?: () => void;
   onExport: () => void;
   onImport: (event: ChangeEvent<HTMLInputElement>) => void;
   importRef: RefObject<HTMLInputElement | null>;
@@ -50,6 +51,7 @@ export function TasksCenterHeader({
   onRefreshSchedule,
   sortMode,
   onSetSortMode,
+  onOpenSearch,
   onExport,
   onImport,
   importRef,
@@ -105,6 +107,7 @@ export function TasksCenterHeader({
         </select>
         {!standalone && (
           <>
+            <button type="button" className="icon-button" title="Search tasks" aria-label="Search tasks" onClick={onOpenSearch}><IcoSearch /></button>
             <button type="button" className="icon-button" onClick={onExport} title="Export CSV" aria-label="Export CSV"><IcoDownload /></button>
             <button type="button" className="icon-button" onClick={() => importRef.current?.click()} title="Import CSV" aria-label="Import CSV"><IcoUpload /></button>
             <input ref={importRef} type="file" accept=".csv" style={{ display: "none" }} onChange={onImport} aria-label="Import CSV file" />

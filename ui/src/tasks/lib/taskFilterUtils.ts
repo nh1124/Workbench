@@ -9,7 +9,8 @@
  *   tasks/lib/taskFilterUtils → lib/taskRecurrenceUtils, tasks/types, types/models
  */
 
-import type { Task } from "../../types/models";
+import { normalizeText } from "../../lib/taskDisplayUtils";
+import type { Task, TaskStatus } from "../../types/models";
 import type {
   CalendarStatusFilter, QuickFilter, SidebarMode, SortMode, TaskOccurrenceRow
 } from "../types";
@@ -106,6 +107,29 @@ export function filterAndSortTasks(
   const { sortMode, ...filterOpts } = opts;
   const filtered = filterTasksByMode(tasks, filterOpts);
   return sortTasks(filtered, sortMode);
+}
+
+// ── Global task search ────────────────────────────────────────────────────────
+
+export function searchTasks(
+  tasks: Task[],
+  opts: { query: string; projectId?: string; status?: TaskStatus | "all" }
+): Task[] {
+  const query = normalizeText(opts.query);
+  const projectId = opts.projectId && opts.projectId !== "all"
+    ? opts.projectId
+    : undefined;
+  const status = opts.status && opts.status !== "all"
+    ? opts.status
+    : undefined;
+
+  return tasks.filter((task) => {
+    if (projectId && task.context !== projectId) return false;
+    if (status && task.status !== status) return false;
+    if (!query) return true;
+    return [task.title, task.notes, task.context, task.contextName ?? ""]
+      .some((value) => normalizeText(value).includes(query));
+  });
 }
 
 // ── Task counters ─────────────────────────────────────────────────────────────

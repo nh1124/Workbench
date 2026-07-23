@@ -76,6 +76,7 @@ import { TaskDetailPanel } from "./components/TaskDetailPanel";
 import { TaskListContent } from "./components/TaskListContent";
 import { TaskOccurrenceRowItem } from "./components/TaskOccurrenceRowItem";
 import { TaskQuickAddPanel } from "./components/TaskQuickAddPanel";
+import { TaskSearchModal } from "./components/TaskSearchModal";
 import { TodaySuggestionCard } from "./components/TodaySuggestionCard";
 import { TasksCenterHeader } from "./components/TasksCenterHeader";
 import { TasksSecondarySidebar } from "./components/TasksSecondarySidebar";
@@ -130,6 +131,9 @@ export function TasksPageContainer({
   const [weekCursor, setWeekCursor] = useState(() => startOfWeek(new Date()));
   const [nowMarker, setNowMarker] = useState(() => new Date());
   const [sortMode, setSortMode] = useState<SortMode>("load");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchTasksList, setSearchTasksList] = useState<Task[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
   const [todayCompletedOpen, setTodayCompletedOpen] = useState(false);
   const [inboxCompletedOpen, setInboxCompletedOpen] = useState(false);
   const [dayDetailDate, setDayDetailDate] = useState<Date | null>(null);
@@ -397,6 +401,15 @@ export function TasksPageContainer({
     _openAddPanel();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [_openAddPanel]);
+
+  const handleOpenSearch = useCallback(() => {
+    setSearchOpen(true);
+    setSearchLoading(true);
+    void tasksApi.list()
+      .then(setSearchTasksList)
+      .catch(() => {})
+      .finally(() => setSearchLoading(false));
+  }, []);
 
   // ── Wrapper closures for multi-arg hook functions ─────────────────────────
 
@@ -1228,6 +1241,7 @@ export function TasksPageContainer({
           onRefreshSchedule={() => setScheduleRefreshTick((n) => n + 1)}
           sortMode={sortMode}
           onSetSortMode={setSortMode}
+          onOpenSearch={handleOpenSearch}
           onExport={handleExport}
           onImport={handleImport}
           importRef={importRef}
@@ -1639,6 +1653,18 @@ export function TasksPageContainer({
       )}
 
       <FileViewerModal fileViewer={fileViewer} onClose={closeFileViewer} />
+      <TaskSearchModal
+        open={searchOpen}
+        tasks={searchTasksList}
+        loading={searchLoading}
+        projectOptions={projectOptions}
+        onClose={() => setSearchOpen(false)}
+        onSelectTask={(task) => {
+          setSidebarMode("list");
+          selectTask(task);
+        }}
+        resolveContextDisplayName={resolveContextDisplayName}
+      />
     </section>
   );
 }
