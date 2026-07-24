@@ -11,23 +11,38 @@ export interface TodayRowComposition {
   membershipKeys: Set<string>;
 }
 
-/** Compose explicit Today memberships with today's generated LBS occurrences. */
+/**
+ * Compose explicit Today memberships with today's generated LBS occurrences.
+ *
+ * When `contextFilter` is set, explicit Today entries from other projects are
+ * dropped so the Today list (and its badge count) stays scoped to the active
+ * project — the generated occurrences are already filtered upstream. Explicit
+ * `skipped` entries are hidden like generated skipped ones, but still cover
+ * their occurrence so the generated row does not resurrect them.
+ */
 export function buildTodayRows(
   taskList: Task[],
   explicitTodayTasks: TodayTask[],
   todaySchedule: TaskScheduleDay[],
-  todayKey: string
+  todayKey: string,
+  contextFilter?: string
 ): TodayRowComposition {
   const taskById = new Map(taskList.map((task) => [task.id, task]));
   const membershipKeys = new Set<string>();
   const coveredOccurrences = new Set<string>();
 
-  const rows: TaskOccurrenceRow[] = explicitTodayTasks.map((task) => {
+  const rows: TaskOccurrenceRow[] = [];
+  for (const task of explicitTodayTasks) {
+    if (contextFilter && task.context !== contextFilter) continue;
     const occurrenceDate = task.occurrenceDate || task.scheduledDate || todayKey;
     const scheduledDate = task.scheduledDate || todayKey;
+    if (toTaskStatus(task.status) === "skipped") {
+      coveredOccurrences.add(taskOccurrenceRowKey({ taskId: task.id, occurrenceDate }));
+      continue;
+    }
     membershipKeys.add(occurrenceMembershipKey(task.id, occurrenceDate, scheduledDate));
     coveredOccurrences.add(taskOccurrenceRowKey({ taskId: task.id, occurrenceDate }));
-    return {
+    rows.push({
       key: taskOccurrenceRowKey({
         taskId: task.id,
         occurrenceDate,
@@ -46,8 +61,8 @@ export function buildTodayRows(
       startTime: task.startTime ?? undefined,
       endTime: task.endTime ?? undefined,
       isLocked: task.isLocked
-    };
-  });
+    });
+  }
 
   for (const day of todaySchedule) {
     for (const item of day.tasks) {

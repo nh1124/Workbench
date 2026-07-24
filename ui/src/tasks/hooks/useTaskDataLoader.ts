@@ -157,7 +157,7 @@ export function useTaskDataLoader(
         const {
           rows: builtTodayRows,
           membershipKeys: todayMemberships
-        } = buildTodayRows(taskList, myDayTasks, todaySchedule, compositionDateKey);
+        } = buildTodayRows(taskList, myDayTasks, todaySchedule, compositionDateKey, contextFilter || undefined);
 
         // Merge live today-status into the task list
         const mergedTasks = taskList.map((task) => {

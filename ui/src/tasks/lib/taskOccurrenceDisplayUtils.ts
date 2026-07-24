@@ -27,7 +27,8 @@ export function filterOccurrenceRowsForQuickFilter(
 /**
  * Sort occurrence rows for list display:
  * - done rows last
- * - within same done-group: by startTime ascending (no startTime → last)
+ * - within same done-group: by startTime ascending (no startTime sorts first,
+ *   since an empty string compares before any "HH:MM" value)
  *
  * Returns a new array; the input is not mutated.
  */

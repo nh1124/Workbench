@@ -122,7 +122,7 @@ describe("buildTodayRows", () => {
     ]));
   });
 
-  it("excludes skipped generated occurrences while retaining skipped explicit rows", () => {
+  it("excludes both explicit and generated skipped occurrences", () => {
     const todayKey = "2026-07-13";
     const explicitSkipped = {
       ...makeTask({ id: "explicit-skipped", status: "skipped" }),
@@ -153,10 +153,55 @@ describe("buildTodayRows", () => {
       todayKey
     );
 
-    expect(result.rows.map((row) => row.taskId)).toEqual(["explicit-skipped"]);
-    expect(result.rows[0]?.status).toBe("skipped");
+    expect(result.rows).toEqual([]);
+    expect(result.membershipKeys).toEqual(new Set());
+  });
+
+  it("does not resurrect an explicit-skipped occurrence from its generated row", () => {
+    const todayKey = "2026-07-13";
+    const explicitSkipped = {
+      ...makeTask({ id: "recurring", status: "skipped", recurrence: "WEEKLY" }),
+      occurrenceDate: todayKey,
+      scheduledDate: todayKey,
+      scheduleId: 90
+    } satisfies TodayTask;
+    const schedule: TaskScheduleDay[] = [{
+      date: todayKey,
+      tasks: [{ taskId: "recurring", title: "This week", context: "default", status: "todo" }]
+    }];
+
+    const result = buildTodayRows([explicitSkipped], [explicitSkipped], schedule, todayKey);
+
+    // The explicit skip covers the occurrence, so the generated todo row is suppressed.
+    expect(result.rows).toEqual([]);
+  });
+
+  it("drops explicit Today entries from other projects under an active project filter", () => {
+    const todayKey = "2026-07-13";
+    const explicitA = {
+      ...makeTask({ id: "a", context: "project-a" }),
+      occurrenceDate: todayKey,
+      scheduledDate: todayKey,
+      scheduleId: 1
+    } satisfies TodayTask;
+    const explicitB = {
+      ...makeTask({ id: "b", context: "project-b" }),
+      occurrenceDate: todayKey,
+      scheduledDate: todayKey,
+      scheduleId: 2
+    } satisfies TodayTask;
+
+    const result = buildTodayRows(
+      [explicitA, explicitB],
+      [explicitA, explicitB],
+      [],
+      todayKey,
+      "project-a"
+    );
+
+    expect(result.rows.map((row) => row.taskId)).toEqual(["a"]);
     expect(result.membershipKeys).toEqual(new Set([
-      occurrenceMembershipKey("explicit-skipped", todayKey, todayKey)
+      occurrenceMembershipKey("a", todayKey, todayKey)
     ]));
   });
 });
