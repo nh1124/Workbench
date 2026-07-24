@@ -405,13 +405,15 @@ export function TasksPageContainer({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [_openAddPanel]);
 
+  const searchFetchIdRef = useRef(0);
   const handleOpenSearch = useCallback(() => {
+    const fetchId = ++searchFetchIdRef.current;
     setSearchOpen(true);
     setSearchLoading(true);
     void tasksApi.list()
-      .then(setSearchTasksList)
+      .then((list) => { if (fetchId === searchFetchIdRef.current) setSearchTasksList(list); })
       .catch(() => {})
-      .finally(() => setSearchLoading(false));
+      .finally(() => { if (fetchId === searchFetchIdRef.current) setSearchLoading(false); });
   }, []);
 
   // ── Wrapper closures for multi-arg hook functions ─────────────────────────
@@ -1664,6 +1666,13 @@ export function TasksPageContainer({
         onClose={() => setSearchOpen(false)}
         onSelectTask={(task) => {
           setSidebarMode("list");
+          // Global search spans all projects; if the picked task is outside the
+          // active project filter it would not appear in the filtered task list
+          // (so the detail panel could not resolve it). Switch the filter to the
+          // task's project so it enters the working set and its detail opens.
+          if (task.context && contextFilter && task.context !== contextFilter) {
+            setContextFilter(task.context);
+          }
           selectTask(task);
         }}
         resolveContextDisplayName={resolveContextDisplayName}
