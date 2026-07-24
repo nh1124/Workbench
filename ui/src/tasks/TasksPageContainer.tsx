@@ -324,10 +324,13 @@ export function TasksPageContainer({
     loadScheduleItem,
     scheduleBackgroundRefresh,
     hasOccurrenceMutationsInFlight,
+    getOccurrenceMutationEpoch,
   } = mutations;
 
   backgroundRefreshActionRef.current = async () => {
-    const shouldApply = () => !hasOccurrenceMutationsInFlight();
+    const startEpoch = getOccurrenceMutationEpoch();
+    const shouldApply = () =>
+      !hasOccurrenceMutationsInFlight() && getOccurrenceMutationEpoch() === startEpoch;
     const primaryApplied = await load({ silent: true, shouldApply });
     if (!primaryApplied) {
       if (hasOccurrenceMutationsInFlight() || isLoadInFlight()) scheduleBackgroundRefresh();

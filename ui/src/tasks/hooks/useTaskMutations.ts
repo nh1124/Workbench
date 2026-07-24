@@ -211,6 +211,7 @@ export interface TaskMutationsActions {
   updateProjectOptions: (newOption: ProjectOption) => void;
   scheduleBackgroundRefresh: () => void;
   hasOccurrenceMutationsInFlight: () => boolean;
+  getOccurrenceMutationEpoch: () => number;
 }
 
 export function useTaskMutations(
@@ -262,6 +263,7 @@ export function useTaskMutations(
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const occurrenceMutationSequenceRef = useRef(0);
   const occurrenceMutationVersionsRef = useRef(new Map<string, number>());
+  const occurrenceMutationEpochRef = useRef(0);
   const onBackgroundRefreshRef = useRef(onBackgroundRefresh);
   const isBackgroundRefreshBlockedRef = useRef(isBackgroundRefreshBlocked);
   const backgroundRefreshSchedulerRef = useRef<BackgroundRefreshScheduler | null>(null);
@@ -303,6 +305,7 @@ export function useTaskMutations(
       occurrenceMutationVersionsRef.current.delete(row.key);
       settledCurrentMutation = true;
     });
+    if (settledCurrentMutation) occurrenceMutationEpochRef.current += 1;
     if (scheduleRefresh && settledCurrentMutation) scheduleBackgroundRefresh();
   };
 
@@ -1202,6 +1205,7 @@ export function useTaskMutations(
     handleHistoryToggle, handleExport, handleImport,
     loadAttachments, loadSubtasks, loadScheduleItem,
     updateProjectOptions, scheduleBackgroundRefresh,
-    hasOccurrenceMutationsInFlight: () => occurrenceMutationVersionsRef.current.size > 0
+    hasOccurrenceMutationsInFlight: () => occurrenceMutationVersionsRef.current.size > 0,
+    getOccurrenceMutationEpoch: () => occurrenceMutationEpochRef.current
   };
 }

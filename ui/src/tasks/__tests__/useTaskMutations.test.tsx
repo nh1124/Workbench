@@ -126,6 +126,43 @@ describe("useTaskMutations", () => {
     expect(apiMocks.update).toHaveBeenCalledWith("task-1", { status: "done" });
   });
 
+  it("increments the occurrence mutation epoch after a successful Today toggle", async () => {
+    const task = makeTask();
+    apiMocks.completeOccurrence.mockResolvedValue({ status: "done" });
+    const { result } = renderMutations(task);
+    const row: TaskOccurrenceRow = {
+      key: "occurrence:task-1:2026-07-13:2026-07-13",
+      taskId: task.id,
+      date: "2026-07-13",
+      occurrenceDate: "2026-07-13",
+      scheduledDate: "2026-07-13",
+      title: task.title,
+      context: task.context,
+      status: "todo"
+    };
+    const current: TaskOccurrenceCollections = {
+      todayRows: [row],
+      occurrenceRows: [],
+      inboxUpcomingRows: [],
+      inboxDoneRows: []
+    };
+    const setters: TaskOccurrenceCollectionSetters = {
+      setTodayRows: vi.fn(),
+      setOccurrenceRows: vi.fn(),
+      setInboxUpcomingRows: vi.fn(),
+      setInboxDoneRows: vi.fn()
+    };
+    const startEpoch = result.current.getOccurrenceMutationEpoch();
+
+    await act(async () => {
+      await result.current.handleToggleOccurrenceDone(row, current, setters);
+    });
+
+    expect(apiMocks.completeOccurrence)
+      .toHaveBeenCalledWith("task-1", "2026-07-13", "done");
+    expect(result.current.getOccurrenceMutationEpoch()).toBe(startEpoch + 1);
+  });
+
   it("excludes status from detail updates when task status is unchanged", async () => {
     const task = makeTask();
     apiMocks.update.mockResolvedValue({ ...task, baseLoadScore: 7 });
