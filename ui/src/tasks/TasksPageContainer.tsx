@@ -830,14 +830,34 @@ export function TasksPageContainer({
   // Handle navigation from other pages with a task to open
   const openTaskIdHandledRef = useRef<string | null>(null);
   useEffect(() => {
-    const state = location.state as { openTaskId?: string; occurrenceStatus?: TaskStatus } | null;
+    const state = location.state as {
+      openTaskId?: string;
+      occurrenceStatus?: TaskStatus;
+      occurrenceDate?: string;
+      scheduleId?: number;
+      scheduledDate?: string;
+    } | null;
     const openTaskId = state?.openTaskId;
-    if (!openTaskId || tasks.length === 0 || openTaskId === openTaskIdHandledRef.current) return;
+    const requestKey = openTaskId
+      ? [
+        openTaskId,
+        state?.occurrenceDate ?? "",
+        state?.scheduledDate ?? "",
+        state?.scheduleId ?? ""
+      ].join("::")
+      : "";
+    if (!openTaskId || tasks.length === 0 || requestKey === openTaskIdHandledRef.current) return;
     const task = tasks.find((t) => t.id === openTaskId);
     if (task) {
-      openTaskIdHandledRef.current = openTaskId;
+      openTaskIdHandledRef.current = requestKey;
       setSidebarMode("list");
-      selectTask(task, state?.occurrenceStatus);
+      selectTask(
+        task,
+        state?.occurrenceStatus,
+        state?.occurrenceDate,
+        state?.scheduleId,
+        state?.scheduledDate
+      );
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tasks, location.state]);

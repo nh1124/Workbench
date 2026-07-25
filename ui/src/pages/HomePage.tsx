@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { readRecentArtifacts, type RecentArtifact } from "../artifacts/utils/recents";
 import { projectsApi, readWorkbenchSession, tasksApi } from "../lib/api";
@@ -8,14 +8,8 @@ import {
   loadUiSettings,
   type UiSettings
 } from "../lib/uiSettings";
-import type { Task, TaskProjectSummary, TaskScheduleDay, TaskStatus } from "../types/models";
+import type { Task, TaskProjectSummary, TodayTask } from "../types/models";
 import "./HomePage.css";
-
-interface CalendarCell {
-  key: string;
-  date: Date;
-  inCurrentMonth: boolean;
-}
 
 interface ProjectProgressRow {
   projectId: string;
@@ -36,24 +30,70 @@ interface WeatherSnapshot {
   updatedAt: string;
 }
 
-function startOfMonth(date: Date): Date {
-  return new Date(date.getFullYear(), date.getMonth(), 1);
+type HomeIconName =
+  | "arrow"
+  | "calendar"
+  | "check"
+  | "cloud"
+  | "file"
+  | "folder"
+  | "note"
+  | "plus"
+  | "tasks";
+
+function HomeIcon({ name }: { name: HomeIconName }) {
+  const paths: Record<HomeIconName, ReactNode> = {
+    arrow: (
+      <>
+        <path d="M7 17 17 7" />
+        <path d="M9 7h8v8" />
+      </>
+    ),
+    calendar: (
+      <>
+        <rect x="3.5" y="5" width="17" height="15" rx="2.5" />
+        <path d="M16.5 3v4M7.5 3v4M3.5 10h17" />
+      </>
+    ),
+    check: <path d="m5 12 4 4L19 6" />,
+    cloud: (
+      <path d="M20 17.5a4 4 0 0 0-1.6-7.7 5.8 5.8 0 0 0-11.2 1.7A3.5 3.5 0 0 0 7.5 18H20z" />
+    ),
+    file: (
+      <>
+        <path d="M6 3h8l4 4v14H6z" />
+        <path d="M14 3v5h5M9 13h6M9 17h4" />
+      </>
+    ),
+    folder: <path d="M3 7h6l2 2h10v11H3z" />,
+    note: (
+      <>
+        <path d="M6 3h8l4 4v14H6z" />
+        <path d="M14 3v5h5M9 13h6" />
+      </>
+    ),
+    plus: <path d="M12 5v14M5 12h14" />,
+    tasks: (
+      <>
+        <rect x="5" y="4" width="14" height="16" rx="2" />
+        <path d="M9 9h6M9 13h6M9 17h4" />
+      </>
+    )
+  };
+
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      {paths[name]}
+    </svg>
+  );
 }
 
-function startOfDay(date: Date): Date {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-}
-
-function addMonths(date: Date, delta: number): Date {
-  return new Date(date.getFullYear(), date.getMonth() + delta, 1);
-}
-
-function isSameDay(a: Date, b: Date): boolean {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-}
-
-function getGreeting(now: Date): string {
-  const hour = now.getHours();
+function getGreeting(now: Date, timeZone: string): string {
+  const hour = Number(new Intl.DateTimeFormat("en-US", {
+    hour: "2-digit",
+    hourCycle: "h23",
+    timeZone
+  }).format(now));
   if (hour < 5) return "Good night";
   if (hour < 12) return "Good morning";
   if (hour < 18) return "Good afternoon";
@@ -63,7 +103,7 @@ function getGreeting(now: Date): string {
 function weatherCodeLabel(code: number | null): string {
   if (code === null) return "Unavailable";
   if (code === 0) return "Clear";
-  if (code <= 3) return "Partly Cloudy";
+  if (code <= 3) return "Partly cloudy";
   if (code <= 48) return "Fog";
   if (code <= 67) return "Rain";
   if (code <= 77) return "Snow";
@@ -80,74 +120,39 @@ function isLikelyIdentifier(value: string): boolean {
   return uuidPattern.test(trimmed) || opaqueIdPattern.test(trimmed);
 }
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-function parseDateOnly(value?: string): Date | null {
-  if (!value) return null;
-  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
-  if (dateOnly) {
-    return new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]));
-  }
-
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return null;
-  return startOfDay(parsed);
+function formatDateKeyInTimeZone(date: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone
+  }).formatToParts(date);
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
+  return `${value("year")}-${value("month")}-${value("day")}`;
 }
 
-function taskWithinActivePeriod(task: Task, date: Date): boolean {
-  if (task.recurrence === "ONCE") return true;
-  if (task.active === false) return false;
-  const from = parseDateOnly(task.activeFrom);
-  const until = parseDateOnly(task.activeUntil);
-  if (from && date < from) return false;
-  if (until && date > until) return false;
-  return true;
+function formatRecentArtifactTime(value: string, now: Date): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const diffMs = Math.max(0, now.getTime() - date.getTime());
+  const diffMinutes = Math.floor(diffMs / 60000);
+  if (diffMinutes < 1) return "now";
+  if (diffMinutes < 60) return `${diffMinutes}m`;
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) return `${diffHours}h`;
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays < 7) return `${diffDays}d`;
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-function taskOccursOnDate(task: Task, date: Date): boolean {
-  const day = startOfDay(date);
-
-  if (task.recurrence === "ONCE") {
-    const due = parseDateOnly(task.dueDate);
-    return !!due && isSameDay(due, day);
-  }
-
-  if (!taskWithinActivePeriod(task, day)) return false;
-
-  if (task.recurrence === "WEEKLY") {
-    const selectedDays = [task.sun, task.mon, task.tue, task.wed, task.thu, task.fri, task.sat].map(Boolean);
-    if (selectedDays.some(Boolean)) return selectedDays[day.getDay()];
-    const fallback = parseDateOnly(task.activeFrom) || parseDateOnly(task.dueDate);
-    return fallback ? fallback.getDay() === day.getDay() : false;
-  }
-
-  if (task.recurrence === "EVERY_N_DAYS") {
-    const interval = Math.max(1, task.intervalDays ?? 1);
-    const anchor = parseDateOnly(task.activeFrom) || parseDateOnly(task.createdAt);
-    if (!anchor) return false;
-    const diff = Math.floor((day.getTime() - anchor.getTime()) / DAY_MS);
-    return diff >= 0 && diff % interval === 0;
-  }
-
-  if (task.recurrence === "MONTHLY_DAY") {
-    const dayOfMonth = Math.min(31, Math.max(1, task.monthDay ?? 1));
-    return day.getDate() === dayOfMonth;
-  }
-
-  if (task.recurrence === "MONTHLY_NTH_WEEKDAY") {
-    const nthInMonth = Math.min(5, Math.max(1, task.nthInMonth ?? 1));
-    const weekday = Math.min(6, Math.max(0, task.weekdayMon1 ?? 0));
-    const weekIndex = Math.floor((day.getDate() - 1) / 7) + 1;
-    return day.getDay() === weekday && weekIndex === nthInMonth;
-  }
-
-  return false;
+function artifactLink(item: RecentArtifact): string {
+  return `/artifacts?item=${encodeURIComponent(item.itemId)}`;
 }
 
 function resolveCoordinates(settings: UiSettings): { latitude: number; longitude: number } {
   if (
-    typeof settings.locationLatitude === "number" &&
-    typeof settings.locationLongitude === "number"
+    typeof settings.locationLatitude === "number"
+    && typeof settings.locationLongitude === "number"
   ) {
     return {
       latitude: settings.locationLatitude,
@@ -168,68 +173,18 @@ function resolveCoordinates(settings: UiSettings): { latitude: number; longitude
   return { latitude: fallback.latitude, longitude: fallback.longitude };
 }
 
-function toTaskStatus(value: string | undefined): TaskStatus {
-  if (value === "done" || value === "skipped") return value;
-  return "todo";
-}
-
-function formatDateKey(date: Date): string {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
-
-function buildMonthCells(monthDate: Date): CalendarCell[] {
-  const first = startOfMonth(monthDate);
-  const firstWeekday = first.getDay();
-  const daysInMonth = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0).getDate();
-  const cells: CalendarCell[] = [];
-
-  for (let i = 0; i < firstWeekday; i += 1) {
-    const date = new Date(first.getFullYear(), first.getMonth(), i - firstWeekday + 1);
-    cells.push({ key: `prev-${i}`, date, inCurrentMonth: false });
-  }
-
-  for (let day = 1; day <= daysInMonth; day += 1) {
-    const date = new Date(first.getFullYear(), first.getMonth(), day);
-    cells.push({ key: `cur-${day}`, date, inCurrentMonth: true });
-  }
-
-  while (cells.length < 42) {
-    const nextIndex = cells.length - (firstWeekday + daysInMonth) + 1;
-    const date = new Date(first.getFullYear(), first.getMonth() + 1, nextIndex);
-    cells.push({ key: `next-${nextIndex}`, date, inCurrentMonth: false });
-  }
-
-  return cells;
-}
-
-function formatRecentArtifactTime(value: string, now: Date): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "unknown";
-  const diffMs = Math.max(0, now.getTime() - date.getTime());
-  const diffMinutes = Math.floor(diffMs / 60000);
-  if (diffMinutes < 1) return "just now";
-  if (diffMinutes < 60) return `${diffMinutes}m ago`;
-  const diffHours = Math.floor(diffMinutes / 60);
-  if (diffHours < 24) return `${diffHours}h ago`;
-  const diffDays = Math.floor(diffHours / 24);
-  if (diffDays < 7) return `${diffDays}d ago`;
-  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
-
-function artifactLink(item: RecentArtifact): string {
-  return `/artifacts?item=${encodeURIComponent(item.itemId)}`;
+function taskTimeLabel(task: TodayTask): string {
+  if (task.startTime && task.endTime) return `${task.startTime}–${task.endTime}`;
+  return task.startTime || "Anytime";
 }
 
 export function HomePage() {
   const navigate = useNavigate();
   const currentUser = readWorkbenchSession();
   const [allTasks, setAllTasks] = useState<Task[]>([]);
+  const [todayTasks, setTodayTasks] = useState<TodayTask[]>([]);
   const [taskProjects, setTaskProjects] = useState<TaskProjectSummary[]>([]);
   const [projectNameMap, setProjectNameMap] = useState<Map<string, string>>(new Map());
-  const [monthCursor, setMonthCursor] = useState(() => startOfMonth(new Date()));
   const [now, setNow] = useState(() => new Date());
   const [settings, setSettings] = useState<UiSettings>(() => loadUiSettings());
   const [weather, setWeather] = useState<WeatherSnapshot>({
@@ -240,87 +195,53 @@ export function HomePage() {
   });
   const [isWeatherOpen, setIsWeatherOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const [isCalendarListView, setIsCalendarListView] = useState(false);
-  const [calendarStatusMap, setCalendarStatusMap] = useState<Map<string, Map<string, TaskStatus>>>(new Map());
-  const [recentArtifacts, setRecentArtifacts] = useState<RecentArtifact[]>(() => readRecentArtifacts(8));
+  const [recentArtifacts, setRecentArtifacts] = useState<RecentArtifact[]>(() => readRecentArtifacts(5));
   const weatherPanelRef = useRef<HTMLDivElement | null>(null);
-  const calendarPanelRef = useRef<HTMLElement | null>(null);
+  const todayKey = formatDateKeyInTimeZone(now, settings.timezone);
 
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(new Date()), 1000);
+    const timer = window.setInterval(() => setNow(new Date()), 60 * 1000);
     return () => window.clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
-    const load = async () => {
-      setIsLoading(true);
-
-      try {
-        const [tasks, projects, projectList] = await Promise.all([
-          tasksApi.list(undefined, undefined, 200),
-          tasksApi.projects(),
-          projectsApi.list(undefined, "active", 200).catch(() => ({ items: [] }))
-        ]);
-        setAllTasks(tasks);
-        setTaskProjects(projects);
-        const nameMap = new Map<string, string>();
-        for (const rec of projectList.items) {
-          if (rec.name?.trim()) nameMap.set(rec.id, rec.name.trim());
-        }
-        setProjectNameMap(nameMap);
-      } catch {
-        // API errors are routed to the global notification center.
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    void load();
   }, []);
 
   useEffect(() => {
     let cancelled = false;
 
-    const loadSchedule = async () => {
-      // Compute the full date range visible in the calendar grid for this month
-      const year = monthCursor.getFullYear();
-      const month = monthCursor.getMonth();
-      const firstOfMonth = new Date(year, month, 1);
-      const startOffset = firstOfMonth.getDay();
-      const rangeStart = new Date(year, month, 1 - startOffset);
-      const lastOfMonth = new Date(year, month + 1, 0);
-      const endOffset = 6 - lastOfMonth.getDay();
-      const rangeEnd = new Date(year, month + 1, endOffset);
+    const load = async () => {
+      setIsLoading(true);
 
       try {
-        const scheduleDays = await tasksApi.schedule(formatDateKey(rangeStart), formatDateKey(rangeEnd));
+        const [tasks, today, projects, projectList] = await Promise.all([
+          tasksApi.list(undefined, undefined, 200),
+          tasksApi.todayList(todayKey),
+          tasksApi.projects(),
+          projectsApi.list(undefined, "active", 200).catch(() => ({ items: [] }))
+        ]);
         if (cancelled) return;
+        setAllTasks(tasks);
+        setTodayTasks(today);
+        setTaskProjects(projects);
 
-        const csMap = new Map<string, Map<string, TaskStatus>>();
-        for (const day of scheduleDays) {
-          for (const item of day.tasks) {
-            if (!csMap.has(day.date)) csMap.set(day.date, new Map());
-            csMap.get(day.date)!.set(item.taskId, toTaskStatus(item.status));
-          }
+        const nameMap = new Map<string, string>();
+        for (const project of projectList.items) {
+          if (project.name?.trim()) nameMap.set(project.id, project.name.trim());
         }
-        setCalendarStatusMap(csMap);
+        setProjectNameMap(nameMap);
       } catch {
-        // schedule fetch failure is non-critical; statuses fall back to master task status
+        // API errors are routed to the global notification center.
+      } finally {
+        if (!cancelled) setIsLoading(false);
       }
     };
 
-    void loadSchedule();
+    void load();
     return () => { cancelled = true; };
-  }, [monthCursor]);
+  }, [todayKey]);
 
   useEffect(() => {
-    const reloadSettings = () => {
-      setSettings(loadUiSettings());
-    };
-
+    const reloadSettings = () => setSettings(loadUiSettings());
     window.addEventListener("storage", reloadSettings);
     window.addEventListener("workbench-ui-settings-changed", reloadSettings);
-
     return () => {
       window.removeEventListener("storage", reloadSettings);
       window.removeEventListener("workbench-ui-settings-changed", reloadSettings);
@@ -328,13 +249,9 @@ export function HomePage() {
   }, []);
 
   useEffect(() => {
-    const reloadRecentArtifacts = () => {
-      setRecentArtifacts(readRecentArtifacts(8));
-    };
-
+    const reloadRecentArtifacts = () => setRecentArtifacts(readRecentArtifacts(5));
     window.addEventListener("storage", reloadRecentArtifacts);
     window.addEventListener("workbench-recent-artifacts-changed", reloadRecentArtifacts);
-
     return () => {
       window.removeEventListener("storage", reloadRecentArtifacts);
       window.removeEventListener("workbench-recent-artifacts-changed", reloadRecentArtifacts);
@@ -342,44 +259,17 @@ export function HomePage() {
   }, []);
 
   useEffect(() => {
-    const updateCalendarLayout = () => {
-      const rect = calendarPanelRef.current?.getBoundingClientRect();
-      const panelWidth = rect?.width ?? window.innerWidth;
-      const shouldUseList = panelWidth < 680 || window.innerHeight < 760;
-      setIsCalendarListView(shouldUseList);
+    const closeWeather = (event: MouseEvent) => {
+      if (!weatherPanelRef.current?.contains(event.target as Node)) setIsWeatherOpen(false);
     };
-
-    updateCalendarLayout();
-    const observer = new ResizeObserver(updateCalendarLayout);
-    if (calendarPanelRef.current) {
-      observer.observe(calendarPanelRef.current);
-    }
-    window.addEventListener("resize", updateCalendarLayout);
+    const closeWeatherWithEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setIsWeatherOpen(false);
+    };
+    document.addEventListener("mousedown", closeWeather);
+    document.addEventListener("keydown", closeWeatherWithEscape);
     return () => {
-      observer.disconnect();
-      window.removeEventListener("resize", updateCalendarLayout);
-    };
-  }, []);
-
-  useEffect(() => {
-    const onMouseDown = (event: MouseEvent) => {
-      if (!weatherPanelRef.current?.contains(event.target as Node)) {
-        setIsWeatherOpen(false);
-      }
-    };
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setIsWeatherOpen(false);
-      }
-    };
-
-    document.addEventListener("mousedown", onMouseDown);
-    document.addEventListener("keydown", onKeyDown);
-
-    return () => {
-      document.removeEventListener("mousedown", onMouseDown);
-      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("mousedown", closeWeather);
+      document.removeEventListener("keydown", closeWeatherWithEscape);
     };
   }, []);
 
@@ -393,26 +283,13 @@ export function HomePage() {
         const response = await fetch(
           `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,weather_code&hourly=temperature_2m,weather_code&forecast_days=2&timezone=${timezone}`
         );
-
-        if (!response.ok) {
-          throw new Error("Weather request failed");
-        }
+        if (!response.ok) throw new Error("Weather request failed");
 
         const payload = await response.json() as {
-          current?: {
-            temperature_2m?: number;
-            weather_code?: number;
-          };
-          hourly?: {
-            time?: string[];
-            temperature_2m?: number[];
-            weather_code?: number[];
-          };
+          current?: { temperature_2m?: number; weather_code?: number };
+          hourly?: { time?: string[]; temperature_2m?: number[]; weather_code?: number[] };
         };
-
-        if (cancelled) {
-          return;
-        }
+        if (cancelled) return;
 
         const temperature = typeof payload.current?.temperature_2m === "number"
           ? Math.round(payload.current.temperature_2m)
@@ -424,17 +301,10 @@ export function HomePage() {
         const hourlyTemps = payload.hourly?.temperature_2m ?? [];
         const hourlyCodes = payload.hourly?.weather_code ?? [];
         const nowTs = Date.now();
-
-        const forecastItems = hourlyTimes
+        const hourly = hourlyTimes
           .map((time, index) => {
             const parsed = new Date(time);
-            if (Number.isNaN(parsed.getTime())) {
-              return null;
-            }
-            if (parsed.getTime() < nowTs - 5 * 60 * 1000) {
-              return null;
-            }
-
+            if (Number.isNaN(parsed.getTime()) || parsed.getTime() < nowTs - 5 * 60 * 1000) return null;
             const hourlyTemp = typeof hourlyTemps[index] === "number" ? Math.round(hourlyTemps[index]) : null;
             const hourlyCode = typeof hourlyCodes[index] === "number" ? hourlyCodes[index] : null;
             return {
@@ -445,42 +315,32 @@ export function HomePage() {
                 timeZone: settings.timezone
               }),
               summary: weatherCodeLabel(hourlyCode),
-              temperatureLabel: hourlyTemp === null ? "--°C" : `${hourlyTemp}°C`
+              temperatureLabel: hourlyTemp === null ? "--°" : `${hourlyTemp}°`
             };
           })
-          .filter((entry): entry is { timeLabel: string; summary: string; temperatureLabel: string } => Boolean(entry))
-          .slice(0, 12);
+          .filter((entry): entry is WeatherSnapshot["hourly"][number] => Boolean(entry))
+          .slice(0, 6);
 
         setWeather({
           summary: weatherCodeLabel(code),
           temperatureC: temperature,
-          hourly: forecastItems,
+          hourly,
           updatedAt: new Date().toISOString()
         });
       } catch {
         if (!cancelled) {
-          setWeather({
-            summary: "Unavailable",
-            temperatureC: null,
-            hourly: [],
-            updatedAt: new Date().toISOString()
-          });
+          setWeather({ summary: "Unavailable", temperatureC: null, hourly: [], updatedAt: "" });
         }
       }
     };
 
     void loadWeather();
-    const timer = window.setInterval(() => {
-      void loadWeather();
-    }, 10 * 60 * 1000);
-
+    const timer = window.setInterval(() => void loadWeather(), 10 * 60 * 1000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
     };
   }, [settings]);
-
-  const remainingTasks = useMemo(() => allTasks.filter((task) => task.status !== "done").length, [allTasks]);
 
   const progressRows = useMemo<ProjectProgressRow[]>(() => {
     return taskProjects
@@ -488,326 +348,237 @@ export function HomePage() {
         const projectTasks = allTasks.filter((task) => task.context === project.projectId);
         const doneTasks = projectTasks.filter((task) => task.status === "done").length;
         const totalTasks = projectTasks.length;
-        const completion = totalTasks === 0 ? 0 : Math.round((doneTasks / totalTasks) * 100);
-
-        // Priority: projectsApi name > non-identifier contextName > short project ID prefix
         const registeredName = projectNameMap.get(project.projectId);
-        const rawContextName = project.projectName?.trim() || projectTasks.find((task) => task.contextName?.trim())?.contextName?.trim();
+        const rawContextName = project.projectName?.trim()
+          || projectTasks.find((task) => task.contextName?.trim())?.contextName?.trim();
         const contextName = rawContextName && !isLikelyIdentifier(rawContextName) ? rawContextName : undefined;
-        const displayName = registeredName || contextName || `Project ${project.projectId.slice(0, 8)}`;
 
         return {
           projectId: project.projectId,
-          projectName: displayName,
+          projectName: registeredName || contextName || `Project ${project.projectId.slice(0, 8)}`,
           totalTasks,
           doneTasks,
-          completion
+          completion: totalTasks === 0 ? 0 : Math.round((doneTasks / totalTasks) * 100)
         };
       })
+      .filter((project) => project.totalTasks > 0)
       .sort((a, b) => b.totalTasks - a.totalTasks)
-      .slice(0, 6);
+      .slice(0, 4);
   }, [allTasks, taskProjects, projectNameMap]);
 
-  const monthCells = useMemo(() => buildMonthCells(monthCursor), [monthCursor]);
+  const sortedTodayTasks = useMemo(() => {
+    return [...todayTasks].sort((a, b) => {
+      const statusRank = (task: TodayTask) => task.status === "todo" ? 0 : 1;
+      const statusDiff = statusRank(a) - statusRank(b);
+      if (statusDiff !== 0) return statusDiff;
+      const timeDiff = (a.startTime || "99:99").localeCompare(b.startTime || "99:99");
+      if (timeDiff !== 0) return timeDiff;
+      return a.title.localeCompare(b.title);
+    });
+  }, [todayTasks]);
 
-  const tasksByDay = useMemo(() => {
-    const visibleDates = monthCells.map((cell) => startOfDay(cell.date));
-    const map = new Map<string, Task[]>();
+  const remainingTodayCount = sortedTodayTasks.filter((task) => task.status === "todo").length;
+  const primaryTask = sortedTodayTasks.find((task) => task.status === "todo");
+  const nextTasks = sortedTodayTasks.filter((task) => task.id !== primaryTask?.id).slice(0, 4);
 
-    for (const date of visibleDates) {
-      const key = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
-      const dateKey = formatDateKey(date);
-      const dateStatuses = calendarStatusMap.get(dateKey);
-      map.set(
-        key,
-        allTasks
-          .filter((task) => taskOccursOnDate(task, date))
-          .map((task) => {
-            const status = dateStatuses?.get(task.id);
-            return status !== undefined ? { ...task, status } : task;
-          })
-      );
-    }
+  const projectNameForTask = (task: TodayTask): string => {
+    const registeredName = projectNameMap.get(task.context);
+    if (registeredName) return registeredName;
+    if (task.contextName?.trim() && !isLikelyIdentifier(task.contextName)) return task.contextName.trim();
+    return task.context ? `Project ${task.context.slice(0, 8)}` : "Inbox";
+  };
 
-    return map;
-  }, [allTasks, monthCells, calendarStatusMap]);
-
-  const calendarListRows = useMemo(() => {
-    return monthCells
-      .filter((cell) => cell.inCurrentMonth)
-      .map((cell) => {
-        const key = `${cell.date.getFullYear()}-${cell.date.getMonth()}-${cell.date.getDate()}`;
-        return {
-          key: cell.key,
-          date: cell.date,
-          isToday: isSameDay(cell.date, now),
-          tasks: tasksByDay.get(key) || []
-        };
-      });
-  }, [monthCells, now, tasksByDay]);
+  const openTask = (task: TodayTask) => {
+    navigate("/tasks", {
+      state: {
+        openTaskId: task.id,
+        occurrenceStatus: task.status,
+        occurrenceDate: task.occurrenceDate,
+        scheduleId: task.scheduleId,
+        scheduledDate: task.scheduledDate
+      }
+    });
+  };
 
   if (isLoading) {
-    return <p className="info">Loading dashboard...</p>;
+    return <div className="home-loading" aria-label="Loading Home"><span /></div>;
   }
 
-  const weatherTemperature = weather.temperatureC === null ? "--°C" : `${weather.temperatureC}°C`;
-  const locationLabel = settings.locationMode === "auto" ? settings.location : settings.location;
+  const weatherTemperature = weather.temperatureC === null ? "--°" : `${weather.temperatureC}°`;
 
   return (
     <section className="home-shell">
-      <article className="hero-card">
-        <div className="hero-main">
-          <p className="hero-greeting">{getGreeting(now)},</p>
-          <h2 className="hero-name">{currentUser?.username ?? ""}</h2>
-          <p className="hero-sub">
-            <svg className="hero-sub-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-              <circle cx="12" cy="12" r="8" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
-            </svg>
-            {remainingTasks} tasks remaining
+      <header className="home-focus-header">
+        <div className="home-heading">
+          <p>
+            {now.toLocaleDateString("en-US", {
+              weekday: "long",
+              month: "short",
+              day: "numeric",
+              timeZone: settings.timezone
+            })}
           </p>
+          <h2>{getGreeting(now, settings.timezone)}, {currentUser?.username ?? ""}.</h2>
         </div>
 
-        <div className="hero-time-box" ref={weatherPanelRef}>
-          <div className="hero-time-main">
-            <strong>{now.toLocaleTimeString("ja-JP", { hour12: false, timeZone: settings.timezone })}</strong>
-            <span>{now.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", timeZone: settings.timezone })}</span>
-            <span className="hero-time-separator" aria-hidden="true" />
+        <div className="home-header-actions">
+          <div className="home-weather-wrap" ref={weatherPanelRef}>
             <button
               type="button"
-              className="hero-weather"
-              aria-label={`Weather ${weather.summary} ${weatherTemperature}`}
+              className="home-weather-button"
+              aria-label={`${weather.summary}, ${weatherTemperature}`}
               aria-expanded={isWeatherOpen}
-              onClick={() => setIsWeatherOpen((prev) => !prev)}
+              onClick={() => setIsWeatherOpen((open) => !open)}
             >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-                <path d="M20 17.5a4 4 0 0 0-1.6-7.7 5.8 5.8 0 0 0-11.2 1.7A3.5 3.5 0 0 0 7.5 18H20z" />
-              </svg>
+              <HomeIcon name="cloud" />
               <span>{weather.summary}</span>
               <strong>{weatherTemperature}</strong>
             </button>
-          </div>
-          <small>{locationLabel} / SYNCING</small>
-
-          {isWeatherOpen ? (
-            <div className="hero-weather-popover" role="dialog" aria-label="Hourly weather forecast">
-              <div className="hero-weather-popover-head">
-                <strong>Next 12 Hours</strong>
-                <span>
-                  {weather.updatedAt
-                    ? `Updated ${new Date(weather.updatedAt).toLocaleTimeString("en-US", {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                      hour12: false,
-                      timeZone: settings.timezone
-                    })}`
-                    : ""}
-                </span>
-              </div>
-              <div className="hero-weather-popover-list">
+            {isWeatherOpen ? (
+              <div className="home-weather-popover" role="dialog" aria-label="Hourly weather">
                 {weather.hourly.length === 0 ? (
-                  <p>No hourly forecast available.</p>
+                  <p>No forecast</p>
                 ) : weather.hourly.map((item) => (
-                  <div key={`${item.timeLabel}-${item.summary}`} className="hero-weather-hour">
+                  <div key={`${item.timeLabel}-${item.summary}`} className="home-weather-hour">
                     <strong>{item.timeLabel}</strong>
                     <span>{item.summary}</span>
                     <em>{item.temperatureLabel}</em>
                   </div>
                 ))}
               </div>
-            </div>
-          ) : null}
+            ) : null}
+          </div>
+
+          <button
+            type="button"
+            className="home-quick-note"
+            aria-label="Quick note"
+            onClick={() => navigate("/artifacts?new=note")}
+          >
+            <HomeIcon name="plus" />
+            <span>Quick note</span>
+          </button>
         </div>
-      </article>
+      </header>
 
-      <div className="home-main-grid">
-        <article className="panel home-panel home-panel-progress">
-          <div className="panel-heading compact">
-            <div className="panel-title-group">
-              <span className="panel-title-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                  <rect x="4.5" y="4.5" width="15" height="15" rx="2.5" />
-                  <path d="M9 4.5v15M4.5 10h15" />
-                </svg>
-              </span>
-              <h3>Project Progress</h3>
+      <div className="home-focus-grid">
+        <main className="home-today-column">
+          <div className="home-section-heading">
+            <div>
+              <p>Today</p>
+              <h3>Your focus</h3>
             </div>
-            <Link to="/tasks" className="panel-jump-link">
-              <span>Open Tasks</span>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-                <path d="M7 17L17 7" />
-                <path d="M9 7h8v8" />
-              </svg>
-            </Link>
+            <span>{remainingTodayCount} remaining</span>
           </div>
 
-          <div className="progress-list">
-            {progressRows.length === 0 ? (
-              <p className="progress-empty">No projects yet</p>
-            ) : progressRows.map((row) => (
-              <div key={row.projectId} className="progress-row">
-                <div className="progress-meta">
-                  <div className="progress-title">
-                    <span className="progress-dot" aria-hidden="true" />
-                    <strong>{row.projectName}</strong>
-                  </div>
-                  <small>
-                    {row.doneTasks}/{row.totalTasks} <span className="progress-rate">{row.completion}%</span>
-                  </small>
-                </div>
-                <div className="progress-track">
-                  <span style={{ width: `${row.completion}%` }} />
-                </div>
+          {primaryTask ? (
+            <article className="home-primary-task">
+              <div className="home-primary-meta">
+                <span>Now</span>
+                <p>{projectNameForTask(primaryTask)} · {taskTimeLabel(primaryTask)}</p>
               </div>
-            ))}
-          </div>
-        </article>
+              <h3>{primaryTask.title}</h3>
+              <div className="home-primary-actions">
+                <button type="button" onClick={() => openTask(primaryTask)}>
+                  <HomeIcon name="tasks" />
+                  Open task
+                </button>
+                <Link to="/tasks">All tasks</Link>
+              </div>
+            </article>
+          ) : (
+            <article className="home-primary-task is-clear">
+              <span className="home-clear-icon"><HomeIcon name="check" /></span>
+              <h3>You're clear today.</h3>
+              <Link to="/tasks">Open Tasks</Link>
+            </article>
+          )}
 
-        <article className="panel home-panel home-panel-recent">
-          <div className="panel-heading compact">
-            <div className="panel-title-group">
-              <span className="panel-title-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                  <path d="M5 5.5A2.5 2.5 0 0 1 7.5 3h6L19 8.5v10A2.5 2.5 0 0 1 16.5 21h-9A2.5 2.5 0 0 1 5 18.5v-13z" />
-                  <path d="M13 3v5.5h6" />
-                  <path d="M8.5 13h7M8.5 16h5" />
-                </svg>
-              </span>
-              <h3>Recent Artifacts</h3>
-            </div>
-            <Link to="/artifacts" className="panel-jump-link">
-              <span>Open Artifacts</span>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-                <path d="M7 17L17 7" />
-                <path d="M9 7h8v8" />
-              </svg>
-            </Link>
-          </div>
-
-          <div className="recent-artifacts-list">
-            {recentArtifacts.length === 0 ? (
-              <p className="recent-artifacts-empty">No recent artifacts yet</p>
-            ) : recentArtifacts.map((item) => (
-              <Link key={item.itemId} className="recent-artifact-row" to={artifactLink(item)}>
-                <span className={`recent-artifact-kind kind-${item.kind}`} aria-hidden="true">
-                  {item.kind === "note" ? "N" : "F"}
-                </span>
-                <span className="recent-artifact-main">
-                  <strong>{item.title}</strong>
-                  <span>{item.path || "/"}</span>
-                </span>
-                <time dateTime={item.at}>{formatRecentArtifactTime(item.at, now)}</time>
-              </Link>
-            ))}
-          </div>
-        </article>
-
-        <article
-          className={`panel home-panel home-panel-calendar${isCalendarListView ? " is-list" : ""}`}
-          ref={calendarPanelRef}
-        >
-          <div className="panel-heading compact">
-            <div className="panel-title-group">
-              <span className="panel-title-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                  <rect x="3.5" y="5" width="17" height="15" rx="2.5" />
-                  <path d="M16.5 3v4M7.5 3v4M3.5 10h17" />
-                </svg>
-              </span>
-              <h3>Calendar</h3>
-            </div>
-            <div className="month-nav">
-              <button
-                type="button"
-                className="icon-button"
-                onClick={() => setMonthCursor((prev) => addMonths(prev, -1))}
-                aria-label="Previous month"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                  <path d="M15 18l-6-6 6-6" />
-                </svg>
-              </button>
-              <strong>
-                {monthCursor.toLocaleDateString("en-US", { year: "numeric", month: "long" })}
-              </strong>
-              <button
-                type="button"
-                className="icon-button"
-                onClick={() => setMonthCursor((prev) => addMonths(prev, 1))}
-                aria-label="Next month"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                  <path d="M9 6l6 6-6 6" />
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          <div className="mini-calendar-wrap">
-            <div className="mini-calendar-weekdays">
-              {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => (
-                <span key={day}>{day}</span>
+          {nextTasks.length > 0 ? (
+            <div className="home-next-list">
+              {nextTasks.map((task) => (
+                <button
+                  type="button"
+                  key={`${task.id}-${task.occurrenceDate}-${task.scheduledDate}`}
+                  className={task.status === "todo" ? "home-next-row" : "home-next-row is-done"}
+                  onClick={() => openTask(task)}
+                >
+                  <span className="home-task-state" aria-hidden="true">
+                    {task.status === "done" ? <HomeIcon name="check" /> : null}
+                  </span>
+                  <span className="home-next-copy">
+                    <strong>{task.title}</strong>
+                    <small>{projectNameForTask(task)}</small>
+                  </span>
+                  <time>{task.status === "done" ? "Done" : taskTimeLabel(task)}</time>
+                </button>
               ))}
             </div>
-            <div className="mini-calendar-grid">
-              {monthCells.map((cell) => {
-                const key = `${cell.date.getFullYear()}-${cell.date.getMonth()}-${cell.date.getDate()}`;
-                const dayTasks = tasksByDay.get(key) || [];
-                const isToday = isSameDay(cell.date, now);
+          ) : null}
+        </main>
 
-                return (
-                  <div
-                    key={cell.key}
-                    className={[
-                      "mini-calendar-cell",
-                      cell.inCurrentMonth ? "is-current" : "is-muted",
-                      isToday ? "is-today" : ""
-                    ].filter(Boolean).join(" ")}
-                  >
-                    <span>{cell.date.getDate()}</span>
-                    {dayTasks.slice(0, 2).map((task) => (
-                      <button
-                        key={task.id}
-                        type="button"
-                        className={`mini-calendar-task${task.status === "done" ? " done" : ""}`}
-                        onClick={(e) => { e.stopPropagation(); navigate("/tasks", { state: { openTaskId: task.id, occurrenceStatus: task.status } }); }}
-                      >
-                        {task.title}
-                      </button>
-                    ))}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="mini-calendar-list" aria-label="Calendar list">
-            {calendarListRows.map((row) => (
-              <div key={row.key} className={`mini-calendar-list-row${row.isToday ? " is-today" : ""}`}>
-                <div className="mini-calendar-list-date">
-                  <strong>{row.date.getDate()}</strong>
-                  <span>{row.date.toLocaleDateString("en-US", { weekday: "short" })}</span>
-                </div>
-                <div className="mini-calendar-list-body">
-                  {row.tasks.length === 0 ? (
-                    <span className="mini-calendar-list-empty">No tasks</span>
-                  ) : row.tasks.slice(0, 3).map((task) => (
-                    <button
-                      key={task.id}
-                      type="button"
-                      className={`mini-calendar-list-task${task.status === "done" ? " done" : ""}`}
-                      onClick={() => navigate("/tasks", { state: { openTaskId: task.id, occurrenceStatus: task.status } })}
-                    >
-                      {task.title}
-                    </button>
-                  ))}
-                  {row.tasks.length > 3 ? (
-                    <span className="mini-calendar-list-more">+{row.tasks.length - 3} more</span>
-                  ) : null}
-                </div>
+        <aside className="home-support-column">
+          <section className="home-panel">
+            <div className="home-panel-heading">
+              <div>
+                <p>Projects</p>
+                <h3>Momentum</h3>
               </div>
-            ))}
-          </div>
-        </article>
+              <Link to="/projects" aria-label="Open Projects"><HomeIcon name="arrow" /></Link>
+            </div>
+
+            <div className="home-project-list">
+              {progressRows.length === 0 ? (
+                <p className="home-empty">No active projects</p>
+              ) : progressRows.map((project) => (
+                <div className="home-project-row" key={project.projectId}>
+                  <div className="home-project-copy">
+                    <strong>{project.projectName}</strong>
+                    <small>{project.doneTasks}/{project.totalTasks}</small>
+                  </div>
+                  <div
+                    className="home-progress-track"
+                    role="progressbar"
+                    aria-label={`${project.projectName} progress`}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={project.completion}
+                  >
+                    <span style={{ width: `${project.completion}%` }} />
+                  </div>
+                  <b>{project.completion}%</b>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="home-panel">
+            <div className="home-panel-heading">
+              <div>
+                <p>Continue</p>
+                <h3>Recent work</h3>
+              </div>
+              <Link to="/artifacts" aria-label="Open Artifacts"><HomeIcon name="arrow" /></Link>
+            </div>
+
+            <div className="home-recent-list">
+              {recentArtifacts.length === 0 ? (
+                <p className="home-empty">No recent work</p>
+              ) : recentArtifacts.map((item) => (
+                <Link className="home-recent-row" key={item.itemId} to={artifactLink(item)}>
+                  <span className="home-recent-icon">
+                    <HomeIcon name={item.kind === "note" ? "note" : "file"} />
+                  </span>
+                  <span className="home-recent-copy">
+                    <strong>{item.title}</strong>
+                    <small>{item.path || "/"}</small>
+                  </span>
+                  <time dateTime={item.at}>{formatRecentArtifactTime(item.at, now)}</time>
+                </Link>
+              ))}
+            </div>
+          </section>
+        </aside>
       </div>
     </section>
   );
