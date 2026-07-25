@@ -164,13 +164,19 @@ export function requestHasValidLoopbackToken(req: IncomingMessage, expectedToken
 
 検証: sync-daemon 133 tests pass / workbench-core 140 pass・18 skip / ui 236 pass、全ワークスペース `tsc --noEmit` クリーン。
 
-### R0.5 — S2: セッションを httpOnly cookie へ（2〜3 日、要設計）
+### R0.5 — S2: セッションを httpOnly cookie へ → **完了（2026-07-26, commit `7fe2d5c`）**
 
-方針は決定済み。ただし単独の設計作業として扱う。論点:
-- Core が refresh token を `HttpOnly; Secure; SameSite` cookie で発行し、access token のみメモリ保持に切り替える
-- CORS が `credentials: true` になるため、`CORE_EXTERNAL_BASE_URL` とオリジン許可の整理が必要
-- **Tauri 経路を壊さないこと**。ネイティブは既に OS セキュアストレージを使っており、cookie 経路と二重にならないよう分岐を残す
-- ローカル daemon 経路（`x-workbench-daemon-token`）は無関係なので触らない
+採用した設計（同一オリジン前提 / access token はメモリのみ）:
+- Core が refresh token を `HttpOnly; SameSite=Lax; Path=/auth` cookie で発行。`Secure` は HTTPS 到達時（`x-forwarded-proto` 経由含む）に自動付与
+- `POST /auth/refresh` は cookie / body の両方を受け付け、**cookie を優先**。拒否した cookie は削除して再送ループを断つ
+- `POST /auth/logout` を追加
+- ブラウザは**トークンを一切永続化しない**。access token はメモリのみ、リロード時は cookie を 1 回使ってセッション復元。旧ビルドが localStorage に残したセッションは次回保存時に破棄
+- **ネイティブ（Tauri）は意図的に変更なし**。OS セキュアストレージは元々ページから読めず再起動も跨げるため、body 送信のまま
+- CORS は**変更不要**だった。同一オリジン前提のため `credentials: true` もオリジン許可リストも導入せずに済み、攻撃面を増やさずに完了
+- dev 用に Vite proxy を追加（`VITE_WORKBENCH_CORE_PROXY_TARGET`）。`VITE_WORKBENCH_CORE_URL` を Core 直指しのままにしても動作するが、その場合のみリロードでセッションが切れる
+- cookie 処理は 7,000 行の httpServer に足さず `refreshCookie.ts` に切り出した（R1 の前倒し。DB なしでテスト可能になる副次効果あり）
+
+検証: core 221 tests（203 pass / 18 skip・DB 依存）、ui 242 tests all pass、両者 `tsc --noEmit` クリーン。cookie 8 件・セッション 6 件の新規テストを追加。
 
 ### R1 — `workbench-core/httpServer.ts` 7,293 行の解体（3〜5 日）
 
@@ -239,12 +245,12 @@ export function requestHasValidLoopbackToken(req: IncomingMessage, expectedToken
 ### 優先順位
 
 ```
-✅ R0（バグ修正）→ Phase 0（掃除）→ R3（スキーマ一元化, 小さくて効果大）
-  → R4'（auth 適合テスト, 0.5 日）→ R0.5（httpOnly cookie）
+✅ R0（バグ修正）→ ✅ R3（スキーマ一元化）→ ✅ R4'（auth 適合テスト）→ ✅ R0.5（httpOnly cookie）
+  → Phase 0/1（掃除・ドキュメント整理）← 次
   → R1（core, 要テスト先行）→ R2（daemon）→ R5 + T8（UI）
 ```
 
-R3 を先に置くのは、小さく完結して S4 の再発を止められるため。R4' を早めに置くのは、共通化しない方針を採る以上、ドリフト検出だけは早く入れる価値があるため（かつ 0.5 日）。
+**セキュリティ系（S1〜S7）と再発防止のテストは全て完了。** 残るのは掃除と大物の分割。Phase 0/1 を先に片付けると、R1/R2 の巨大な差分がノイズに埋もれずに済む。
 
 ---
 
@@ -264,9 +270,9 @@ R3 を先に置くのは、小さく完結して S4 の再発を止められる�
 | R0-S6 | internalClients タイムアウト | **完了** | commit `8a4245f`（回帰テスト付き） |
 | R0-S3 | loadTree 世代ガード | **完了** | commit `8a4245f` |
 | R0-S7 | clientMetadataCache 上限 | **完了** | commit `8a4245f` |
-| R0.5-S2 | セッションを httpOnly cookie へ | 未着手 | 方針決定済み・要設計 |
-| R3 | スキーマ一元化 | 未着手 | images/mindmaps/wbs/deepResearch |
-| R4' | auth 適合テスト（共通化はしない） | 未着手 | 0.5 日 |
+| R0.5-S2 | セッションを httpOnly cookie へ | **完了** | commit `7fe2d5c` |
+| R3 | スキーマ一元化 | **完了** | commit `261769b`・parity テスト付き |
+| R4' | auth 適合テスト（共通化はしない） | **完了** | commit `9b36224`・ドリフト注入で検知を確認 |
 | R1-pre | OAuth フローのテスト追加 | 未着手 | **R1 の前提** |
 | R1 | core/httpServer 分割 | 未着手 | |
 | R2 | sync-daemon 分割 | 未着手 | |
