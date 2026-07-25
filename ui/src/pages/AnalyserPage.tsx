@@ -78,6 +78,16 @@ function optionalDate(value: string | undefined): string {
   return value ? formatDateTime(value) : "—";
 }
 
+function relativeFromNow(value: string): string {
+  const elapsedMinutes = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 60_000));
+  if (elapsedMinutes < 1) return "just now";
+  if (elapsedMinutes < 60) return `${elapsedMinutes} minute${elapsedMinutes === 1 ? "" : "s"} ago`;
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+  if (elapsedHours < 24) return `${elapsedHours} hour${elapsedHours === 1 ? "" : "s"} ago`;
+  const elapsedDays = Math.floor(elapsedHours / 24);
+  return `${elapsedDays} day${elapsedDays === 1 ? "" : "s"} ago`;
+}
+
 function machineName(machine: AnalyserMachineRecord): string {
   return machine.displayName?.trim() || machine.machineKey;
 }
@@ -174,6 +184,92 @@ function OverviewTab() {
             <span>{status.hasOpenProposals ? "Open proposals need review" : "No open proposals"}</span>
             <Link to="/analyser?tab=proposals">Open Proposals</Link>
           </div>
+
+          {status.runnerHealth ? (
+            <section className="analyser-machines" aria-labelledby="analyser-runner-health-heading">
+              <div className={status.runnerHealth.state === "healthy" ? "analyser-proposal-indicator" : "analyser-proposal-indicator open"}>
+                <div>
+                  <h2 id="analyser-runner-health-heading">Runner health</h2>
+                  {status.runnerHealth.state === "never_claimed" ? (
+                    <p className="analyser-error">Analyser routines only run when an external scheduler periodically calls analyser.routines.claim. Nothing has polled yet.</p>
+                  ) : null}
+                  {status.runnerHealth.state === "stalled" ? (
+                    <p>Routines are overdue and no runner has claimed recently.</p>
+                  ) : null}
+                </div>
+                <span className={`analyser-state ${status.runnerHealth.state === "healthy" ? "enabled" : "disabled"}`}>
+                  {status.runnerHealth.state === "never_claimed"
+                    ? "No runner has ever claimed a routine"
+                    : status.runnerHealth.state === "stalled"
+                      ? "Runner may have stopped"
+                      : "Runner active"}
+                </span>
+              </div>
+
+              <div className="analyser-key-value-grid">
+                <span>
+                  <strong>Last claim</strong>
+                  <span>
+                    {status.runnerHealth.lastClaimAt
+                      ? `${relativeFromNow(status.runnerHealth.lastClaimAt)} (${formatDateTime(status.runnerHealth.lastClaimAt)})`
+                      : "never"}
+                  </span>
+                </span>
+              </div>
+
+              <h3>Runners</h3>
+              {status.runnerHealth.runners.length === 0 ? (
+                <p className="analyser-muted">No runner has claimed a routine yet.</p>
+              ) : (
+                <div className="analyser-table-wrap">
+                  <table className="analyser-table">
+                    <thead>
+                      <tr>
+                        <th>Runner</th>
+                        <th>Last seen</th>
+                        <th>Last status</th>
+                        <th>Runs in last 24h</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {status.runnerHealth.runners.map((runner) => (
+                        <tr key={runner.runner}>
+                          <td><strong>{runner.runner}</strong></td>
+                          <td>{formatDateTime(runner.lastSeenAt)}</td>
+                          <td>{runner.lastStatus}</td>
+                          <td>{runner.runsLast24h}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {status.runnerHealth.overdueRoutines.length > 0 ? (
+                <>
+                  <h3>Overdue routines</h3>
+                  <div className="analyser-table-wrap">
+                    <table className="analyser-table">
+                      <thead>
+                        <tr>
+                          <th>Routine</th>
+                          <th>Delay</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {status.runnerHealth.overdueRoutines.map((routine) => (
+                          <tr key={routine.key}>
+                            <td><strong>{routine.key}</strong></td>
+                            <td>overdue {routine.overdueMinutes} min</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              ) : null}
+            </section>
+          ) : null}
 
           {status.routines.length === 0 ? (
             <div className="analyser-empty-card">

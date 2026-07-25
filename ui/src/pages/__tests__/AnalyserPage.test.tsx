@@ -343,6 +343,87 @@ describe("AnalyserPage", () => {
     expect(screen.getByText("Open proposals need review")).toBeTruthy();
   });
 
+  it("shows the never-claimed runner warning", async () => {
+    vi.mocked(analyserApi.status).mockResolvedValue(statusResult({
+      runnerHealth: {
+        state: "never_claimed",
+        lastClaimAt: null,
+        runners: [],
+        overdueRoutines: []
+      }
+    }));
+
+    renderPage();
+
+    const panel = await screen.findByRole("region", { name: /runner health/i });
+    expect(within(panel).getByText("No runner has ever claimed a routine")).toBeTruthy();
+    expect(within(panel).getByText(/Nothing has polled yet/)).toBeTruthy();
+    expect(within(panel).getByText("No runner has claimed a routine yet.")).toBeTruthy();
+  });
+
+  it("shows a healthy runner without a warning", async () => {
+    vi.mocked(analyserApi.status).mockResolvedValue(statusResult({
+      runnerHealth: {
+        state: "healthy",
+        lastClaimAt: "2026-07-25T11:50:00.000Z",
+        runners: [{
+          runner: "codex-loop",
+          lastSeenAt: "2026-07-25T11:50:00.000Z",
+          lastStatus: "processing",
+          runsLast24h: 3
+        }],
+        overdueRoutines: []
+      }
+    }));
+
+    renderPage();
+
+    const panel = await screen.findByRole("region", { name: /runner health/i });
+    expect(within(panel).getByText("Runner active")).toBeTruthy();
+    expect(within(panel).getByText("codex-loop")).toBeTruthy();
+    expect(within(panel).getByText("processing")).toBeTruthy();
+    expect(within(panel).getByText("3")).toBeTruthy();
+    expect(within(panel).queryByText("No runner has ever claimed a routine")).toBeNull();
+    expect(within(panel).queryByText("Runner may have stopped")).toBeNull();
+  });
+
+  it("shows a stalled runner and its overdue routine", async () => {
+    vi.mocked(analyserApi.status).mockResolvedValue(statusResult({
+      runnerHealth: {
+        state: "stalled",
+        lastClaimAt: "2026-07-25T08:00:00.000Z",
+        runners: [{
+          runner: "agent",
+          lastSeenAt: "2026-07-25T08:00:00.000Z",
+          lastStatus: "failed",
+          runsLast24h: 1
+        }],
+        overdueRoutines: [{
+          key: "weekly-workbench-digest",
+          nextRunAt: "2026-07-25T09:00:00.000Z",
+          overdueMinutes: 95
+        }]
+      }
+    }));
+
+    renderPage();
+
+    const panel = await screen.findByRole("region", { name: /runner health/i });
+    expect(within(panel).getByText("Runner may have stopped")).toBeTruthy();
+    expect(within(panel).getByText("Routines are overdue and no runner has claimed recently.")).toBeTruthy();
+    expect(within(panel).getByText("weekly-workbench-digest")).toBeTruthy();
+    expect(within(panel).getByText("overdue 95 min")).toBeTruthy();
+  });
+
+  it("renders an older status payload without runner health", async () => {
+    vi.mocked(analyserApi.status).mockResolvedValue(statusResult());
+
+    renderPage();
+
+    expect(await screen.findByText("daily-activity")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: /runner health/i })).toBeNull();
+  });
+
   it("shows a friendly state for ANALYSER_NOT_CONFIGURED", async () => {
     vi.mocked(analyserApi.status).mockRejectedValue(new ApiError({
       backend: "core",

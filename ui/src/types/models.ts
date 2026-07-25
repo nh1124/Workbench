@@ -1143,10 +1143,31 @@ export interface AnalyserSettingsResult {
   };
 }
 
+export interface AnalyserRunnerSummary {
+  runner: string;
+  lastSeenAt: string;
+  lastStatus: "claimed" | "processing" | "completed" | "failed";
+  runsLast24h: number;
+}
+
+export interface AnalyserOverdueRoutine {
+  key: string;
+  nextRunAt: string;
+  overdueMinutes: number;
+}
+
+export interface AnalyserRunnerHealth {
+  state: "never_claimed" | "stalled" | "healthy";
+  lastClaimAt: string | null;
+  runners: AnalyserRunnerSummary[];
+  overdueRoutines: AnalyserOverdueRoutine[];
+}
+
 export interface AnalyserStatusResult {
   routines: AnalyserRoutineStatusSummary[];
   hasOpenProposals: boolean;
   machines: AnalyserMachineRecord[];
+  runnerHealth?: AnalyserRunnerHealth;
 }
 
 export interface AnalyserProjectorFlushResult {

@@ -26,6 +26,7 @@ import {
   startRetentionHousekeeping
 } from "./stores/observations.js";
 import { getOperation, listOperations, recordOperation } from "./stores/operations.js";
+import { getRunnerHealth } from "./stores/runnerHealth.js";
 import {
   getAutomationPolicyRecord,
   getCollectionPolicyRows,
@@ -405,6 +406,7 @@ export interface AppDeps {
   aggregateActivity: typeof aggregateActivity;
   listRoutines: typeof listRoutines;
   routineStatusSummaries: typeof routineStatusSummaries;
+  getRunnerHealth: typeof getRunnerHealth;
   seedRoutines: typeof seedRoutines;
   createRoutine: typeof createRoutine;
   deleteRoutine: typeof deleteRoutine;
@@ -459,6 +461,7 @@ const realAppDeps: AppDeps = {
   aggregateActivity,
   listRoutines,
   routineStatusSummaries,
+  getRunnerHealth,
   seedRoutines,
   createRoutine,
   deleteRoutine,
@@ -885,12 +888,13 @@ export function buildApp(deps: AppDeps): express.Express {
     const query = parse(emptyObjectSchema, req.query, res);
     if (!query) return;
     const owner = req.authUser!.serviceAccountId;
-    const [routines, openProposals, machines] = await Promise.all([
+    const [routines, openProposals, machines, runnerHealth] = await Promise.all([
       deps.routineStatusSummaries(owner),
       deps.listProposals(owner, { status: "open", limit: 1 }),
-      deps.listMachines(owner)
+      deps.listMachines(owner),
+      deps.getRunnerHealth(owner)
     ]);
-    return res.json({ routines, hasOpenProposals: openProposals.items.length > 0, machines });
+    return res.json({ routines, hasOpenProposals: openProposals.items.length > 0, machines, runnerHealth });
   }));
 
   app.use((_req, _res, next) => {
