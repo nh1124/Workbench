@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { imagesClient } from "../internalClients.js";
+import { imageContextRefSchema, imageGenerationFields } from "../schemas/images.js";
 import { getIntegrationConfig } from "../store.js";
 import { asMcpText, runWithAuthContext } from "./helpers.js";
 
@@ -10,40 +11,7 @@ type ToolContext = {
 
 const IMAGE_GENERATION_INTEGRATION_ID = "image_generation";
 
-const imageProviderSchema = z.enum(["auto", "mock", "openai", "nanobanana"]);
-const imageIntentSchema = z.enum(["create", "refine", "edit", "context_update"]);
-const imageSizeSchema = z.enum(["512x512", "768x768", "1024x1024", "1024x1536", "1536x1024", "auto"]);
-const imageQualitySchema = z.enum(["draft", "standard", "high"]);
-const imagePreserveSchema = z.enum(["composition", "subject", "style", "colors", "text", "layout"]);
-const imageContextRefSchema = z.object({
-  kind: z.enum(["project", "artifact", "note", "task", "research", "freeform"]),
-  id: z.string().optional(),
-  title: z.string().optional(),
-  path: z.string().optional(),
-  content: z.string().optional()
-});
-
-const imageGenerationSchema = {
-  prompt: z.string().min(1),
-  instruction: z.string().optional(),
-  negativePrompt: z.string().optional(),
-  provider: imageProviderSchema.optional(),
-  model: z.string().optional(),
-  size: imageSizeSchema.optional(),
-  count: z.number().int().min(1).max(8).optional(),
-  quality: imageQualitySchema.optional(),
-  stylePreset: z.string().optional(),
-  seed: z.number().int().optional(),
-  referenceImageIds: z.array(z.string()).optional(),
-  sourceAssetIds: z.array(z.string()).optional(),
-  contextRefs: z.array(imageContextRefSchema).optional(),
-  preserve: z.array(imagePreserveSchema).optional(),
-  saveToArtifacts: z.boolean().optional(),
-  artifactTitle: z.string().optional(),
-  artifactPath: z.string().optional(),
-  projectId: z.string().optional(),
-  projectName: z.string().optional()
-};
+const imageGenerationSchema = imageGenerationFields;
 
 function configString(values: Record<string, string | number | boolean>, key: string): string | undefined {
   const value = values[key];

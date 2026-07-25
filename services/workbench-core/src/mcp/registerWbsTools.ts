@@ -11,6 +11,16 @@ import {
   WBS_TARGET_RESOURCE_TYPE,
   wbsProjectIdsBestEffort
 } from "../projectContext.js";
+import {
+  wbsArtifactSaveFields,
+  wbsDependencyCreateFields,
+  wbsExportFormatSchema,
+  wbsItemCreateFields,
+  wbsItemMoveFields,
+  wbsItemUpdateFields,
+  wbsPlanCreateFields,
+  wbsPlanUpdateFields
+} from "../schemas/wbs.js";
 import { recordProjectContextInvalidationsBestEffort } from "../projectContextSync.js";
 import { ensureWbsAccountProvisioned } from "../serviceProvisioning.js";
 import { markIndexEntryReadBestEffort } from "../indexReadTracking.js";
@@ -25,14 +35,6 @@ type AuthRunContext = {
   username: string;
 };
 
-const wbsStatusSchema = z.enum(["todo", "doing", "blocked", "done"]);
-const wbsDependencyTypeSchema = z.enum([
-  "finish_to_start",
-  "start_to_start",
-  "finish_to_finish",
-  "start_to_finish"
-]);
-const wbsExportFormatSchema = z.enum(["json", "markdown", "csv"]);
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
@@ -148,11 +150,7 @@ export function registerWbsTools(server: McpServer, ctx?: ToolContext): void {
       title: "Create WBS Plan",
       description: "Create a WBS plan and add it to the Project index when projectId is supplied.",
       inputSchema: {
-        title: z.string().min(1),
-        description: z.string().optional(),
-        projectId: z.string().optional(),
-        projectName: z.string().optional(),
-        settings: z.record(z.unknown()).optional()
+        ...wbsPlanCreateFields
       }
     },
     async (payload) => {
@@ -173,12 +171,7 @@ export function registerWbsTools(server: McpServer, ctx?: ToolContext): void {
       description: "Update WBS plan metadata and refresh its Project index entry.",
       inputSchema: {
         id: z.string().min(1),
-        title: z.string().optional(),
-        description: z.string().optional(),
-        projectId: z.string().nullable().optional(),
-        projectName: z.string().nullable().optional(),
-        settings: z.record(z.unknown()).optional(),
-        expectedVersion: z.number().int().positive()
+        ...wbsPlanUpdateFields
       }
     },
     async ({ id, ...payload }) => {
@@ -239,15 +232,7 @@ export function registerWbsTools(server: McpServer, ctx?: ToolContext): void {
       description: "Create a WBS row under an optional parent item.",
       inputSchema: {
         planId: z.string().min(1),
-        parentId: z.string().optional(),
-        title: z.string().min(1),
-        description: z.string().optional(),
-        ownerLabel: z.string().optional(),
-        startDate: z.string().optional(),
-        dueDate: z.string().optional(),
-        effortHours: z.number().nonnegative().optional(),
-        status: wbsStatusSchema.optional(),
-        progress: z.number().int().min(0).max(100).optional()
+        ...wbsItemCreateFields
       }
     },
     async ({ planId, ...payload }) => {
@@ -267,16 +252,7 @@ export function registerWbsTools(server: McpServer, ctx?: ToolContext): void {
       description: "Update a WBS row with optimistic concurrency.",
       inputSchema: {
         id: z.string().min(1),
-        title: z.string().optional(),
-        description: z.string().optional(),
-        ownerLabel: z.string().nullable().optional(),
-        startDate: z.string().nullable().optional(),
-        dueDate: z.string().nullable().optional(),
-        effortHours: z.number().nonnegative().nullable().optional(),
-        status: wbsStatusSchema.optional(),
-        progress: z.number().int().min(0).max(100).nullable().optional(),
-        linkedTaskId: z.string().nullable().optional(),
-        expectedVersion: z.number().int().positive()
+        ...wbsItemUpdateFields
       }
     },
     async ({ id, ...payload }) => {
@@ -322,10 +298,7 @@ export function registerWbsTools(server: McpServer, ctx?: ToolContext): void {
       description: "Move or reorder a WBS row.",
       inputSchema: {
         id: z.string().min(1),
-        parentId: z.string().nullable().optional(),
-        beforeItemId: z.string().optional(),
-        afterItemId: z.string().optional(),
-        expectedVersion: z.number().int().positive()
+        ...wbsItemMoveFields
       }
     },
     async ({ id, ...payload }) => {
@@ -360,10 +333,7 @@ export function registerWbsTools(server: McpServer, ctx?: ToolContext): void {
       description: "Create a dependency link between two WBS rows.",
       inputSchema: {
         planId: z.string().min(1),
-        fromItemId: z.string().min(1),
-        toItemId: z.string().min(1),
-        dependencyType: wbsDependencyTypeSchema.optional(),
-        lagDays: z.number().int().optional()
+        ...wbsDependencyCreateFields
       }
     },
     async ({ planId, ...payload }) => {
@@ -419,11 +389,7 @@ export function registerWbsTools(server: McpServer, ctx?: ToolContext): void {
       description: "Save a WBS export snapshot to Artifacts without changing the WBS source plan.",
       inputSchema: {
         id: z.string().min(1),
-        format: wbsExportFormatSchema.default("markdown"),
-        artifactTitle: z.string().optional(),
-        artifactPath: z.string().optional(),
-        projectId: z.string().optional(),
-        projectName: z.string().optional()
+        ...wbsArtifactSaveFields
       }
     },
     async ({ id, ...payload }) => {

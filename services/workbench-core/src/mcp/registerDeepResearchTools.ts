@@ -7,6 +7,7 @@ import {
   runDeepResearch,
   saveDeepResearchJobArtifact
 } from "../deepResearch/service.js";
+import { deepResearchProviderSchema, deepResearchSpeedSchema } from "../schemas/deepResearch.js";
 import { asMcpText, runWithAuthContext } from "./helpers.js";
 
 type ToolContext = {
@@ -61,8 +62,8 @@ export function registerDeepResearchTools(server: McpServer, ctx?: ToolContext):
         "Run deep research with provider routing, timeout fallback, background jobs, and artifact save. MCP calls always save completed results to Artifacts, even if save_to_artifacts is false.",
       inputSchema: {
         query: z.string().min(1),
-        provider: z.enum(["auto", "gemini", "openai", "anthropic"]).optional(),
-        speed: z.enum(["deep", "fast"]).optional(),
+        provider: deepResearchProviderSchema.optional(),
+        speed: deepResearchSpeedSchema.optional(),
         timeout_sec: z.number().int().positive().optional(),
         async_on_timeout: z.boolean().optional(),
         save_to_artifacts: z.boolean().optional(),

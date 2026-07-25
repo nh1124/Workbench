@@ -11,6 +11,13 @@ import {
   rebuildProjectMindmapIndex,
   saveMindmapExportArtifact
 } from "../projectContext.js";
+import {
+  mindmapArtifactSaveFields,
+  mindmapCreateFields,
+  mindmapExportFormatSchema,
+  mindmapModeSchema,
+  mindmapUpdateFields
+} from "../schemas/mindmaps.js";
 import { recordProjectContextInvalidationsBestEffort } from "../projectContextSync.js";
 import { ensureMindmapsAccountProvisioned } from "../serviceProvisioning.js";
 import { markIndexEntryReadBestEffort } from "../indexReadTracking.js";
@@ -25,8 +32,6 @@ type AuthRunContext = {
   username: string;
 };
 
-const mindmapModeSchema = z.enum(["mindmap", "logical_tree"]);
-const mindmapExportFormatSchema = z.enum(["json", "markdown", "svg"]);
 
 async function invalidateMindmapIndexFromMcp(
   userId: string,
@@ -127,14 +132,7 @@ export function registerMindmapTools(server: McpServer, ctx?: ToolContext): void
       title: "Create Mindmap",
       description: "Create a Mindmap or Logical Tree document and add it to the Project index when projectId is supplied.",
       inputSchema: {
-        title: z.string().min(1),
-        description: z.string().optional(),
-        mode: mindmapModeSchema.optional(),
-        projectId: z.string().optional(),
-        projectName: z.string().optional(),
-        body: z.unknown().optional(),
-        tags: z.array(z.string()).optional(),
-        template: z.enum(["blank", "mindmap", "logical_tree"]).optional()
+        ...mindmapCreateFields
       }
     },
     async (payload) => {
@@ -155,14 +153,7 @@ export function registerMindmapTools(server: McpServer, ctx?: ToolContext): void
       description: "Update a Mindmap document with optional optimistic concurrency and refresh its Project index entry.",
       inputSchema: {
         id: z.string().min(1),
-        title: z.string().optional(),
-        description: z.string().optional(),
-        mode: mindmapModeSchema.optional(),
-        projectId: z.string().nullable().optional(),
-        projectName: z.string().nullable().optional(),
-        body: z.unknown().optional(),
-        tags: z.array(z.string()).optional(),
-        expectedVersion: z.number().int().positive().optional()
+        ...mindmapUpdateFields
       }
     },
     async ({ id, ...payload }) => {
@@ -226,11 +217,7 @@ export function registerMindmapTools(server: McpServer, ctx?: ToolContext): void
       description: "Save a Mindmap export snapshot to Artifacts without changing the Mindmap source document.",
       inputSchema: {
         id: z.string().min(1),
-        format: mindmapExportFormatSchema.default("markdown"),
-        artifactTitle: z.string().optional(),
-        artifactPath: z.string().optional(),
-        projectId: z.string().optional(),
-        projectName: z.string().optional()
+        ...mindmapArtifactSaveFields
       }
     },
     async ({ id, ...payload }) => {

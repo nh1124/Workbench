@@ -36,6 +36,29 @@ import { exportAnalyserRecord } from "./analyserExport.js";
 import { fetchSkillCatalog } from "./analyserSkillCatalog.js";
 import { runSkillIntegrityCheck } from "./analyserSkillIntegrity.js";
 import { getOAuthDynamicClient, saveOAuthDynamicClient } from "./oauthDynamicClientsStore.js";
+import { deepResearchProviderSchema, deepResearchSpeedSchema } from "./schemas/deepResearch.js";
+import {
+  imageArtifactSaveSchema,
+  imageContextRefSchema,
+  imageGenerationRequestSchema,
+  imageRetryRequestSchema
+} from "./schemas/images.js";
+import {
+  mindmapArtifactSaveSchema,
+  mindmapCreateSchema,
+  mindmapExportFormatSchema,
+  mindmapUpdateSchema
+} from "./schemas/mindmaps.js";
+import {
+  wbsArtifactSaveSchema,
+  wbsDependencyCreateSchema,
+  wbsExportFormatSchema,
+  wbsItemCreateSchema,
+  wbsItemMoveSchema,
+  wbsItemUpdateSchema,
+  wbsPlanCreateSchema,
+  wbsPlanUpdateSchema
+} from "./schemas/wbs.js";
 import {
   commitSyncChangesCursor,
   initializeSyncChangesConsumer,
@@ -986,8 +1009,8 @@ const taskImportBodySchema = z.union([z.string(), z.object({ csv: z.string() })]
 
 const deepResearchRequestSchema = z.object({
   query: z.string().min(1),
-  provider: z.enum(["auto", "gemini", "openai", "anthropic"]).optional(),
-  speed: z.enum(["deep", "fast"]).optional(),
+  provider: deepResearchProviderSchema.optional(),
+  speed: deepResearchSpeedSchema.optional(),
   timeoutSec: z.number().int().positive().optional(),
   asyncOnTimeout: z.boolean().optional(),
   saveToArtifacts: z.boolean().optional(),
@@ -1005,152 +1028,8 @@ const deepResearchManualSaveSchema = z.object({
   createNew: z.boolean().optional()
 });
 
-const imageProviderSchema = z.enum(["auto", "mock", "openai", "nanobanana"]);
-const imageIntentSchema = z.enum(["create", "refine", "edit", "context_update"]);
-const imageSizeSchema = z.enum(["512x512", "768x768", "1024x1024", "1024x1536", "1536x1024", "auto"]);
-const imageQualitySchema = z.enum(["draft", "standard", "high"]);
-const imagePreserveSchema = z.enum(["composition", "subject", "style", "colors", "text", "layout"]);
-const imageContextRefSchema = z.object({
-  kind: z.enum(["project", "artifact", "note", "task", "research", "freeform"]),
-  id: z.string().optional(),
-  title: z.string().optional(),
-  path: z.string().optional(),
-  content: z.string().optional()
-});
 
-const imageGenerationRequestSchema = z.object({
-  intent: imageIntentSchema.optional(),
-  prompt: z.string().min(1),
-  instruction: z.string().optional(),
-  negativePrompt: z.string().optional(),
-  provider: imageProviderSchema.optional(),
-  model: z.string().optional(),
-  size: imageSizeSchema.optional(),
-  count: z.number().int().min(1).max(8).optional(),
-  quality: imageQualitySchema.optional(),
-  stylePreset: z.string().optional(),
-  seed: z.number().int().optional(),
-  referenceImageIds: z.array(z.string()).optional(),
-  sourceAssetIds: z.array(z.string()).optional(),
-  sourceArtifactItemIds: z.array(z.string()).optional(),
-  contextRefs: z.array(imageContextRefSchema).optional(),
-  preserve: z.array(imagePreserveSchema).optional(),
-  saveToArtifacts: z.boolean().optional(),
-  artifactTitle: z.string().optional(),
-  artifactPath: z.string().optional(),
-  projectId: z.string().optional(),
-  projectName: z.string().optional()
-});
 
-const imageRetryRequestSchema = imageGenerationRequestSchema.partial();
-
-const imageArtifactSaveSchema = z.object({
-  artifactTitle: z.string().optional(),
-  artifactPath: z.string().optional(),
-  projectId: z.string().optional(),
-  projectName: z.string().optional()
-});
-
-const mindmapModeSchema = z.enum(["mindmap", "logical_tree"]);
-const mindmapExportFormatSchema = z.enum(["json", "markdown", "svg"]);
-
-const mindmapCreateSchema = z.object({
-  title: z.string().min(1),
-  description: z.string().optional(),
-  mode: mindmapModeSchema.optional(),
-  projectId: z.string().optional(),
-  projectName: z.string().optional(),
-  body: z.unknown().optional(),
-  tags: z.array(z.string()).optional(),
-  template: z.enum(["blank", "mindmap", "logical_tree"]).optional()
-});
-
-const mindmapUpdateSchema = z.object({
-  title: z.string().optional(),
-  description: z.string().optional(),
-  mode: mindmapModeSchema.optional(),
-  projectId: z.string().nullable().optional(),
-  projectName: z.string().nullable().optional(),
-  body: z.unknown().optional(),
-  tags: z.array(z.string()).optional(),
-  expectedVersion: z.number().int().positive().optional()
-});
-
-const mindmapArtifactSaveSchema = z.object({
-  format: mindmapExportFormatSchema.default("markdown"),
-  artifactTitle: z.string().optional(),
-  artifactPath: z.string().optional(),
-  projectId: z.string().optional(),
-  projectName: z.string().optional()
-});
-
-const wbsStatusSchema = z.enum(["todo", "doing", "blocked", "done"]);
-const wbsDependencyTypeSchema = z.enum(["finish_to_start", "start_to_start", "finish_to_finish", "start_to_finish"]);
-const wbsExportFormatSchema = z.enum(["json", "markdown", "csv"]);
-
-const wbsPlanCreateSchema = z.object({
-  title: z.string().min(1),
-  description: z.string().optional(),
-  projectId: z.string().optional(),
-  projectName: z.string().optional(),
-  settings: z.record(z.unknown()).optional()
-});
-
-const wbsPlanUpdateSchema = z.object({
-  expectedVersion: z.number().int().positive(),
-  title: z.string().min(1).optional(),
-  description: z.string().optional(),
-  projectId: z.string().nullable().optional(),
-  projectName: z.string().nullable().optional(),
-  settings: z.record(z.unknown()).optional()
-});
-
-const wbsItemCreateSchema = z.object({
-  parentId: z.string().optional(),
-  title: z.string().min(1),
-  description: z.string().optional(),
-  ownerLabel: z.string().optional(),
-  startDate: z.string().optional(),
-  dueDate: z.string().optional(),
-  effortHours: z.number().nonnegative().optional(),
-  status: wbsStatusSchema.optional(),
-  progress: z.number().int().min(0).max(100).optional()
-});
-
-const wbsItemUpdateSchema = z.object({
-  expectedVersion: z.number().int().positive(),
-  title: z.string().min(1).optional(),
-  description: z.string().optional(),
-  ownerLabel: z.string().nullable().optional(),
-  startDate: z.string().nullable().optional(),
-  dueDate: z.string().nullable().optional(),
-  effortHours: z.number().nonnegative().nullable().optional(),
-  status: wbsStatusSchema.optional(),
-  progress: z.number().int().min(0).max(100).nullable().optional(),
-  linkedTaskId: z.string().nullable().optional()
-});
-
-const wbsItemMoveSchema = z.object({
-  expectedVersion: z.number().int().positive(),
-  parentId: z.string().nullable().optional(),
-  beforeItemId: z.string().optional(),
-  afterItemId: z.string().optional()
-});
-
-const wbsDependencyCreateSchema = z.object({
-  fromItemId: z.string().min(1),
-  toItemId: z.string().min(1),
-  dependencyType: wbsDependencyTypeSchema.default("finish_to_start"),
-  lagDays: z.number().int().optional()
-});
-
-const wbsArtifactSaveSchema = z.object({
-  format: wbsExportFormatSchema.default("markdown"),
-  artifactTitle: z.string().optional(),
-  artifactPath: z.string().optional(),
-  projectId: z.string().optional(),
-  projectName: z.string().optional()
-});
 
 const jsonRecordSchema = z.record(z.unknown());
 
