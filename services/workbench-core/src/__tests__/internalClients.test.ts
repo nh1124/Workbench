@@ -8,8 +8,10 @@ process.env.IMAGES_SERVICE_URL ||= "http://images.test";
 process.env.MINDMAPS_SERVICE_URL ||= "http://mindmaps.test";
 process.env.WBS_SERVICE_URL ||= "http://wbs.test";
 process.env.PROJECTS_SERVICE_URL ||= "http://projects.test";
+// Keep the unresponsive-service assertion fast.
+process.env.INTERNAL_SERVICE_TIMEOUT_MS ||= "150";
 
-const { artifactsClient } = await import("../internalClients.js");
+const { artifactsClient, tasksClient } = await import("../internalClients.js");
 const originalFetch = globalThis.fetch;
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -144,4 +146,51 @@ describe("internal artifact clients", () => {
     assert.equal(result[0]?.projectName, null);
   });
 
+});
+
+describe("internal client mutation headers", () => {
+  // Multipart attachment routes previously bypassed buildServiceHeaders, so they
+  // would 403 once WORKBENCH_REQUIRE_CORE_MUTATION_ORIGIN was enabled downstream.
+  it("marks task attachment uploads and replacements as Core-originated mutations", async () => {
+    const seen: Array<{ method: string; origin: string | null }> = [];
+
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(String(input));
+      const headers = new Headers((init as RequestInit | undefined)?.headers ?? {});
+      seen.push({
+        method: ((init as RequestInit | undefined)?.method ?? "GET").toUpperCase(),
+        origin: headers.get("x-workbench-core-mutation")
+      });
+      if (url.origin === "http://tasks.test") return jsonResponse({ id: "attachment-1" });
+      throw new Error(`Unexpected request: ${url}`);
+    };
+
+    await tasksClient.uploadAttachment("token", "task-1", {
+      filename: "a.txt",
+      contentBase64: Buffer.from("hello").toString("base64")
+    });
+    await tasksClient.replaceAttachment("token", "task-1", "attachment-1", {
+      contentBase64: Buffer.from("world").toString("base64")
+    });
+
+    assert.deepEqual(seen, [
+      { method: "POST", origin: "1" },
+      { method: "PUT", origin: "1" }
+    ]);
+  });
+
+  it("bounds downstream requests with an abort signal and maps timeouts to 504", async () => {
+    let sawSignal = false;
+
+    globalThis.fetch = async (_input, init) => {
+      sawSignal = Boolean((init as RequestInit | undefined)?.signal);
+      throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+    };
+
+    await assert.rejects(
+      () => artifactsClient.treeList("token", {}),
+      (error: unknown) => (error as { status?: number }).status === 504
+    );
+    assert.equal(sawSignal, true, "internal requests must carry a timeout signal");
+  });
 });

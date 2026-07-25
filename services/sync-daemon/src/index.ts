@@ -153,6 +153,8 @@ export type DaemonConfig = {
   coreUrl: string;
   accessToken?: string;
   apiToken?: string;
+  /** Absent means secure: the local API requires a token. */
+  allowAnonymousApi?: boolean;
   syncRoot: string;
   downloadsDir: string;
   deviceId: string;
@@ -244,6 +246,7 @@ function readConfig(): DaemonConfig {
     coreUrl: normalizeCoreUrl(env("WORKBENCH_CORE_URL") ?? "http://localhost:3000"),
     accessToken: env("WORKBENCH_ACCESS_TOKEN"),
     apiToken: env("WORKBENCH_DAEMON_API_TOKEN") ?? env("WORKBENCH_LOCAL_DAEMON_TOKEN"),
+    allowAnonymousApi: envBoolean(env("WORKBENCH_DAEMON_ALLOW_ANONYMOUS"), false),
     syncRoot,
     downloadsDir,
     deviceId: env("WORKBENCH_DEVICE_ID") ?? `${hostname()}-${randomUUID()}`,
@@ -269,6 +272,45 @@ async function ensureDirs(config: DaemonConfig): Promise<void> {
   await fs.mkdir(config.downloadsDir, { recursive: true });
   await fs.mkdir(join(config.syncRoot, ".workbench"), { recursive: true });
   await fs.mkdir(join(config.syncRoot, ".workbench", "conflicts"), { recursive: true });
+}
+
+const DAEMON_TOKEN_FILE = "daemon-token";
+
+/**
+ * Resolves the loopback API token, generating and persisting one on first run.
+ *
+ * The local API can write to the filesystem and mutate offline data, and requests
+ * without an Origin header are not covered by the CORS allowlist, so it must never
+ * be reachable unauthenticated. Generating a stable token keeps existing setups
+ * working without forcing manual configuration.
+ */
+async function ensureLoopbackApiToken(config: DaemonConfig): Promise<void> {
+  if (config.apiToken) return;
+  if (config.allowAnonymousApi) {
+    console.warn(
+      "[workbench-daemon] WORKBENCH_DAEMON_ALLOW_ANONYMOUS is set: the local API is reachable by any process on this machine."
+    );
+    return;
+  }
+
+  const tokenPath = join(config.syncRoot, ".workbench", DAEMON_TOKEN_FILE);
+  try {
+    const existing = (await fs.readFile(tokenPath, "utf8")).trim();
+    if (existing) {
+      config.apiToken = existing;
+      return;
+    }
+  } catch {
+    // No persisted token yet; fall through and create one.
+  }
+
+  const generated = randomUUID().replace(/-/g, "");
+  await fs.writeFile(tokenPath, `${generated}\n`, { encoding: "utf8", mode: 0o600 });
+  config.apiToken = generated;
+  console.warn(
+    `[workbench-daemon] Generated a local API token at ${tokenPath}. ` +
+    "Paste it into Settings > Local daemon, or set WORKBENCH_DAEMON_API_TOKEN, to let clients connect."
+  );
 }
 
 class CoreHttpError extends Error {
@@ -6642,8 +6684,14 @@ export function loopbackAuthBypassed(pathname: string, method?: string): boolean
   return method === "OPTIONS" || pathname === "/health";
 }
 
-export function requestHasValidLoopbackToken(req: IncomingMessage, expectedToken?: string): boolean {
-  if (!expectedToken) return true;
+export function requestHasValidLoopbackToken(
+  req: IncomingMessage,
+  expectedToken?: string,
+  allowAnonymous = false
+): boolean {
+  // Fail closed: an unconfigured token must not leave the local API open, because
+  // requests without an Origin header (any local process) bypass the CORS allowlist.
+  if (!expectedToken) return allowAnonymous;
   const headerToken = req.headers["x-workbench-daemon-token"];
   const token = Array.isArray(headerToken) ? headerToken[0] : headerToken;
   if (token === expectedToken) return true;
@@ -6655,7 +6703,7 @@ export function requestHasValidLoopbackToken(req: IncomingMessage, expectedToken
 
 function requireLoopbackAuth(state: DaemonState, req: IncomingMessage, res: ServerResponse, pathname: string): boolean {
   if (loopbackAuthBypassed(pathname, req.method)) return true;
-  if (requestHasValidLoopbackToken(req, state.config.apiToken)) return true;
+  if (requestHasValidLoopbackToken(req, state.config.apiToken, state.config.allowAnonymousApi === true)) return true;
 
   writeJson(res, {
     code: LOOPBACK_AUTH_ERROR_CODE,
@@ -7998,6 +8046,7 @@ function startStatusServer(state: DaemonState): void {
 async function main(): Promise<void> {
   const config = readConfig();
   await ensureDirs(config);
+  await ensureLoopbackApiToken(config);
   const manifestStore = openManifestStore(config.syncRoot);
   await migrateLegacyManifestJson(config.syncRoot, manifestStore);
   await writeManifestDebugSnapshot(config.syncRoot, manifestStore);

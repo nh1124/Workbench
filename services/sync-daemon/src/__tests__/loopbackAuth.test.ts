@@ -20,9 +20,16 @@ function requestWithHeaders(headers: IncomingMessage["headers"]): IncomingMessag
 }
 
 describe("loopback API token auth", () => {
-  it("keeps loopback endpoints open when no token is configured", () => {
-    assert.equal(requestHasValidLoopbackToken(requestWithHeaders({}), undefined), true);
-    assert.equal(requestHasValidLoopbackToken(requestWithHeaders({}), ""), true);
+  it("fails closed when no token is configured", () => {
+    assert.equal(requestHasValidLoopbackToken(requestWithHeaders({}), undefined), false);
+    assert.equal(requestHasValidLoopbackToken(requestWithHeaders({}), ""), false);
+  });
+
+  it("opens loopback endpoints only when anonymous access is explicitly allowed", () => {
+    assert.equal(requestHasValidLoopbackToken(requestWithHeaders({}), undefined, true), true);
+    assert.equal(requestHasValidLoopbackToken(requestWithHeaders({}), "", true), true);
+    // An explicit token still wins over the anonymous escape hatch.
+    assert.equal(requestHasValidLoopbackToken(requestWithHeaders({}), "secret", true), false);
   });
 
   it("accepts x-workbench-daemon-token when a token is configured", () => {

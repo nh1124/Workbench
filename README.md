@@ -104,6 +104,7 @@ Edit `infra/workbench.env` when changing hosts or ports. Keep secrets and databa
 - `ANALYSER_SERVICE_URL` (default local URL `http://127.0.0.1:4109`)
 - matching `INTERNAL_API_KEY_*` values, including `INTERNAL_API_KEY_ANALYSER`
 - `WORKBENCH_CORE_MUTATION_TOKEN` when the Core-origin guard is enabled
+- `INTERNAL_SERVICE_TIMEOUT_MS` (default `30000`) bounds every internal service call; timeouts surface as HTTP 504
 
 ### Analyser
 

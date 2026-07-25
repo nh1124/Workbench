@@ -491,8 +491,14 @@ npm run build
   - Explicit `*` is still supported for development, but is no longer the default.
 - `[implemented]` Add path allowlist tests for Windows/macOS/Linux edge cases covered by Node path handling.
   - Rejects absolute paths, drive-prefixed paths, UNC-style roots, `..` traversal, `.workbench`, temp/partial files, and reserved Windows device names.
-- `[implemented]` Add optional local daemon loopback token for status/API endpoints.
-  - `WORKBENCH_DAEMON_API_TOKEN` or `WORKBENCH_LOCAL_DAEMON_TOKEN` enables token enforcement.
+- `[implemented]` Require a local daemon loopback token for status/API endpoints.
+  - `WORKBENCH_DAEMON_API_TOKEN` or `WORKBENCH_LOCAL_DAEMON_TOKEN` sets the token explicitly.
+  - **Enforcement is the default.** When neither is set, the daemon generates a token on first run and
+    persists it to `.workbench/daemon-token` (mode 0600), logging the path at startup. The CORS
+    allowlist does not cover requests without an `Origin` header, so any local process could
+    otherwise reach the filesystem-writing routes unauthenticated.
+  - `WORKBENCH_DAEMON_ALLOW_ANONYMOUS=true` restores the previous open behaviour for trusted
+    single-user boxes and test rigs; the daemon warns loudly when it is set.
   - UI stores/sends the token via `x-workbench-daemon-token`.
   - `/health` remains unauthenticated and returns only a minimal `{ status: "ok" }` payload.
 - `[implemented]` Avoid returning sensitive local paths to non-local callers unless explicitly requested and authorized.
@@ -525,7 +531,7 @@ First registration requires a normal Workbench access token.
 $env:WORKBENCH_CORE_URL="http://localhost:4100"
 $env:WORKBENCH_ACCESS_TOKEN="<access token>"
 $env:WORKBENCH_SYNC_ROOT="$HOME\WorkbenchSync"
-$env:WORKBENCH_DAEMON_API_TOKEN="<optional loopback token>"
+$env:WORKBENCH_DAEMON_API_TOKEN="<loopback token; auto-generated to .workbench/daemon-token if unset>"
 npm run dev --workspace services/sync-daemon
 ```
 

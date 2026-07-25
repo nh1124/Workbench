@@ -215,7 +215,24 @@ type ClientMetadataCacheRecord = {
 };
 
 const clientMetadataCache = new Map<string, ClientMetadataCacheRecord>();
+const CLIENT_METADATA_CACHE_MAX_ENTRIES = 500;
 const DYNAMIC_CLIENT_REGISTRATION_PATH = "/oauth/register";
+
+/**
+ * Drops expired records and, if still over capacity, the oldest insertions.
+ * Entries are only evicted lazily on re-request, so distinct client IDs would
+ * otherwise grow the cache without bound.
+ */
+function pruneClientMetadataCache(nowMs = Date.now()): void {
+  for (const [key, record] of clientMetadataCache) {
+    if (record.expiresAtMs <= nowMs) clientMetadataCache.delete(key);
+  }
+  // Map preserves insertion order, so the leading keys are the oldest.
+  for (const key of clientMetadataCache.keys()) {
+    if (clientMetadataCache.size <= CLIENT_METADATA_CACHE_MAX_ENTRIES) break;
+    clientMetadataCache.delete(key);
+  }
+}
 
 type CanonicalBaseConfig = {
   issuer: string;
@@ -586,6 +603,7 @@ async function resolveClientFromMetadataDocument(clientId: string): Promise<Reso
       client: resolvedClient,
       expiresAtMs: Date.now() + clientMetadataCacheTtlMs
     });
+    pruneClientMetadataCache();
     return resolvedClient;
   } finally {
     clearTimeout(timeout);

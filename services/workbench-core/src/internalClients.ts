@@ -90,6 +90,27 @@ function buildServiceHeaders(token: string, init?: RequestInit): Headers {
   return headers;
 }
 
+const internalRequestTimeoutMsRaw = Number(process.env.INTERNAL_SERVICE_TIMEOUT_MS ?? "30000");
+const internalRequestTimeoutMs = Number.isFinite(internalRequestTimeoutMsRaw) && internalRequestTimeoutMsRaw > 0
+  ? internalRequestTimeoutMsRaw
+  : 30000;
+
+/**
+ * Wraps fetch with a timeout so a hung downstream service cannot pin a Core
+ * request open indefinitely. Aborts surface as a 504 InternalServiceError so
+ * callers handle them through the same path as any other upstream failure.
+ */
+async function fetchInternal(service: ServiceId, url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(internalRequestTimeoutMs) });
+  } catch (error) {
+    if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+      throw new InternalServiceError(service, 504, `${service} service did not respond within ${internalRequestTimeoutMs}ms`);
+    }
+    throw error;
+  }
+}
+
 async function serviceRequest<T>(
   service: ServiceConfig,
   path: string,
@@ -97,7 +118,7 @@ async function serviceRequest<T>(
   init?: RequestInit,
   parse: "json" | "text" = "json"
 ): Promise<T> {
-  const response = await fetch(`${service.baseUrl}${path}`, {
+  const response = await fetchInternal(service.id, `${service.baseUrl}${path}`, {
     ...init,
     headers: buildServiceHeaders(token, init)
   });
@@ -384,7 +405,7 @@ export const artifactsClient = {
       payload.filename
     );
 
-    const response = await fetch(`${artifactsService.baseUrl}/artifacts/upload`, {
+    const response = await fetchInternal(artifactsService.id, `${artifactsService.baseUrl}/artifacts/upload`, {
       method: "POST",
       headers: buildServiceHeaders(token, { method: "POST" }),
       body: formData
@@ -423,11 +444,15 @@ export const artifactsClient = {
       payload.filename || id
     );
 
-    const response = await fetch(`${artifactsService.baseUrl}/artifacts/items/${encodeURIComponent(id)}/file`, {
-      method: "PUT",
-      headers: buildServiceHeaders(token, { method: "PUT" }),
-      body: formData
-    });
+    const response = await fetchInternal(
+      artifactsService.id,
+      `${artifactsService.baseUrl}/artifacts/items/${encodeURIComponent(id)}/file`,
+      {
+        method: "PUT",
+        headers: buildServiceHeaders(token, { method: "PUT" }),
+        body: formData
+      }
+    );
 
     const text = await response.text();
     if (!response.ok) {
@@ -440,7 +465,8 @@ export const artifactsClient = {
   },
   downloadFile: async (token: string, id: string, asAttachment = true) => {
     const suffix = asAttachment ? "?download=1" : "";
-    const response = await fetch(
+    const response = await fetchInternal(
+      artifactsService.id,
       `${artifactsService.baseUrl}/artifacts/items/${encodeURIComponent(id)}/download${suffix}`,
       {
         headers: {
@@ -508,11 +534,15 @@ export const imagesClient = {
     }),
   downloadAsset: async (token: string, assetId: string, asAttachment = true) => {
     const suffix = asAttachment ? "?download=1" : "";
-    const response = await fetch(`${imagesService.baseUrl}/images/assets/${encodeURIComponent(assetId)}/download${suffix}`, {
-      headers: {
-        Authorization: `Bearer ${token}`
+    const response = await fetchInternal(
+      imagesService.id,
+      `${imagesService.baseUrl}/images/assets/${encodeURIComponent(assetId)}/download${suffix}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
       }
-    });
+    );
 
     const arrayBuffer = await response.arrayBuffer();
     if (!response.ok) {
@@ -711,7 +741,7 @@ async function analyserInternalRequest<T>(path: string, init?: RequestInit): Pro
   const service = requireAnalyser();
   const headers = new Headers(init?.headers ?? {});
   headers.set("x-api-key", requireAnalyserInternalApiKey());
-  const response = await fetch(`${service.baseUrl}${path}`, { ...init, headers });
+  const response = await fetchInternal(service.id, `${service.baseUrl}${path}`, { ...init, headers });
   const text = await response.text();
   if (!response.ok) {
     throw new InternalServiceError(service.id, response.status, text || `HTTP ${response.status}`);
@@ -807,7 +837,7 @@ type AnalyserPublicationFindQuery = {
 export const analyserClient = {
   provisionAccount: async (payload: unknown) => {
     const service = requireAnalyser();
-    const response = await fetch(`${service.baseUrl}/internal/accounts`, {
+    const response = await fetchInternal(service.id, `${service.baseUrl}/internal/accounts`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -1100,11 +1130,15 @@ export const tasksClient = {
       payload.filename
     );
 
-    const response = await fetch(`${tasksService.baseUrl}/tasks/${encodeURIComponent(taskId)}/attachments`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-      body: formData
-    });
+    const response = await fetchInternal(
+      tasksService.id,
+      `${tasksService.baseUrl}/tasks/${encodeURIComponent(taskId)}/attachments`,
+      {
+        method: "POST",
+        headers: buildServiceHeaders(token, { method: "POST" }),
+        body: formData
+      }
+    );
 
     const text = await response.text();
     if (!response.ok) {
@@ -1129,11 +1163,12 @@ export const tasksClient = {
       payload.filename || attachmentId
     );
 
-    const response = await fetch(
+    const response = await fetchInternal(
+      tasksService.id,
       `${tasksService.baseUrl}/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}`,
       {
         method: "PUT",
-        headers: { Authorization: `Bearer ${token}` },
+        headers: buildServiceHeaders(token, { method: "PUT" }),
         body: formData
       }
     );
@@ -1147,7 +1182,8 @@ export const tasksClient = {
 
   downloadAttachment: async (token: string, taskId: string, attachmentId: string, asAttachment = true) => {
     const suffix = asAttachment ? "?download=1" : "";
-    const response = await fetch(
+    const response = await fetchInternal(
+      tasksService.id,
       `${tasksService.baseUrl}/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}/download${suffix}`,
       { headers: { Authorization: `Bearer ${token}` } }
     );

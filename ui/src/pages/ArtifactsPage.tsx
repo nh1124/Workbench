@@ -166,6 +166,8 @@ export function ArtifactsPage() {
   const draggingItemRef = useRef<ArtifactItem | null>(null);
   const tableSelectionDragRef = useRef<TableSelectionState | null>(null);
   const loadTreeRef = useRef<() => Promise<void>>(async () => {});
+  // Monotonic token so a slow tree response cannot overwrite a newer one.
+  const loadTreeSeqRef = useRef(0);
   const handleCreateNoteRef = useRef<() => void>(() => {});
   const handleSaveRef = useRef<() => Promise<void>>(async () => {});
   const handleArtifactHistoryNavRef = useRef<(direction: -1 | 1) => void>(() => {});
@@ -480,9 +482,11 @@ export function ArtifactsPage() {
     if (!projectsLoaded) {
       return;
     }
+    const seq = ++loadTreeSeqRef.current;
     setIsLoading(true);
     try {
       const treeItems = await artifactsApi.tree(projectFilter || undefined);
+      if (seq !== loadTreeSeqRef.current) return;
       const visibleItems = treeItems;
       setItems(visibleItems);
 
@@ -501,7 +505,7 @@ export function ArtifactsPage() {
     } catch {
       // Notification is handled globally.
     } finally {
-      setIsLoading(false);
+      if (seq === loadTreeSeqRef.current) setIsLoading(false);
     }
   };
   loadTreeRef.current = loadTree;
