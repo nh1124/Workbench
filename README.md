@@ -20,6 +20,19 @@ UI / Agent Runtime -> Workbench Core -> Internal Services
 - User auth is centralized in Core.
 - Core issues signed JWT access and refresh tokens on register/login.
 - The UI sends `Authorization: Bearer <access token>` and refreshes expired access tokens.
+- Refresh tokens are held differently per client, so page script never has one to leak:
+  - **Browser**: Core sets the refresh token as an `HttpOnly; SameSite=Lax; Path=/auth` cookie
+    (`Secure` whenever the request arrived over HTTPS, including via `x-forwarded-proto`). Nothing is
+    written to `localStorage`; the access token stays in memory and a reload restores the session by
+    spending the cookie once against `POST /auth/refresh`.
+  - **Native (Tauri)**: unchanged — the session lives in OS secure storage and the refresh token is
+    sent in the request body.
+  - `POST /auth/refresh` accepts either source, preferring the cookie, and drops a cookie it rejects.
+- The browser flow assumes the UI is served from Core's origin, which is how production runs
+  (Core serves `ui/dist`). For dev, Vite proxies Core's routes so the same origin holds — point
+  `VITE_WORKBENCH_CORE_URL` at the Vite dev server, and set `VITE_WORKBENCH_CORE_PROXY_TARGET` if
+  Core is not on `http://127.0.0.1:4100`. Pointing `VITE_WORKBENCH_CORE_URL` straight at Core still
+  works, but the browser session will not survive a reload.
 - Core validates JWTs for the external API and Core MCP execution, then forwards the bearer JWT to internal business routes.
 - Internal provisioning endpoints use `x-api-key`.
 - Tasks is the provisioning exception: it uses the JWT `sub` as its local owner identity and has no `/internal/accounts` route.
@@ -64,6 +77,7 @@ Agents may create proposals but cannot approve/reject them or change collection 
 - `POST /accounts/register`
 - `POST /accounts/login`
 - `POST /auth/refresh`
+- `POST /auth/logout` (clears the browser refresh cookie)
 - `GET /auth/me`
 - `GET /.well-known/oauth-protected-resource`
 - `GET /.well-known/oauth-authorization-server`

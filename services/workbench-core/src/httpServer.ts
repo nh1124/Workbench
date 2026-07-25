@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { installProcessHandlers, requestLogger } from "@workbench/logging";
 import { isOAuthScopedToken, issueTokenBundle, verifyAccessToken, verifyRefreshToken } from "./auth.js";
+import { clearRefreshCookie, readRefreshCookie, setRefreshCookie } from "./refreshCookie.js";
 import { logger } from "./logger.js";
 import { ensureCoreSchema } from "./db.js";
 import { getIntegrationManifests } from "./integrations/index.js";
@@ -3314,6 +3315,7 @@ app.post("/accounts/register", async (req, res) => {
     const user = await registerUser(parsed.data.username, parsed.data.password);
     const provisioning = await provisionAccountToServices(user.id, user.username);
     const tokenBundle = issueTokenBundle({ userId: user.id, username: user.username });
+    setRefreshCookie(req, res, tokenBundle.refreshToken);
     return res.status(201).json({ user, provisioning, ...tokenBundle });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Registration failed";
@@ -3338,31 +3340,48 @@ app.post("/accounts/login", async (req, res) => {
   await provisionAccountToServices(user.id, user.username);
   const provisioning = await listProvisionings(user.id);
   const tokenBundle = issueTokenBundle({ userId: user.id, username: user.username });
+  setRefreshCookie(req, res, tokenBundle.refreshToken);
   return res.json({ user, provisioning, ...tokenBundle });
 });
 
 app.post("/auth/refresh", async (req, res) => {
-  const parsed = refreshSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(400).json({ message: parsed.error.flatten() });
+  // Browser sessions present the token as an HttpOnly cookie and send no body;
+  // native clients keep sending it in the body from OS secure storage.
+  const cookieToken = readRefreshCookie(req);
+  let refreshToken = cookieToken;
+  if (!refreshToken) {
+    const parsed = refreshSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: parsed.error.flatten() });
+    }
+    refreshToken = parsed.data.refreshToken;
   }
 
   try {
-    const claims = verifyRefreshToken(parsed.data.refreshToken);
+    const claims = verifyRefreshToken(refreshToken);
     const user = await findUserById(claims.sub);
     if (!user || user.username !== claims.username) {
       return res.status(401).json({ message: "Invalid refresh token user" });
     }
 
     const tokenBundle = issueTokenBundle({ userId: user.id, username: user.username });
+    setRefreshCookie(req, res, tokenBundle.refreshToken);
     return res.json({ user, ...tokenBundle });
   } catch (error) {
+    // A rejected cookie is a dead session: drop it so the browser stops
+    // replaying it on every reload.
+    if (cookieToken) clearRefreshCookie(req, res);
     if (error instanceof jwt.TokenExpiredError || error instanceof jwt.JsonWebTokenError) {
       return res.status(401).json({ message: "Invalid or expired refresh token" });
     }
     const message = error instanceof Error ? error.message : "Refresh failed";
     return res.status(401).json({ message });
   }
+});
+
+app.post("/auth/logout", (req, res) => {
+  clearRefreshCookie(req, res);
+  return res.json({ status: "ok" });
 });
 
 app.get("/auth/me", async (req, res) => {

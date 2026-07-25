@@ -63,6 +63,9 @@ if (!Number.isFinite(refreshTokenExpiresInSeconds) || refreshTokenExpiresInSecon
   throw new Error(`Invalid JWT_REFRESH_EXPIRY_SECONDS value: ${refreshJwtExpirySecondsRaw}`);
 }
 
+/** Lifetime of the browser refresh cookie, so it expires with the token it carries. */
+export const refreshTokenLifetimeSeconds = refreshTokenExpiresInSeconds;
+
 function issueJwtToken(input: { userId: string; username: string; tokenUse: TokenUse; expiresInSeconds: number }): string {
   return jwt.sign(
     {

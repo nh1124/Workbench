@@ -298,27 +298,86 @@ export async function syncNativeDaemonCoreUrl(): Promise<LocalDaemonPreferences 
   return nativeDaemonApi.setCoreUrl(coreUrl);
 }
 
+function sessionFromAuthResponse(payload: WorkbenchRefreshResponse | WorkbenchAuthResponse): StoredAuthSession {
+  return {
+    user: payload.user,
+    accessToken: payload.accessToken,
+    // Browsers never hold the refresh token; the HttpOnly cookie carries it.
+    refreshToken: isTauriNativeRuntime() ? payload.refreshToken : undefined,
+    tokenType: "Bearer",
+    expiresInSeconds: payload.expiresInSeconds,
+    issuedAt: new Date().toISOString()
+  };
+}
+
+/**
+ * Spends the HttpOnly refresh cookie to mint a fresh access token.
+ *
+ * Runs on boot for browser sessions, so it must stay quiet: a signed-out
+ * visitor has no cookie and the 401 here is expected, not an error worth
+ * surfacing.
+ */
+async function restoreSessionFromCookie(): Promise<StoredAuthSession | undefined> {
+  let url: string;
+  try {
+    url = `${coreBaseUrl()}/auth/refresh`;
+  } catch {
+    return undefined;
+  }
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" }
+    });
+    if (!response.ok) return undefined;
+    return sessionFromAuthResponse(await response.json() as WorkbenchRefreshResponse);
+  } catch {
+    return undefined;
+  }
+}
+
+async function revokeRefreshCookie(): Promise<void> {
+  try {
+    await fetch(`${coreBaseUrl()}/auth/logout`, { method: "POST", credentials: "include" });
+  } catch {
+    // Signing out locally must succeed even when Core is unreachable.
+  }
+}
+
+/**
+ * Browser sessions keep no token in localStorage. The refresh token lives in an
+ * HttpOnly cookie the page cannot read, and the short-lived access token stays
+ * in memory only, so an XSS payload has nothing durable to steal. A reload
+ * restores the session by spending the cookie once (see restoreSessionFromCookie).
+ *
+ * Native (Tauri) builds keep using OS secure storage, which is already outside
+ * the page's reach and survives restarts without a network round-trip.
+ */
 async function loadSessionFromStorage(): Promise<StoredAuthSession | undefined> {
   if (isTauriNativeRuntime()) {
     const raw = await invokeNative<string | null>(NATIVE_SESSION_COMMANDS.read);
     return parseStoredSession(raw);
   }
-  return parseStoredSession(localStorage.getItem(SESSION_KEY));
+  return restoreSessionFromCookie();
 }
 
 async function persistSessionToStorage(session: StoredAuthSession): Promise<void> {
-  const serialized = JSON.stringify(session);
   if (isTauriNativeRuntime()) {
-    await invokeNative<void>(NATIVE_SESSION_COMMANDS.save, { sessionJson: serialized });
+    await invokeNative<void>(NATIVE_SESSION_COMMANDS.save, { sessionJson: JSON.stringify(session) });
     localStorage.removeItem(SESSION_KEY);
     return;
   }
-  localStorage.setItem(SESSION_KEY, serialized);
+  // Drop any session written by a previous build that stored tokens here.
+  localStorage.removeItem(SESSION_KEY);
 }
 
 async function clearSessionFromStorage(): Promise<void> {
   if (isTauriNativeRuntime()) {
     await invokeNative<void>(NATIVE_SESSION_COMMANDS.clear);
+  } else {
+    await revokeRefreshCookie();
   }
   localStorage.removeItem(SESSION_KEY);
 }
@@ -915,15 +974,26 @@ function filenameFromDisposition(disposition: string | null, fallback: string): 
     : (quotedMatch?.[1] ?? fallback);
 }
 
-async function refreshAccessToken(refreshToken: string): Promise<void> {
+/**
+ * Native builds can only refresh with a token from secure storage. Browsers
+ * always can: the HttpOnly cookie is invisible here, so the attempt itself is
+ * the only way to find out whether a session is still alive.
+ */
+function canAttemptRefresh(session: StoredAuthSession | undefined): boolean {
+  return isTauriNativeRuntime() ? Boolean(session?.refreshToken) : true;
+}
+
+async function refreshAccessToken(refreshToken?: string): Promise<void> {
   const refreshed = await requestJson<WorkbenchRefreshResponse>(
     `${coreBaseUrl()}/auth/refresh`,
     {
       method: "POST",
+      // Browsers send nothing: Core reads the HttpOnly cookie instead.
+      credentials: "include",
       headers: {
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ refreshToken })
+      body: refreshToken ? JSON.stringify({ refreshToken }) : undefined
     },
     false
   );
@@ -946,12 +1016,12 @@ async function fetchJson<T>(
     }
 
     const session = readStoredSession();
-    if (!session?.refreshToken) {
+    if (!canAttemptRefresh(session)) {
       throw error;
     }
 
     try {
-      await refreshAccessToken(session.refreshToken);
+      await refreshAccessToken(session?.refreshToken);
       const result = await requestJson<T>(url, options, true, notificationOptions);
       markSuccessfulCoreRequest();
       return result;
@@ -988,9 +1058,9 @@ async function fetchWithSessionAuth(
   let response = await requestOnce();
   if (response.status === 401 && !isAuthRefreshRoute(url)) {
     const session = readStoredSession();
-    if (session?.refreshToken) {
+    if (canAttemptRefresh(session)) {
       try {
-        await refreshAccessToken(session.refreshToken);
+        await refreshAccessToken(session?.refreshToken);
         response = await requestOnce();
       } catch {
         await clearWorkbenchSession();
@@ -2209,13 +2279,14 @@ export const coreApi = {
       method: "POST",
       body: JSON.stringify({ username, password })
     }),
-  refresh: (refreshToken: string): Promise<WorkbenchRefreshResponse> =>
+  refresh: (refreshToken?: string): Promise<WorkbenchRefreshResponse> =>
     requestJson(
       `${coreBaseUrl()}/auth/refresh`,
       {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refreshToken })
+        body: refreshToken ? JSON.stringify({ refreshToken }) : undefined
       },
       false
     ),
@@ -2380,14 +2451,7 @@ export const localDaemonApi = {
 };
 
 export async function saveWorkbenchSession(session: WorkbenchAuthResponse | WorkbenchRefreshResponse): Promise<void> {
-  const stored: StoredAuthSession = {
-    user: session.user,
-    accessToken: session.accessToken,
-    refreshToken: session.refreshToken,
-    tokenType: session.tokenType,
-    expiresInSeconds: session.expiresInSeconds,
-    issuedAt: new Date().toISOString()
-  };
+  const stored = sessionFromAuthResponse(session);
   sessionCache = stored;
   await persistSessionToStorage(stored);
   try {
