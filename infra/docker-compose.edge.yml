@@ -1,3 +1,7 @@
+# Edge stack: the Cloudflare tunnel that publishes Core. Started explicitly with
+# -f by infra/start_tunnel.{sh,bat}; it is never picked up by default discovery.
+#
+# The database/service stack is the separate root docker-compose.yml.
 services:
   # Cloudflare Tunnel
   tunnel:

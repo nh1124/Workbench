@@ -89,7 +89,7 @@ AC-D5 スクリーンショット(#4後半) — 別契約・Owner承認必須
 
 > **AC-D6 は置き換え済み(2026-07-10)**: Ownerのcapture本来構想(複数PC集約 +
 > エージェント定期分析)により抽出トリガー(a)(b)が要件化されたため、
-> [workbench-insights-service-plan.md](workbench-insights-service-plan.md) を正本とする。
+> [workbench-insights-service-plan.md](archive/workbench-insights-service-plan.md) を正本とする。
 > maintenance/analyser の Review 側を domain 残留とする判断は不変。
 
 ```text

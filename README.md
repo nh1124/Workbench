@@ -133,6 +133,10 @@ Edit `infra/workbench.env` when changing hosts or ports. Keep secrets and databa
 - `WORKBENCH_REQUIRE_CORE_MUTATION_ORIGIN`, `WORKBENCH_CORE_MUTATION_TOKEN`
 - service-specific database variables
 - Tasks additionally uses `TASKS_LBS_MODE=local` and `TASKS_TIMEZONE`
+- Logging (`@workbench/logging`): `LOG_LEVEL`, `WORKBENCH_LOG_DIR`, `WORKBENCH_LOG_CONSOLE=0` to silence
+  the console mirror, and `WORKBENCH_LOG_RETENTION_DAYS` (default `14`). Each service writes
+  `logs/<service>-<date>.jsonl` and sweeps files past the retention window once a day, so `logs/` does
+  not need manual pruning.
 
 The UI needs only `VITE_WORKBENCH_CORE_URL`. For remote MCP or OAuth clients, set `CORE_EXTERNAL_BASE_URL` to the exact externally reachable HTTPS origin or base path.
 
@@ -175,7 +179,8 @@ The built UI uses the browser origin as its Core URL. For stable remote OAuth or
 
 ## Databases
 
-`docker-compose.yml` defines these PostgreSQL services and host ports:
+The root `docker-compose.yml` defines these PostgreSQL services and host ports (the Cloudflare tunnel
+is a separate stack in `infra/docker-compose.edge.yml`):
 
 | Compose service | Container | Host port | Database | Volume |
 |---|---|---:|---|---|

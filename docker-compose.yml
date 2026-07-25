@@ -1,3 +1,9 @@
+# Local data plane: one PostgreSQL per service, plus the Artifacts container.
+# Lives at the repo root because every infra/*.sh and *.bat script invokes
+# `docker compose` without -f and relies on default file discovery.
+#
+# The Cloudflare tunnel is a separate stack: infra/docker-compose.edge.yml,
+# started by infra/start_tunnel.{sh,bat}.
 services:
   workbench-core-db:
     image: postgres:16-alpine

@@ -1,7 +1,7 @@
 # Tasks UI Specification（確定版）
 
 Last updated: 2026-07-13（ユーザー確認済みの決定を反映）
-関連: docs/imple/task-occurrence-stabilization-plan.md（identity 契約）, docs/imple/lbs-full-integration-plan.md
+関連: docs/imple/archive/task-occurrence-stabilization-plan.md（identity 契約）, docs/imple/lbs-full-integration-plan.md
 
 ## 1. ビュー定義（表示単位と正本）
 

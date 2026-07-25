@@ -55,7 +55,7 @@ LG-D3 requestLogger ミドルウェア（Express 互換、型は構造的に定�
 
 LG-D4 各サービス統合方針
 - 対象: workbench-core, notes, artifacts, tasks, projects, images,
-  mindmaps, wbs, insights（src のみ。__tests__/scripts/dist は対象外）。
+  mindmaps, wbs, insights（現 analyser。src のみ。__tests__/scripts/dist は対象外）。
 - sync-daemon は対象外（クライアント機で動くためサーバ logs/ の前提が
   成り立たない。必要になれば別計画）。
 - 複数ファイルから使うサービス（workbench-core, tasks）は src/logger.ts に
@@ -100,7 +100,7 @@ LG-F1 将来スコープ（本計画では実装しない）
 | P1 | services/logging パッケージ新設（index.js / index.d.ts / package.json、root workspaces は services/* で自動包含） | `[x]` |
 | P2 | requestLogger / installProcessHandlers 実装（P1 に同梱） | `[x]` |
 | P3 | workbench-core 統合: src/logger.ts、httpServer.ts の console 置換 + OAuth debug 格下げ、projectContext.ts ほか周辺ファイル | `[x]` |
-| P4 | 内部 8 サービス統合（notes / artifacts / tasks / projects / images / mindmaps / wbs / insights、tasks は store 系含む） | `[x]` |
+| P4 | 内部 8 サービス統合（notes / artifacts / tasks / projects / images / mindmaps / wbs / insights〔現 analyser〕、tasks は store 系含む） | `[x]` |
 | P5 | infra: .gitignore、initialize_system、docker-compose、artifacts Dockerfile、logs_tail.sh、env example 追記 | `[x]` |
 | P6 | 検証: 全 workspace tsc --noEmit、logger 単体+実 Express スモーク（ファイル生成・レベル・ローテ削除・requestId・/health除外）、tasks 139/139・core 77/77 pass | `[x]` |
 

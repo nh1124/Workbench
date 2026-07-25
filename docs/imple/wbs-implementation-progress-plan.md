@@ -15,9 +15,9 @@ Last updated: 2026-07-01
 
 | Document | State | Notes |
 |---|---|---|
-| `docs/imple/mindmap-wbs-independent-services-plan.md` | `[implemented]` | Confirms Mindmap/Logical Tree and WBS are separate service tracks. |
-| `docs/imple/wbs-service-plan.md` | `[implemented]` | WBS independent service design is ready for implementation. |
-| `docs/imple/mindmap-project-context-mcp-plan.md` | `[implemented]` | Useful reference for Project index and MCP progress tracking style. |
+| `docs/imple/archive/mindmap-wbs-independent-services-plan.md` | `[implemented]` | Confirms Mindmap/Logical Tree and WBS are separate service tracks. |
+| `docs/imple/archive/wbs-service-plan.md` | `[implemented]` | WBS independent service design is ready for implementation. |
+| `docs/imple/archive/mindmap-project-context-mcp-plan.md` | `[implemented]` | Useful reference for Project index and MCP progress tracking style. |
 | `docs/imple/wbs-implementation-progress-plan.md` | `[in-progress]` | Implementation wiring is in place; final verification and review are ongoing. |
 
 ## 3. Objective

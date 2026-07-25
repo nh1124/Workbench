@@ -18,5 +18,10 @@ native/desktop/src-tauri/tauri.conf.json
 .claude/
 services/lbs/.venv*/
 CLAUDE.md
+
 # TypeScript incremental build artifacts
 *.tsbuildinfo
+
+# Scratch dev-server logs written by agent sessions
+/.codex/
+/.codex-dev-logs/

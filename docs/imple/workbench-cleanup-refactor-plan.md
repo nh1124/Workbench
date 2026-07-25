@@ -62,7 +62,7 @@
 | # | 対象 | 内容 |
 |---|---|---|
 | T1 | `.codex/`, `.codex-dev-logs/` | 2026-06-28〜07-02 の Vite 開発ログ。`.err.log` は 0 バイト。完全な残骸 |
-| T2 | `logs/` (約 1.8 MB) | 07-14〜07-25 の jsonl。`insights-2026-07-19.jsonl` は改名前の遺物 |
+| ~~T2~~ | ~~`logs/` (約 1.8 MB)~~ | **取り下げ（2026-07-26）**。`@workbench/logging` が既に 14 日保持＋日次スイープを実装済み（`WORKBENCH_LOG_RETENTION_DAYS`）。現存ファイルは全て保持期間内で、手動削除は不要かつ有害。実際の不足は**環境変数が未文書だったこと**で、README に追記して解決 |
 | T3 | `docker-compose.yml`（root）と `infra/docker-compose.yml` | **別物**（前者=DB スタック、後者=Cloudflare tunnel の edge プロファイル）なのに同名。事故のもと |
 | ~~T4~~ | ~~`CLAUDE.md` が `.gitignore` に入っている~~ | **取り下げ（2026-07-26）**。本番サーバ情報・一時チャネル URL などの機密が含まれるため、意図的な除外。機密を分離しない限り公開しない方針で正しい |
 | T9 | `ui/tsconfig.tsbuildinfo` が追跡されていた | 型チェックのたびに再生成され、無関係なコミットに差分が混入していた。**対応済み** |
@@ -77,17 +77,31 @@
 
 ### Phase 0 — 即実行（低リスク・約 30 分）
 
-1. **T1**: `.codex/` `.codex-dev-logs/` を削除し、`.gitignore` に追記して再発を防ぐ
-2. **T2**: `logs/*.jsonl` のうち 7 日より古いものを削除。ログローテーション方針を `README.md` に 1 行明記
-3. **T3**: root の `docker-compose.yml` を `infra/docker-compose.db.yml` へ、`infra/docker-compose.yml` を `infra/docker-compose.edge.yml` へ改名。root にはどちらも置かない。`infra/*.sh` `*.bat` の参照を追随
+1. ✅ **T1**: `.codex/` `.codex-dev-logs/` を削除し、`.gitignore` に追記
+2. ~~**T2**~~: 取り下げ（§1.4 参照）。代わりに `WORKBENCH_LOG_RETENTION_DAYS` 等を README に文書化
+3. ✅ **T3（縮小）**: `infra/docker-compose.yml` → `infra/docker-compose.edge.yml` のみ改名。
+   **root の `docker-compose.yml` は移動しない** —— 当初案は誤りだった。`infra/*.sh` `*.bat` の約 8 本が
+   `docker compose up -d`（`-f` なし）で**既定のファイル探索に依存**しており、root から動かすと全て壊れる。
+   root は docker の慣習どおりの置き場所でもある。edge 側は `start_tunnel.{sh,bat}` が既に明示パスで
+   参照していたので 2 ファイルの修正で済んだ。加えて両ファイル冒頭に用途を書いたコメントを追加し、
+   「同名で別物」という本来の混乱要因を直接解消した
 4. ~~**T4**~~: 取り下げ。`CLAUDE.md` の除外は意図通り（§1.4 参照）。将来的に共有したくなった場合のみ、機密部分を `.env` 相当へ分離してから検討する
 
 ### Phase 1 — ドキュメント整理（約 1 時間）
 
-5. **T5**: `docs/imple/archive/` を作り、進捗ボードが全項目完了の計画書を移動。対象候補 —
-   `project-agent-context-implementation-plan.md` / `task-occurrence-stabilization-plan.md` / `mindmap-logical-tree-service-plan.md` / `mindmap-project-context-mcp-plan.md` / `wbs-service-plan.md` / `workbench-ux-refinements-plan.md` / `workbench-context-governance-plan.md` / `workbench-maintenance-loop-plan.md` / `workbench-mcp-feedback-fixes-plan.md` / `workbench-insights-service-plan.md`（analyser へ改名済み・完全に歴史的）/ `lbs-consolidation-proposal.md` / `lbs-full-integration-plan.md` / `artifacts-quick-access-ui-plan.md`
-   `docs/imple/README.md` に「現役の計画書」一覧を置く
-6. **T6**: `insights` → `analyser` の残存参照を一括置換。`.agents/skills/` は正本（project 936c…）との同期が必要なので、`workbench-agent-skills-materialize` スキル経由で反映する
+5. ✅ **T5**: `docs/imple/archive/` へ 11 本を移動し、`docs/imple/README.md` に現役一覧を作成。
+   **当初の 13 本候補のうち 3 本は未完了だったため現役に残した** —— キーワード数だけで判断せず
+   1 本ずつ進捗ボードを読んだ結果、以下が未完了だと判明した（README にも再掲）:
+   - `lbs-full-integration-plan` W7: **本番 LBS 移行が未実施**（ユーザー確認必須）
+   - `workbench-mcp-feedback-fixes-plan` FB2-R: 本番反映（push）と再受入が残
+   - `workbench-maintenance-loop-plan` P3-8: live 環境での forward-test が残
+   さらに `wbs-implementation-progress-plan` は一度 archive したが `[in-progress]` を確認して差し戻した。
+   archive によって壊れた相互参照 8 箇所も修正済み。
+6. ✅ **T6（縮小）**: 一括置換は**しない**のが正解だった。`.agents/skills/` の `insights` 参照は
+   「legacy な `insights.*` ツールは存在しないので fall back するな」という**意図的な記述**であり、
+   `infra/scripts/migrate-insights-to-analyser.mjs` も名称として正しい。analyser 系 doc の言及も移行の
+   歴史説明。実際に紛らわしかったのは `logging-foundation-plan.md` の 2 箇所だけで、完了済み計画の
+   記録を書き換えるのは履歴の改竄になるため「insights（現 analyser）」と注記する形に留めた
 
 ### Phase 2 — 構造の統一（要判断）
 
@@ -246,11 +260,15 @@ export function requestHasValidLoopbackToken(req: IncomingMessage, expectedToken
 
 ```
 ✅ R0（バグ修正）→ ✅ R3（スキーマ一元化）→ ✅ R4'（auth 適合テスト）→ ✅ R0.5（httpOnly cookie）
-  → Phase 0/1（掃除・ドキュメント整理）← 次
-  → R1（core, 要テスト先行）→ R2（daemon）→ R5 + T8（UI）
+  → ✅ Phase 0/1（掃除・ドキュメント整理）
+  → R1（core, 要テスト先行）← 次 → R2（daemon）→ R5 + T8（UI）
 ```
 
-**セキュリティ系（S1〜S7）と再発防止のテストは全て完了。** 残るのは掃除と大物の分割。Phase 0/1 を先に片付けると、R1/R2 の巨大な差分がノイズに埋もれずに済む。
+**セキュリティ系（S1〜S7）・再発防止テスト・掃除は全て完了。** 残るのは大物の分割のみ。
+
+R1 の前提条件は変わらず「OAuth の認可コード〜トークン〜リフレッシュの実フローのテストを先に書く」。
+なお R0.5 で `refreshCookie.ts` を切り出した際、httpServer を import すると DB が必要になる（既存 18
+テストが skip される理由）ことが分かった。**R1 の分割は、副次的にテスト可能性を大きく改善する**。
 
 ---
 
@@ -258,13 +276,13 @@ export function requestHasValidLoopbackToken(req: IncomingMessage, expectedToken
 
 | ID | 項目 | 状態 | 備考 |
 |---|---|---|---|
-| Phase0-T1 | `.codex*` 削除 | 未着手 | |
-| Phase0-T2 | `logs/` 整理 + 方針明記 | 未着手 | |
-| Phase0-T3 | docker-compose 改名 | 未着手 | 参照スクリプト追随が必要 |
+| Phase0-T1 | `.codex*` 削除 | **完了** | `.gitignore` 追記済み |
+| ~~Phase0-T2~~ | ~~`logs/` 整理~~ | **取り下げ** | 保持機構は実装済み。README に文書化して代替 |
+| Phase0-T3 | docker-compose 改名（edge のみ） | **完了** | root は既定探索依存のため移動せず |
 | ~~Phase0-T4~~ | ~~`CLAUDE.md` を追跡対象に~~ | **取り下げ** | 機密を含むため意図的に除外 |
 | Phase0-T9 | `tsbuildinfo` を追跡解除 | **完了** | commit `93fc678` |
-| Phase1-T5 | `docs/imple/archive/` へ移動 | 未着手 | 13 本が候補 |
-| Phase1-T6 | `insights` 参照の一掃 | 未着手 | `.agents` は正本経由で反映 |
+| Phase1-T5 | `docs/imple/archive/` へ移動 | **完了** | 11 本を archive・3 本は未完了のため現役維持・参照 8 箇所修正 |
+| Phase1-T6 | `insights` 参照の整理 | **完了** | 大半は意図的な記述。`logging-foundation-plan` の 2 箇所のみ注記 |
 | R0-S1 | daemon トークン既定必須化 | **完了** | commit `8a4245f` |
 | R0-S5 | multipart に Core ヘッダ | **完了** | commit `8a4245f`（回帰テスト付き） |
 | R0-S6 | internalClients タイムアウト | **完了** | commit `8a4245f`（回帰テスト付き） |

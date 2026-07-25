@@ -3,7 +3,7 @@ setlocal enabledelayedexpansion
 
 set "SCRIPT_DIR=%~dp0"
 set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
-set "COMPOSE_FILE=%SCRIPT_DIR%\docker-compose.yml"
+set "COMPOSE_FILE=%SCRIPT_DIR%\docker-compose.edge.yml"
 set "PROJECT_ROOT=%SCRIPT_DIR%\.."
 
 set "ENV_FILE=%PROJECT_ROOT%\.env.edge"

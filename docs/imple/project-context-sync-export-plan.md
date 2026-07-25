@@ -6,7 +6,7 @@ Last updated: 2026-06-21
 Related documents:
 
 - [Project Agent Context design](../project-agent-context-design.md)
-- [Project Agent Context implementation result](project-agent-context-implementation-plan.md)
+- [Project Agent Context implementation result](archive/project-agent-context-implementation-plan.md)
 - [Local client / sync daemon plan](workbench-local-client-sync-daemon-plan.md)
 
 ## 1. Scope

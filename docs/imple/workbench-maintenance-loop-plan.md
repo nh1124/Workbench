@@ -7,7 +7,7 @@ Last updated: 2026-07-06
 
 - 方向性レビュー(本計画の元): [workbench-direction-review.md](../user_note/workbench-direction-review.md)
 - 設計正本: [project-agent-context-design.md](../project-agent-context-design.md)
-- 先行実装: [project-agent-context-implementation-plan.md](project-agent-context-implementation-plan.md),
+- 先行実装: [project-agent-context-implementation-plan.md](archive/project-agent-context-implementation-plan.md),
   [workbench-local-client-sync-daemon-plan.md](workbench-local-client-sync-daemon-plan.md)
 
 目的: 「変更発生 → 変更フィード → メンテキュー → 定期agent実行 → 人間レビュー(週次・一箇所)
