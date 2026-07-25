@@ -3,8 +3,9 @@
 **What this is.** A setup instruction you hand to an agent (Claude, Codex, cowork, …) that has
 the Workbench MCP tools connected. It is deliberately **not** an AgentSkill: skills are
 auto-discovered and applied by an agent when relevant, whereas this is a one-off runbook a person
-invokes on purpose. It is also kept outside `skills/` in the canonical AgentSkills store so it is
-never mistaken for a routine's `skillKey`.
+invokes on purpose. The canonical copy lives in the AgentSkills project at
+`prompts/workbench-analyser-onboarding.md` — outside `skills/`, so it is never picked up by the
+skill catalog as a routine's `skillKey`.
 
 **How to use.** Paste everything below the line into an agent session, once per user account.
 Run it again any time routines stop firing.
