@@ -1,0 +1,80 @@
+import type { FSWatcher } from "node:fs";
+import type { CaptureManager } from "./capture/manager.js";
+import type { CaptureServerPolicyProvider } from "./capture/serverPolicy.js";
+import type { CaptureUploader } from "./capture/uploader.js";
+import type { DaemonConfig } from "./config.js";
+import type { ClientIdentity } from "./identityStorage.js";
+import type { ManifestStore, SyncErrorCategory } from "./manifestStore.js";
+
+/**
+ * Shared daemon types.
+ *
+ * These lived in index.ts, which meant any module that needed DaemonState had
+ * to import index.ts and form a cycle — that is what blocked the domain logic
+ * from being extracted. Keeping them here lets the domain modules depend on the
+ * shape without depending on the entry point.
+ */
+
+export type LocalJob = {
+  id: string;
+  kind: "download_artifact" | "download_task_attachment" | "materialize_resource";
+  target: "downloads" | "sync-folder";
+  payload: Record<string, unknown>;
+  status: string;
+};
+
+export type PendingLocalJobConfirmation = {
+  job: LocalJob;
+  requestedAt: string;
+  reason: string;
+};
+
+export type LocalArtifactItem = {
+  id: string;
+  projectId: string;
+  projectName?: string;
+  kind: "folder" | "note" | "file";
+  title: string;
+  path: string;
+  parentPath: string;
+  scope: "private";
+  tags: string[];
+  mimeType?: string;
+  sizeBytes?: number;
+  version: number;
+  contentMarkdown?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DaemonState = {
+  config: DaemonConfig;
+  manifestStore: ManifestStore;
+  capture?: CaptureManager;
+  captureUploader?: CaptureUploader;
+  capturePolicy?: CaptureServerPolicyProvider;
+  captureUploadIdentityWarned?: boolean;
+  captureFileUploadWarned?: boolean;
+  identity?: ClientIdentity;
+  lastHeartbeatAt?: string;
+  lastClaimAt?: string;
+  lastScanAt?: string;
+  lastPushAt?: string;
+  lastRemotePullAt?: string;
+  remoteArtifactCursor?: string;
+  lastError?: string;
+  lastErrorCode?: string;
+  lastErrorCategory?: SyncErrorCategory;
+  lastErrorRetryable?: boolean;
+  lastLoggedError?: string;
+  processedJobs: number;
+  outboxPending: number;
+  outboxFailed: number;
+  conflictsOpen: number;
+  watcherActive: boolean;
+  tickRunning: boolean;
+  tickQueued: boolean;
+  tickTimer?: ReturnType<typeof setTimeout>;
+  watcher?: FSWatcher;
+  pendingJobConfirmations?: Map<string, PendingLocalJobConfirmation>;
+};

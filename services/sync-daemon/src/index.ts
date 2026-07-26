@@ -216,69 +216,13 @@ export function runWithClientOpId<T>(clientOpId: string | undefined, operation: 
   return localWriteContext.run({ clientOpId: normalized }, operation);
 }
 
-export type LocalJob = {
-  id: string;
-  kind: "download_artifact" | "download_task_attachment" | "materialize_resource";
-  target: "downloads" | "sync-folder";
-  payload: Record<string, unknown>;
-  status: string;
-};
-
-type PendingLocalJobConfirmation = {
-  job: LocalJob;
-  requestedAt: string;
-  reason: string;
-};
-
-type LocalArtifactItem = {
-  id: string;
-  projectId: string;
-  projectName?: string;
-  kind: "folder" | "note" | "file";
-  title: string;
-  path: string;
-  parentPath: string;
-  scope: "private";
-  tags: string[];
-  mimeType?: string;
-  sizeBytes?: number;
-  version: number;
-  contentMarkdown?: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type DaemonState = {
-  config: DaemonConfig;
-  manifestStore: ManifestStore;
-  capture?: CaptureManager;
-  captureUploader?: CaptureUploader;
-  capturePolicy?: CaptureServerPolicyProvider;
-  captureUploadIdentityWarned?: boolean;
-  captureFileUploadWarned?: boolean;
-  identity?: ClientIdentity;
-  lastHeartbeatAt?: string;
-  lastClaimAt?: string;
-  lastScanAt?: string;
-  lastPushAt?: string;
-  lastRemotePullAt?: string;
-  remoteArtifactCursor?: string;
-  lastError?: string;
-  lastErrorCode?: string;
-  lastErrorCategory?: SyncErrorCategory;
-  lastErrorRetryable?: boolean;
-  lastLoggedError?: string;
-  processedJobs: number;
-  outboxPending: number;
-  outboxFailed: number;
-  conflictsOpen: number;
-  watcherActive: boolean;
-  tickRunning: boolean;
-  tickQueued: boolean;
-  tickTimer?: ReturnType<typeof setTimeout>;
-  watcher?: FSWatcher;
-  pendingJobConfirmations?: Map<string, PendingLocalJobConfirmation>;
-};
+export type { DaemonState, LocalJob } from "./types.js";
+import type {
+  DaemonState,
+  LocalArtifactItem,
+  LocalJob,
+  PendingLocalJobConfirmation
+} from "./types.js";
 
 class CoreHttpError extends Error {
   status: number;
