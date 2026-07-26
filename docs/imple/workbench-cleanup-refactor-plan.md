@@ -259,15 +259,30 @@ DB 非依存で回るようになった。**分割はテスト可能性を直接
 
 ### R2 — `sync-daemon/index.ts` の解体 → **着手済み・継続中（2026-07-26）**
 
-**8,122 → 7,566 行（-7%）**。R1 と違い**構造的に手強い**ことが判明した。
+**8,122 → 4,282 行（-47%）**
 
 | commit | 内容 | 行数 |
 |---|---|---|
 | `8a6b454` | `config.ts` + `paths.ts`（設定・パス安全性） | -342 |
 | `3ceb6ba` | `localProjects.ts` `localNotes.ts`（純粋ヘルパのみ） | -52 |
-| `c06df5d` | `types.ts`（`DaemonState` ほか） | -56 |
+| `c06df5d` | **`types.ts`（`DaemonState` ほか）← 障壁 1 の除去** | -56 |
 | `34a1222` | 既定プロジェクトのキャッシュ系 | -36 |
-| `ea2e36f` | `localStore.ts`（ローカル書き込み基盤） | -70 |
+| `ea2e36f` | **`localStore.ts`（ローカル書き込み基盤）← 障壁 2 の除去** | -70 |
+| `9427b99` | `localNotes.ts`（Notes ドメイン全体） | -207 |
+| `5a37d77` | `localProjects.ts`（Projects ドメイン全体） | -476 |
+| `b522b55` | `localTasks.ts`（Tasks ドメイン 94 関数） | -1,785 |
+| `4f1a515` | `localArtifacts.ts`（ローカル投影・`scanSyncFolder`） | -507 |
+| `2741ea3` | `remoteSync.ts`（同期エラー分類） | -97 |
+| `8a6d62b` | `httpApi.ts`（ループバック HTTP 層） | -212 |
+
+**障壁を先に外すのが鍵だった**。`types.ts` と `localStore.ts` を作るまで 2 wave 空振りしたが、
+外した直後から Notes → Projects → Tasks → Artifacts と一気に進んだ。
+
+**残り**:
+- remote pull/push 本体（スナップショット適用・カーソル前進・衝突ファイル書き出し・push ループ）
+- `startStatusServer` とそのルータ —— `scheduleTick` / rescan / artifact 操作を呼ぶため、
+  それらを先に移さないと `httpApi.ts → index.ts` の循環になる
+- `main()` とジョブ/スケジューラ/ウォッチャ
 
 **なぜ R1 ほど進まないか**: Core のルートハンドラは互いに独立していたが、daemon は
 `DaemonState` を全域で引き回す設計で、関数が相互に依存している。1 つ動かすには依存の連鎖を
@@ -278,7 +293,7 @@ DB 非依存で回るようになった。**分割はテスト可能性を直接
 2. `localStore.ts` — `localWriteContext`(AsyncLocalStorage) / `enqueueManifestOutbox` /
    `runWithClientOpId` / `refreshManifestStats` / ID ヘルパ群
 
-**次 wave の具体的な手順**（調査済み・この順でないと動かない）:
+**次 wave の具体的な手順**（旧メモ・下記は完了済み）:
 1. `localStore.ts` へ次を移す —— note/project CRUD が直接呼んでいる残りの依存:
    `asString`, `asNumber`, `localRemoteDomainItem`, `listLocalRemoteDomainItems`,
    `supersedeOpenOutboxForPath`
@@ -342,7 +357,7 @@ DB 非依存で回るようになった。**分割はテスト可能性を直接
 ### 優先順位
 
 ```
-✅ R0 → ✅ R3 → ✅ R4' → ✅ R0.5 → ✅ Phase 0/1 → ✅ R1-pre → ✅ R1（-97%）→ 🔄 R2（-7%, 障壁除去済み）
+✅ R0 → ✅ R3 → ✅ R4' → ✅ R0.5 → ✅ Phase 0/1 → ✅ R1-pre → ✅ R1（-97%）→ 🔄 R2（-47%）
   → R2（daemon 8,073 行）→ R5 + T8（UI）
 ```
 
@@ -386,7 +401,7 @@ R1 の前提条件は変わらず「OAuth の認可コード〜トークン〜�
 | R4' | auth 適合テスト（共通化はしない） | **完了** | commit `9b36224`・ドリフト注入で検知を確認 |
 | R1-pre | OAuth フローのテスト追加 | **完了** | 21 件。mutation 注入で有効性確認済み |
 | R1 | core/httpServer 分割 | **完了** | 7,209→192 行（-97%）。16 モジュールへ分割 |
-| R2 | sync-daemon 分割 | **一部完了** | 8,122→7,566 行。障壁(types/localStore)は除去済み・§4 R2 に次手順 |
+| R2 | sync-daemon 分割 | **一部完了** | 8,122→4,282 行（-47%）。残: remote pull/push・router・main |
 | ~~R4~~ | ~~services 共通パッケージ~~ | **取り下げ** | §4 R4 参照。R4' に置換 |
 | R5+T8 | UI feature-first 化 | 未着手 | |
 
