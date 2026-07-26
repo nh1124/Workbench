@@ -192,9 +192,9 @@ export function requestHasValidLoopbackToken(req: IncomingMessage, expectedToken
 
 検証: core 221 tests（203 pass / 18 skip・DB 依存）、ui 242 tests all pass、両者 `tsc --noEmit` クリーン。cookie 8 件・セッション 6 件の新規テストを追加。
 
-### R1 — `workbench-core/httpServer.ts` の解体 → **着手済み・継続中（2026-07-26）**
+### R1 — `workbench-core/httpServer.ts` の解体 → **✅ 完了（2026-07-26）**
 
-**完了分**: 7,209 → **4,162 行**（-3,047 行, **-42%**）
+**7,209 → 192 行（-97%）**。httpServer.ts に残るのは app 構築・middleware・`/health`・UI 配信・起動のみ。
 
 | wave | commit | 内容 | 行数 |
 |---|---|---|---|
@@ -203,6 +203,14 @@ export function requestHasValidLoopbackToken(req: IncomingMessage, expectedToken
 | 2 | `55d8cfa` | `schemas/requests.ts` + `middleware/auth.ts` | -223 |
 | 3 | `68d9118` | `routes/{deep-research,mindmaps,analyser,wbs,images,notes}.ts` + `routes/shared.ts` | -1,655 |
 | 4 | `a846c48` | `routes/{local-clients,local-jobs}.ts` | -419 |
+| 5 | `eed5f62` | `routes/{artifacts,projects}.ts` | -946 |
+| 6 | `0d3124c` | `routes/tasks.ts` | -674 |
+| 7 | `3913343` | `routes/sync.ts` | -1,468 |
+| 8 | `b9c69b2` | `routes/{oauth,accounts,mcp}.ts` | -882 |
+
+**既知の見た目の負債**: `routes/*.ts` の各 `register*Routes()` の中身はトップレベル相当の
+インデントのまま（移動元の字下げを保っている）。これは**意図的**で、本文をバイト一致に保つことが
+検証手段そのものだったため。整形したい場合は R1 完了後の独立した formatter パスで行うこと。
 
 **検証方法**（機械的移動であることの証明）。テストが緑なだけでは不十分なので、以下を毎 wave 実施:
 1. **ランタイムのルート登録順**を `app._router.stack` から dump し、直前コミットの worktree で取った
@@ -299,7 +307,7 @@ DB 非依存で回るようになった。**分割はテスト可能性を直接
 ### 優先順位
 
 ```
-✅ R0 → ✅ R3 → ✅ R4' → ✅ R0.5 → ✅ Phase 0/1 → ✅ R1-pre → 🔄 R1（-42%, sync/tasks/projects/artifacts が残）
+✅ R0 → ✅ R3 → ✅ R4' → ✅ R0.5 → ✅ Phase 0/1 → ✅ R1-pre → ✅ R1（-97%）
   → R2（daemon 8,073 行）→ R5 + T8（UI）
 ```
 
@@ -342,7 +350,7 @@ R1 の前提条件は変わらず「OAuth の認可コード〜トークン〜�
 | R3 | スキーマ一元化 | **完了** | commit `261769b`・parity テスト付き |
 | R4' | auth 適合テスト（共通化はしない） | **完了** | commit `9b36224`・ドリフト注入で検知を確認 |
 | R1-pre | OAuth フローのテスト追加 | **完了** | 21 件。mutation 注入で有効性確認済み |
-| R1 | core/httpServer 分割 | **一部完了** | 7,209→4,162 行（-42%）。sync/tasks/projects/artifacts が残 |
+| R1 | core/httpServer 分割 | **完了** | 7,209→192 行（-97%）。16 モジュールへ分割 |
 | R2 | sync-daemon 分割 | 未着手 | |
 | ~~R4~~ | ~~services 共通パッケージ~~ | **取り下げ** | §4 R4 参照。R4' に置換 |
 | R5+T8 | UI feature-first 化 | 未着手 | |
