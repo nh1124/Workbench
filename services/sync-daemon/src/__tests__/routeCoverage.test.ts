@@ -10,7 +10,17 @@ const repoRoot = path.resolve(__dirname, "../../../..");
 
 const uiApiSource = readFileSync(path.join(repoRoot, "ui/src/lib/api.ts"), "utf8");
 const uiServicesSource = readFileSync(path.join(repoRoot, "ui/src/config/services.ts"), "utf8");
-const daemonSource = readFileSync(path.join(repoRoot, "services/sync-daemon/src/index.ts"), "utf8");
+// Read the daemon's whole non-test source rather than index.ts alone, so the
+// route contract keeps holding as index.ts is split into modules. Same reason
+// as coreHttpSource below.
+function readDaemonSources(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) return entry.name === "__tests__" ? [] : readDaemonSources(full);
+    return entry.name.endsWith(".ts") ? [readFileSync(full, "utf8")] : [];
+  });
+}
+const daemonSource = readDaemonSources(path.join(repoRoot, "services/sync-daemon/src")).join("\n");
 const daemonMcpSource = readFileSync(path.join(repoRoot, "services/sync-daemon/src/mcpServer.ts"), "utf8");
 const daemonProjectContextExportSource = readFileSync(path.join(repoRoot, "services/sync-daemon/src/projectContextExport.ts"), "utf8");
 // Core's routes were split out of httpServer.ts into routes/*.ts. The contract
