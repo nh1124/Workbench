@@ -80,6 +80,14 @@ export function objectId(value: unknown): string | undefined {
   return undefined;
 }
 
+export function jsonRecordFromBuffer(buffer: Buffer): Record<string, unknown> {
+  try {
+    return asJsonRecord(JSON.parse(buffer.toString("utf8")));
+  } catch {
+    return {};
+  }
+}
+
 export type LiveSyncEvent = {
   domain: SyncDomain;
   resourceId: string;
