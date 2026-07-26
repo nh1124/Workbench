@@ -32,14 +32,6 @@ import { saveOAuthDynamicClient } from "./oauthDynamicClientsStore.js";
 import {
   accountSchema,
   integrationConfigSchema,
-  localClientHeartbeatSchema,
-  localClientPatchSchema,
-  localClientRegisterSchema,
-  localJobClaimSchema,
-  localJobCompleteSchema,
-  localJobCreateSchema,
-  localJobFailSchema,
-  localJobStatusSchema,
   refreshSchema,
   syncBlobPutSchema,
   syncPushSchema,
@@ -71,28 +63,7 @@ import {
 } from "./projectContext.js";
 import { artifactDeletionSnapshotRoot, artifactEventMetadata } from "./syncEventMetadata.js";
 import {
-  archiveLocalClient,
-  claimLocalJobsForClient,
-  completeLocalJobForClient,
-  createLocalJob,
-  deleteLocalClient,
-  failLocalJobForClient,
-  getLocalJob,
-  getLocalJobForClient,
-  listLocalClientAuditEventsForUser,
-  listLocalJobEventsForUser,
-  listLocalClients,
-  listLocalJobsForUser,
-  LocalClientStoreError,
-  recordLocalClientHeartbeat,
-  registerLocalClient,
-  revokeLocalClientTokens,
-  serializeLocalJobForOwner,
-  serializeLocalJobsForOwner,
-  updateLocalClient,
-  type LocalJobKind,
-  type LocalJobStatus,
-  type LocalJobTarget
+  LocalClientStoreError
 } from "./localClientsStore.js";
 import {
   getAppliedClientOp,
@@ -150,8 +121,6 @@ import {
 import {
   readBearerToken,
   requireAuthenticatedContext,
-  requireLocalClientCapability,
-  requireLocalClientContext,
   requireSyncAccessContext,
   type SyncAccessContext
 } from "./middleware/auth.js";

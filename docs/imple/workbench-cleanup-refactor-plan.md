@@ -194,23 +194,39 @@ export function requestHasValidLoopbackToken(req: IncomingMessage, expectedToken
 
 ### R1 — `workbench-core/httpServer.ts` の解体 → **着手済み・継続中（2026-07-26）**
 
-**完了分**: 7,209 → **6,236 行**（-973 行, -13.5%）
-- ✅ 前提の OAuth フローテスト 21 件（commit `7af4b11`, `a09bf22`）。DB 必須のため以前は 18 件が
-  skip されていたが、ローカル Postgres を起動して**全 242 件 skip ゼロ**で緑を確認
-- ✅ `oauth/{config,clients,tokens,authorizeRequest}.ts`（commit `14bb1c9`, -750 行）
-- ✅ `schemas/requests.ts` + `middleware/auth.ts`（commit `55d8cfa`, -223 行）
+**完了分**: 7,209 → **4,162 行**（-3,047 行, **-42%**）
 
-**検証方法**（機械的移動であることの証明）:
-- 移動した 37 関数すべてが、空白と `export` 修飾子を正規化したうえで移動前と**バイト一致**
-- 218 のルート登録が集合として不変
-- 依存の向きは一方向（`httpServer → oauth/ , middleware/ , schemas/`）、循環なし
-- Codex による独立レビューでも semantic drift ゼロ・ストア重複なし・export 欠落なしを確認
+| wave | commit | 内容 | 行数 |
+|---|---|---|---|
+| pre | `7af4b11` `a09bf22` | OAuth フローテスト 21 件 | — |
+| 1 | `14bb1c9` | `oauth/{config,clients,tokens,authorizeRequest}.ts` | -750 |
+| 2 | `55d8cfa` | `schemas/requests.ts` + `middleware/auth.ts` | -223 |
+| 3 | `68d9118` | `routes/{deep-research,mindmaps,analyser,wbs,images,notes}.ts` + `routes/shared.ts` | -1,655 |
+| 4 | `a846c48` | `routes/{local-clients,local-jobs}.ts` | -419 |
 
-**残り**（次セッション以降）:
-- `routes/sync.ts`（同期の検証・衝突・push 適用, 約 1,200 行）
-- `routes/<domain>.ts`（notes/artifacts/tasks/projects/mindmaps/wbs/images/analyser のファサード, 約 3,500 行）
-  —— `authenticate → try → client 呼び出し → catch` の同型が繰り返されるので `makeFacadeRoute()` で畳める
+**検証方法**（機械的移動であることの証明）。テストが緑なだけでは不十分なので、以下を毎 wave 実施:
+1. **ランタイムのルート登録順**を `app._router.stack` から dump し、直前コミットの worktree で取った
+   同じ dump と**位置まで含めて完全一致**することを確認（Express はルート順が意味を持つため、
+   集合一致では不十分）。差分は `ui/dist` 有無で条件登録される静的配信 2 層のみ
+2. 移動した関数が、空白と `export` 修飾子の正規化後に**バイト一致**すること
+3. httpServer.ts から消えた行がすべて移動先か残存部に存在すること（取りこぼしゼロ）
+4. `routes/*` `oauth/*` が httpServer.ts を import していないこと（循環なし）
+5. 全 242 テスト・skip ゼロ、`tsc --noEmit` クリーン
+
+**この過程で検出・修正した実バグ 2 件**:
+- `oauth/config.ts` が module load 時に env を読むが、ESM は import 先を importer 本体より先に評価する。
+  `auth.js` がたまたま先に dotenv を呼ぶことに依存しており、**import 順の並べ替えで起動不能**になる
+  状態だった → config.ts 自身が dotenv を読むよう修正
+- `syncEventBroadcaster` が `export { } from` で**再エクスポートのみ**され、ローカル束縛が無いため
+  httpServer.ts がコンパイル不能だった（再エクスポートはローカル変数を作らない）
+
+**残り**（次セッション）:
+- `routes/sync.ts`（同期の検証・衝突・push 適用, 約 1,200 行）—— push ヘルパ群が大きく、wave 4 では
+  時間切れのため**あえて手を付けず**コンパイル可能な状態で停止した
+- `routes/{tasks,projects,artifacts}.ts`（約 1,900 行）
 - `server.ts`（MCP トランスポート・UI 配信・起動）
+- 余力があれば、ファサードの `authenticate → try → client 呼び出し → catch` 同型反復を
+  `analyserFacadeRoute` と同じ要領で畳む（**これは機械的移動ではないので別 wave にすること**）
 
 **得られた知見**: `refreshCookie.ts` / `oauth/config.ts` の切り出しで判明したとおり、httpServer.ts を
 import すると DB 接続が要る。切り出した単位は DB なしでテストでき、実際 cookie 8 件・schema parity 5 件が
@@ -283,9 +299,16 @@ DB 非依存で回るようになった。**分割はテスト可能性を直接
 ### 優先順位
 
 ```
-✅ R0 → ✅ R3 → ✅ R4' → ✅ R0.5 → ✅ Phase 0/1 → ✅ R1-pre → 🔄 R1（-13.5%, routes/ が残）
+✅ R0 → ✅ R3 → ✅ R4' → ✅ R0.5 → ✅ Phase 0/1 → ✅ R1-pre → 🔄 R1（-42%, sync/tasks/projects/artifacts が残）
   → R2（daemon 8,073 行）→ R5 + T8（UI）
 ```
+
+**Codex 委譲時の注意（実測）**: R1 wave 3/4 では Codex(MCP) が 30 分の無応答 abort に 2 回かかった。
+プロセスは生き残って作業を続けるため、abort 後は (1) ファイルの mtime/md5 が安定するまで待つ、
+(2) `tsc` と全テストを自分で流す、(3) commit 前に `git status` を確認、の順で扱うこと。
+wave 3 では abort 後にコンパイル不能な状態が残っており、こちらで修正した。
+**「1 wave = 20 分以内に終わる分量」に絞り、収まらない場合は縮退してでもコンパイル可能な状態で止める**
+よう指示に明記すると、wave 4 のように安全に部分完了できる。
 
 **テスト実行環境の注意**: core の全テストを skip ゼロで回すにはローカル Postgres が必要。
 `docker compose up -d workbench-core-db` を先に実行すること。DB なしだと 18 件が skip され、
@@ -319,7 +342,7 @@ R1 の前提条件は変わらず「OAuth の認可コード〜トークン〜�
 | R3 | スキーマ一元化 | **完了** | commit `261769b`・parity テスト付き |
 | R4' | auth 適合テスト（共通化はしない） | **完了** | commit `9b36224`・ドリフト注入で検知を確認 |
 | R1-pre | OAuth フローのテスト追加 | **完了** | 21 件。mutation 注入で有効性確認済み |
-| R1 | core/httpServer 分割 | **一部完了** | 7,209→6,236 行。routes/ の分割が残 |
+| R1 | core/httpServer 分割 | **一部完了** | 7,209→4,162 行（-42%）。sync/tasks/projects/artifacts が残 |
 | R2 | sync-daemon 分割 | 未着手 | |
 | ~~R4~~ | ~~services 共通パッケージ~~ | **取り下げ** | §4 R4 参照。R4' に置換 |
 | R5+T8 | UI feature-first 化 | 未着手 | |
