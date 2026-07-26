@@ -185,3 +185,11 @@ export function supersedeOpenOutboxForPath(
   }
   return superseded;
 }
+
+export function decodeContentBase64(value: string): Buffer {
+  const compact = value.replace(/\s+/g, "");
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(compact)) {
+    throw new Error("contentBase64 must be valid base64");
+  }
+  return Buffer.from(compact, "base64");
+}
