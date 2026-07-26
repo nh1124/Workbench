@@ -12,7 +12,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { installProcessHandlers, requestLogger } from "@workbench/logging";
-import { isOAuthScopedToken, issueTokenBundle, verifyAccessToken, verifyRefreshToken } from "./auth.js";
+import { issueTokenBundle, verifyAccessToken, verifyRefreshToken } from "./auth.js";
 import { clearRefreshCookie, readRefreshCookie, setRefreshCookie } from "./refreshCookie.js";
 import { logger } from "./logger.js";
 import { ensureCoreSchema } from "./db.js";
@@ -35,7 +35,6 @@ import { exportAnalyserRecord } from "./analyserExport.js";
 import { fetchSkillCatalog } from "./analyserSkillCatalog.js";
 import { runSkillIntegrityCheck } from "./analyserSkillIntegrity.js";
 import { saveOAuthDynamicClient } from "./oauthDynamicClientsStore.js";
-import { deepResearchProviderSchema, deepResearchSpeedSchema } from "./schemas/deepResearch.js";
 import {
   imageArtifactSaveSchema,
   imageContextRefSchema,
@@ -48,6 +47,24 @@ import {
   mindmapExportFormatSchema,
   mindmapUpdateSchema
 } from "./schemas/mindmaps.js";
+import {
+  accountSchema,
+  deepResearchManualSaveSchema,
+  deepResearchRequestSchema,
+  integrationConfigSchema,
+  localClientHeartbeatSchema,
+  localClientPatchSchema,
+  localClientRegisterSchema,
+  localJobClaimSchema,
+  localJobCompleteSchema,
+  localJobCreateSchema,
+  localJobFailSchema,
+  localJobStatusSchema,
+  refreshSchema,
+  syncBlobPutSchema,
+  syncPushSchema,
+  taskImportBodySchema
+} from "./schemas/requests.js";
 import {
   wbsArtifactSaveSchema,
   wbsDependencyCreateSchema,
@@ -100,7 +117,6 @@ import {
 import { artifactDeletionSnapshotRoot, artifactEventMetadata } from "./syncEventMetadata.js";
 import {
   archiveLocalClient,
-  assertLocalClientCapability,
   claimLocalJobsForClient,
   completeLocalJobForClient,
   createLocalJob,
@@ -113,16 +129,12 @@ import {
   listLocalClients,
   listLocalJobsForUser,
   LocalClientStoreError,
-  recordLocalClientCapabilityDenied,
   recordLocalClientHeartbeat,
   registerLocalClient,
   revokeLocalClientTokens,
   serializeLocalJobForOwner,
   serializeLocalJobsForOwner,
   updateLocalClient,
-  verifyLocalClientToken,
-  type LocalClient,
-  type LocalClientCapability,
   type LocalJobKind,
   type LocalJobStatus,
   type LocalJobTarget
@@ -196,6 +208,15 @@ import {
   supportedMcpScopes
 } from "./oauth/config.js";
 import {
+  readBearerToken,
+  requireAuthenticatedContext,
+  requireLocalClientCapability,
+  requireLocalClientContext,
+  requireSyncAccessContext,
+  type AuthenticatedContext,
+  type SyncAccessContext
+} from "./middleware/auth.js";
+import {
   AUTHORIZATION_CODE_TTL_MS,
   authorizationCodeStore,
   base64UrlSha256,
@@ -241,250 +262,6 @@ app.use((req, _res, next) => {
 });
 app.use(requestLogger(logger));
 app.use(analyserHttpAccessMiddleware());
-
-const accountSchema = z.object({
-  username: z.string().min(1),
-  password: z.string().min(1)
-});
-
-const refreshSchema = z.object({
-  refreshToken: z.string().min(1)
-});
-
-const integrationConfigSchema = z.object({
-  enabled: z.boolean(),
-  values: z.record(z.union([z.string(), z.number(), z.boolean()])).default({})
-});
-
-const taskImportBodySchema = z.union([z.string(), z.object({ csv: z.string() })]);
-
-const deepResearchRequestSchema = z.object({
-  query: z.string().min(1),
-  provider: deepResearchProviderSchema.optional(),
-  speed: deepResearchSpeedSchema.optional(),
-  timeoutSec: z.number().int().positive().optional(),
-  asyncOnTimeout: z.boolean().optional(),
-  saveToArtifacts: z.boolean().optional(),
-  artifactTitle: z.string().optional(),
-  artifactPath: z.string().optional(),
-  projectId: z.string().optional(),
-  projectName: z.string().optional()
-});
-
-const deepResearchManualSaveSchema = z.object({
-  artifactTitle: z.string().optional(),
-  artifactPath: z.string().optional(),
-  projectId: z.string().optional(),
-  projectName: z.string().optional(),
-  createNew: z.boolean().optional()
-});
-
-
-
-
-const jsonRecordSchema = z.record(z.unknown());
-
-const localClientRegisterSchema = z.object({
-  deviceId: z.string().min(1),
-  clientName: z.string().min(1),
-  platform: z.string().min(1),
-  capabilities: jsonRecordSchema.optional(),
-  syncRootId: z.string().min(1).optional(),
-  syncRootLabel: z.string().min(1).optional(),
-  default: z.boolean().optional()
-});
-
-const localClientPatchSchema = z.object({
-  clientName: z.string().min(1).optional(),
-  enabled: z.boolean().optional(),
-  capabilities: jsonRecordSchema.optional(),
-  syncRootLabel: z.string().min(1).optional(),
-  default: z.boolean().optional()
-});
-
-const localClientHeartbeatSchema = z.object({
-  daemonVersion: z.string().optional(),
-  syncRootState: jsonRecordSchema.optional()
-});
-
-const localJobKindSchema = z.enum(["download_artifact", "download_task_attachment", "materialize_resource"]);
-const localJobTargetSchema = z.enum(["downloads", "sync-folder"]);
-const localJobStatusSchema = z.enum(["pending", "running", "completed", "failed"]);
-
-const localJobCreateSchema = z.object({
-  localClientId: z.string().min(1).optional(),
-  idempotencyKey: z.string().min(1).max(256).optional(),
-  kind: localJobKindSchema,
-  target: localJobTargetSchema,
-  payload: jsonRecordSchema.optional(),
-  ttlSeconds: z.number().int().positive().optional()
-});
-
-const localJobClaimSchema = z.object({
-  limit: z.number().int().positive().max(25).optional()
-});
-
-const localJobCompleteSchema = z.object({
-  result: jsonRecordSchema.default({})
-});
-
-const localJobFailSchema = z.object({
-  error: z.string().min(1),
-  retryable: z.boolean().optional(),
-  retryAfterSeconds: z.number().int().nonnegative().max(86400).optional()
-});
-
-const syncPushSchema = z.object({
-  ops: z.array(jsonRecordSchema).default([])
-});
-
-const syncBlobPutSchema = z.object({
-  contentBase64: z.string(),
-  filename: z.string().min(1).optional(),
-  mimeType: z.string().min(1).optional(),
-  checksum: z.string().min(1).optional(),
-  baseVersion: z.number().int().nonnegative().optional(),
-  expectedVersion: z.number().int().positive().optional()
-});
-
-type AuthenticatedContext = {
-  userId: string;
-  username: string;
-  accessToken: string;
-};
-
-type SyncAccessContext = AuthenticatedContext & {
-  localClient?: LocalClient;
-};
-
-function readBearerToken(req: express.Request): string | undefined {
-  const raw = req.header("authorization");
-  if (!raw) return undefined;
-  const [scheme, token] = raw.split(" ");
-  if (scheme?.toLowerCase() !== "bearer" || !token) return undefined;
-  return token.trim();
-}
-
-async function requireAuthenticatedContext(
-  req: express.Request,
-  res: express.Response,
-  options: { rejectOAuthScopedTokens?: boolean } = {}
-): Promise<AuthenticatedContext | undefined> {
-  const token = readBearerToken(req);
-  if (!token) {
-    res.status(401).json({ message: "Missing bearer token" });
-    return undefined;
-  }
-
-  try {
-    const claims = verifyAccessToken(token);
-    if (options.rejectOAuthScopedTokens && isOAuthScopedToken(claims)) {
-      res.status(403).json({ message: "This action requires the authenticated user, not an OAuth-scoped client token", code: "USER_ONLY" });
-      return undefined;
-    }
-    const user = await findUserById(claims.sub);
-    if (!user || user.username !== claims.username) {
-      res.status(401).json({ message: "Invalid token user" });
-      return undefined;
-    }
-
-    return {
-      userId: user.id,
-      username: user.username,
-      accessToken: token
-    };
-  } catch (error) {
-    if (error instanceof jwt.TokenExpiredError || error instanceof jwt.JsonWebTokenError) {
-      res.status(401).json({ message: "Invalid or expired token" });
-      return undefined;
-    }
-    const message = error instanceof Error ? error.message : "Authentication failed";
-    res.status(401).json({ message });
-    return undefined;
-  }
-}
-
-async function requireLocalClientContext(
-  req: express.Request,
-  res: express.Response
-): Promise<{ client: LocalClient } | undefined> {
-  const localClientId = req.header("x-workbench-local-client-id")?.trim();
-  const localClientToken = req.header("x-workbench-local-client-token")?.trim();
-  if (!localClientId || !localClientToken) {
-    res.status(401).json({ message: "Missing local client credentials" });
-    return undefined;
-  }
-
-  try {
-    const client = await verifyLocalClientToken(localClientId, localClientToken);
-    return { client };
-  } catch (error) {
-    if (error instanceof LocalClientStoreError) {
-      res.status(error.status).json({ message: error.message, code: error.code });
-      return undefined;
-    }
-    const message = error instanceof Error ? error.message : "Local client authentication failed";
-    res.status(401).json({ message });
-    return undefined;
-  }
-}
-
-async function requireLocalClientCapability(
-  req: express.Request,
-  res: express.Response,
-  capability: LocalClientCapability
-): Promise<{ client: LocalClient } | undefined> {
-  const localContext = await requireLocalClientContext(req, res);
-  if (!localContext) return undefined;
-  try {
-    assertLocalClientCapability(localContext.client, capability);
-    return localContext;
-  } catch (error) {
-    if (error instanceof LocalClientStoreError) {
-      await recordLocalClientCapabilityDenied(localContext.client, capability, {
-        method: req.method,
-        path: req.path
-      }).catch((auditError) => {
-        const message = auditError instanceof Error ? auditError.message : String(auditError);
-        logger.warn("[local-client] failed to record capability denial", {
-          localClientId: localContext.client.id,
-          capability,
-          message
-        });
-      });
-      res.status(error.status).json({ message: error.message, code: error.code, capability });
-      return undefined;
-    }
-    throw error;
-  }
-}
-
-async function requireSyncAccessContext(
-  req: express.Request,
-  res: express.Response,
-  localClientCapability?: LocalClientCapability
-): Promise<SyncAccessContext | undefined> {
-  if (readBearerToken(req)) {
-    return requireAuthenticatedContext(req, res);
-  }
-
-  const localContext = localClientCapability
-    ? await requireLocalClientCapability(req, res, localClientCapability)
-    : await requireLocalClientContext(req, res);
-  if (!localContext) return undefined;
-  const user = await findUserById(localContext.client.userId);
-  if (!user) {
-    res.status(401).json({ message: "Invalid local client user" });
-    return undefined;
-  }
-  const bundle = issueTokenBundle({ userId: user.id, username: user.username });
-  return {
-    userId: user.id,
-    username: user.username,
-    accessToken: bundle.accessToken,
-    localClient: localContext.client
-  };
-}
 
 export function respondInternalError(res: express.Response, error: unknown): express.Response {
   if (error instanceof SyncConsumerCursorInputError) {
