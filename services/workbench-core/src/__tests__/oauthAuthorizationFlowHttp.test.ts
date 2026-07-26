@@ -12,9 +12,13 @@ import { after, before, describe, it, type TestContext } from "node:test";
  *
  * Before this, only the discovery metadata was tested: the code that actually
  * issues and validates tokens — PKCE, single-use codes, client/redirect/resource
- * binding, refresh rotation and scope narrowing — had none. It is the highest
- * risk area to move, so this exists to be the safety net for splitting
- * httpServer.ts, and asserts observable HTTP behaviour only, never internals.
+ * binding and refresh rotation — had none. It is the highest risk area to move,
+ * so this exists to be the safety net for splitting httpServer.ts, and asserts
+ * observable HTTP behaviour only, never internals.
+ *
+ * Not covered: authorization-code and refresh-token expiry (both are time-based
+ * and would need clock control), and genuine scope narrowing (only one scope
+ * exists today, so no strict subset can be requested).
  */
 
 type HttpServerModule = typeof import("../httpServer.js");
@@ -69,13 +73,12 @@ async function loadHarness(): Promise<Harness | { skipMessage: string }> {
       if (!(await canReachTcp(endpoint.host, endpoint.port))) {
         return { skipMessage: `Core DB is not reachable at ${endpoint.host}:${endpoint.port}.` };
       }
-      try {
-        const [httpServer, db] = await Promise.all([import("../httpServer.js"), import("../db.js")]);
-        await db.ensureCoreSchema();
-        return { httpServer, db };
-      } catch (error) {
-        return { skipMessage: `Core OAuth harness is unavailable: ${error instanceof Error ? error.message : String(error)}` };
-      }
+      // Only an unavailable database is a legitimate reason to skip. Once it is
+      // reachable, an import or schema failure is a real defect — swallowing it
+      // into a skip would let a broken extraction report a green suite.
+      const [httpServer, db] = await Promise.all([import("../httpServer.js"), import("../db.js")]);
+      await db.ensureCoreSchema();
+      return { httpServer, db };
     })();
   }
   return harnessPromise;
@@ -183,7 +186,11 @@ async function authorize(input: {
   assert.equal(res.status, 302, `expected redirect, got ${res.status}: ${await res.text()}`);
   const location = res.headers.get("location");
   assert.ok(location, "authorize must redirect with a Location header");
-  const code = new URL(location as string).searchParams.get("code");
+  const target = new URL(location as string);
+  // The code must be delivered to the registered callback, not anywhere else.
+  const registered = new URL(REDIRECT_URI);
+  assert.equal(`${target.origin}${target.pathname}`, `${registered.origin}${registered.pathname}`);
+  const code = target.searchParams.get("code");
   assert.ok(code, "redirect must carry an authorization code");
   return code as string;
 }
@@ -220,6 +227,16 @@ describe("OAuth authorization_code grant", () => {
     assert.equal(body.scope, "mcp:tools");
     assert.equal(typeof body.refresh_token, "string");
     assert.ok(Number(body.expires_in) > 0);
+
+    // Asserting the shape alone would accept a junk or wrongly-signed token, so
+    // spend it against a protected endpoint and confirm it identifies the user.
+    const me = await fetch(`${baseUrl}/auth/me`, {
+      headers: { Authorization: `Bearer ${body.access_token as string}` }
+    });
+    const meRaw = await me.text();
+    assert.equal(me.status, 200, `issued access token was rejected: ${meRaw}`);
+    const identity = JSON.parse(meRaw) as { user?: { username?: string } };
+    assert.equal(identity.user?.username, user.username);
   });
 
   it("preserves state on the redirect so clients can correlate the callback", async (t) => {
@@ -276,7 +293,7 @@ describe("OAuth authorization_code grant", () => {
     const resource = await canonicalResource();
     const clientId = await registerClient();
     const user = await registerUser();
-    const { challenge } = pkcePair();
+    const { verifier, challenge } = pkcePair();
     const code = await authorize({ clientId, resource, challenge, ...user });
 
     const wrong = await token({
@@ -290,16 +307,19 @@ describe("OAuth authorization_code grant", () => {
     assert.equal(wrong.status, 400);
     assert.equal(wrong.body.error, "invalid_grant");
 
-    // A failed verifier must not leave the code usable for a second attempt.
+    // Retry with the CORRECT verifier: it must still fail, which is only true if
+    // the failed attempt burned the code. Retrying with another wrong verifier
+    // would fail either way and prove nothing.
     const retry = await token({
       grant_type: "authorization_code",
       client_id: clientId,
       code,
-      code_verifier: pkcePair().verifier,
+      code_verifier: verifier,
       redirect_uri: REDIRECT_URI,
       resource
     });
-    assert.equal(retry.body.error, "invalid_grant");
+    assert.equal(retry.status, 400);
+    assert.equal(retry.body.error, "invalid_grant", "a burned code must not become usable again");
   });
 
   it("rejects an exchange from a different client than the code was issued to", async (t) => {
@@ -543,6 +563,39 @@ describe("OAuth refresh_token grant", () => {
     assert.equal(body.scope, "mcp:tools");
   });
 
+  it("rotates the refresh token and revokes the one just spent", async (t) => {
+    if (!(await requireHarness(t))) return;
+
+    const { clientId, refreshToken } = await issueRefreshToken();
+    const first = await token({
+      grant_type: "refresh_token",
+      client_id: clientId,
+      refresh_token: refreshToken
+    });
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+
+    const rotated = first.body.refresh_token;
+    assert.equal(typeof rotated, "string", "refresh grant must return a rotated token");
+    assert.notEqual(rotated, refreshToken, "the rotated token must differ from the one spent");
+
+    // Replaying the spent token must fail, otherwise rotation buys nothing.
+    const replay = await token({
+      grant_type: "refresh_token",
+      client_id: clientId,
+      refresh_token: refreshToken
+    });
+    assert.equal(replay.status, 400);
+    assert.equal(replay.body.error, "invalid_grant");
+
+    // The rotated token must itself still work.
+    const second = await token({
+      grant_type: "refresh_token",
+      client_id: clientId,
+      refresh_token: rotated as string
+    });
+    assert.equal(second.status, 200, JSON.stringify(second.body));
+  });
+
   it("rejects an unknown refresh token", async (t) => {
     if (!(await requireHarness(t))) return;
 
@@ -583,6 +636,8 @@ describe("OAuth refresh_token grant", () => {
     assert.equal(missingClient.body.error, "invalid_client");
   });
 
+  // Only one scope (mcp:tools) exists today, so a genuine narrowing case cannot
+  // be expressed; this covers the rejection path only.
   it("rejects a scope the original grant did not include", async (t) => {
     if (!(await requireHarness(t))) return;
 
