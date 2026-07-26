@@ -192,7 +192,31 @@ export function requestHasValidLoopbackToken(req: IncomingMessage, expectedToken
 
 検証: core 221 tests（203 pass / 18 skip・DB 依存）、ui 242 tests all pass、両者 `tsc --noEmit` クリーン。cookie 8 件・セッション 6 件の新規テストを追加。
 
-### R1 — `workbench-core/httpServer.ts` 7,293 行の解体（3〜5 日）
+### R1 — `workbench-core/httpServer.ts` の解体 → **着手済み・継続中（2026-07-26）**
+
+**完了分**: 7,209 → **6,236 行**（-973 行, -13.5%）
+- ✅ 前提の OAuth フローテスト 21 件（commit `7af4b11`, `a09bf22`）。DB 必須のため以前は 18 件が
+  skip されていたが、ローカル Postgres を起動して**全 242 件 skip ゼロ**で緑を確認
+- ✅ `oauth/{config,clients,tokens,authorizeRequest}.ts`（commit `14bb1c9`, -750 行）
+- ✅ `schemas/requests.ts` + `middleware/auth.ts`（commit `55d8cfa`, -223 行）
+
+**検証方法**（機械的移動であることの証明）:
+- 移動した 37 関数すべてが、空白と `export` 修飾子を正規化したうえで移動前と**バイト一致**
+- 218 のルート登録が集合として不変
+- 依存の向きは一方向（`httpServer → oauth/ , middleware/ , schemas/`）、循環なし
+- Codex による独立レビューでも semantic drift ゼロ・ストア重複なし・export 欠落なしを確認
+
+**残り**（次セッション以降）:
+- `routes/sync.ts`（同期の検証・衝突・push 適用, 約 1,200 行）
+- `routes/<domain>.ts`（notes/artifacts/tasks/projects/mindmaps/wbs/images/analyser のファサード, 約 3,500 行）
+  —— `authenticate → try → client 呼び出し → catch` の同型が繰り返されるので `makeFacadeRoute()` で畳める
+- `server.ts`（MCP トランスポート・UI 配信・起動）
+
+**得られた知見**: `refreshCookie.ts` / `oauth/config.ts` の切り出しで判明したとおり、httpServer.ts を
+import すると DB 接続が要る。切り出した単位は DB なしでテストでき、実際 cookie 8 件・schema parity 5 件が
+DB 非依存で回るようになった。**分割はテスト可能性を直接改善する**。
+
+#### 当初計画（参考）
 
 現状の責務境界は実は明瞭なので、分割は素直に効く:
 
@@ -259,10 +283,13 @@ export function requestHasValidLoopbackToken(req: IncomingMessage, expectedToken
 ### 優先順位
 
 ```
-✅ R0（バグ修正）→ ✅ R3（スキーマ一元化）→ ✅ R4'（auth 適合テスト）→ ✅ R0.5（httpOnly cookie）
-  → ✅ Phase 0/1（掃除・ドキュメント整理）
-  → R1（core, 要テスト先行）← 次 → R2（daemon）→ R5 + T8（UI）
+✅ R0 → ✅ R3 → ✅ R4' → ✅ R0.5 → ✅ Phase 0/1 → ✅ R1-pre → 🔄 R1（-13.5%, routes/ が残）
+  → R2（daemon 8,073 行）→ R5 + T8（UI）
 ```
+
+**テスト実行環境の注意**: core の全テストを skip ゼロで回すにはローカル Postgres が必要。
+`docker compose up -d workbench-core-db` を先に実行すること。DB なしだと 18 件が skip され、
+OAuth フローの検証が丸ごと抜ける。
 
 **セキュリティ系（S1〜S7）・再発防止テスト・掃除は全て完了。** 残るのは大物の分割のみ。
 
@@ -291,8 +318,8 @@ R1 の前提条件は変わらず「OAuth の認可コード〜トークン〜�
 | R0.5-S2 | セッションを httpOnly cookie へ | **完了** | commit `7fe2d5c` |
 | R3 | スキーマ一元化 | **完了** | commit `261769b`・parity テスト付き |
 | R4' | auth 適合テスト（共通化はしない） | **完了** | commit `9b36224`・ドリフト注入で検知を確認 |
-| R1-pre | OAuth フローのテスト追加 | 未着手 | **R1 の前提** |
-| R1 | core/httpServer 分割 | 未着手 | |
+| R1-pre | OAuth フローのテスト追加 | **完了** | 21 件。mutation 注入で有効性確認済み |
+| R1 | core/httpServer 分割 | **一部完了** | 7,209→6,236 行。routes/ の分割が残 |
 | R2 | sync-daemon 分割 | 未着手 | |
 | ~~R4~~ | ~~services 共通パッケージ~~ | **取り下げ** | §4 R4 参照。R4' に置換 |
 | R5+T8 | UI feature-first 化 | 未着手 | |
