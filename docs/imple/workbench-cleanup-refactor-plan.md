@@ -259,7 +259,7 @@ DB 非依存で回るようになった。**分割はテスト可能性を直接
 
 ### R2 — `sync-daemon/index.ts` の解体 → **着手済み・継続中（2026-07-26）**
 
-**8,122 → 4,282 行（-47%）**
+**8,122 → 2,128 行（-74%）**。機械的移動で可能な範囲は概ね完了。
 
 | commit | 内容 | 行数 |
 |---|---|---|
@@ -278,11 +278,24 @@ DB 非依存で回るようになった。**分割はテスト可能性を直接
 **障壁を先に外すのが鍵だった**。`types.ts` と `localStore.ts` を作るまで 2 wave 空振りしたが、
 外した直後から Notes → Projects → Tasks → Artifacts と一気に進んだ。
 
-**残り**:
-- remote pull/push 本体（スナップショット適用・カーソル前進・衝突ファイル書き出し・push ループ）
-- `startStatusServer` とそのルータ —— `scheduleTick` / rescan / artifact 操作を呼ぶため、
-  それらを先に移さないと `httpApi.ts → index.ts` の循環になる
-- `main()` とジョブ/スケジューラ/ウォッチャ
+| `fa2180a` | `localArtifacts.ts`（Artifact CRUD）+ wildcard 再エクスポート除去 | -522 |
+| `2733f6f` | `remoteSync.ts`（リモートペイロード解析） | -215 |
+| `da0e8d3` | `coreClient.ts`（Core HTTP クライアント） | -200 |
+| `8e0601b` | `remoteSync.ts`（リモート照合・apply 群 24 関数） | -646 |
+| `b8731a3` | `jobs.ts`（ローカルジョブ処理） | -165 |
+| `a19cabd` | `remoteSync.ts`（pull/snapshot/push オーケストレーション） | -430 |
+
+**index.ts に残る 15 関数（2,128 行）** —— デーモンループ（`tick` / `scheduleTick` / `performTick`）、
+ウォッチャ、HTTP ルータ（`startStatusServer`）、`main()`、および下記の循環に絡む 6 関数。
+
+**ここから先は機械的移動では進まない**。`scheduleTick → tick → pushOutbox / pullRemoteArtifactSyncState`
+と、`markProjectContextRescanRequired → scheduleTick` が**真の相互依存**を作っている。
+解くには依存性注入（`scheduleTick` をパラメータで渡す等）が必要で、これは**関数シグネチャの変更＝設計変更**。
+バイト一致検証が使えなくなるため、独立した設計判断として別途行うこと。
+
+**wildcard 再エクスポートの注意**: 委譲すると `export * from "./x.js"` を書かれることがある。これは
+分割前に private だったヘルパを公開 API に昇格させてしまうため、**必ず明示リストに直す**
+（本作業では 3 箇所を差し戻した）。
 
 **なぜ R1 ほど進まないか**: Core のルートハンドラは互いに独立していたが、daemon は
 `DaemonState` を全域で引き回す設計で、関数が相互に依存している。1 つ動かすには依存の連鎖を
@@ -357,7 +370,7 @@ DB 非依存で回るようになった。**分割はテスト可能性を直接
 ### 優先順位
 
 ```
-✅ R0 → ✅ R3 → ✅ R4' → ✅ R0.5 → ✅ Phase 0/1 → ✅ R1-pre → ✅ R1（-97%）→ 🔄 R2（-47%）
+✅ R0 → ✅ R3 → ✅ R4' → ✅ R0.5 → ✅ Phase 0/1 → ✅ R1-pre → ✅ R1（-97%）→ 🔄 R2（-74%, 機械的移動は完了）
   → R2（daemon 8,073 行）→ R5 + T8（UI）
 ```
 
@@ -401,7 +414,7 @@ R1 の前提条件は変わらず「OAuth の認可コード〜トークン〜�
 | R4' | auth 適合テスト（共通化はしない） | **完了** | commit `9b36224`・ドリフト注入で検知を確認 |
 | R1-pre | OAuth フローのテスト追加 | **完了** | 21 件。mutation 注入で有効性確認済み |
 | R1 | core/httpServer 分割 | **完了** | 7,209→192 行（-97%）。16 モジュールへ分割 |
-| R2 | sync-daemon 分割 | **一部完了** | 8,122→4,282 行（-47%）。残: remote pull/push・router・main |
+| R2 | sync-daemon 分割 | **機械的移動は完了** | 8,122→2,128 行（-74%）。残りは循環解消＝設計変更が必要 |
 | ~~R4~~ | ~~services 共通パッケージ~~ | **取り下げ** | §4 R4 参照。R4' に置換 |
 | R5+T8 | UI feature-first 化 | 未着手 | |
 
