@@ -46,6 +46,22 @@ import {
   walkSyncDirectories,
   walkSyncFiles
 } from "./paths.js";
+import {
+  asString,
+  isLocalProjectId,
+  LOCAL_PROJECT_ID_PREFIX,
+  localProjectDefaultSelection,
+  normalizeLocalProjectPayload,
+  projectDefaultOutboxPath,
+  projectDefaultRelationPayload,
+  projectOutboxPath
+} from "./localProjects.js";
+import {
+  isLocalNoteId,
+  LOCAL_NOTE_ID_PREFIX,
+  normalizeStringArray,
+  noteOutboxPath
+} from "./localNotes.js";
 
 export { readIdentity } from "./identityStorage.js";
 export type { ClientIdentity, SecureIdentityMode } from "./identityStorage.js";
@@ -89,6 +105,20 @@ export {
   walkSyncDirectories,
   walkSyncFiles
 } from "./paths.js";
+export {
+  isLocalProjectId,
+  localProjectDefaultSelection,
+  normalizeLocalProjectPayload,
+  normalizeProjectStatus,
+  projectDefaultOutboxPath,
+  projectDefaultRelationPayload,
+  projectOutboxPath
+} from "./localProjects.js";
+export {
+  isLocalNoteId,
+  normalizeStringArray,
+  noteOutboxPath
+} from "./localNotes.js";
 
 import {
   enqueueOutbox as enqueueManifestOutboxRaw,
@@ -697,63 +727,6 @@ function localDefaultProjectSelection(state: DaemonState): Record<string, unknow
   };
 }
 
-const LOCAL_PROJECT_ID_PREFIX = "local-project-";
-const LOCAL_PROJECT_STATUSES = new Set(["draft", "active", "archived"]);
-
-function isLocalProjectId(id: string | undefined): boolean {
-  return typeof id === "string" && id.startsWith(LOCAL_PROJECT_ID_PREFIX);
-}
-
-function projectOutboxPath(id: string): string {
-  return `projects/${id}`;
-}
-
-function projectDefaultOutboxPath(): string {
-  return "projects/default";
-}
-
-function normalizeProjectStatus(value: unknown, fallback?: unknown): "draft" | "active" | "archived" {
-  if (typeof value === "string" && LOCAL_PROJECT_STATUSES.has(value)) {
-    return value as "draft" | "active" | "archived";
-  }
-  if (typeof fallback === "string" && LOCAL_PROJECT_STATUSES.has(fallback)) {
-    return fallback as "draft" | "active" | "archived";
-  }
-  return "active";
-}
-
-function normalizeLocalProjectPayload(
-  input: Record<string, unknown>,
-  existing?: Record<string, unknown>
-): Record<string, unknown> {
-  const now = new Date().toISOString();
-  const name = typeof input.name === "string" && input.name.trim()
-    ? input.name.trim()
-    : typeof existing?.name === "string" && existing.name.trim()
-      ? existing.name
-      : "Untitled Project";
-  const description = typeof input.description === "string"
-    ? input.description
-    : typeof existing?.description === "string"
-      ? existing.description
-      : "";
-  return {
-    ...(existing ?? {}),
-    name,
-    description,
-    status: normalizeProjectStatus(input.status, existing?.status),
-    createdAt: typeof existing?.createdAt === "string" ? existing.createdAt : now,
-    updatedAt: now
-  };
-}
-
-function localProjectDefaultSelection(project: Record<string, unknown>): Record<string, unknown> {
-  return {
-    project,
-    source: project.isFallbackDefault === true && project.isUserDefault !== true ? "fallback" : "user"
-  };
-}
-
 function updateLocalProjectDefaultCache(state: DaemonState, projectId: string, updatedAt: string): Record<string, unknown> | undefined {
   let selected: Record<string, unknown> | undefined;
   for (const resource of listRemoteResources(state.manifestStore, { domain: "projects", includeDeleted: false, limit: 1000 })) {
@@ -807,12 +780,6 @@ function retargetOpenProjectOutboxReferences(state: DaemonState, oldResourceId: 
       }
     });
   }
-}
-
-function projectDefaultRelationPayload(item: OutboxItem): { relation: "default"; projectId: string } | undefined {
-  if (item.domain !== "projects" || asString(item.payload.relation) !== "default") return undefined;
-  const projectId = asString(item.payload.projectId) ?? item.resourceId ?? asString(item.payload.id);
-  return projectId ? { relation: "default", projectId } : undefined;
 }
 
 function shouldDeferProjectOutboxItem(state: DaemonState, item: OutboxItem): boolean {
@@ -1263,21 +1230,6 @@ export async function deleteLocalProjectRelation(state: DaemonState, relationId:
   });
   echoLocalProjectRelationDelete(state.manifestStore, relationId);
   await finishLocalProjectContextWrite(state);
-}
-
-const LOCAL_NOTE_ID_PREFIX = "local-note-";
-
-function isLocalNoteId(id: string | undefined): boolean {
-  return typeof id === "string" && id.startsWith(LOCAL_NOTE_ID_PREFIX);
-}
-
-function noteOutboxPath(id: string): string {
-  return `notes/${id}`;
-}
-
-function normalizeStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((item): item is string => typeof item === "string");
 }
 
 function normalizeLocalNotePayload(
@@ -4279,10 +4231,6 @@ const REMOTE_CURSOR_DRAIN_LIMIT = 500;
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
-}
-
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 function asNumber(value: unknown): number | undefined {
