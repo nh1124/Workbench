@@ -140,11 +140,17 @@ import {
 import {
   applyRemoteArtifactEvent,
   applyRemoteArtifactSnapshotEntry,
+  applyRemoteSnapshot,
   applyRemoteDomainEvent,
   applyRemoteDomainSnapshotEntry,
+  bootstrapPagedDomainSnapshots,
+  bootstrapProjectContextSnapshot,
   classifySyncError,
+  clearSyncErrorState,
   fetchProjectContextDetail,
   firstRecord,
+  getSyncPullPage,
+  getSyncSnapshot,
   isLegacyProjectContextEvent,
   isRemoteResourceTombstone,
   isRemoteTombstone,
@@ -152,6 +158,10 @@ import {
   parseRemoteResourceDomain,
   projectContextEventIsStale,
   projectContextSnapshotPage,
+  pushOutbox,
+  REMOTE_ARTIFACT_CURSOR_META_KEY,
+  REMOTE_SYNC_CURSOR_META_KEY,
+  REMOTE_SYNC_DOMAINS,
   recordHasLegacyProjectContextShape,
   relativePathForRemoteArtifact,
   remoteArtifactFromEvent,
@@ -162,6 +172,9 @@ import {
   resourcesUnderPath,
   snapshotItems,
   snapshotNextCursor,
+  snapshotSupportsProjectContext,
+  setSyncErrorState,
+  logSyncDaemonErrorOnce,
   type SyncErrorDetails
 } from "./remoteSync.js";
 import {
@@ -319,18 +332,26 @@ export {
   applyRemoteArtifactEvent,
   applyRemoteArtifactItem,
   applyRemoteArtifactSnapshotEntry,
+  applyRemoteSnapshot,
   applyRemoteDomainEvent,
   applyRemoteDomainSnapshotEntry,
   applyRemoteProjectDefaultEvent,
   canApplyRemoteArtifact,
   canApplyRemoteArtifactFolderDelete,
   classifySyncError,
+  bootstrapPagedArtifactSnapshot,
+  bootstrapPagedDomainSnapshot,
+  bootstrapPagedDomainSnapshots,
+  bootstrapProjectContextSnapshot,
+  clearSyncErrorState,
   directoryHasUntrackedVisibleEntries,
   fallbackRemoteArtifactLeaf,
   fetchProjectContextDetail,
   fetchRemoteArtifactBlob,
   findResourceById,
   firstRecord,
+  getSyncPullPage,
+  getSyncSnapshot,
   hasOpenOutboxForRemoteArtifact,
   hasOpenOutboxUnderRemoteFolder,
   isLegacyProjectContextEvent,
@@ -344,6 +365,7 @@ export {
   pathIsSelfOrChild,
   projectContextEventIsStale,
   projectContextSnapshotPage,
+  pruneLegacyProjectContextRows,
   recordHasLegacyProjectContextShape,
   relativePathForRemoteArtifact,
   remoteArtifactBuffer,
@@ -356,6 +378,13 @@ export {
   resourcesUnderPath,
   snapshotItems,
   snapshotNextCursor,
+  snapshotSupportsProjectContext,
+  setSyncErrorState,
+  logSyncDaemonErrorOnce,
+  postSyncPush,
+  extractResourceId,
+  writeConflictRecord,
+  pushOutbox,
   writeRemoteConflict
 } from "./remoteSync.js";
 // Re-export only what index.ts exposed before the split. A wildcard would
@@ -461,18 +490,12 @@ import type {
   LocalJob,
   RemoteArtifactItem,
   RemoteSyncEvent,
-  SyncPullResponse,
-  SyncSnapshotResponse,
-  SyncPushResponse
+  SyncSnapshotResponse
 } from "./types.js";
 
-const REMOTE_SYNC_DOMAINS: RemoteResourceDomain[] = ["projects", "notes", "artifacts", "tasks"];
-const REMOTE_SYNC_CURSOR_META_KEY = "remoteSyncCursor";
-const REMOTE_ARTIFACT_CURSOR_META_KEY = "remoteArtifactCursor";
 const REMOTE_ARTIFACT_SNAPSHOT_COMPLETE_META_KEY = "remoteArtifactSnapshotComplete";
 const LAST_REMOTE_PULL_AT_META_KEY = "lastRemotePullAt";
 const REMOTE_PULL_LIMIT = 100;
-const REMOTE_SNAPSHOT_PAGE_LIMIT = 100;
 const REMOTE_CURSOR_DRAIN_LIMIT = 500;
 
 function markProjectContextRescanRequired(state: DaemonState): void {
@@ -529,232 +552,6 @@ async function applyRemoteSyncEvent(state: DaemonState, event: RemoteSyncEvent):
     return;
   }
   applyRemoteDomainEvent(state, event);
-}
-
-async function getSyncPullPage(state: DaemonState, cursor: string | undefined, limit: number): Promise<SyncPullResponse> {
-  if (!state.identity) throw new Error("Missing local client identity");
-  const query = new URLSearchParams();
-  if (cursor !== undefined) {
-    query.set("cursor", cursor);
-  }
-  query.set("limit", String(limit));
-  return coreJson<SyncPullResponse>(state.config, `/api/sync/pull?${query.toString()}`, {
-    method: "GET",
-    localIdentity: state.identity
-  });
-}
-
-async function getSyncSnapshot(
-  state: DaemonState,
-  domains: RemoteResourceDomain[],
-  options: { cursor?: string; limit?: number; baselineCursor?: string } = {}
-): Promise<SyncSnapshotResponse> {
-  if (!state.identity) throw new Error("Missing local client identity");
-  const query = new URLSearchParams();
-  query.set("domains", domains.join(","));
-  if (options.cursor) {
-    query.set("cursor", options.cursor);
-  }
-  if (options.limit) {
-    query.set("limit", String(options.limit));
-  }
-  if (options.baselineCursor) {
-    query.set("baselineCursor", options.baselineCursor);
-  }
-  return coreJson<SyncSnapshotResponse>(state.config, `/api/sync/snapshot?${query.toString()}`, {
-    method: "GET",
-    localIdentity: state.identity
-  });
-}
-
-async function applyRemoteSnapshot(
-  state: DaemonState,
-  snapshot: SyncSnapshotResponse,
-  generatedAt: string
-): Promise<void> {
-  for (const domain of REMOTE_SYNC_DOMAINS) {
-    for (const item of snapshotItems(snapshot.domains?.[domain])) {
-      if (domain === "artifacts") {
-        await applyRemoteArtifactSnapshotEntry(state, item, generatedAt);
-      } else {
-        applyRemoteDomainSnapshotEntry(state, domain, item, generatedAt);
-      }
-    }
-  }
-}
-
-async function bootstrapPagedDomainSnapshot(
-  state: DaemonState,
-  domain: "projects" | "notes" | "tasks",
-  firstPage: unknown,
-  initialGeneratedAt: string
-): Promise<void> {
-  let cursor = snapshotNextCursor(firstPage);
-  for (let pageIndex = 0; cursor && pageIndex < 100; pageIndex += 1) {
-    const page = await getSyncSnapshot(state, [domain], {
-      cursor,
-      limit: REMOTE_SNAPSHOT_PAGE_LIMIT
-    });
-    const generatedAt = asString(page.generatedAt) ?? initialGeneratedAt;
-    for (const item of snapshotItems(page.domains?.[domain])) {
-      applyRemoteDomainSnapshotEntry(state, domain, item, generatedAt);
-    }
-    const nextCursor = snapshotNextCursor(page.domains?.[domain]);
-    if (!nextCursor || nextCursor === cursor) {
-      return;
-    }
-    cursor = nextCursor;
-  }
-}
-
-async function bootstrapPagedArtifactSnapshot(
-  state: DaemonState,
-  firstPage: unknown,
-  initialGeneratedAt: string
-): Promise<void> {
-  let cursor = snapshotNextCursor(firstPage);
-  for (let pageIndex = 0; cursor && pageIndex < 100; pageIndex += 1) {
-    const page = await getSyncSnapshot(state, ["artifacts"], {
-      cursor,
-      limit: REMOTE_SNAPSHOT_PAGE_LIMIT
-    });
-    const generatedAt = asString(page.generatedAt) ?? initialGeneratedAt;
-    for (const item of snapshotItems(page.domains?.artifacts)) {
-      await applyRemoteArtifactSnapshotEntry(state, item, generatedAt);
-    }
-    const nextCursor = snapshotNextCursor(page.domains?.artifacts);
-    if (!nextCursor || nextCursor === cursor) {
-      return;
-    }
-    cursor = nextCursor;
-  }
-}
-
-async function bootstrapPagedDomainSnapshots(
-  state: DaemonState,
-  snapshot: SyncSnapshotResponse,
-  initialGeneratedAt: string
-): Promise<void> {
-  await bootstrapPagedArtifactSnapshot(state, snapshot.domains?.artifacts, initialGeneratedAt);
-  for (const domain of ["projects", "notes", "tasks"] as const) {
-    await bootstrapPagedDomainSnapshot(state, domain, snapshot.domains?.[domain], initialGeneratedAt);
-  }
-}
-
-function snapshotSupportsProjectContext(snapshot: SyncSnapshotResponse): boolean {
-  return Array.isArray(snapshot.supportedDomains)
-    && snapshot.supportedDomains.includes(PROJECT_CONTEXT_DOMAIN);
-}
-
-function pruneLegacyProjectContextRows(state: DaemonState, activeProjectIds: Set<string>): void {
-  for (const resource of listAllRemoteResourcesForDomain(state.manifestStore, "projects", { includeDeleted: true })) {
-    if (activeProjectIds.has(resource.resourceId)) continue;
-    if (listOpenOutboxForResource(state.manifestStore, resource.resourceId).length > 0) continue;
-    if (!recordHasLegacyProjectContextShape(resource.payload)) continue;
-    removeRemoteResource(state.manifestStore, "projects", resource.resourceId);
-  }
-}
-
-async function bootstrapProjectContextSnapshot(
-  state: DaemonState,
-  suppliedBaselineCursor?: string
-): Promise<{ supported: boolean; baselineCursor?: string }> {
-  const firstPage = await getSyncSnapshot(state, [PROJECT_CONTEXT_DOMAIN], {
-    limit: REMOTE_SNAPSHOT_PAGE_LIMIT,
-    baselineCursor: suppliedBaselineCursor
-  });
-  if (!snapshotSupportsProjectContext(firstPage)) {
-    throw new LocalProjectContextError(
-      502,
-      "LOCAL_PROJECT_CONTEXT_INVALID_SNAPSHOT",
-      "Core removed the Project context capability during bootstrap."
-    );
-  }
-
-  const baselineCursor = suppliedBaselineCursor ?? asString(firstPage.baselineCursor);
-  if (
-    !baselineCursor
-    || !/^\d+$/.test(baselineCursor)
-    || (suppliedBaselineCursor && firstPage.baselineCursor !== suppliedBaselineCursor)
-  ) {
-    throw new LocalProjectContextError(
-      502,
-      "LOCAL_PROJECT_CONTEXT_INVALID_SNAPSHOT",
-      "Core returned an invalid Project context baseline cursor."
-    );
-  }
-
-  const activeProjectIds = new Set<string>();
-  const pendingSnapshots: Array<{ snapshot: NonNullable<ReturnType<typeof parseProjectContextSnapshot>>; timestamp: string }> = [];
-  const acceptPage = (page: SyncSnapshotResponse): string | undefined => {
-    const parsedPage = projectContextSnapshotPage(page.domains?.[PROJECT_CONTEXT_DOMAIN]);
-    for (const item of parsedPage.items) {
-      const snapshot = parseProjectContextSnapshot(item);
-      if (!snapshot || snapshot.baselineCursor !== baselineCursor || activeProjectIds.has(snapshot.projectId)) {
-        throw new LocalProjectContextError(
-          502,
-          "LOCAL_PROJECT_CONTEXT_INVALID_SNAPSHOT",
-          "Core returned an incomplete, duplicate, or baseline-mismatched Project context item."
-        );
-      }
-      activeProjectIds.add(snapshot.projectId);
-      pendingSnapshots.push({
-        snapshot,
-        timestamp: asString(page.generatedAt) ?? new Date().toISOString()
-      });
-    }
-    return parsedPage.nextCursor;
-  };
-
-  let cursor = acceptPage(firstPage);
-  const seenCursors = new Set<string>();
-  for (let pageIndex = 0; cursor && pageIndex < 100; pageIndex += 1) {
-    if (seenCursors.has(cursor)) {
-      throw new LocalProjectContextError(
-        502,
-        "LOCAL_PROJECT_CONTEXT_INVALID_SNAPSHOT",
-        "Core repeated a Project context snapshot cursor."
-      );
-    }
-    seenCursors.add(cursor);
-    const page = await getSyncSnapshot(state, [PROJECT_CONTEXT_DOMAIN], {
-      cursor,
-      limit: REMOTE_SNAPSHOT_PAGE_LIMIT,
-      baselineCursor
-    });
-    if (!snapshotSupportsProjectContext(page) || page.baselineCursor !== baselineCursor) {
-      throw new LocalProjectContextError(
-        502,
-        "LOCAL_PROJECT_CONTEXT_INVALID_SNAPSHOT",
-        "Core changed the Project context capability or baseline during pagination."
-      );
-    }
-    cursor = acceptPage(page);
-  }
-  if (cursor) {
-    throw new LocalProjectContextError(
-      413,
-      "PROJECT_CONTEXT_SYNC_LIMIT_EXCEEDED",
-      "Project context snapshot pagination exceeded the daemon safety limit."
-    );
-  }
-
-  state.manifestStore.db.exec("BEGIN IMMEDIATE");
-  try {
-    for (const pending of pendingSnapshots) {
-      cacheProjectContextSnapshot(state.manifestStore, pending.snapshot, { timestamp: pending.timestamp });
-    }
-    removeStaleProjectContextRows(state.manifestStore, activeProjectIds);
-    pruneLegacyProjectContextRows(state, activeProjectIds);
-    setMeta(state.manifestStore, PROJECT_CONTEXT_SUPPORTED_META_KEY, "1");
-    setMeta(state.manifestStore, PROJECT_CONTEXT_SNAPSHOT_COMPLETE_META_KEY, "1");
-    setMeta(state.manifestStore, PROJECT_CONTEXT_BASELINE_CURSOR_META_KEY, baselineCursor);
-    state.manifestStore.db.exec("COMMIT");
-  } catch (error) {
-    state.manifestStore.db.exec("ROLLBACK");
-    throw error;
-  }
-  return { supported: true, baselineCursor };
 }
 
 async function bootstrapRemoteArtifactSnapshot(state: DaemonState): Promise<string | undefined> {
@@ -851,233 +648,6 @@ async function requestRemoteSnapshotRescan(state: DaemonState): Promise<void> {
   setMeta(state.manifestStore, PROJECT_CONTEXT_BASELINE_CURSOR_META_KEY, undefined);
   state.remoteArtifactCursor = undefined;
   scheduleTick(state, 0);
-  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
-  await refreshManifestStats(state);
-}
-
-function setSyncErrorState(state: DaemonState, details: SyncErrorDetails): void {
-  state.lastError = details.errorMessage;
-  state.lastErrorCode = details.errorCode;
-  state.lastErrorCategory = details.errorCategory;
-  state.lastErrorRetryable = details.retryable;
-}
-
-function clearSyncErrorState(state: DaemonState): void {
-  state.lastError = undefined;
-  state.lastErrorCode = undefined;
-  state.lastErrorCategory = undefined;
-  state.lastErrorRetryable = undefined;
-  state.lastLoggedError = undefined;
-}
-
-export function logSyncDaemonErrorOnce(
-  state: Pick<DaemonState, "lastLoggedError">,
-  message: string,
-  warn: (message: string) => void = (value) => console.warn(value)
-): boolean {
-  if (state.lastLoggedError === message) {
-    return false;
-  }
-  state.lastLoggedError = message;
-  warn(`[sync-daemon] ${message}`);
-  return true;
-}
-
-async function postSyncPush(state: DaemonState, ops: OutboxItem[]): Promise<SyncPushResponse> {
-  if (!state.identity) throw new Error("Missing local client identity");
-  const response = await fetch(`${state.config.coreUrl}/api/sync/push`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-workbench-local-client-id": state.identity.localClientId,
-      "x-workbench-local-client-token": state.identity.localClientToken
-    },
-    body: JSON.stringify({
-      ops: ops.map((item) => ({
-        clientOpId: item.clientOpId,
-        domain: item.domain,
-        action: item.action,
-        ...(asString(item.payload.relation) ? { relation: asString(item.payload.relation) } : {}),
-        resourceId: item.resourceId,
-        payload: item.payload
-      }))
-    })
-  });
-  const text = await response.text();
-  const parsed = text.trim() ? JSON.parse(text) as SyncPushResponse : {};
-  if (!response.ok && !parsed.rejected?.length) {
-    throw new Error(text || `HTTP ${response.status}`);
-  }
-  return parsed;
-}
-
-function extractResourceId(value: unknown): string | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const id = (value as { id?: unknown }).id;
-  if (typeof id === "string" && id.trim()) return id;
-  const item = (value as { item?: unknown }).item;
-  if (item && typeof item === "object") {
-    const itemId = (item as { id?: unknown }).id;
-    if (typeof itemId === "string" && itemId.trim()) return itemId;
-  }
-  return undefined;
-}
-
-async function writeConflictRecord(
-  state: DaemonState,
-  item: OutboxItem,
-  error: SyncErrorDetails,
-  createdAt: string
-): Promise<void> {
-  const conflictId = randomUUID();
-  const conflictBaseName = sanitizeFileName(item.relativePath.replace(/[\\/]/g, "__")) || "conflict";
-  const timestamp = createdAt.replace(/[:.]/g, "-");
-  const conflictPath = join(state.config.syncRoot, ".workbench", "conflicts", `${timestamp}-${conflictId}-${conflictBaseName}.json`);
-  const conflict = recordConflict(state.manifestStore, {
-    id: conflictId,
-    outboxId: item.id,
-    clientOpId: item.clientOpId,
-    relativePath: item.relativePath,
-    domain: item.domain,
-    action: item.action,
-    resourceId: item.resourceId,
-    payload: item.payload,
-    errorMessage: error.errorMessage,
-    errorCode: error.errorCode,
-    errorCategory: error.errorCategory,
-    retryable: error.retryable,
-    conflictPath,
-    status: "open",
-    createdAt
-  });
-  await fs.mkdir(dirname(conflictPath), { recursive: true });
-  await fs.writeFile(conflictPath, `${JSON.stringify({
-    conflictId: conflict.id,
-    relativePath: item.relativePath,
-    action: item.action,
-    resourceId: item.resourceId,
-    clientOpId: item.clientOpId,
-    errorMessage: error.errorMessage,
-    errorCode: error.errorCode,
-    errorCategory: error.errorCategory,
-    retryable: error.retryable,
-    payload: item.payload,
-    createdAt
-  }, null, 2)}\n`, "utf8");
-
-  const resource = getResource(state.manifestStore, item.relativePath);
-  if (resource) {
-    upsertManifestResource(state.manifestStore, {
-      ...resource,
-      dirty: true,
-      lastError: error.errorMessage
-    });
-  }
-  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
-}
-
-async function pushOutbox(state: DaemonState): Promise<void> {
-  if (!state.identity) return;
-  const pending = listPendingOutbox(state.manifestStore, 20).filter((item) =>
-    !shouldDeferProjectOutboxItem(state, item) && !shouldDeferTaskOutboxItem(state, item)
-  );
-  if (pending.length === 0) {
-    await refreshManifestStats(state);
-    return;
-  }
-
-  const result = await postSyncPush(state, pending);
-  const applied = result.applied ?? [];
-  const rejected = result.rejected ?? [];
-  const now = new Date().toISOString();
-  if (result.serverCursor) {
-    setMeta(state.manifestStore, REMOTE_SYNC_CURSOR_META_KEY, result.serverCursor);
-    setMeta(state.manifestStore, REMOTE_ARTIFACT_CURSOR_META_KEY, result.serverCursor);
-    state.remoteArtifactCursor = result.serverCursor;
-  }
-  for (const appliedItem of applied) {
-    const item = pending[appliedItem.index];
-    if (!item) continue;
-    markOutboxApplied(state.manifestStore, item.id, now);
-    if (item.domain === PROJECT_CONTEXT_DOMAIN) {
-      // The invalidation emitted by Core will refetch and replace the optimistic context pack.
-      // Applying an op-level result as a remote resource would corrupt the snapshot envelope.
-      continue;
-    }
-    const resourceId = appliedItem.resourceId ?? extractResourceId(appliedItem.result);
-    if (item.domain !== "artifacts") {
-      const domain = item.domain;
-      const nextResourceId = resourceId ?? item.resourceId;
-      if (!nextResourceId) continue;
-      if (applyProjectDefaultPushResult(state, item, appliedItem, now)) {
-        continue;
-      }
-      if (applyTaskRelationPushResult(state, item, appliedItem, now)) {
-        continue;
-      }
-      if (item.resourceId && item.resourceId !== nextResourceId) {
-        removeRemoteResource(state.manifestStore, domain, item.resourceId);
-        if (domain === "projects") {
-          retargetOpenProjectOutboxReferences(state, item.resourceId, nextResourceId, now);
-        } else if (domain === "tasks") {
-          retargetOpenTaskOutboxReferences(state, item.resourceId, nextResourceId, now);
-        }
-      }
-      if (item.action === "delete") {
-        markRemoteResourceDeleted(state.manifestStore, {
-          domain,
-          resourceId: nextResourceId,
-          version: appliedItem.version,
-          payload: item.payload,
-          deletedAt: now,
-          lastSyncedAt: now
-        });
-      } else {
-        const payload = {
-          ...item.payload,
-          ...(resultRecord(appliedItem.result) ?? {}),
-          id: nextResourceId
-        };
-        upsertRemoteResource(state.manifestStore, {
-          domain,
-          resourceId: nextResourceId,
-          version: appliedItem.version,
-          payload,
-          updatedAt: remoteResourceUpdatedAt(payload, now),
-          lastSyncedAt: now
-        });
-      }
-      continue;
-    }
-    const existing = getResource(state.manifestStore, item.relativePath);
-    if (item.action === "delete") {
-      if (existing?.kind === "folder" || item.payload.kind === "folder") {
-        for (const resource of resourcesUnderPath(state, item.relativePath)) {
-          removeResource(state.manifestStore, resource.relativePath);
-        }
-      } else {
-        removeResource(state.manifestStore, item.relativePath);
-      }
-    } else {
-      upsertManifestResource(state.manifestStore, {
-        ...(existing ?? { relativePath: item.relativePath, domain: "artifacts", kind: artifactKindForOutboxItem(item) }),
-        resourceId: resourceId ?? existing?.resourceId,
-        dirty: false,
-        lastSyncedAt: now
-      });
-    }
-  }
-  for (const rejectedItem of rejected) {
-    const item = pending[rejectedItem.index];
-    if (!item) continue;
-    const error = classifySyncError({
-      code: rejectedItem.code,
-      message: rejectedItem.message ?? rejectedItem.code ?? "Sync push rejected"
-    });
-    markOutboxFailed(state.manifestStore, item.id, error.errorMessage, now, error);
-    await writeConflictRecord(state, item, error, now);
-  }
-  setMeta(state.manifestStore, "lastPushAt", now);
   await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
   await refreshManifestStats(state);
 }
