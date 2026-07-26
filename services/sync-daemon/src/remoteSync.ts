@@ -1,19 +1,61 @@
+import { createHash, randomUUID } from "node:crypto";
+import { promises as fs } from "node:fs";
+import { dirname, join } from "node:path";
 import type { SyncErrorMetadata } from "./manifestStore.js";
-import { PROJECT_CONTEXT_DOMAIN } from "./projectContextCache.js";
+import {
+  CoreHttpError,
+  assertExpectedDownloadChecksum,
+  coreJson
+} from "./coreClient.js";
+import { updateLocalProjectDefaultCache } from "./localProjects.js";
+import {
+  LocalProjectContextError,
+  PROJECT_CONTEXT_DOMAIN,
+  PROJECT_CONTEXT_SCHEMA_VERSION,
+  cacheProjectContextSnapshot,
+  parseProjectContextSnapshot
+} from "./projectContextCache.js";
 import {
   defaultNotePath,
+  hashFile,
   isIgnoredSyncRelativePath,
   normalizeArtifactFolderPath,
   normalizeArtifactRelativePath,
+  normalizeRelativePath,
+  resolveSyncRootRelativePath,
+  sanitizeFileName,
   sanitizePathSegment
 } from "./paths.js";
-import { asNumber, asRecord, asString } from "./localStore.js";
+import {
+  asNumber,
+  asRecord,
+  asString,
+  decodeContentBase64,
+  remoteResourceUpdatedAt
+} from "./localStore.js";
 import type {
+  DaemonState,
   RemoteArtifactItem,
   RemoteArtifactKind,
   RemoteSyncEvent
 } from "./types.js";
-import type { RemoteResourceDomain } from "./manifestStore.js";
+import {
+  getRemoteResource,
+  getResource,
+  hasOpenOutboxForPath,
+  listOpenOutboxForResource,
+  listOpenOutboxUnderPath,
+  listResources,
+  markRemoteResourceDeleted,
+  recordConflict,
+  removeResource,
+  upsertRemoteResource,
+  upsertResource as upsertManifestResource,
+  type ManifestResource,
+  type RemoteResource,
+  type RemoteResourceDomain,
+  type SyncErrorCategory
+} from "./manifestStore.js";
 
 export type SyncErrorDetails = SyncErrorMetadata & {
   errorMessage: string;
@@ -22,6 +64,597 @@ export type SyncErrorDetails = SyncErrorMetadata & {
 export function stringFromUnknown(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
+
+export function findResourceById(state: DaemonState, resourceId: string): ManifestResource | undefined {
+  return listResources(state.manifestStore).find((resource) => resource.resourceId === resourceId);
+}
+
+export function pathIsSelfOrChild(relativePath: string, parentPath: string): boolean {
+  const normalizedPath = normalizeRelativePath(relativePath);
+  const normalizedParent = normalizeRelativePath(parentPath).replace(/\/+$/, "");
+  return normalizedPath === normalizedParent || normalizedPath.startsWith(`${normalizedParent}/`);
+}
+
+export function resourcesUnderPath(state: DaemonState, relativePath: string): ManifestResource[] {
+  return listResources(state.manifestStore).filter((resource) => pathIsSelfOrChild(resource.relativePath, relativePath));
+}
+
+export async function localPathExists(absolutePath: string): Promise<boolean> {
+  try {
+    await fs.access(absolutePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function isLocalArtifactDirty(
+  state: DaemonState,
+  relativePath: string,
+  resource: ManifestResource | undefined
+): Promise<boolean> {
+  const absolutePath = resolveSyncRootRelativePath(state.config, relativePath);
+  if (!absolutePath) return true;
+  if (resource?.dirty) return true;
+  if (!resource) return localPathExists(absolutePath);
+
+  let stat;
+  try {
+    stat = await fs.stat(absolutePath);
+  } catch {
+    return true;
+  }
+  if (!stat.isFile()) return true;
+  if (resource.checksum) {
+    return await hashFile(absolutePath) !== resource.checksum;
+  }
+  if (resource.sizeBytes !== undefined) {
+    return stat.size !== resource.sizeBytes;
+  }
+  return false;
+}
+
+export function hasOpenOutboxForRemoteArtifact(state: DaemonState, relativePath?: string, resourceId?: string): boolean {
+  if (relativePath && hasOpenOutboxForPath(state.manifestStore, relativePath)) return true;
+  if (resourceId && listOpenOutboxForResource(state.manifestStore, resourceId).length > 0) return true;
+  return false;
+}
+
+export function hasOpenOutboxUnderRemoteFolder(state: DaemonState, relativePath: string, resourceId?: string): boolean {
+  if (listOpenOutboxUnderPath(state.manifestStore, relativePath).length > 0) return true;
+  if (resourceId && listOpenOutboxForResource(state.manifestStore, resourceId).length > 0) return true;
+  return false;
+}
+
+export async function directoryHasUntrackedVisibleEntries(
+  state: DaemonState,
+  relativePath: string,
+  trackedResources: ManifestResource[]
+): Promise<boolean> {
+  if (!resolveSyncRootRelativePath(state.config, relativePath)) return true;
+  const trackedPaths = new Set(trackedResources.map((resource) => normalizeRelativePath(resource.relativePath)));
+  const stack = [normalizeRelativePath(relativePath)];
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) continue;
+    const absolutePath = resolveSyncRootRelativePath(state.config, current);
+    if (!absolutePath) return true;
+
+    let entries;
+    try {
+      entries = await fs.readdir(absolutePath, { withFileTypes: true });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") continue;
+      return true;
+    }
+
+    for (const entry of entries) {
+      const childRelativePath = normalizeRelativePath(`${current}/${entry.name}`);
+      if (isIgnoredSyncRelativePath(childRelativePath)) continue;
+      if (entry.isDirectory()) {
+        const containsTrackedResource = trackedResources.some((resource) => pathIsSelfOrChild(resource.relativePath, childRelativePath));
+        if (!containsTrackedResource) return true;
+        stack.push(childRelativePath);
+      } else if (!trackedPaths.has(childRelativePath)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+export async function writeRemoteConflict(
+  state: DaemonState,
+  input: {
+    relativePath: string;
+    resourceId?: string;
+    action: "create" | "update" | "delete";
+    payload: Record<string, unknown>;
+    errorMessage: string;
+    createdAt: string;
+    errorCode?: string;
+    errorCategory?: SyncErrorCategory;
+    retryable?: boolean;
+  }
+): Promise<void> {
+  const details = classifySyncError({
+    message: input.errorMessage,
+    code: input.errorCode
+  });
+  const conflictId = randomUUID();
+  const conflictBaseName = sanitizeFileName(input.relativePath.replace(/[\\/]/g, "__")) || "remote-conflict";
+  const timestamp = input.createdAt.replace(/[:.]/g, "-");
+  const conflictPath = join(state.config.syncRoot, ".workbench", "conflicts", `${timestamp}-${conflictId}-${conflictBaseName}.json`);
+  const conflict = recordConflict(state.manifestStore, {
+    id: conflictId,
+    relativePath: input.relativePath,
+    domain: "artifacts",
+    action: input.action,
+    resourceId: input.resourceId,
+    payload: input.payload,
+    errorMessage: input.errorMessage,
+    errorCode: input.errorCode ?? details.errorCode ?? "LOCAL_SYNC_CONFLICT",
+    errorCategory: input.errorCategory ?? details.errorCategory ?? "local_conflict",
+    retryable: input.retryable ?? details.retryable ?? false,
+    conflictPath,
+    status: "open",
+    createdAt: input.createdAt
+  });
+  await fs.mkdir(dirname(conflictPath), { recursive: true });
+  await fs.writeFile(conflictPath, `${JSON.stringify({
+    conflictId: conflict.id,
+    relativePath: input.relativePath,
+    action: input.action,
+    resourceId: input.resourceId,
+    errorMessage: input.errorMessage,
+    errorCode: input.errorCode ?? details.errorCode ?? "LOCAL_SYNC_CONFLICT",
+    errorCategory: input.errorCategory ?? details.errorCategory ?? "local_conflict",
+    retryable: input.retryable ?? details.retryable ?? false,
+    remotePayload: input.payload,
+    createdAt: input.createdAt
+  }, null, 2)}\n`, "utf8");
+}
+
+export async function canApplyRemoteArtifact(
+  state: DaemonState,
+  options: {
+    relativePath: string;
+    resourceId?: string;
+    action: "create" | "update" | "delete";
+    payload: Record<string, unknown>;
+    createdAt: string;
+  }
+): Promise<boolean> {
+  const pathResource = getResource(state.manifestStore, options.relativePath);
+  const idResource = options.resourceId ? findResourceById(state, options.resourceId) : undefined;
+  const resource = pathResource ?? idResource;
+  if (hasOpenOutboxForRemoteArtifact(state, options.relativePath, options.resourceId)) {
+    await writeRemoteConflict(state, {
+      ...options,
+      errorMessage: "Remote artifact change arrived while local outbox work is open."
+    });
+    return false;
+  }
+
+  if (await isLocalArtifactDirty(state, options.relativePath, pathResource)) {
+    await writeRemoteConflict(state, {
+      ...options,
+      errorMessage: "Remote artifact change conflicts with unsynced local file state."
+    });
+    return false;
+  }
+
+  if (idResource && idResource.relativePath !== options.relativePath) {
+    if (hasOpenOutboxForRemoteArtifact(state, idResource.relativePath, options.resourceId)
+      || await isLocalArtifactDirty(state, idResource.relativePath, idResource)) {
+      await writeRemoteConflict(state, {
+        ...options,
+        errorMessage: "Remote artifact move conflicts with unsynced local file state."
+      });
+      return false;
+    }
+  }
+
+  return !resource?.dirty;
+}
+
+export async function canApplyRemoteArtifactFolderDelete(
+  state: DaemonState,
+  options: {
+    relativePath: string;
+    resourceId?: string;
+    payload: Record<string, unknown>;
+    createdAt: string;
+  }
+): Promise<boolean> {
+  if (hasOpenOutboxUnderRemoteFolder(state, options.relativePath, options.resourceId)) {
+    await writeRemoteConflict(state, {
+      ...options,
+      action: "delete",
+      errorMessage: "Remote artifact folder delete arrived while local outbox work is open under the folder."
+    });
+    return false;
+  }
+
+  const trackedResources = resourcesUnderPath(state, options.relativePath);
+  for (const resource of trackedResources) {
+    if (await isLocalArtifactDirty(state, resource.relativePath, resource)) {
+      await writeRemoteConflict(state, {
+        ...options,
+        action: "delete",
+        errorMessage: "Remote artifact folder delete conflicts with unsynced local file state under the folder."
+      });
+      return false;
+    }
+  }
+
+  if (await directoryHasUntrackedVisibleEntries(state, options.relativePath, trackedResources)) {
+    await writeRemoteConflict(state, {
+      ...options,
+      action: "delete",
+      errorMessage: "Remote artifact folder delete conflicts with untracked local files under the folder."
+    });
+    return false;
+  }
+
+  return true;
+}
+
+export async function fetchRemoteArtifactBlob(state: DaemonState, artifactId: string): Promise<Buffer | undefined> {
+  if (!state.identity) throw new Error("Missing local client identity");
+  const response = await fetch(`${state.config.coreUrl}/api/sync/blobs/${encodeURIComponent(`artifact:${artifactId}`)}`, {
+    headers: {
+      "x-workbench-local-client-id": state.identity.localClientId,
+      "x-workbench-local-client-token": state.identity.localClientToken
+    }
+  });
+  const length = Number(response.headers.get("content-length") ?? "");
+  if (Number.isFinite(length) && length > state.config.maxSyncFileBytes) {
+    return undefined;
+  }
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (!response.ok) {
+    throw new Error(buffer.toString("utf8") || `HTTP ${response.status}`);
+  }
+  const checksum = createHash("sha256").update(buffer).digest("hex");
+  assertExpectedDownloadChecksum(response.headers.get("x-workbench-content-checksum"), checksum);
+  return buffer.byteLength <= state.config.maxSyncFileBytes ? buffer : undefined;
+}
+
+export async function remoteArtifactBuffer(
+  state: DaemonState,
+  item: RemoteArtifactItem,
+  relativePath: string,
+  createdAt: string,
+  payload: Record<string, unknown>
+): Promise<Buffer | undefined> {
+  if (item.kind === "note") {
+    return typeof item.contentMarkdown === "string" ? Buffer.from(item.contentMarkdown, "utf8") : undefined;
+  }
+
+  if (typeof item.contentBase64 === "string") {
+    const buffer = decodeContentBase64(item.contentBase64);
+    if (buffer.byteLength <= state.config.maxSyncFileBytes) return buffer;
+    await writeRemoteConflict(state, {
+      relativePath,
+      resourceId: item.id,
+      action: "update",
+      payload,
+      errorMessage: `Remote artifact file exceeds max sync size of ${state.config.maxSyncFileBytes} bytes.`,
+      createdAt
+    });
+    return undefined;
+  }
+
+  if (typeof item.sizeBytes === "number" && item.sizeBytes > state.config.maxSyncFileBytes) {
+    await writeRemoteConflict(state, {
+      relativePath,
+      resourceId: item.id,
+      action: "update",
+      payload,
+      errorMessage: `Remote artifact file exceeds max sync size of ${state.config.maxSyncFileBytes} bytes.`,
+      createdAt
+    });
+    return undefined;
+  }
+
+  const buffer = await fetchRemoteArtifactBlob(state, item.id);
+  if (buffer) return buffer;
+  await writeRemoteConflict(state, {
+    relativePath,
+    resourceId: item.id,
+    action: "update",
+    payload,
+    errorMessage: `Remote artifact file exceeds max sync size of ${state.config.maxSyncFileBytes} bytes.`,
+    createdAt
+  });
+  return undefined;
+}
+
+export async function applyRemoteArtifactItem(
+  state: DaemonState,
+  item: RemoteArtifactItem,
+  options: {
+    action: "create" | "update";
+    payload: Record<string, unknown>;
+    createdAt: string;
+  }
+): Promise<void> {
+  const relativePath = relativePathForRemoteArtifact(item);
+  if (!relativePath) return;
+
+  if (item.kind === "folder") {
+    const folderPath = resolveSyncRootRelativePath(state.config, relativePath);
+    if (!folderPath) return;
+    if (hasOpenOutboxForRemoteArtifact(state, relativePath, item.id)) {
+      await writeRemoteConflict(state, {
+        relativePath,
+        resourceId: item.id,
+        action: options.action,
+        payload: options.payload,
+        errorMessage: "Remote artifact folder change arrived while local outbox work is open.",
+        createdAt: options.createdAt
+      });
+      return;
+    }
+    try {
+      const stat = await fs.stat(folderPath);
+      if (!stat.isDirectory()) {
+        await writeRemoteConflict(state, {
+          relativePath,
+          resourceId: item.id,
+          action: options.action,
+          payload: options.payload,
+          errorMessage: "Remote artifact folder conflicts with a local file at the same path.",
+          createdAt: options.createdAt
+        });
+        return;
+      }
+    } catch {
+      // Missing directory will be created below.
+    }
+    const previousById = findResourceById(state, item.id);
+    await fs.mkdir(folderPath, { recursive: true });
+    const stat = await fs.stat(folderPath);
+    upsertManifestResource(state.manifestStore, {
+      relativePath,
+      domain: "artifacts",
+      kind: "folder",
+      resourceId: item.id,
+      dirty: false,
+      lastSeenAt: options.createdAt,
+      lastSyncedAt: options.createdAt,
+      localUpdatedAt: stat.mtime.toISOString()
+    });
+    if (previousById && previousById.relativePath !== relativePath) {
+      removeResource(state.manifestStore, previousById.relativePath);
+    }
+    return;
+  }
+
+  if (!await canApplyRemoteArtifact(state, {
+    relativePath,
+    resourceId: item.id,
+    action: options.action,
+    payload: options.payload,
+    createdAt: options.createdAt
+  })) {
+    return;
+  }
+
+  const buffer = await remoteArtifactBuffer(state, item, relativePath, options.createdAt, options.payload);
+  if (!buffer) return;
+
+  const absolutePath = resolveSyncRootRelativePath(state.config, relativePath);
+  if (!absolutePath) return;
+  const previousById = findResourceById(state, item.id);
+  await fs.mkdir(dirname(absolutePath), { recursive: true });
+  await fs.writeFile(absolutePath, buffer);
+  const stat = await fs.stat(absolutePath);
+  const now = options.createdAt;
+  upsertManifestResource(state.manifestStore, {
+    relativePath,
+    domain: "artifacts",
+    kind: item.kind,
+    resourceId: item.id,
+    checksum: createHash("sha256").update(buffer).digest("hex"),
+    sizeBytes: stat.size,
+    dirty: false,
+    lastSeenAt: now,
+    lastSyncedAt: now,
+    localUpdatedAt: stat.mtime.toISOString()
+  });
+
+  if (previousById && previousById.relativePath !== relativePath) {
+    const previousPath = resolveSyncRootRelativePath(state.config, previousById.relativePath);
+    if (previousPath) {
+      await fs.rm(previousPath, { force: true }).catch(() => {
+        // Best-effort cleanup after a clean remote move.
+      });
+    }
+    removeResource(state.manifestStore, previousById.relativePath);
+  }
+}
+
+export async function applyRemoteArtifactDelete(
+  state: DaemonState,
+  event: RemoteSyncEvent,
+  item: RemoteArtifactItem | undefined,
+  createdAt: string
+): Promise<void> {
+  const resourceId = event.resourceId ?? item?.id;
+  const existing = resourceId ? findResourceById(state, resourceId) : undefined;
+  const relativePath = existing?.relativePath ?? (item ? relativePathForRemoteArtifact(item) : undefined);
+  if (!relativePath) return;
+
+  const payload = asRecord(event.payload) ?? {};
+  if (item?.kind === "folder") {
+    if (!await canApplyRemoteArtifactFolderDelete(state, {
+      relativePath,
+      resourceId,
+      payload,
+      createdAt
+    })) {
+      return;
+    }
+    const absolutePath = resolveSyncRootRelativePath(state.config, relativePath);
+    if (absolutePath) {
+      await fs.rm(absolutePath, { recursive: true, force: true });
+    }
+    for (const resource of resourcesUnderPath(state, relativePath)) {
+      removeResource(state.manifestStore, resource.relativePath);
+    }
+    return;
+  }
+
+  if (!await canApplyRemoteArtifact(state, {
+    relativePath,
+    resourceId,
+    action: "delete",
+    payload,
+    createdAt
+  })) {
+    return;
+  }
+
+  const absolutePath = resolveSyncRootRelativePath(state.config, relativePath);
+  if (absolutePath) {
+    await fs.rm(absolutePath, { force: true });
+  }
+  removeResource(state.manifestStore, relativePath);
+}
+
+export async function applyRemoteArtifactEvent(state: DaemonState, event: RemoteSyncEvent): Promise<void> {
+  if (event.domain !== "artifacts") return;
+  const payload = asRecord(event.payload) ?? {};
+  if (asString(payload.localClientId) === state.identity?.localClientId) return;
+  const createdAt = asString(event.createdAt) ?? new Date().toISOString();
+  const item = remoteArtifactFromEvent(event);
+  if (isRemoteTombstone(event, item)) {
+    await applyRemoteArtifactDelete(state, event, item, createdAt);
+    return;
+  }
+  if (!item) return;
+  await applyRemoteArtifactItem(state, item, {
+    action: event.action === "create" ? "create" : "update",
+    payload,
+    createdAt
+  });
+}
+
+export async function applyRemoteArtifactSnapshotEntry(
+  state: DaemonState,
+  value: unknown,
+  generatedAt: string
+): Promise<void> {
+  const item = remoteArtifactFromUnknown(value);
+  if (!item) return;
+  await applyRemoteArtifactItem(state, item, {
+    action: "update",
+    payload: { source: "sync-snapshot", resource: value },
+    createdAt: generatedAt
+  });
+}
+
+export function remoteResourceRecord(
+  domain: RemoteResourceDomain,
+  resourceId: string,
+  payload: Record<string, unknown>,
+  options: { version?: number; deleted?: boolean; timestamp: string }
+): RemoteResource {
+  return {
+    domain,
+    resourceId,
+    version: options.version,
+    deleted: options.deleted ?? false,
+    payload,
+    updatedAt: remoteResourceUpdatedAt(payload, options.timestamp),
+    lastSyncedAt: options.timestamp
+  };
+}
+
+export function applyRemoteDomainSnapshotEntry(
+  state: DaemonState,
+  domain: RemoteResourceDomain,
+  value: unknown,
+  generatedAt: string
+): void {
+  if (domain === "artifacts") return;
+  const payload = remoteResourcePayloadFromSnapshot(value);
+  if (!payload) return;
+  const resourceId = remoteResourceIdFromUnknown(payload);
+  if (!resourceId) return;
+  upsertRemoteResource(state.manifestStore, remoteResourceRecord(domain, resourceId, payload, {
+    version: asNumber(payload.version),
+    timestamp: generatedAt
+  }));
+}
+
+export function applyRemoteProjectDefaultEvent(
+  state: DaemonState,
+  event: RemoteSyncEvent,
+  payload: Record<string, unknown>,
+  createdAt: string
+): boolean {
+  if (event.domain !== "projects" || normalizedProjectEventMarker(payload.relation) !== "default") {
+    return false;
+  }
+  const selection = asRecord(payload.resource);
+  const project = asRecord(selection?.project);
+  const projectId = asString(project?.id) ?? asString(payload.projectId) ?? event.resourceId;
+  if (!project || !projectId) return false;
+
+  const existing = getRemoteResource(state.manifestStore, "projects", projectId);
+  const nextPayload = {
+    ...(existing?.payload ?? {}),
+    ...project,
+    id: projectId,
+    isUserDefault: true
+  };
+  upsertRemoteResource(state.manifestStore, remoteResourceRecord("projects", projectId, nextPayload, {
+    version: event.version ?? asNumber(project.version) ?? existing?.version,
+    timestamp: createdAt
+  }));
+  updateLocalProjectDefaultCache(state, projectId, createdAt);
+  return true;
+}
+
+export function projectContextSnapshotPage(value: unknown): { items: unknown[]; nextCursor?: string } {
+  const page = asRecord(value);
+  if (!page || !Array.isArray(page.items)) {
+    throw new LocalProjectContextError(
+      502,
+      "LOCAL_PROJECT_CONTEXT_INVALID_SNAPSHOT",
+      "Core returned an invalid Project context snapshot page."
+    );
+  }
+  let nextCursor: string | undefined;
+  if (page.nextCursor !== undefined) {
+    if (
+      typeof page.nextCursor !== "string"
+      || page.nextCursor.length === 0
+      || page.nextCursor.trim() !== page.nextCursor
+    ) {
+      throw new LocalProjectContextError(
+        502,
+        "LOCAL_PROJECT_CONTEXT_INVALID_SNAPSHOT",
+        "Core returned an invalid Project context snapshot cursor."
+      );
+    }
+    nextCursor = page.nextCursor;
+  }
+  return { items: page.items, nextCursor };
+}
+
+export function projectContextEventIsStale(state: DaemonState, event: RemoteSyncEvent): boolean {
+  if (event.version === undefined || !event.resourceId) return false;
+  const current = getRemoteResource(state.manifestStore, PROJECT_CONTEXT_DOMAIN, event.resourceId);
+  return current?.version !== undefined && event.version <= current.version;
+}
+
 
 export function errorCodeFromUnknown(value: unknown): string | undefined {
   if (!value || typeof value !== "object") return undefined;
@@ -316,4 +949,83 @@ export function relativePathForRemoteArtifact(item: RemoteArtifactItem): string 
   const requested = item.path ?? (item.parentPath ? `${item.parentPath}/${fallbackRemoteArtifactLeaf(item)}` : fallbackRemoteArtifactLeaf(item));
   const relativePath = normalizeArtifactRelativePath(requested, fallbackRemoteArtifactLeaf(item));
   return relativePath && !isIgnoredSyncRelativePath(relativePath) ? relativePath : undefined;
+}
+
+export async function fetchProjectContextDetail(
+  state: DaemonState,
+  projectId: string,
+  version?: number
+): Promise<void> {
+  if (!state.identity) throw new Error("Missing local client identity");
+  try {
+    const detail = await coreJson<unknown>(
+      state.config,
+      `/api/sync/project-context/${encodeURIComponent(projectId)}`,
+      { method: "GET", localIdentity: state.identity }
+    );
+    const snapshot = parseProjectContextSnapshot(detail);
+    if (!snapshot || snapshot.projectId !== projectId) {
+      throw new LocalProjectContextError(
+        502,
+        "LOCAL_PROJECT_CONTEXT_INVALID_SNAPSHOT",
+        "Core returned Project context for a different Project."
+      );
+    }
+    cacheProjectContextSnapshot(state.manifestStore, snapshot, {
+      version,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    if (error instanceof CoreHttpError && error.status === 404) {
+      const deletedAt = new Date().toISOString();
+      markRemoteResourceDeleted(state.manifestStore, {
+        domain: PROJECT_CONTEXT_DOMAIN,
+        resourceId: projectId,
+        version,
+        payload: { schemaVersion: PROJECT_CONTEXT_SCHEMA_VERSION, projectId, deleted: true },
+        deletedAt,
+        lastSyncedAt: deletedAt
+      });
+      return;
+    }
+    throw error;
+  }
+}
+
+export function applyRemoteDomainEvent(state: DaemonState, event: RemoteSyncEvent): void {
+  const domain = parseRemoteResourceDomain(event.domain);
+  if (!domain || domain === "artifacts") return;
+  if (isLegacyProjectContextEvent(event)) return;
+  const payload = asRecord(event.payload) ?? {};
+  if (asString(payload.localClientId) === state.identity?.localClientId) return;
+
+  const createdAt = asString(event.createdAt) ?? new Date().toISOString();
+  if (applyRemoteProjectDefaultEvent(state, event, payload, createdAt)) return;
+  const { payload: recordPayload, merge } = remoteResourcePayloadFromEvent(event);
+  const resourceId = event.resourceId ?? remoteResourceIdFromUnknown(recordPayload);
+  if (!resourceId) return;
+
+  if (isRemoteResourceTombstone(event)) {
+    markRemoteResourceDeleted(state.manifestStore, {
+      domain,
+      resourceId,
+      version: event.version,
+      payload: recordPayload,
+      deletedAt: createdAt,
+      lastSyncedAt: createdAt
+    });
+    return;
+  }
+
+  const existing = getRemoteResource(state.manifestStore, domain, resourceId);
+  const nextPayload = merge
+    ? {
+        ...(existing?.payload ?? { id: resourceId }),
+        ...recordPayload
+      }
+    : recordPayload;
+  upsertRemoteResource(state.manifestStore, remoteResourceRecord(domain, resourceId, nextPayload, {
+    version: event.version ?? asNumber(nextPayload.version),
+    timestamp: createdAt
+  }));
 }
