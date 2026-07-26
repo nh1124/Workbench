@@ -46,7 +46,6 @@ import {
   walkSyncFiles
 } from "./paths.js";
 import {
-  asString,
   isLocalProjectId,
   LOCAL_PROJECT_ID_PREFIX,
   localProjectDefaultSelection,
@@ -59,10 +58,14 @@ import {
   updateLocalProjectDefaultCache
 } from "./localProjects.js";
 import {
+  createLocalNote,
+  deleteLocalNote,
   isLocalNoteId,
   LOCAL_NOTE_ID_PREFIX,
+  localNoteProjectSummaries,
   normalizeStringArray,
-  noteOutboxPath
+  noteOutboxPath,
+  updateLocalNote
 } from "./localNotes.js";
 
 export { readIdentity } from "./identityStorage.js";
@@ -120,9 +123,14 @@ export {
   updateLocalProjectDefaultCache
 } from "./localProjects.js";
 export {
+  createLocalNote,
+  deleteLocalNote,
   isLocalNoteId,
+  localNoteProjectSummaries,
+  normalizeLocalNotePayload,
   normalizeStringArray,
-  noteOutboxPath
+  noteOutboxPath,
+  updateLocalNote
 } from "./localNotes.js";
 
 import {
@@ -165,20 +173,30 @@ import {
   type SyncErrorMetadata
 } from "./manifestStore.js";
 import {
+  asNumber,
+  asString,
   CLIENT_OP_ID_HEADER,
   decodeLocalItemId,
   enqueueManifestOutbox,
   itemUpdatedAt,
   localItemId,
+  listLocalRemoteDomainItems,
+  localRemoteDomainItem,
   localProjectId,
   localProjectName,
   refreshManifestStats,
   runWithClientOpId,
+  supersedeOpenOutboxForPath,
   uniqueRelativePath
 } from "./localStore.js";
 export {
+  asNumber,
+  asString,
   CLIENT_OP_ID_HEADER,
   decodeLocalItemId,
+  listLocalRemoteDomainItems,
+  localRemoteDomainItem,
+  supersedeOpenOutboxForPath,
   runWithClientOpId
 } from "./localStore.js";
 import {
@@ -557,43 +575,6 @@ export async function getLocalArtifactItemById(
   const resource = resources.find((item) => item.resourceId === id)
     ?? (local ? resources.find((item) => item.kind === local.kind && item.relativePath === local.relativePath) : undefined);
   return resource ? buildLocalArtifactItem(state, resource, options) : undefined;
-}
-
-function listLocalRemoteDomainItems(
-  state: DaemonState,
-  domain: Exclude<RemoteResourceDomain, "artifacts">,
-  options: { includeDeleted?: boolean; limit?: number } = {}
-): Record<string, unknown>[] {
-  return listRemoteResources(state.manifestStore, {
-    domain,
-    includeDeleted: options.includeDeleted,
-    limit: options.limit
-  }).map((resource) => ({
-    ...resource.payload,
-    id: asString(resource.payload.id) ?? resource.resourceId,
-    version: asNumber(resource.payload.version) ?? resource.version,
-    deleted: resource.deleted ? true : resource.payload.deleted,
-    updatedAt: asString(resource.payload.updatedAt) ?? resource.updatedAt,
-    lastSyncedAt: resource.lastSyncedAt
-  }));
-}
-
-function localRemoteDomainItem(
-  state: DaemonState,
-  domain: Exclude<RemoteResourceDomain, "artifacts">,
-  resourceId: string,
-  options: { includeDeleted?: boolean } = {}
-): Record<string, unknown> | undefined {
-  const resource = getRemoteResource(state.manifestStore, domain, resourceId);
-  if (!resource || (resource.deleted && !options.includeDeleted)) return undefined;
-  return {
-    ...resource.payload,
-    id: asString(resource.payload.id) ?? resource.resourceId,
-    version: asNumber(resource.payload.version) ?? resource.version,
-    deleted: resource.deleted ? true : resource.payload.deleted,
-    updatedAt: asString(resource.payload.updatedAt) ?? resource.updatedAt,
-    lastSyncedAt: resource.lastSyncedAt
-  };
 }
 
 function localDefaultProjectSelection(state: DaemonState): Record<string, unknown> | undefined {
@@ -1068,174 +1049,6 @@ export async function deleteLocalProjectRelation(state: DaemonState, relationId:
   });
   echoLocalProjectRelationDelete(state.manifestStore, relationId);
   await finishLocalProjectContextWrite(state);
-}
-
-function normalizeLocalNotePayload(
-  state: DaemonState,
-  input: Record<string, unknown>,
-  existing?: Record<string, unknown>
-): Record<string, unknown> {
-  const now = new Date().toISOString();
-  const title = typeof input.title === "string" && input.title.trim()
-    ? input.title.trim()
-    : typeof existing?.title === "string" && existing.title.trim()
-      ? existing.title
-      : "Untitled";
-  const content = typeof input.content === "string"
-    ? input.content
-    : typeof existing?.content === "string"
-      ? existing.content
-      : "";
-  const projectId = typeof input.projectId === "string" && input.projectId.trim()
-    ? input.projectId.trim()
-    : typeof existing?.projectId === "string" && existing.projectId.trim()
-      ? existing.projectId
-      : localProjectId(state);
-  const projectName = typeof input.projectName === "string"
-    ? input.projectName
-    : typeof existing?.projectName === "string"
-      ? existing.projectName
-      : localProjectName(state);
-  return {
-    ...(existing ?? {}),
-    title,
-    content,
-    projectId,
-    projectName,
-    tags: Array.isArray(input.tags) ? normalizeStringArray(input.tags) : normalizeStringArray(existing?.tags),
-    createdAt: typeof existing?.createdAt === "string" ? existing.createdAt : now,
-    updatedAt: now
-  };
-}
-
-function localNoteProjectSummaries(state: DaemonState): Record<string, unknown>[] {
-  const byProject = new Map<string, { projectId: string; projectName?: string; noteCount: number; latestUpdatedAt: string }>();
-  for (const note of listLocalRemoteDomainItems(state, "notes")) {
-    const projectId = typeof note.projectId === "string" && note.projectId.trim() ? note.projectId : localProjectId(state);
-    const projectName = typeof note.projectName === "string" ? note.projectName : undefined;
-    const updatedAt = typeof note.updatedAt === "string" ? note.updatedAt : new Date().toISOString();
-    const existing = byProject.get(projectId);
-    if (!existing) {
-      byProject.set(projectId, { projectId, projectName, noteCount: 1, latestUpdatedAt: updatedAt });
-    } else {
-      existing.noteCount += 1;
-      if (!existing.projectName && projectName) existing.projectName = projectName;
-      if (existing.latestUpdatedAt < updatedAt) existing.latestUpdatedAt = updatedAt;
-    }
-  }
-  return [...byProject.values()].sort((a, b) => b.latestUpdatedAt.localeCompare(a.latestUpdatedAt));
-}
-
-export async function createLocalNote(state: DaemonState, input: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const id = `${LOCAL_NOTE_ID_PREFIX}${randomUUID()}`;
-  const payload: Record<string, unknown> = {
-    ...normalizeLocalNotePayload(state, input),
-    id
-  };
-  const now = new Date().toISOString();
-  const outboxPath = noteOutboxPath(id);
-  supersedeOpenOutboxForPath(
-    state,
-    outboxPath,
-    () => true,
-    "Local note was recreated through daemon facade; stale note operation was superseded.",
-    now
-  );
-  enqueueManifestOutbox(state.manifestStore, {
-    relativePath: outboxPath,
-    domain: "notes",
-    action: "create",
-    resourceId: id,
-    payload
-  });
-  upsertRemoteResource(state.manifestStore, {
-    domain: "notes",
-    resourceId: id,
-    payload,
-    updatedAt: asString(payload.updatedAt) ?? now
-  });
-  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
-  await refreshManifestStats(state);
-  return payload;
-}
-
-export async function updateLocalNote(
-  state: DaemonState,
-  id: string,
-  input: Record<string, unknown>
-): Promise<Record<string, unknown> | undefined> {
-  const existing = localRemoteDomainItem(state, "notes", id);
-  if (!existing) return undefined;
-  const now = new Date().toISOString();
-  const payload: Record<string, unknown> = {
-    ...normalizeLocalNotePayload(state, input, existing),
-    id
-  };
-  const outboxPath = noteOutboxPath(id);
-  const action = isLocalNoteId(id) ? "create" : "update";
-  supersedeOpenOutboxForPath(
-    state,
-    outboxPath,
-    () => true,
-    "Local note was updated through daemon facade; stale note operation was superseded.",
-    now
-  );
-  enqueueManifestOutbox(state.manifestStore, {
-    relativePath: outboxPath,
-    domain: "notes",
-    action,
-    resourceId: id,
-    payload
-  });
-  upsertRemoteResource(state.manifestStore, {
-    domain: "notes",
-    resourceId: id,
-    version: asNumber(existing.version),
-    payload,
-    updatedAt: asString(payload.updatedAt) ?? now,
-    lastSyncedAt: asString(existing.lastSyncedAt)
-  });
-  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
-  await refreshManifestStats(state);
-  return payload;
-}
-
-export async function deleteLocalNote(state: DaemonState, id: string): Promise<boolean> {
-  const existing = localRemoteDomainItem(state, "notes", id);
-  if (!existing) return false;
-  const now = new Date().toISOString();
-  const outboxPath = noteOutboxPath(id);
-  supersedeOpenOutboxForPath(
-    state,
-    outboxPath,
-    () => true,
-    "Local note was deleted through daemon facade; stale note operation was superseded.",
-    now
-  );
-
-  if (isLocalNoteId(id)) {
-    removeRemoteResource(state.manifestStore, "notes", id);
-  } else {
-    enqueueManifestOutbox(state.manifestStore, {
-      relativePath: outboxPath,
-      domain: "notes",
-      action: "delete",
-      resourceId: id,
-      payload: existing
-    });
-    markRemoteResourceDeleted(state.manifestStore, {
-      domain: "notes",
-      resourceId: id,
-      version: asNumber(existing.version),
-      payload: existing,
-      deletedAt: now,
-      lastSyncedAt: asString(existing.lastSyncedAt)
-    });
-  }
-
-  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
-  await refreshManifestStats(state);
-  return true;
 }
 
 const LOCAL_TASK_ID_PREFIX = "local-task-";
@@ -3756,22 +3569,6 @@ async function queueCleanLocalRenameUpdates(
   return renamedCandidatePaths;
 }
 
-function supersedeOpenOutboxForPath(
-  state: DaemonState,
-  relativePath: string,
-  predicate: (item: OutboxItem) => boolean,
-  reason: string,
-  updatedAt: string
-): OutboxItem[] {
-  const superseded: OutboxItem[] = [];
-  for (const item of listOpenOutboxForPath(state.manifestStore, relativePath)) {
-    if (!predicate(item)) continue;
-    markOutboxSuperseded(state.manifestStore, item.id, reason, updatedAt);
-    superseded.push(item);
-  }
-  return superseded;
-}
-
 function hasOpenOutboxAction(
   state: DaemonState,
   relativePath: string,
@@ -4069,10 +3866,6 @@ const REMOTE_CURSOR_DRAIN_LIMIT = 500;
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function parseRemoteResourceDomain(value: unknown): RemoteResourceDomain | undefined {

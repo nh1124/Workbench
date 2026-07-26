@@ -5,6 +5,7 @@ import {
   upsertRemoteResource,
   type OutboxItem
 } from "./manifestStore.js";
+import { asString } from "./localStore.js";
 import type { DaemonState } from "./types.js";
 
 export const LOCAL_PROJECT_ID_PREFIX = "local-project-";
@@ -110,8 +111,4 @@ export function shouldDeferProjectOutboxItem(state: DaemonState, item: OutboxIte
       && candidate.action === "create"
       && asString(candidate.payload.relation) !== "default"
   );
-}
-
-export function asString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }

@@ -5,10 +5,15 @@ import type { DaemonConfig } from "./config.js";
 import {
   enqueueOutbox as enqueueManifestOutboxRaw,
   getMeta,
+  getRemoteResource,
+  listOpenOutboxForPath,
+  listRemoteResources,
+  markOutboxSuperseded,
   readManifestStats,
   type ManifestResource,
   type ManifestStore,
-  type OutboxItem
+  type OutboxItem,
+  type RemoteResourceDomain
 } from "./manifestStore.js";
 import {
   directoryPathFor,
@@ -100,4 +105,65 @@ export function decodeLocalItemId(id: string): { kind: "folder" | "note" | "file
 
 export function itemUpdatedAt(resource: ManifestResource): string {
   return resource.localUpdatedAt ?? resource.lastSeenAt ?? resource.lastSyncedAt ?? new Date(0).toISOString();
+}
+
+export function asString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+export function asNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+export function listLocalRemoteDomainItems(
+  state: DaemonState,
+  domain: Exclude<RemoteResourceDomain, "artifacts">,
+  options: { includeDeleted?: boolean; limit?: number } = {}
+): Record<string, unknown>[] {
+  return listRemoteResources(state.manifestStore, {
+    domain,
+    includeDeleted: options.includeDeleted,
+    limit: options.limit
+  }).map((resource) => ({
+    ...resource.payload,
+    id: asString(resource.payload.id) ?? resource.resourceId,
+    version: asNumber(resource.payload.version) ?? resource.version,
+    deleted: resource.deleted ? true : resource.payload.deleted,
+    updatedAt: asString(resource.payload.updatedAt) ?? resource.updatedAt,
+    lastSyncedAt: resource.lastSyncedAt
+  }));
+}
+
+export function localRemoteDomainItem(
+  state: DaemonState,
+  domain: Exclude<RemoteResourceDomain, "artifacts">,
+  resourceId: string,
+  options: { includeDeleted?: boolean } = {}
+): Record<string, unknown> | undefined {
+  const resource = getRemoteResource(state.manifestStore, domain, resourceId);
+  if (!resource || (resource.deleted && !options.includeDeleted)) return undefined;
+  return {
+    ...resource.payload,
+    id: asString(resource.payload.id) ?? resource.resourceId,
+    version: asNumber(resource.payload.version) ?? resource.version,
+    deleted: resource.deleted ? true : resource.payload.deleted,
+    updatedAt: asString(resource.payload.updatedAt) ?? resource.updatedAt,
+    lastSyncedAt: resource.lastSyncedAt
+  };
+}
+
+export function supersedeOpenOutboxForPath(
+  state: DaemonState,
+  relativePath: string,
+  predicate: (item: OutboxItem) => boolean,
+  reason: string,
+  updatedAt: string
+): OutboxItem[] {
+  const superseded: OutboxItem[] = [];
+  for (const item of listOpenOutboxForPath(state.manifestStore, relativePath)) {
+    if (!predicate(item)) continue;
+    markOutboxSuperseded(state.manifestStore, item.id, reason, updatedAt);
+    superseded.push(item);
+  }
+  return superseded;
 }
