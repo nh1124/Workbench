@@ -115,6 +115,20 @@ export function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+export function remoteResourceUpdatedAt(payload: Record<string, unknown>, fallback: string): string {
+  return asString(payload.updatedAt)
+    ?? asString(payload.updated_at)
+    ?? asString(payload.modifiedAt)
+    ?? asString(payload.createdAt)
+    ?? fallback;
+}
+
+export function resultRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
 export function listLocalRemoteDomainItems(
   state: DaemonState,
   domain: Exclude<RemoteResourceDomain, "artifacts">,

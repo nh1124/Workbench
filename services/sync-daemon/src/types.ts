@@ -4,7 +4,7 @@ import type { CaptureServerPolicyProvider } from "./capture/serverPolicy.js";
 import type { CaptureUploader } from "./capture/uploader.js";
 import type { DaemonConfig } from "./config.js";
 import type { ClientIdentity } from "./identityStorage.js";
-import type { ManifestStore, SyncErrorCategory } from "./manifestStore.js";
+import type { ManifestStore, RemoteResourceDomain, SyncErrorCategory } from "./manifestStore.js";
 
 /**
  * Shared daemon types.
@@ -45,6 +45,24 @@ export type LocalArtifactItem = {
   contentMarkdown?: string;
   createdAt: string;
   updatedAt: string;
+};
+
+export type SyncPushResponse = {
+  applied?: Array<{
+    index: number;
+    domain?: RemoteResourceDomain;
+    action?: "create" | "update" | "delete";
+    resourceId?: string;
+    version?: number;
+    deduplicated?: boolean;
+    result?: unknown;
+  }>;
+  rejected?: Array<{
+    index: number;
+    code?: string;
+    message?: string;
+  }>;
+  serverCursor?: string;
 };
 
 export type DaemonState = {
