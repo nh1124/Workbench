@@ -7,17 +7,88 @@ import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { promises as fs, watch, type FSWatcher } from "node:fs";
 import { config as loadEnv } from "dotenv";
-import { normalizeCoreUrl } from "./coreUrl.js";
 import {
-  parseSecureIdentityMode,
   readIdentity,
   writeIdentity,
   type ClientIdentity,
   type SecureIdentityMode
 } from "./identityStorage.js";
+import {
+  ensureDirs,
+  ensureLoopbackApiToken,
+  env,
+  normalizeConfiguredOrigin,
+  readConfig,
+  type DaemonConfig
+} from "./config.js";
+import {
+  artifactKindForPath,
+  defaultNotePath,
+  directoryPathFor,
+  hashFile,
+  isIgnoredSyncPath,
+  isIgnoredSyncRelativePath,
+  isPathInsideDirectory,
+  mimeTypeForPath,
+  normalizeArtifactFolderPath,
+  normalizeArtifactRelativePath,
+  normalizeRelativePath,
+  normalizeSha256Checksum,
+  parseContentDispositionFilename,
+  relativeSyncPath,
+  resolveSyncRootRelativePath,
+  sanitizeFileName,
+  sanitizePathSegment,
+  sleep,
+  titleFor,
+  uniquePath,
+  waitForStableFile,
+  walkSyncDirectories,
+  walkSyncFiles
+} from "./paths.js";
 
 export { readIdentity } from "./identityStorage.js";
 export type { ClientIdentity, SecureIdentityMode } from "./identityStorage.js";
+export {
+  DAEMON_TOKEN_FILE,
+  ensureDirs,
+  ensureLoopbackApiToken,
+  env,
+  envBoolean,
+  normalizeConfiguredOrigin,
+  parseLocalJobConfirmationPolicy,
+  parseLoopbackAllowedOrigins,
+  readConfig
+} from "./config.js";
+export type { DaemonConfig, LocalJobConfirmationPolicy } from "./config.js";
+export {
+  artifactKindForPath,
+  defaultNotePath,
+  directoryPathFor,
+  hashFile,
+  isIgnoredSyncPath,
+  isIgnoredSyncRelativePath,
+  isPathInsideDirectory,
+  isReservedWindowsName,
+  mimeTypeForPath,
+  normalizeArtifactFolderPath,
+  normalizeArtifactRelativePath,
+  normalizeRelativePath,
+  normalizeSha256Checksum,
+  parseContentDispositionFilename,
+  pathContainsReservedSegment,
+  pathHasUnsafeRootOrTraversal,
+  relativeSyncPath,
+  resolveSyncRootRelativePath,
+  sanitizeFileName,
+  sanitizePathSegment,
+  sleep,
+  titleFor,
+  uniquePath,
+  waitForStableFile,
+  walkSyncDirectories,
+  walkSyncFiles
+} from "./paths.js";
 
 import {
   enqueueOutbox as enqueueManifestOutboxRaw,
@@ -123,8 +194,6 @@ export type LocalJob = {
   status: string;
 };
 
-export type LocalJobConfirmationPolicy = "off" | "downloads" | "all";
-
 type PendingLocalJobConfirmation = {
   job: LocalJob;
   requestedAt: string;
@@ -147,29 +216,6 @@ type LocalArtifactItem = {
   contentMarkdown?: string;
   createdAt: string;
   updatedAt: string;
-};
-
-export type DaemonConfig = {
-  coreUrl: string;
-  accessToken?: string;
-  apiToken?: string;
-  /** Absent means secure: the local API requires a token. */
-  allowAnonymousApi?: boolean;
-  syncRoot: string;
-  downloadsDir: string;
-  deviceId: string;
-  clientName: string;
-  syncRootId: string;
-  syncRootLabel: string;
-  intervalMs: number;
-  httpPort: number;
-  apiAllowedOrigins?: string[];
-  maxSyncFileBytes: number;
-  watchEnabled: boolean;
-  watchDebounceMs: number;
-  persistClientIdentity?: boolean;
-  secureClientIdentity?: SecureIdentityMode;
-  localJobConfirmationPolicy?: LocalJobConfirmationPolicy;
 };
 
 export type DaemonState = {
@@ -203,115 +249,6 @@ export type DaemonState = {
   watcher?: FSWatcher;
   pendingJobConfirmations?: Map<string, PendingLocalJobConfirmation>;
 };
-
-function env(name: string): string | undefined {
-  const value = process.env[name]?.trim();
-  return value && value.length > 0 ? value : undefined;
-}
-
-function envBoolean(value: string | undefined, fallback: boolean): boolean {
-  const normalized = value?.trim().toLowerCase();
-  if (!normalized) return fallback;
-  if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on") return true;
-  if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off") return false;
-  return fallback;
-}
-
-export function parseLocalJobConfirmationPolicy(value: string | undefined): LocalJobConfirmationPolicy {
-  const normalized = value?.trim().toLowerCase();
-  if (!normalized || normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off") {
-    return "off";
-  }
-  if (normalized === "downloads" || normalized === "download" || normalized === "outside-sync-folder") {
-    return "downloads";
-  }
-  if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on" || normalized === "all") {
-    return "all";
-  }
-  return "off";
-}
-
-function readConfig(): DaemonConfig {
-  const syncRoot = resolve(env("WORKBENCH_SYNC_ROOT") ?? join(homedir(), "WorkbenchSync"));
-  const downloadsDir = resolve(env("WORKBENCH_DOWNLOADS_DIR") ?? join(homedir(), "Downloads"));
-  const intervalRaw = Number(env("WORKBENCH_DAEMON_INTERVAL_MS") ?? "5000");
-  const httpPortRaw = Number(env("WORKBENCH_DAEMON_HTTP_PORT") ?? "35780");
-  const maxSyncFileBytesRaw = Number(env("WORKBENCH_MAX_SYNC_FILE_BYTES") ?? String(10 * 1024 * 1024));
-  const watchDebounceRaw = Number(env("WORKBENCH_SYNC_WATCH_DEBOUNCE_MS") ?? "800");
-  const watchEnabledRaw = env("WORKBENCH_SYNC_WATCH")?.toLowerCase();
-  const persistIdentityRaw = env("WORKBENCH_PERSIST_CLIENT_IDENTITY") ?? env("WORKBENCH_LOCAL_CLIENT_IDENTITY_FILE");
-  const secureIdentityRaw = env("WORKBENCH_SECURE_CLIENT_IDENTITY") ?? env("WORKBENCH_LOCAL_CLIENT_SECURE_STORAGE");
-  const localJobConfirmationRaw = env("WORKBENCH_LOCAL_JOB_CONFIRMATION") ?? env("WORKBENCH_LOCAL_JOB_CONFIRMATION_POLICY");
-  return {
-    coreUrl: normalizeCoreUrl(env("WORKBENCH_CORE_URL") ?? "http://localhost:3000"),
-    accessToken: env("WORKBENCH_ACCESS_TOKEN"),
-    apiToken: env("WORKBENCH_DAEMON_API_TOKEN") ?? env("WORKBENCH_LOCAL_DAEMON_TOKEN"),
-    allowAnonymousApi: envBoolean(env("WORKBENCH_DAEMON_ALLOW_ANONYMOUS"), false),
-    syncRoot,
-    downloadsDir,
-    deviceId: env("WORKBENCH_DEVICE_ID") ?? `${hostname()}-${randomUUID()}`,
-    clientName: env("WORKBENCH_CLIENT_NAME") ?? `${hostname()} Workbench daemon`,
-    syncRootId: env("WORKBENCH_SYNC_ROOT_ID") ?? "default",
-    syncRootLabel: env("WORKBENCH_SYNC_ROOT_LABEL") ?? "Workbench Sync",
-    intervalMs: Number.isFinite(intervalRaw) ? Math.max(1000, intervalRaw) : 5000,
-    httpPort: Number.isFinite(httpPortRaw) ? Math.max(0, httpPortRaw) : 35780,
-    apiAllowedOrigins: parseLoopbackAllowedOrigins(
-      env("WORKBENCH_DAEMON_ALLOWED_ORIGINS") ?? env("WORKBENCH_LOCAL_DAEMON_ALLOWED_ORIGINS")
-    ),
-    maxSyncFileBytes: Number.isFinite(maxSyncFileBytesRaw) ? Math.max(1024, maxSyncFileBytesRaw) : 10 * 1024 * 1024,
-    watchEnabled: watchEnabledRaw !== "0" && watchEnabledRaw !== "false" && watchEnabledRaw !== "off",
-    watchDebounceMs: Number.isFinite(watchDebounceRaw) ? Math.max(100, watchDebounceRaw) : 800,
-    persistClientIdentity: envBoolean(persistIdentityRaw, true),
-    secureClientIdentity: parseSecureIdentityMode(secureIdentityRaw),
-    localJobConfirmationPolicy: parseLocalJobConfirmationPolicy(localJobConfirmationRaw)
-  };
-}
-
-async function ensureDirs(config: DaemonConfig): Promise<void> {
-  await fs.mkdir(config.syncRoot, { recursive: true });
-  await fs.mkdir(config.downloadsDir, { recursive: true });
-  await fs.mkdir(join(config.syncRoot, ".workbench"), { recursive: true });
-  await fs.mkdir(join(config.syncRoot, ".workbench", "conflicts"), { recursive: true });
-}
-
-const DAEMON_TOKEN_FILE = "daemon-token";
-
-/**
- * Resolves the loopback API token, generating and persisting one on first run.
- *
- * The local API can write to the filesystem and mutate offline data, and requests
- * without an Origin header are not covered by the CORS allowlist, so it must never
- * be reachable unauthenticated. Generating a stable token keeps existing setups
- * working without forcing manual configuration.
- */
-async function ensureLoopbackApiToken(config: DaemonConfig): Promise<void> {
-  if (config.apiToken) return;
-  if (config.allowAnonymousApi) {
-    console.warn(
-      "[workbench-daemon] WORKBENCH_DAEMON_ALLOW_ANONYMOUS is set: the local API is reachable by any process on this machine."
-    );
-    return;
-  }
-
-  const tokenPath = join(config.syncRoot, ".workbench", DAEMON_TOKEN_FILE);
-  try {
-    const existing = (await fs.readFile(tokenPath, "utf8")).trim();
-    if (existing) {
-      config.apiToken = existing;
-      return;
-    }
-  } catch {
-    // No persisted token yet; fall through and create one.
-  }
-
-  const generated = randomUUID().replace(/-/g, "");
-  await fs.writeFile(tokenPath, `${generated}\n`, { encoding: "utf8", mode: 0o600 });
-  config.apiToken = generated;
-  console.warn(
-    `[workbench-daemon] Generated a local API token at ${tokenPath}. ` +
-    "Paste it into Settings > Local daemon, or set WORKBENCH_DAEMON_API_TOKEN, to let clients connect."
-  );
-}
 
 class CoreHttpError extends Error {
   status: number;
@@ -486,72 +423,6 @@ async function claimJobs(state: DaemonState): Promise<LocalJob[]> {
   return result.items;
 }
 
-function isReservedWindowsName(value: string): boolean {
-  return /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(value);
-}
-
-export function sanitizeFileName(raw: string): string {
-  const fallback = "download.bin";
-  const cleaned = raw
-    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/[. ]+$/g, "");
-  if (!cleaned || cleaned === "." || cleaned === ".." || isReservedWindowsName(cleaned)) return fallback;
-  return cleaned.slice(0, 180);
-}
-
-function sanitizePathSegment(raw: string, fallback = "untitled"): string {
-  const cleaned = raw
-    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/[. ]+$/g, "");
-  if (!cleaned || cleaned === "." || cleaned === ".." || isReservedWindowsName(cleaned)) return fallback;
-  return cleaned.slice(0, 180);
-}
-
-function parseContentDispositionFilename(value: string | null): string | undefined {
-  if (!value) return undefined;
-  const utf8 = value.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
-  if (utf8?.[1]) {
-    try {
-      return decodeURIComponent(utf8[1]);
-    } catch {
-      return utf8[1];
-    }
-  }
-  const quoted = value.match(/filename\s*=\s*"([^"]+)"/i);
-  if (quoted?.[1]) return quoted[1];
-  const plain = value.match(/filename\s*=\s*([^;]+)/i);
-  return plain?.[1]?.trim();
-}
-
-async function uniquePath(directory: string, filename: string): Promise<string> {
-  const parsed = filename.match(/^(.*?)(\.[^.]+)?$/);
-  const base = parsed?.[1] || "download";
-  const ext = parsed?.[2] || "";
-  for (let index = 0; index < 1000; index += 1) {
-    const candidate = join(directory, index === 0 ? `${base}${ext}` : `${base} (${index})${ext}`);
-    try {
-      await fs.access(candidate);
-    } catch {
-      return candidate;
-    }
-  }
-  return join(directory, `${base}-${Date.now()}${ext}`);
-}
-
-export function normalizeSha256Checksum(value: string | null | undefined): string | undefined {
-  if (!value) return undefined;
-  const trimmed = value.trim().toLowerCase();
-  const hex = trimmed.startsWith("sha256:") ? trimmed.slice("sha256:".length) : trimmed;
-  if (!/^[a-f0-9]{64}$/.test(hex)) {
-    throw new Error("Invalid download checksum header");
-  }
-  return hex;
-}
-
 function assertExpectedDownloadChecksum(expected: string | null, actualHex: string): void {
   const expectedHex = normalizeSha256Checksum(expected);
   if (expectedHex && expectedHex !== actualHex.toLowerCase()) {
@@ -596,184 +467,8 @@ async function downloadJobFile(state: DaemonState, job: LocalJob): Promise<{
   };
 }
 
-export function normalizeRelativePath(pathValue: string): string {
-  return pathValue.replace(/\\/g, "/");
-}
-
-function pathHasUnsafeRootOrTraversal(pathValue: string): boolean {
-  const normalized = normalizeRelativePath(pathValue);
-  const trimmed = normalized.trim();
-  if (!trimmed) return false;
-  if (isAbsolute(pathValue) || isAbsolute(normalized) || /^[A-Za-z]:/.test(trimmed) || trimmed.startsWith("//")) {
-    return true;
-  }
-  return normalized.split("/").some((segment) => segment === "..");
-}
-
-function pathContainsReservedSegment(pathValue: string): boolean {
-  return normalizeRelativePath(pathValue).split("/").some((segment) => isReservedWindowsName(segment));
-}
-
-function isPathInsideDirectory(directory: string, candidate: string): boolean {
-  const relativePath = normalizeRelativePath(relative(resolve(directory), resolve(candidate)));
-  return relativePath === "" || (relativePath !== ".." && !relativePath.startsWith("../"));
-}
-
-function relativeSyncPath(config: DaemonConfig, absolutePath: string): string | undefined {
-  if (!isPathInsideDirectory(config.syncRoot, absolutePath)) {
-    return undefined;
-  }
-  const rel = relative(config.syncRoot, absolutePath);
-  if (!rel || resolve(config.syncRoot, rel) === resolve(config.syncRoot, ".workbench")) {
-    return undefined;
-  }
-  return normalizeRelativePath(rel);
-}
-
-function isIgnoredSyncRelativePath(relativePath: string): boolean {
-  const normalized = normalizeRelativePath(relativePath).replace(/^\/+/, "");
-  const fileName = basename(normalized).toLowerCase();
-  if (!normalized || normalized === ".workbench" || normalized.startsWith(".workbench/")) return true;
-  if (pathContainsReservedSegment(normalized)) return true;
-  if (fileName === "thumbs.db" || fileName === ".ds_store") return true;
-  if (fileName.startsWith("~$") || fileName.startsWith(".~")) return true;
-  if (fileName.endsWith("~") || fileName.endsWith(".tmp") || fileName.endsWith(".temp")) return true;
-  if (fileName.endsWith(".swp") || fileName.endsWith(".swo") || fileName.endsWith(".part")) return true;
-  if (fileName.endsWith(".crdownload") || fileName.endsWith(".download")) return true;
-  return false;
-}
-
-function isIgnoredSyncPath(config: DaemonConfig, absolutePath: string): boolean {
-  const relativePath = relativeSyncPath(config, absolutePath);
-  return !relativePath || isIgnoredSyncRelativePath(relativePath);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
-}
-
-async function waitForStableFile(absolutePath: string): Promise<{
-  size: number;
-  mtime: Date;
-  mtimeMs: number;
-} | undefined> {
-  let previous: { size: number; mtimeMs: number; mtime: Date } | undefined;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    let stat;
-    try {
-      stat = await fs.stat(absolutePath);
-    } catch {
-      return undefined;
-    }
-    if (!stat.isFile()) return undefined;
-    if (previous && previous.size === stat.size && previous.mtimeMs === stat.mtimeMs) {
-      return {
-        size: stat.size,
-        mtime: stat.mtime,
-        mtimeMs: stat.mtimeMs
-      };
-    }
-    previous = { size: stat.size, mtimeMs: stat.mtimeMs, mtime: stat.mtime };
-    await sleep(180);
-  }
-  return previous;
-}
-
-async function walkSyncFiles(config: DaemonConfig, current = config.syncRoot, files: string[] = []): Promise<string[]> {
-  const entries = await fs.readdir(current, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.name === ".workbench") continue;
-    const absolutePath = join(current, entry.name);
-    if (entry.isDirectory()) {
-      await walkSyncFiles(config, absolutePath, files);
-    } else if (entry.isFile() && !isIgnoredSyncPath(config, absolutePath)) {
-      files.push(absolutePath);
-    }
-  }
-  return files;
-}
-
-async function walkSyncDirectories(
-  config: DaemonConfig,
-  current = config.syncRoot,
-  directories: string[] = []
-): Promise<string[]> {
-  const entries = await fs.readdir(current, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.name === ".workbench") continue;
-    if (!entry.isDirectory()) continue;
-    const absolutePath = join(current, entry.name);
-    const relativePath = relativeSyncPath(config, absolutePath);
-    if (!relativePath || isIgnoredSyncRelativePath(relativePath)) continue;
-    directories.push(relativePath);
-    await walkSyncDirectories(config, absolutePath, directories);
-  }
-  return directories;
-}
-
-async function hashFile(absolutePath: string): Promise<string> {
-  const buffer = await fs.readFile(absolutePath);
-  return createHash("sha256").update(buffer).digest("hex");
-}
-
-function mimeTypeForPath(pathValue: string): string {
-  const ext = extname(pathValue).toLowerCase();
-  if (ext === ".md" || ext === ".markdown") return "text/markdown";
-  if (ext === ".txt") return "text/plain";
-  if (ext === ".json") return "application/json";
-  if (ext === ".csv") return "text/csv";
-  if (ext === ".html") return "text/html";
-  if (ext === ".png") return "image/png";
-  if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
-  if (ext === ".gif") return "image/gif";
-  if (ext === ".webp") return "image/webp";
-  if (ext === ".pdf") return "application/pdf";
-  return "application/octet-stream";
-}
-
-function artifactKindForPath(pathValue: string): "note" | "file" {
-  const ext = extname(pathValue).toLowerCase();
-  return ext === ".md" || ext === ".markdown" ? "note" : "file";
-}
-
 function artifactKindForOutboxItem(item: OutboxItem): "folder" | "note" | "file" {
   return item.payload.kind === "folder" ? "folder" : artifactKindForPath(item.relativePath);
-}
-
-function directoryPathFor(relativePath: string): string | undefined {
-  const directory = normalizeRelativePath(dirname(relativePath));
-  return directory === "." ? undefined : directory;
-}
-
-function titleFor(relativePath: string): string {
-  const name = basename(relativePath);
-  const ext = extname(name);
-  return ext ? name.slice(0, -ext.length) : name;
-}
-
-function defaultNotePath(title: string): string {
-  const base = sanitizePathSegment(title, "untitled");
-  return /\.[a-z0-9]{1,12}$/i.test(base) ? base : `${base}.md`;
-}
-
-function normalizeArtifactRelativePath(raw: string, fallbackLeaf = "untitled.md"): string {
-  if (pathHasUnsafeRootOrTraversal(raw)) return "";
-  const normalized = normalizeRelativePath(raw).replace(/^\/+/, "");
-  const segments = normalized
-    .split("/")
-    .map((segment, index, values) => sanitizePathSegment(segment, index === values.length - 1 ? fallbackLeaf : "folder"))
-    .filter((segment) => segment.length > 0);
-  return normalizeRelativePath(segments.join("/"));
-}
-
-function normalizeArtifactFolderPath(raw: string): string {
-  if (pathHasUnsafeRootOrTraversal(raw)) return "";
-  const normalized = normalizeRelativePath(raw).replace(/^\/+|\/+$/g, "");
-  const segments = normalized
-    .split("/")
-    .map((segment) => sanitizePathSegment(segment, "folder"))
-    .filter((segment) => segment.length > 0);
-  return normalizeRelativePath(segments.join("/"));
 }
 
 async function uniqueRelativePath(
@@ -829,23 +524,6 @@ export function decodeLocalItemId(id: string): { kind: "folder" | "note" | "file
   } catch {
     return undefined;
   }
-}
-
-export function resolveSyncRootRelativePath(config: DaemonConfig, relativePath: string): string | undefined {
-  if (pathHasUnsafeRootOrTraversal(relativePath)) return undefined;
-  const normalized = normalizeRelativePath(relativePath);
-  if (!normalized || isIgnoredSyncRelativePath(normalized)) return undefined;
-  const absolutePath = resolve(config.syncRoot, normalized);
-  const relativeToRoot = normalizeRelativePath(relative(config.syncRoot, absolutePath));
-  if (
-    !relativeToRoot
-    || relativeToRoot === ".."
-    || relativeToRoot.startsWith("../")
-    || resolve(config.syncRoot, relativeToRoot) === resolve(config.syncRoot, ".workbench")
-  ) {
-    return undefined;
-  }
-  return absolutePath;
 }
 
 function itemUpdatedAt(resource: ManifestResource): string {
@@ -6597,26 +6275,6 @@ function parseConflictResolution(value: unknown): ConflictResolution | undefined
 function parseBooleanQuery(value: string | null): boolean {
   const normalized = value?.trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes";
-}
-
-function normalizeConfiguredOrigin(value: string): string | undefined {
-  const trimmed = value.trim();
-  if (!trimmed) return undefined;
-  if (trimmed === "*" || trimmed === "null") return trimmed;
-  try {
-    const url = new URL(trimmed);
-    return `${url.protocol}//${url.host}`;
-  } catch {
-    return trimmed.replace(/\/+$/, "");
-  }
-}
-
-export function parseLoopbackAllowedOrigins(raw: string | undefined): string[] | undefined {
-  const values = raw
-    ?.split(",")
-    .map((value) => normalizeConfiguredOrigin(value))
-    .filter((value): value is string => Boolean(value));
-  return values && values.length > 0 ? [...new Set(values)] : undefined;
 }
 
 function requestOrigin(req: IncomingMessage): string | undefined {
