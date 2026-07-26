@@ -65,6 +65,44 @@ export type SyncPushResponse = {
   serverCursor?: string;
 };
 
+export type RemoteArtifactKind = "folder" | "note" | "file";
+
+export type RemoteArtifactItem = {
+  id: string;
+  kind: RemoteArtifactKind;
+  title?: string;
+  path?: string;
+  parentPath?: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  version?: number;
+  updatedAt?: string;
+  contentMarkdown?: string;
+  contentBase64?: string;
+};
+
+export type RemoteSyncEvent = {
+  cursor?: string;
+  domain?: string;
+  resourceId?: string;
+  action?: string;
+  version?: number;
+  payload?: Record<string, unknown>;
+  createdAt?: string;
+};
+
+export type SyncPullResponse = {
+  events?: RemoteSyncEvent[];
+  nextCursor?: string;
+};
+
+export type SyncSnapshotResponse = {
+  generatedAt?: string;
+  baselineCursor?: string;
+  supportedDomains?: string[];
+  domains?: Partial<Record<RemoteResourceDomain, unknown>>;
+};
+
 export type DaemonState = {
   config: DaemonConfig;
   manifestStore: ManifestStore;

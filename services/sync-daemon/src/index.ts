@@ -21,12 +21,10 @@ import {
 import {
   artifactKindForPath,
   defaultNotePath,
-  directoryPathFor,
   hashFile,
   isIgnoredSyncPath,
   isIgnoredSyncRelativePath,
   isPathInsideDirectory,
-  mimeTypeForPath,
   normalizeArtifactFolderPath,
   normalizeArtifactRelativePath,
   normalizeRelativePath,
@@ -37,7 +35,6 @@ import {
   sanitizeFileName,
   sanitizePathSegment,
   sleep,
-  titleFor,
   uniquePath
 } from "./paths.js";
 import {
@@ -115,10 +112,6 @@ import {
 } from "./localTasks.js";
 import {
   artifactKindForOutboxItem,
-  buildLocalArtifactItem,
-  buildLocalFolderItem,
-  buildOutboxPayloadForFile,
-  buildOutboxPayloadForFolder,
   createLocalArtifactFile,
   createLocalArtifactFolder,
   createLocalArtifactNote,
@@ -156,6 +149,21 @@ import {
 } from "./httpApi.js";
 import {
   classifySyncError,
+  firstRecord,
+  isLegacyProjectContextEvent,
+  isRemoteResourceTombstone,
+  isRemoteTombstone,
+  normalizedProjectEventMarker,
+  parseRemoteResourceDomain,
+  recordHasLegacyProjectContextShape,
+  relativePathForRemoteArtifact,
+  remoteArtifactFromEvent,
+  remoteArtifactFromUnknown,
+  remoteResourceIdFromUnknown,
+  remoteResourcePayloadFromEvent,
+  remoteResourcePayloadFromSnapshot,
+  snapshotItems,
+  snapshotNextCursor,
   stringFromUnknown,
   type SyncErrorDetails
 } from "./remoteSync.js";
@@ -284,7 +292,26 @@ export {
   updateLocalArtifactItem,
   updateLocalArtifactNoteSection
 } from "./localArtifacts.js";
-export { classifySyncError } from "./remoteSync.js";
+export {
+  classifySyncError,
+  fallbackRemoteArtifactLeaf,
+  firstRecord,
+  isLegacyProjectContextEvent,
+  isRemoteResourceTombstone,
+  isRemoteTombstone,
+  normalizedProjectEventMarker,
+  parseRemoteArtifactKind,
+  parseRemoteResourceDomain,
+  recordHasLegacyProjectContextShape,
+  relativePathForRemoteArtifact,
+  remoteArtifactFromEvent,
+  remoteArtifactFromUnknown,
+  remoteResourceIdFromUnknown,
+  remoteResourcePayloadFromEvent,
+  remoteResourcePayloadFromSnapshot,
+  snapshotItems,
+  snapshotNextCursor
+} from "./remoteSync.js";
 // Re-export only what index.ts exposed before the split. A wildcard would
 // promote helpers that were private to this file into the module's public API.
 export {
@@ -339,19 +366,12 @@ import {
   asRecord,
   asString,
   decodeContentBase64,
-  decodeLocalItemId,
-  enqueueManifestOutbox,
-  localItemId,
   listLocalRemoteDomainItems,
   localRemoteDomainItem,
-  localProjectId,
-  localProjectName,
   refreshManifestStats,
   remoteResourceUpdatedAt,
   resultRecord,
-  runWithClientOpId,
-  supersedeOpenOutboxForPath,
-  uniqueRelativePath
+  runWithClientOpId
 } from "./localStore.js";
 export {
   asNumber,
@@ -401,6 +421,10 @@ import type {
   LocalArtifactItem,
   LocalJob,
   PendingLocalJobConfirmation,
+  RemoteArtifactItem,
+  RemoteSyncEvent,
+  SyncPullResponse,
+  SyncSnapshotResponse,
   SyncPushResponse
 } from "./types.js";
 
@@ -610,44 +634,6 @@ async function downloadJobFile(state: DaemonState, job: LocalJob): Promise<{
   };
 }
 
-type RemoteArtifactKind = "folder" | "note" | "file";
-
-type RemoteArtifactItem = {
-  id: string;
-  kind: RemoteArtifactKind;
-  title?: string;
-  path?: string;
-  parentPath?: string;
-  mimeType?: string;
-  sizeBytes?: number;
-  version?: number;
-  updatedAt?: string;
-  contentMarkdown?: string;
-  contentBase64?: string;
-};
-
-type RemoteSyncEvent = {
-  cursor?: string;
-  domain?: string;
-  resourceId?: string;
-  action?: string;
-  version?: number;
-  payload?: Record<string, unknown>;
-  createdAt?: string;
-};
-
-type SyncPullResponse = {
-  events?: RemoteSyncEvent[];
-  nextCursor?: string;
-};
-
-type SyncSnapshotResponse = {
-  generatedAt?: string;
-  baselineCursor?: string;
-  supportedDomains?: string[];
-  domains?: Partial<Record<RemoteResourceDomain, unknown>>;
-};
-
 const REMOTE_SYNC_DOMAINS: RemoteResourceDomain[] = ["projects", "notes", "artifacts", "tasks"];
 const REMOTE_SYNC_CURSOR_META_KEY = "remoteSyncCursor";
 const REMOTE_ARTIFACT_CURSOR_META_KEY = "remoteArtifactCursor";
@@ -656,207 +642,6 @@ const LAST_REMOTE_PULL_AT_META_KEY = "lastRemotePullAt";
 const REMOTE_PULL_LIMIT = 100;
 const REMOTE_SNAPSHOT_PAGE_LIMIT = 100;
 const REMOTE_CURSOR_DRAIN_LIMIT = 500;
-
-function parseRemoteResourceDomain(value: unknown): RemoteResourceDomain | undefined {
-  return value === "projects"
-    || value === "notes"
-    || value === "artifacts"
-    || value === "tasks"
-    || value === PROJECT_CONTEXT_DOMAIN
-    ? value
-    : undefined;
-}
-
-function firstRecord(...values: unknown[]): Record<string, unknown> | undefined {
-  for (const value of values) {
-    const record = asRecord(value);
-    if (record) return record;
-  }
-  return undefined;
-}
-
-function remoteResourceIdFromUnknown(value: unknown, fallbackResourceId?: string): string | undefined {
-  const record = asRecord(value);
-  return asString(record?.id)
-    ?? asString(record?._id)
-    ?? asString(record?.resourceId)
-    ?? fallbackResourceId;
-}
-
-function remoteResourcePayloadFromEvent(event: RemoteSyncEvent): { payload: Record<string, unknown>; merge: boolean } {
-  const payload = asRecord(event.payload) ?? {};
-  const resource = firstRecord(payload.resource, payload.result);
-  if (resource) {
-    return { payload: resource, merge: false };
-  }
-  const patch = asRecord(payload.patch);
-  if (patch) {
-    return { payload: patch, merge: true };
-  }
-  return { payload, merge: true };
-}
-
-function remoteResourcePayloadFromSnapshot(value: unknown): Record<string, unknown> | undefined {
-  return asRecord(value);
-}
-
-function isRemoteResourceTombstone(event: RemoteSyncEvent): boolean {
-  const payload = asRecord(event.payload) ?? {};
-  return event.action === "delete"
-    || payload.deleted === true
-    || payload.tombstone === true
-    || typeof payload.deletedAt === "string";
-}
-
-const LEGACY_PROJECT_CONTEXT_MARKERS = new Set([
-  "brief",
-  "context",
-  "context-summary",
-  "index",
-  "link",
-  "links",
-  "membership",
-  "memory",
-  "project-brief",
-  "project-context",
-  "project-index",
-  "project-link",
-  "project-membership",
-  "project-memory",
-  "project-relation",
-  "relation",
-  "relations",
-  "secondary-membership",
-  "secondary_membership",
-  "summary"
-]);
-
-function normalizedProjectEventMarker(value: unknown): string | undefined {
-  return asString(value)?.toLowerCase().replaceAll("_", "-");
-}
-
-function recordHasLegacyProjectContextShape(value: unknown): boolean {
-  const record = asRecord(value);
-  if (!record) return false;
-  return typeof record.contentMarkdown === "string"
-    || typeof record.bodyMarkdown === "string"
-    || asString(record.memoryId) !== undefined
-    || asString(record.relationId) !== undefined
-    || asString(record.artifactItemId) !== undefined
-    || asString(record.associationKind) !== undefined
-    || (asString(record.sourceService) !== undefined && asString(record.resourceType) !== undefined)
-    || (asString(record.targetService) !== undefined && asString(record.targetResourceType) !== undefined)
-    || (asString(record.sourceProjectId) !== undefined && asString(record.targetProjectId) !== undefined);
-}
-
-function isLegacyProjectContextEvent(event: RemoteSyncEvent): boolean {
-  if (event.domain !== "projects") return false;
-  const payload = asRecord(event.payload) ?? {};
-  const relation = normalizedProjectEventMarker(payload.relation);
-
-  // Project default selection is the sole supported relation in the legacy
-  // projects sync domain. All other relation markers belong to Project context
-  // read models and must not mutate or create base Project cache rows.
-  if (relation && relation !== "default") return true;
-
-  for (const value of [payload.kind, payload.type, payload.entityType, payload.resourceType]) {
-    const marker = normalizedProjectEventMarker(value);
-    if (marker && LEGACY_PROJECT_CONTEXT_MARKERS.has(marker)) return true;
-  }
-
-  return asString(payload.memoryId) !== undefined
-    || asString(payload.relationId) !== undefined
-    || asString(payload.artifactItemId) !== undefined
-    || recordHasLegacyProjectContextShape(payload.resource)
-    || recordHasLegacyProjectContextShape(payload.patch);
-}
-
-function snapshotItems(value: unknown): unknown[] {
-  if (Array.isArray(value)) return value;
-  const record = asRecord(value);
-  if (!record) return [];
-  for (const key of ["items", "data", "results", "projects", "notes", "tasks", "artifacts"]) {
-    const nested = record[key];
-    if (Array.isArray(nested)) return nested;
-  }
-  return [];
-}
-
-function snapshotNextCursor(value: unknown): string | undefined {
-  const record = asRecord(value);
-  return asString(record?.nextCursor);
-}
-
-function parseRemoteArtifactKind(value: unknown): RemoteArtifactKind | undefined {
-  return value === "folder" || value === "note" || value === "file" ? value : undefined;
-}
-
-function remoteArtifactFromUnknown(value: unknown, fallbackResourceId?: string): RemoteArtifactItem | undefined {
-  const record = asRecord(value);
-  if (!record) return undefined;
-  const id = asString(record.id) ?? fallbackResourceId;
-  const kind = parseRemoteArtifactKind(record.kind);
-  if (!id || !kind) return undefined;
-  return {
-    id,
-    kind,
-    title: asString(record.title),
-    path: asString(record.path),
-    parentPath: asString(record.parentPath),
-    mimeType: asString(record.mimeType),
-    sizeBytes: asNumber(record.sizeBytes),
-    version: asNumber(record.version),
-    updatedAt: asString(record.updatedAt),
-    contentMarkdown: typeof record.contentMarkdown === "string" ? record.contentMarkdown : undefined,
-    contentBase64: typeof record.contentBase64 === "string" ? record.contentBase64 : undefined
-  };
-}
-
-function remoteArtifactFromEvent(event: RemoteSyncEvent): RemoteArtifactItem | undefined {
-  const payload = asRecord(event.payload) ?? {};
-  const resource = remoteArtifactFromUnknown(payload.resource, event.resourceId);
-  if (resource) return resource;
-
-  const patch = remoteArtifactFromUnknown({
-    ...asRecord(payload.patch),
-    id: event.resourceId,
-    kind: asRecord(payload.patch)?.kind ?? asRecord(payload.patch)?.type
-  }, event.resourceId);
-  if (patch) return patch;
-
-  return remoteArtifactFromUnknown(payload, event.resourceId);
-}
-
-function isRemoteTombstone(event: RemoteSyncEvent, item?: RemoteArtifactItem): boolean {
-  const payload = asRecord(event.payload) ?? {};
-  return event.action === "delete"
-    || payload.deleted === true
-    || payload.tombstone === true
-    || typeof payload.deletedAt === "string"
-    || (item ? (asRecord(item)?.deleted === true || asRecord(item)?.tombstone === true) : false);
-}
-
-function fallbackRemoteArtifactLeaf(item: RemoteArtifactItem): string {
-  if (item.kind === "note") {
-    return defaultNotePath(item.title ?? item.id);
-  }
-  if (item.kind === "file") {
-    return sanitizePathSegment(item.title ?? item.id, "file");
-  }
-  return sanitizePathSegment(item.title ?? item.id, "folder");
-}
-
-function relativePathForRemoteArtifact(item: RemoteArtifactItem): string | undefined {
-  if (item.kind === "folder") {
-    const requested = item.path ?? (item.parentPath ? `${item.parentPath}/${item.title ?? item.id}` : item.title ?? item.id);
-    const relativePath = normalizeArtifactFolderPath(requested);
-    return relativePath && !isIgnoredSyncRelativePath(relativePath) ? relativePath : undefined;
-  }
-
-  const requested = item.path ?? (item.parentPath ? `${item.parentPath}/${fallbackRemoteArtifactLeaf(item)}` : fallbackRemoteArtifactLeaf(item));
-  const relativePath = normalizeArtifactRelativePath(requested, fallbackRemoteArtifactLeaf(item));
-  return relativePath && !isIgnoredSyncRelativePath(relativePath) ? relativePath : undefined;
-}
 
 function findResourceById(state: DaemonState, resourceId: string): ManifestResource | undefined {
   return listResources(state.manifestStore).find((resource) => resource.resourceId === resourceId);
