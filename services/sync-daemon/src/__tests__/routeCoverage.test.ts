@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
@@ -13,7 +13,17 @@ const uiServicesSource = readFileSync(path.join(repoRoot, "ui/src/config/service
 const daemonSource = readFileSync(path.join(repoRoot, "services/sync-daemon/src/index.ts"), "utf8");
 const daemonMcpSource = readFileSync(path.join(repoRoot, "services/sync-daemon/src/mcpServer.ts"), "utf8");
 const daemonProjectContextExportSource = readFileSync(path.join(repoRoot, "services/sync-daemon/src/projectContextExport.ts"), "utf8");
-const coreHttpSource = readFileSync(path.join(repoRoot, "services/workbench-core/src/httpServer.ts"), "utf8");
+// Core's routes were split out of httpServer.ts into routes/*.ts. The contract
+// this test guards is "Core exposes these routes", not which file holds them,
+// so read the whole HTTP surface rather than a single file.
+const coreHttpSource = [
+  path.join(repoRoot, "services/workbench-core/src/httpServer.ts"),
+  ...readdirSync(path.join(repoRoot, "services/workbench-core/src/routes"))
+    .filter((name) => name.endsWith(".ts"))
+    .map((name) => path.join(repoRoot, "services/workbench-core/src/routes", name))
+]
+  .map((file) => readFileSync(file, "utf8"))
+  .join("\n");
 const coreSyncStoreSource = readFileSync(path.join(repoRoot, "services/workbench-core/src/syncStore.ts"), "utf8");
 
 function assertIncludes(source: string, needle: string, label: string): void {
