@@ -1,6 +1,7 @@
 import express from "express";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
+import { createHash } from "node:crypto";
 import { InternalServiceError } from "../internalClients.js";
 import { logger } from "../logger.js";
 import { LocalClientStoreError } from "../localClientsStore.js";
@@ -208,4 +209,18 @@ export function asJsonRecord(value: unknown): Record<string, unknown> {
 
 export function asNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+export function queryFlagEnabled(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some(queryFlagEnabled);
+  }
+  if (typeof value !== "string") {
+    return false;
+  }
+  return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+}
+
+export function sha256Checksum(buffer: Buffer): string {
+  return `sha256:${createHash("sha256").update(buffer).digest("hex")}`;
 }

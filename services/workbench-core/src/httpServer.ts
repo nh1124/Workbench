@@ -5,12 +5,9 @@ import jwt from "jsonwebtoken";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { existsSync } from "node:fs";
-import { AsyncLocalStorage } from "node:async_hooks";
-import { EventEmitter } from "node:events";
 import path from "node:path";
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { z } from "zod";
 import { installProcessHandlers, requestLogger } from "@workbench/logging";
 import { issueTokenBundle, verifyAccessToken, verifyRefreshToken } from "./auth.js";
 import { clearRefreshCookie, readRefreshCookie, setRefreshCookie } from "./refreshCookie.js";
@@ -28,29 +25,12 @@ import { registerProjectContextTools } from "./mcp/registerProjectContextTools.j
 import { registerTasksTools } from "./mcp/registerTasksTools.js";
 import { registerWbsTools } from "./mcp/registerWbsTools.js";
 import { ensureIntegrationLinked } from "./integrationLinking.js";
-import { analyserClient, artifactsClient, imagesClient, InternalServiceError, mindmapsClient, notesClient, projectsClient, serviceBaseUrls, tasksClient, wbsClient } from "./internalClients.js";
-import { projectSyncEventsForUser, startAnalyserProjector } from "./analyserProjector.js";
+import { artifactsClient, InternalServiceError, notesClient, projectsClient, serviceBaseUrls, tasksClient } from "./internalClients.js";
+import { startAnalyserProjector } from "./analyserProjector.js";
 import { analyserHttpAccessMiddleware, instrumentMcpServer } from "./analyserAccessInstrumentation.js";
-import { exportAnalyserRecord } from "./analyserExport.js";
-import { fetchSkillCatalog } from "./analyserSkillCatalog.js";
-import { runSkillIntegrityCheck } from "./analyserSkillIntegrity.js";
 import { saveOAuthDynamicClient } from "./oauthDynamicClientsStore.js";
 import {
-  imageArtifactSaveSchema,
-  imageContextRefSchema,
-  imageGenerationRequestSchema,
-  imageRetryRequestSchema
-} from "./schemas/images.js";
-import {
-  mindmapArtifactSaveSchema,
-  mindmapCreateSchema,
-  mindmapExportFormatSchema,
-  mindmapUpdateSchema
-} from "./schemas/mindmaps.js";
-import {
   accountSchema,
-  deepResearchManualSaveSchema,
-  deepResearchRequestSchema,
   integrationConfigSchema,
   localClientHeartbeatSchema,
   localClientPatchSchema,
@@ -66,26 +46,12 @@ import {
   taskImportBodySchema
 } from "./schemas/requests.js";
 import {
-  wbsArtifactSaveSchema,
-  wbsDependencyCreateSchema,
-  wbsExportFormatSchema,
-  wbsItemCreateSchema,
-  wbsItemMoveSchema,
-  wbsItemUpdateSchema,
-  wbsPlanCreateSchema,
-  wbsPlanUpdateSchema
-} from "./schemas/wbs.js";
-import {
   commitSyncChangesCursor,
   initializeSyncChangesConsumer,
-  pullSyncChanges,
-  SyncConsumerScopeMismatchError
+  pullSyncChanges
 } from "./syncChanges.js";
-import { SyncConsumerCursorInputError, SyncConsumerScopeConflictError } from "./syncConsumerCursorsStore.js";
 import {
   createArtifactNoteWithIndex,
-  cleanupDeletedMindmapBestEffort,
-  cleanupDeletedWbsBestEffort,
   createProjectLinkWithValidation,
   deleteProjectWithGuard,
   getArtifactProjectMemberships,
@@ -94,23 +60,12 @@ import {
   listArtifactProjectIdsBestEffort,
   listProjectLinksResolved,
   linkArtifactToProject,
-  maintainMindmapIndexBestEffort,
-  maintainWbsIndexBestEffort,
-  mindmapProjectIdsBestEffort,
-  wbsProjectIdsBestEffort,
   maintainArtifactIndexBestEffort,
-  ProjectContextError,
   projectIdsFromArtifactDeletionSnapshot,
-  reconcileMindmapMutationBestEffort,
-  reconcileWbsMutationBestEffort,
   rebuildProjectIndex,
-  rebuildProjectMindmapIndex,
-  rebuildProjectWbsIndex,
   reconcileArtifactMutationBestEffort,
   removeArtifactItemWithProjectCleanup,
   removeProjectLinkWithValidation,
-  saveMindmapExportArtifact,
-  saveWbsExportArtifact,
   unlinkArtifactFromProject,
   uploadArtifactFileWithIndex
 } from "./projectContext.js";
@@ -146,8 +101,7 @@ import {
   listSyncEvents,
   recordSyncEvent,
   type SyncAction,
-  type SyncDomain,
-  type SyncEventMetadata
+  type SyncDomain
 } from "./syncStore.js";
 import {
   buildProjectContextSyncItem,
@@ -164,24 +118,10 @@ import {
 import { buildProjectContextExportResponse } from "./projectContextExport.js";
 import {
   configuredServiceIds,
-  ensureAnalyserAccountProvisioned,
-  ensureImagesAccountProvisioned,
-  ensureMindmapsAccountProvisioned,
-  ensureWbsAccountProvisioned,
   provisionAccountToServices
 } from "./serviceProvisioning.js";
-import { DeepResearchError } from "./deepResearch/errors.js";
-import {
-  cancelDeepResearch,
-  getDeepResearchDefaults,
-  listDeepResearchHistory,
-  getDeepResearchStatus,
-  runDeepResearch,
-  saveDeepResearchJobArtifact
-} from "./deepResearch/service.js";
 import {
   findUserById,
-  getIntegrationConfig,
   listIntegrationConfigs,
   listProvisionings,
   loginUser,
@@ -213,7 +153,6 @@ import {
   requireLocalClientCapability,
   requireLocalClientContext,
   requireSyncAccessContext,
-  type AuthenticatedContext,
   type SyncAccessContext
 } from "./middleware/auth.js";
 import {
@@ -234,6 +173,8 @@ import { registerDeepResearchRoutes } from "./routes/deep-research.js";
 import { registerImageRoutes } from "./routes/images.js";
 import { registerMindmapRoutes } from "./routes/mindmaps.js";
 import { registerNoteRoutes } from "./routes/notes.js";
+import { registerLocalClientRoutes } from "./routes/local-clients.js";
+import { registerLocalJobRoutes } from "./routes/local-jobs.js";
 import {
   asJsonRecord,
   asNonEmptyString,
@@ -243,6 +184,7 @@ import {
   objectId,
   recordSyncEventBestEffort,
   respondInternalError,
+  sha256Checksum,
   syncEventBroadcaster,
   syncRequestContext
 } from "./routes/shared.js";
@@ -300,16 +242,6 @@ function asBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
-function queryFlagEnabled(value: unknown): boolean {
-  if (Array.isArray(value)) {
-    return value.some(queryFlagEnabled);
-  }
-  if (typeof value !== "string") {
-    return false;
-  }
-  return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
-}
-
 function optionalNonNegativeInteger(value: unknown, fieldName: string): number | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
@@ -338,10 +270,6 @@ function decodeContentBase64(contentBase64: string): { compactBase64: string; bu
     compactBase64,
     buffer: Buffer.from(compactBase64, "base64")
   };
-}
-
-function sha256Checksum(buffer: Buffer): string {
-  return `sha256:${createHash("sha256").update(buffer).digest("hex")}`;
 }
 
 function withoutKeys(record: Record<string, unknown>, keys: string[]): Record<string, unknown> {
@@ -2001,355 +1929,8 @@ registerWbsRoutes(app);
 registerImageRoutes(app);
 
 // Local clients and daemon-pulled jobs
-app.post("/api/local-clients/register", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
-  if (!authContext) return;
-
-  const parsed = localClientRegisterSchema.safeParse(req.body ?? {});
-  if (!parsed.success) {
-    return res.status(400).json({ message: parsed.error.flatten() });
-  }
-
-  try {
-    const result = await registerLocalClient(authContext.userId, parsed.data);
-    return res.status(201).json(result);
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.get("/api/local-clients", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
-  if (!authContext) return;
-  const includeArchived = queryFlagEnabled(req.query.includeArchived);
-
-  try {
-    const clients = await listLocalClients(authContext.userId, { includeArchived });
-    return res.json({ items: clients });
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.get("/api/local-clients/audit-events", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
-  if (!authContext) return;
-
-  const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
-  const localClientId = typeof req.query.localClientId === "string" ? req.query.localClientId : undefined;
-
-  try {
-    const events = await listLocalClientAuditEventsForUser(authContext.userId, {
-      localClientId,
-      limit: Number.isFinite(limit) ? limit : undefined
-    });
-    return res.json({ items: events });
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.patch("/api/local-clients/:id", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
-  if (!authContext) return;
-
-  const parsed = localClientPatchSchema.safeParse(req.body ?? {});
-  if (!parsed.success) {
-    return res.status(400).json({ message: parsed.error.flatten() });
-  }
-
-  try {
-    const client = await updateLocalClient(authContext.userId, String(req.params.id), parsed.data);
-    if (!client) {
-      return res.status(404).json({ message: "Local client not found" });
-    }
-    return res.json(client);
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.post("/api/local-clients/:id/revoke", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
-  if (!authContext) return;
-
-  try {
-    const revoked = await revokeLocalClientTokens(authContext.userId, String(req.params.id));
-    if (!revoked) {
-      return res.status(404).json({ message: "Local client not found or no active token exists" });
-    }
-    const client = await updateLocalClient(authContext.userId, String(req.params.id), { enabled: false });
-    return res.json({ revoked: true, client });
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.post("/api/local-clients/:id/archive", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
-  if (!authContext) return;
-
-  try {
-    const client = await archiveLocalClient(authContext.userId, String(req.params.id));
-    if (!client) {
-      return res.status(404).json({ message: "Local client not found" });
-    }
-    return res.json(client);
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.delete("/api/local-clients/:id", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
-  if (!authContext) return;
-
-  try {
-    const deleted = await deleteLocalClient(authContext.userId, String(req.params.id));
-    if (!deleted) {
-      return res.status(404).json({ message: "Local client not found" });
-    }
-    return res.status(204).send();
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.post("/api/local-clients/:id/heartbeat", async (req, res) => {
-  const localContext = await requireLocalClientContext(req, res);
-  if (!localContext) return;
-  if (localContext.client.id !== String(req.params.id)) {
-    return res.status(403).json({ message: "Local client credentials do not match route client id" });
-  }
-
-  const parsed = localClientHeartbeatSchema.safeParse(req.body ?? {});
-  if (!parsed.success) {
-    return res.status(400).json({ message: parsed.error.flatten() });
-  }
-
-  try {
-    const client = await recordLocalClientHeartbeat(localContext.client, parsed.data);
-    return res.json(client);
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.get("/api/local-jobs", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
-  if (!authContext) return;
-
-  const status = typeof req.query.status === "string" ? req.query.status : undefined;
-  const parsedStatus = status ? localJobStatusSchema.safeParse(status) : undefined;
-  if (parsedStatus && !parsedStatus.success) {
-    return res.status(400).json({ message: parsedStatus.error.flatten() });
-  }
-  const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
-  const localClientId = typeof req.query.localClientId === "string" ? req.query.localClientId : undefined;
-  const includeLocalPaths = queryFlagEnabled(req.query.includeLocalPaths);
-
-  try {
-    const jobs = await listLocalJobsForUser(authContext.userId, {
-      localClientId,
-      status: parsedStatus?.success ? (parsedStatus.data as LocalJobStatus) : undefined,
-      limit: Number.isFinite(limit) ? limit : undefined
-    });
-    return res.json({ items: serializeLocalJobsForOwner(jobs, { includeLocalPaths }) });
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.post("/api/local-jobs", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
-  if (!authContext) return;
-
-  const parsed = localJobCreateSchema.safeParse(req.body ?? {});
-  if (!parsed.success) {
-    return res.status(400).json({ message: parsed.error.flatten() });
-  }
-
-  try {
-    const job = await createLocalJob(authContext.userId, {
-      localClientId: parsed.data.localClientId,
-      idempotencyKey: parsed.data.idempotencyKey,
-      kind: parsed.data.kind as LocalJobKind,
-      target: parsed.data.target as LocalJobTarget,
-      payload: parsed.data.payload,
-      ttlSeconds: parsed.data.ttlSeconds
-    });
-    return res.status(201).json(job);
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.get("/api/local-jobs/:jobId/events", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
-  if (!authContext) return;
-
-  const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
-
-  try {
-    const job = await getLocalJob(authContext.userId, String(req.params.jobId));
-    if (!job) {
-      return res.status(404).json({ message: "Local job not found" });
-    }
-    const events = await listLocalJobEventsForUser(
-      authContext.userId,
-      String(req.params.jobId),
-      Number.isFinite(limit) ? limit : undefined
-    );
-    return res.json({ items: events });
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.get("/api/local-jobs/:jobId", async (req, res) => {
-  const authContext = await requireAuthenticatedContext(req, res);
-  if (!authContext) return;
-
-  const includeLocalPaths = queryFlagEnabled(req.query.includeLocalPaths);
-
-  try {
-    const job = await getLocalJob(authContext.userId, String(req.params.jobId));
-    if (!job) {
-      return res.status(404).json({ message: "Local job not found" });
-    }
-    return res.json(serializeLocalJobForOwner(job, { includeLocalPaths }));
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.post("/api/local-jobs/claim", async (req, res) => {
-  const localContext = await requireLocalClientCapability(req, res, "local_jobs.claim");
-  if (!localContext) return;
-
-  const parsed = localJobClaimSchema.safeParse(req.body ?? {});
-  if (!parsed.success) {
-    return res.status(400).json({ message: parsed.error.flatten() });
-  }
-
-  try {
-    await recordLocalClientHeartbeat(localContext.client, {
-      syncRootState: { claiming: true }
-    });
-    const jobs = await claimLocalJobsForClient(localContext.client.id, parsed.data.limit ?? 5);
-    return res.json({ items: jobs });
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.post("/api/local-jobs/:jobId/complete", async (req, res) => {
-  const localContext = await requireLocalClientCapability(req, res, "local_jobs.claim");
-  if (!localContext) return;
-
-  const parsed = localJobCompleteSchema.safeParse(req.body ?? {});
-  if (!parsed.success) {
-    return res.status(400).json({ message: parsed.error.flatten() });
-  }
-
-  try {
-    const job = await completeLocalJobForClient(localContext.client.id, String(req.params.jobId), parsed.data.result);
-    if (!job) {
-      return res.status(404).json({ message: "Local job not found or already terminal" });
-    }
-    return res.json(job);
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.post("/api/local-jobs/:jobId/fail", async (req, res) => {
-  const localContext = await requireLocalClientCapability(req, res, "local_jobs.claim");
-  if (!localContext) return;
-
-  const parsed = localJobFailSchema.safeParse(req.body ?? {});
-  if (!parsed.success) {
-    return res.status(400).json({ message: parsed.error.flatten() });
-  }
-
-  try {
-    const job = await failLocalJobForClient(localContext.client.id, String(req.params.jobId), parsed.data.error, {
-      retryable: parsed.data.retryable,
-      retryAfterSeconds: parsed.data.retryAfterSeconds
-    });
-    if (!job) {
-      return res.status(404).json({ message: "Local job not found or already terminal" });
-    }
-    return res.json(job);
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
-app.get("/api/local-jobs/:jobId/download", async (req, res) => {
-  const localContext = await requireLocalClientCapability(req, res, "local_jobs.download");
-  if (!localContext) return;
-
-  try {
-    const job = await getLocalJobForClient(localContext.client.id, String(req.params.jobId));
-    if (!job) {
-      return res.status(404).json({ message: "Local job not found" });
-    }
-    if (job.status !== "running" && job.status !== "completed") {
-      return res.status(409).json({ message: "Local job must be claimed before download" });
-    }
-
-    const user = await findUserById(job.userId);
-    if (!user) {
-      return res.status(404).json({ message: "Job owner not found" });
-    }
-    const bundle = issueTokenBundle({ userId: user.id, username: user.username });
-    let targetUrl: string | undefined;
-
-    if (job.kind === "download_artifact" || (job.kind === "materialize_resource" && job.payload.domain === "artifacts")) {
-      const artifactItemId = typeof job.payload.artifactItemId === "string"
-        ? job.payload.artifactItemId
-        : typeof job.payload.id === "string"
-          ? job.payload.id
-          : undefined;
-      if (!artifactItemId) {
-        return res.status(400).json({ message: "Job payload is missing artifactItemId" });
-      }
-      targetUrl = `${serviceBaseUrls.artifacts}/artifacts/items/${encodeURIComponent(artifactItemId)}/download?download=1`;
-    }
-
-    if (job.kind === "download_task_attachment") {
-      const taskId = typeof job.payload.taskId === "string" ? job.payload.taskId : undefined;
-      const attachmentId = typeof job.payload.attachmentId === "string" ? job.payload.attachmentId : undefined;
-      if (!taskId || !attachmentId) {
-        return res.status(400).json({ message: "Job payload is missing taskId or attachmentId" });
-      }
-      targetUrl = `${serviceBaseUrls.tasks}/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}/download?download=1`;
-    }
-
-    if (!targetUrl) {
-      return res.status(400).json({ message: `Unsupported local job kind for download: ${job.kind}` });
-    }
-
-    const upstream = await fetch(targetUrl, {
-      headers: {
-        Authorization: `Bearer ${bundle.accessToken}`
-      }
-    });
-    const buffer = Buffer.from(await upstream.arrayBuffer());
-    const contentType = upstream.headers.get("content-type");
-    const disposition = upstream.headers.get("content-disposition");
-    const length = upstream.headers.get("content-length");
-    if (contentType) res.setHeader("Content-Type", contentType);
-    if (disposition) res.setHeader("Content-Disposition", disposition);
-    if (length) res.setHeader("Content-Length", length);
-    if (upstream.ok) res.setHeader("X-Workbench-Content-Checksum", sha256Checksum(buffer));
-    return res.status(upstream.status).send(buffer);
-  } catch (error) {
-    return respondInternalError(res, error);
-  }
-});
-
+registerLocalClientRoutes(app);
+registerLocalJobRoutes(app);
 async function projectContextBaselineCursor(req: express.Request, userId: string): Promise<string> {
   const supplied = parseProjectContextBaselineCursor(req.query.baselineCursor);
   return supplied ?? getLatestSyncCursor(userId);
