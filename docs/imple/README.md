@@ -41,7 +41,7 @@
 |---|---|
 | [tasks-ui-spec.md](tasks-ui-spec.md) | Tasks UI 仕様 |
 | [tasks-ui-fixes-2026-07-plan.md](tasks-ui-fixes-2026-07-plan.md) | Tasks UI 修正（2026-07） |
-| [lbs-full-integration-plan.md](lbs-full-integration-plan.md) | LBS 統合。**残: W7 本番移行が未実施（ユーザー確認必須）** |
+| [lbs-full-integration-plan.md](lbs-full-integration-plan.md) | LBS 統合。W7 は「本番移行は実行不要」と実地調査で確定（§7.1）。archive 候補 |
 | [wbs-implementation-progress-plan.md](wbs-implementation-progress-plan.md) | WBS。最終検証とレビューが進行中 |
 | [workbench-mcp-feedback-fixes-plan.md](workbench-mcp-feedback-fixes-plan.md) | MCP フィードバック修正。**残: FB2-R の本番反映と再受入** |
 
@@ -49,8 +49,9 @@
 
 archive 対象を選ぶ際に、以下が未完了として残っていることを確認した。埋もれないようここに再掲する。
 
-- **`lbs-full-integration-plan` W7** — dev の LBS 移行は完了しているが、**本番（rocky）は未実施**。
-  `scripts/lbs-migrate` を本番 LBS DB に対して実行してからデプロイする必要があり、ユーザー確認必須。
+- ~~**`lbs-full-integration-plan` W7**~~ — **解決（2026-07-26）**。本番調査の結果、レガシーデータは既に
+  本番 tasks DB に存在し、移行 CLI の実行は現行データを 2 ヶ月前の値で上書きするだけと判明したため
+  「実行不要」で完了。根拠は同計画書 §7.1。
 - **`workbench-mcp-feedback-fixes-plan` FB2-R** — commit 済み（95191ce, c47c69a）だが本番反映（push）と
   再受入・rebuild が残っている。
 - **`workbench-maintenance-loop-plan` P3-8** — skill forward-test。サービス起動と MCP 接続が要るため

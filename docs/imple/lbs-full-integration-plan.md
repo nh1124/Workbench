@@ -91,7 +91,38 @@ tasks ⇔ LBS の HTTP 境界を消滅させ、タスク定義・繰り返し・
 | W4 | `[implemented]` | codex | 移行 CLI（dry-run/冪等/ユーザーマップ検証） | test_migrate 緑・dev lbs.db dry-run 成功（データは空; commit 6111420）。実データ移行は prod で W7 時に実施 |
 | W5 | `[implemented]` | codex | recurrence 二重実装統合（taskRecurrenceUtils→engine 委譲、UI 側も同期） | 月末クランプ・nth=-1 採用、Workbench フォールバック保持（commit 186245b） |
 | W6 | `[implemented]` | codex | local default 化・remote/provisioning コード削除・services/lbs 完全削除 | tasks 138 / core 93 / sync-daemon 120 緑（commit 9987962）。migrate CLI は standalone 化済み |
-| W7 | `[in-progress]` | root | dev 移行完了（lbs.db→tasks Postgres, verify 済）。**prod 移行が未実施** — rocky の LBS DB に対し scripts/lbs-migrate を実行してからこのバージョンをデプロイすること（ユーザー確認必須） | dev: 済 / prod: 未 |
+| W7 | `[implemented]` | root | dev 移行完了（lbs.db→tasks Postgres, verify 済）。**prod は移行不要と判明（2026-07-26 実地調査）** — レガシーデータは既に本番 tasks DB に存在済み。移行 CLI の実行は**データ破壊になるため実施しない**。根拠は §7.1 | dev: 済 / prod: 実行不要（調査により確定） |
+
+### 7.1 W7 prod 調査結果（2026-07-26）
+
+本計画書には長らく「prod 移行が未実施」と記録されていたが、**この記述は誤りだった**。本番（rocky）を
+read-only で調査した結果、移行 CLI を実行してはならないことが確定した。
+
+**調査事実**
+
+| 項目 | 結果 |
+|---|---|
+| 本番デプロイ commit | `8ae1585`。W6 (`9987962`, 2026-07-13) を**含む**（`git merge-base --is-ancestor` で確認） |
+| `lbs-backend` コンテナ | `Exited (137) 2 months ago`。レガシー LBS は 2 ヶ月前から停止 |
+| レガシー `services/lbs/lbs.db` | 残存（348 KB, mtime 2026-07-13）。書き込み主体は存在しない |
+| ソース行数 | tasks 167 / task_executions 17 / task_exceptions 3 / daily_conditions 0 / system_config 0 |
+| ソース利用者 | 実データは 1 名のみ（`wb_a98b1d2d…@workbench.local` = 本番 core user `a98b1d2d7bb23d860f9f2f71547c29ce`）。dev-fallback ユーザは 0 行 |
+| ターゲット行数 | task_definitions **241** / task_executions **141** / task_rule_exceptions 5 |
+| task_id 突合 | ソース 167 件は**全て**ターゲットに存在（source-only = **0**）。ターゲット固有が 74 件 |
+| `updated_at` 比較 | ターゲットの方が新しい: **108 件** / ソースの方が新しい: **0 件** / 同一: 59 件 |
+
+**結論**: レガシーデータは既に本番 tasks DB に取り込まれており（最古 `created_at` がソース先頭行と完全一致）、
+W6 デプロイ後の 13 日間で利用者が継続的に更新している。移行 CLI は `(owner_username, task_id)` で upsert
+するため、いま実行すると**現行の 108 件を 2 ヶ月前の値で上書きする**。ソース側が新しい行は 1 件も無いため、
+実行して得られるものは何も無く、失うものだけがある。よって **W7 は「実行不要」として完了**とする。
+
+**残作業（任意・要ユーザー判断）**
+- 本番の `~/Workbench/services/lbs/`（`lbs.db` 含む）はリポジトリから削除済みのサービスの残骸。
+  ロールバック猶予は既に経過しているが、削除は本番書き込みのため未実施。バックアップ後に削除するか、
+  このまま保全するかはユーザー判断。
+- 別件（本計画とは無関係）: `workbench-tasks-db` が `0.0.0.0:5545` で listen している。外部からは
+  クラウド FW で遮断されている（接続がタイムアウト）が、FW 設定変更時に Postgres が露出する。
+  `127.0.0.1:5545` へのバインド変更を推奨。
 
 レビュー方針: 各 workstream は codex 実装 → root（Claude）が差分レビュー・検証・commit。W2 の golden 不一致は「golden が正」を原則とし、LBS 側バグと判断した場合のみ理由を本計画書に記録して例外とする。
 
