@@ -66,6 +66,7 @@ import {
 } from "./utils/pins";
 import { useArtifactProjects } from "./hooks/useArtifactProjects";
 import { useArtifactsMarkdownEditor } from "./hooks/useArtifactsMarkdownEditor";
+import { useArtifactPreview } from "./hooks/useArtifactPreview";
 import {
   IcoClose,
   IcoChevronLeft,
@@ -139,8 +140,7 @@ export function ArtifactsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [notePreviewMode, setNotePreviewMode] = useState<"edit" | "live">("edit");
-  const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
-  const [imageBlobUrl, setImageBlobUrl] = useState<string | null>(null);
+  const { pdfBlobUrl, imageBlobUrl, pdfExpanded, setPdfExpanded } = useArtifactPreview(draft, setDraft);
   const [contextMenu, setContextMenu] = useState<TreeContextMenuState | null>(null);
   const [tableContextMenu, setTableContextMenu] = useState<TableContextMenuState | null>(null);
   const [editorContextMenu, setEditorContextMenu] = useState<EditorContextMenuState | null>(null);
@@ -154,7 +154,6 @@ export function ArtifactsPage() {
   const [moveFolderProjectState, setMoveFolderProjectState] = useState<MoveFolderProjectState | null>(null);
   const [insertLinkState, setInsertLinkState] = useState<InsertLinkState | null>(null);
   const [editorExpanded, setEditorExpanded] = useState(false);
-  const [pdfExpanded, setPdfExpanded] = useState(false);
   const [artifactSettingsOpen, setArtifactSettingsOpen] = useState(false);
   const [editSidebarCollapsed, setEditSidebarCollapsed] = useState(false);
   const [mobileTreeVisible, setMobileTreeVisible] = useState(false);
@@ -658,103 +657,6 @@ export function ArtifactsPage() {
     };
   }, [selectedItemId]);
 
-  useEffect(() => {
-    const canShowPdfPreview =
-      draft.id &&
-      draft.kind === "file" &&
-      (isPdf(draft) || (isWordDocument(draft) && draft.previewPdfStatus === "ready"));
-
-    if (!canShowPdfPreview || !draft.id) {
-      if (pdfBlobUrl) {
-        URL.revokeObjectURL(pdfBlobUrl);
-      }
-      setPdfBlobUrl(null);
-      setPdfExpanded(false);
-      return;
-    }
-
-    let cancelled = false;
-    let objectUrl: string | null = null;
-    const loadPromise = isPdf(draft)
-      ? artifactsApi.downloadFile(draft.id, false)
-      : artifactsApi.downloadPreviewPdf(draft.id);
-
-    void loadPromise
-      .then((blob) => {
-        if (cancelled) return;
-        objectUrl = URL.createObjectURL(blob);
-        setPdfBlobUrl(objectUrl);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setPdfBlobUrl(null);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl);
-      }
-    };
-  }, [draft.id, draft.kind, draft.mimeType, draft.path, draft.previewPdfStatus]);
-
-  useEffect(() => {
-    if (!draft.id || draft.kind !== "file" || !isWordDocument(draft)) {
-      return;
-    }
-    if (draft.previewPdfStatus === "ready" || draft.previewPdfStatus === "error") {
-      return;
-    }
-
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const next = await artifactsApi.getItem(draft.id!);
-        if (cancelled || next.id !== draft.id) return;
-        setDraft((prev) => (prev.id === next.id ? itemToDraft(next) : prev));
-      } catch {
-        // Notification is handled globally.
-      }
-    };
-
-    const intervalId = window.setInterval(() => {
-      void poll();
-    }, 2000);
-    void poll();
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, [draft.id, draft.kind, draft.mimeType, draft.path, draft.previewPdfStatus]);
-
-  useEffect(() => {
-    if (!draft.id || draft.kind !== "file" || !isImage(draft)) {
-      if (imageBlobUrl) URL.revokeObjectURL(imageBlobUrl);
-      setImageBlobUrl(null);
-      return;
-    }
-
-    let cancelled = false;
-    let objectUrl: string | null = null;
-
-    void artifactsApi
-      .downloadFile(draft.id, false)
-      .then((blob) => {
-        if (cancelled) return;
-        objectUrl = URL.createObjectURL(blob);
-        setImageBlobUrl(objectUrl);
-      })
-      .catch(() => {
-        if (!cancelled) setImageBlobUrl(null);
-      });
-
-    return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [draft.id, draft.kind, draft.mimeType, draft.path]);
 
   useEffect(() => {
     if (notePreviewMode !== "live") {
