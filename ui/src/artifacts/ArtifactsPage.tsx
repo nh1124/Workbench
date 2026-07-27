@@ -45,15 +45,17 @@ import {
   itemToDraft
 } from "./utils/tree";
 import {
-  clampTableSelectionBounds,
   createNotionBlock,
-  createNotionTableCell,
   findNotionBlock,
-  getNotionTableColumnCount,
   getNotionTableRows,
   normalizeNotionBlockElement,
-  normalizeTableSelectionBounds,
 } from "./utils/notionMarkdown";
+import {
+  applyTableOperation,
+  applyTableSelectionVisual,
+  getSelectedTableContext,
+  isCellInTableSelection
+} from "./utils/notionTableOps";
 import { parseMarkdownOutline, type MarkdownOutlineItem } from "./utils/markdownOutline";
 import { insertBelowOutlineEntry, moveOutlineSection } from "./utils/markdownOutlineOps";
 import { recordRecentArtifact } from "./utils/recents";
@@ -621,10 +623,10 @@ export function ArtifactsPage() {
       tableSelectionDragRef.current = null;
       setTableSelection(null);
       setTableContextMenu(null);
-      applyTableSelectionVisual(null);
+      applyTableSelectionVisual(notionEditorRef.current, null);
       return;
     }
-    applyTableSelectionVisual(tableSelection);
+    applyTableSelectionVisual(notionEditorRef.current, tableSelection);
   }, [draft.contentMarkdown, draft.id, notePreviewMode, tableSelection]);
 
 
@@ -946,91 +948,12 @@ export function ArtifactsPage() {
     };
   };
 
-  const isCellInTableSelection = (selection: TableSelectionState, row: number, col: number): boolean => {
-    const bounds = normalizeTableSelectionBounds(selection);
-    return row >= bounds.startRow && row <= bounds.endRow && col >= bounds.startCol && col <= bounds.endCol;
-  };
-
-  function applyTableSelectionVisual(selection: TableSelectionState | null): void {
-    const editor = notionEditorRef.current;
-    if (!editor) return;
-    editor.querySelectorAll(".va-notion-table-cell.table-selected").forEach((node) => {
-      node.classList.remove("table-selected");
-    });
-    if (!selection) {
-      return;
-    }
-    const tableBlock = editor.querySelector(
-      `[data-md-kind="table"][data-table-id="${selection.tableId}"]`
-    ) as HTMLElement | null;
-    if (!tableBlock) {
-      return;
-    }
-    const table = tableBlock.querySelector("table");
-    if (!(table instanceof HTMLTableElement)) {
-      return;
-    }
-    const rows = getNotionTableRows(table);
-    const bounds = clampTableSelectionBounds(
-      normalizeTableSelectionBounds(selection),
-      rows.length,
-      getNotionTableColumnCount(table)
-    );
-    for (let row = bounds.startRow; row <= bounds.endRow; row += 1) {
-      const rowElement = rows[row];
-      if (!rowElement) continue;
-      for (let col = bounds.startCol; col <= bounds.endCol; col += 1) {
-        const cell = rowElement.cells[col];
-        if (cell instanceof HTMLTableCellElement) {
-          cell.classList.add("table-selected");
-        }
-      }
-    }
-  }
-
   const setAndApplyTableSelection = (selection: TableSelectionState | null) => {
     setTableSelection(selection);
-    applyTableSelectionVisual(selection);
+    applyTableSelectionVisual(notionEditorRef.current, selection);
   };
 
-  const getSelectedTableContext = (selection: TableSelectionState | null) => {
-    const editor = notionEditorRef.current;
-    if (!editor || !selection) {
-      return null;
-    }
-    const block = editor.querySelector(
-      `[data-md-kind="table"][data-table-id="${selection.tableId}"]`
-    ) as HTMLElement | null;
-    if (!block) {
-      return null;
-    }
-    normalizeNotionBlockElement(block);
-    const table = block.querySelector("table");
-    if (!(table instanceof HTMLTableElement)) {
-      return null;
-    }
-    const rows = getNotionTableRows(table);
-    if (rows.length === 0) {
-      return null;
-    }
-    const colCount = getNotionTableColumnCount(table);
-    return {
-      block,
-      table,
-      rows,
-      colCount,
-      selection: {
-        ...selection,
-        ...{
-          start: selection.start,
-          end: selection.end
-        }
-      },
-      bounds: clampTableSelectionBounds(normalizeTableSelectionBounds(selection), rows.length, colCount)
-    };
-  };
-
-  const applyTableOperation = (
+  const applySelectedTableOperation = (
     operation:
       | "insert-row-above"
       | "insert-row-below"
@@ -1040,112 +963,10 @@ export function ArtifactsPage() {
       | "delete-columns"
   ) => {
     const activeSelection = tableContextMenu?.selection ?? tableSelection;
-    const context = getSelectedTableContext(activeSelection);
-    if (!context) {
+    const correctedSelection = applyTableOperation(notionEditorRef.current, activeSelection, operation);
+    if (!correctedSelection) {
       return;
     }
-    const { table, rows, colCount, bounds } = context;
-    const tbody = table.tBodies[0] ?? table.createTBody();
-    const headerRow = table.tHead?.rows[0] ?? table.createTHead().insertRow();
-    while (headerRow.cells.length < colCount) {
-      headerRow.appendChild(createNotionTableCell("th"));
-    }
-
-    let nextSelection: TableSelectionState | null = activeSelection;
-
-    if (operation === "insert-row-above" || operation === "insert-row-below") {
-      const bodyInsertIndex =
-        operation === "insert-row-above"
-          ? Math.max(0, bounds.startRow - 1)
-          : Math.max(0, bounds.endRow);
-      const row = tbody.insertRow(Math.min(bodyInsertIndex, tbody.rows.length));
-      for (let col = 0; col < colCount; col += 1) {
-        row.appendChild(createNotionTableCell("td"));
-      }
-      const fullRowIndex =
-        operation === "insert-row-above"
-          ? Math.max(1, bounds.startRow)
-          : Math.max(1, bounds.endRow + 1);
-      nextSelection = {
-        tableId: activeSelection!.tableId,
-        start: { row: fullRowIndex, col: bounds.startCol },
-        end: { row: fullRowIndex, col: bounds.endCol }
-      };
-    }
-
-    if (operation === "delete-rows") {
-      const deleteStart = Math.max(1, bounds.startRow);
-      const deleteEnd = Math.max(1, bounds.endRow);
-      if (deleteStart <= deleteEnd && tbody.rows.length > 0) {
-        const bodyStart = Math.max(0, deleteStart - 1);
-        const bodyEnd = Math.min(tbody.rows.length - 1, deleteEnd - 1);
-        for (let index = bodyEnd; index >= bodyStart; index -= 1) {
-          tbody.deleteRow(index);
-        }
-      }
-      if (tbody.rows.length === 0) {
-        const fallback = tbody.insertRow();
-        for (let col = 0; col < colCount; col += 1) {
-          fallback.appendChild(createNotionTableCell("td"));
-        }
-      }
-      nextSelection = {
-        tableId: activeSelection!.tableId,
-        start: { row: 1, col: bounds.startCol },
-        end: { row: 1, col: bounds.endCol }
-      };
-    }
-
-    if (operation === "insert-column-left" || operation === "insert-column-right") {
-      const insertCol = operation === "insert-column-left" ? bounds.startCol : bounds.endCol + 1;
-      const tableRows = getNotionTableRows(table);
-      for (let row = 0; row < tableRows.length; row += 1) {
-        const rowElement = tableRows[row];
-        const isHeader = row === 0;
-        const nextCell = createNotionTableCell(isHeader ? "th" : "td");
-        const reference = rowElement.cells[insertCol];
-        if (reference) {
-          rowElement.insertBefore(nextCell, reference);
-        } else {
-          rowElement.appendChild(nextCell);
-        }
-      }
-      nextSelection = {
-        tableId: activeSelection!.tableId,
-        start: { row: bounds.startRow, col: insertCol },
-        end: { row: bounds.endRow, col: insertCol }
-      };
-    }
-
-    if (operation === "delete-columns") {
-      const tableRows = getNotionTableRows(table);
-      const currentColCount = getNotionTableColumnCount(table);
-      const deleteCount = bounds.endCol - bounds.startCol + 1;
-      if (currentColCount > deleteCount) {
-        for (const rowElement of tableRows) {
-          for (let col = bounds.endCol; col >= bounds.startCol; col -= 1) {
-            if (rowElement.cells[col]) {
-              rowElement.deleteCell(col);
-            }
-          }
-        }
-      }
-      const nextCol = Math.max(0, Math.min(bounds.startCol, getNotionTableColumnCount(table) - 1));
-      nextSelection = {
-        tableId: activeSelection!.tableId,
-        start: { row: bounds.startRow, col: nextCol },
-        end: { row: bounds.endRow, col: nextCol }
-      };
-    }
-
-    const normalizedContext = getSelectedTableContext(nextSelection);
-    const correctedSelection = normalizedContext
-      ? {
-          tableId: nextSelection!.tableId,
-          start: { row: normalizedContext.bounds.startRow, col: normalizedContext.bounds.startCol },
-          end: { row: normalizedContext.bounds.endRow, col: normalizedContext.bounds.endCol }
-        }
-      : nextSelection;
     setAndApplyTableSelection(correctedSelection);
     syncDraftFromNotionEditor();
   };
@@ -2306,7 +2127,7 @@ export function ArtifactsPage() {
     void action();
   };
 
-  const tableMenuContext = tableContextMenu ? getSelectedTableContext(tableContextMenu.selection) : null;
+  const tableMenuContext = tableContextMenu ? getSelectedTableContext(notionEditorRef.current, tableContextMenu.selection) : null;
   const canDeleteTableRows = Boolean(tableMenuContext && tableMenuContext.bounds.endRow >= 1);
   const canDeleteTableColumns = Boolean(
     tableMenuContext &&
@@ -3093,29 +2914,29 @@ export function ArtifactsPage() {
           style={{ left: tableContextMenuPosition.left, top: tableContextMenuPosition.top }}
           onClick={(event) => event.stopPropagation()}
         >
-          <button type="button" onClick={() => executeTableContextAction(() => applyTableOperation("insert-row-above"))}>
+          <button type="button" onClick={() => executeTableContextAction(() => applySelectedTableOperation("insert-row-above"))}>
             Insert Row Above
           </button>
-          <button type="button" onClick={() => executeTableContextAction(() => applyTableOperation("insert-row-below"))}>
+          <button type="button" onClick={() => executeTableContextAction(() => applySelectedTableOperation("insert-row-below"))}>
             Insert Row Below
           </button>
-          <button type="button" onClick={() => executeTableContextAction(() => applyTableOperation("insert-column-left"))}>
+          <button type="button" onClick={() => executeTableContextAction(() => applySelectedTableOperation("insert-column-left"))}>
             Insert Column Left
           </button>
-          <button type="button" onClick={() => executeTableContextAction(() => applyTableOperation("insert-column-right"))}>
+          <button type="button" onClick={() => executeTableContextAction(() => applySelectedTableOperation("insert-column-right"))}>
             Insert Column Right
           </button>
           <button
             type="button"
             disabled={!canDeleteTableRows}
-            onClick={() => executeTableContextAction(() => applyTableOperation("delete-rows"))}
+            onClick={() => executeTableContextAction(() => applySelectedTableOperation("delete-rows"))}
           >
             Delete Selected Rows
           </button>
           <button
             type="button"
             disabled={!canDeleteTableColumns}
-            onClick={() => executeTableContextAction(() => applyTableOperation("delete-columns"))}
+            onClick={() => executeTableContextAction(() => applySelectedTableOperation("delete-columns"))}
           >
             Delete Selected Columns
           </button>
@@ -3284,5 +3105,4 @@ export function ArtifactsPage() {
     </section>
   );
 }
-
 
