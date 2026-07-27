@@ -8,7 +8,16 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "../../../..");
 
-const uiApiSource = readFileSync(path.join(repoRoot, "ui/src/lib/api.ts"), "utf8");
+// lib/api.ts was split into lib/api/*.ts. The contract guarded here is which
+// routes the UI calls, not which file holds them, so read the whole api surface.
+const uiApiSource = [
+  path.join(repoRoot, "ui/src/lib/api.ts"),
+  ...readdirSync(path.join(repoRoot, "ui/src/lib/api"))
+    .filter((name) => name.endsWith(".ts"))
+    .map((name) => path.join(repoRoot, "ui/src/lib/api", name))
+]
+  .map((file) => readFileSync(file, "utf8"))
+  .join("\n");
 const uiServicesSource = readFileSync(path.join(repoRoot, "ui/src/config/services.ts"), "utf8");
 // Read the daemon's whole non-test source rather than index.ts alone, so the
 // route contract keeps holding as index.ts is split into modules. Same reason

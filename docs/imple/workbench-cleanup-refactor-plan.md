@@ -361,7 +361,41 @@ DB 非依存で回るようになった。**分割はテスト可能性を直接
 
 修正後の見積り: **0.5 日**（適合テスト 1 本）。
 
-### R5 — UI（4〜6 日、§2 の T8 と同時）
+### R5 + T8 — UI → **レイアウト整理は完了、内部分解は未着手（2026-07-27）**
+
+**`lib/api.ts` 2,469 → 112 行（-95%）**
+
+| commit | 内容 |
+|---|---|
+| `99752ef` | `api/transport.ts`（セッション状態・HTTP トランスポート・refresh・自動ルーティング） |
+| `a7d18e3` | `api/{notes,artifacts,tasks,projects,analyser,images,mindmaps,wbs,deepResearch,core}.ts` |
+
+`api.ts` は明示的な再エクスポートで**公開面を完全に維持**したので、`lib/api` を import している
+約 40 ファイルは無変更。13 個のドメイン API オブジェクトは**空白まで含めて完全一致**を確認済み
+（`projectsApi` 219 行、`analyserApi` 168 行）。
+
+**T8: `pages/` 11,382 → 3,832 行**。1,000 行超のページを feature ディレクトリへ移動し、
+`pages/` は 1 行の再エクスポートだけにした（App.tsx・ルート定義・既存テストは無変更）。
+
+| ページ | 行 | 移動先 |
+|---|---:|---|
+| ArtifactsPage | 3,451 | `artifacts/` |
+| SettingsPage | 2,236 | `settings/`（新規） |
+| AnalyserPage | 1,884 | `analyser/`（新規） |
+| MindmapsPage | 1,348 | `mindmaps/`（新規） |
+| WbsPage | 1,227 | `wbs/`（新規） |
+| ProjectDetailPage | 865 | `projects/` |
+
+`pages/` と feature ディレクトリは同じ深さ（`src/` 直下）なので、`../lib` `../types` などは
+そのまま有効。書き換えが要ったのは自分の feature ディレクトリを指す import だけ。
+
+**残り: ページ内部の分解は未着手。これは機械的移動ではない。**
+`ArtifactsPage.tsx` は**単一コンポーネントに 66 個のフック・約 2,450 行のロジック**が入っており、
+テストは 8 件しかない。カスタムフックへの切り出しは stale closure・effect 依存・再レンダリング挙動の
+変化を招きうるが、**バイト一致検証が使えず 8 件のテストでは検出できない**。
+R1 で OAuth テストを先に書いたのと同じく、**テストを増やしてから**着手すべき。
+
+#### 当初計画（参考）
 
 - `ArtifactsPage.tsx` 3451 行 → `ui/src/artifacts/` へ。state 39 個をまず `useReducer` か複数フックに割る。既に `ui/src/artifacts/hooks/` があるのでそこに寄せる
 - `lib/api.ts` 2407 行 → `lib/api/<domain>.ts` へ分割。トランスポート（Core / daemon / フォールバック / リフレッシュ）を `lib/api/transport.ts` に集約。リフレッシュ後の失敗が元の 401 を再 throw してセッションを消す挙動（`933-1004`）もここで直す
@@ -370,7 +404,7 @@ DB 非依存で回るようになった。**分割はテスト可能性を直接
 ### 優先順位
 
 ```
-✅ R0 → ✅ R3 → ✅ R4' → ✅ R0.5 → ✅ Phase 0/1 → ✅ R1-pre → ✅ R1（-97%）→ 🔄 R2（-74%, 機械的移動は完了）
+✅ R0 → ✅ R3 → ✅ R4' → ✅ R0.5 → ✅ Phase 0/1 → ✅ R1-pre → ✅ R1（-97%）→ 🔄 R2（-74%）→ 🔄 R5+T8（レイアウト完了）
   → R2（daemon 8,073 行）→ R5 + T8（UI）
 ```
 
@@ -416,7 +450,7 @@ R1 の前提条件は変わらず「OAuth の認可コード〜トークン〜�
 | R1 | core/httpServer 分割 | **完了** | 7,209→192 行（-97%）。16 モジュールへ分割 |
 | R2 | sync-daemon 分割 | **機械的移動は完了** | 8,122→2,128 行（-74%）。残りは循環解消＝設計変更が必要 |
 | ~~R4~~ | ~~services 共通パッケージ~~ | **取り下げ** | §4 R4 参照。R4' に置換 |
-| R5+T8 | UI feature-first 化 | 未着手 | |
+| R5+T8 | UI feature-first 化 | **レイアウトは完了** | api.ts 2,469→112 行、pages/ 11,382→3,832 行。ページ内部の分解はテスト拡充が前提 |
 
 ---
 
