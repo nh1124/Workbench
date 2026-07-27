@@ -93,9 +93,37 @@ describe("table cells", () => {
     expect(roundTrip("| a | b |\n| --- | --- |\n|  |  |")).toBe("| a | b |\n| --- | --- |\n|  |  |");
   });
 
-  it("still encodes a real line break inside a cell as <br>", () => {
+  it("keeps the <br> spelling of a line break literal in the source", () => {
     const source = "| a<br>b | c |\n| --- | --- |\n| 1 | 2 |";
     expect(roundTrip(source)).toBe(source);
+  });
+
+  // The case above is literal text, because the source is HTML-escaped on the
+  // way in. A break the user actually typed is a real BR node, so build one.
+  it("encodes a line break the user typed in a cell as <br>", () => {
+    const editor = editorFrom("| x | c |\n| --- | --- |\n| 1 | 2 |");
+    const cell = editor.querySelector("th") as HTMLTableCellElement;
+    cell.innerHTML = "a<br>b";
+
+    expect(notionEditorToMarkdown(editor)).toBe("| a<br>b | c |\n| --- | --- |\n| 1 | 2 |");
+  });
+});
+
+describe("line breaks outside tables", () => {
+  it("keeps a typed line break inside a paragraph", () => {
+    const editor = editorFrom("placeholder");
+    const block = editor.children[0] as HTMLElement;
+    block.innerHTML = "a<br>b";
+
+    expect(notionEditorToMarkdown(editor)).toBe("a\nb");
+  });
+
+  it("drops the trailing break a block carries as its empty placeholder", () => {
+    const editor = editorFrom("placeholder");
+    const block = editor.children[0] as HTMLElement;
+    block.innerHTML = "a<br>";
+
+    expect(notionEditorToMarkdown(editor)).toBe("a");
   });
 
   it("keeps a literal pipe escaped", () => {
