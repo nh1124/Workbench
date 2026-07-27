@@ -257,9 +257,9 @@ DB 非依存で回るようになった。**分割はテスト可能性を直接
 
 ファサードは `authenticate → try → client 呼び出し → catch` の同型が延々続く（例: `5874-5887`, `5889-5899`）ので、`makeFacadeRoute()` 1 つで大半が畳める。
 
-### R2 — `sync-daemon/index.ts` の解体 → **着手済み・継続中（2026-07-26）**
+### R2 — `sync-daemon/index.ts` の解体 → **✅ 完了（2026-07-28）**
 
-**8,122 → 2,128 行（-74%）**。機械的移動で可能な範囲は概ね完了。
+**8,122 → 601 行（-93%）**。当初「設計変更が必要」とした循環も解消済み（下記）。
 
 | commit | 内容 | 行数 |
 |---|---|---|
@@ -285,13 +285,40 @@ DB 非依存で回るようになった。**分割はテスト可能性を直接
 | `b8731a3` | `jobs.ts`（ローカルジョブ処理） | -165 |
 | `a19cabd` | `remoteSync.ts`（pull/snapshot/push オーケストレーション） | -430 |
 
-**index.ts に残る 15 関数（2,128 行）** —— デーモンループ（`tick` / `scheduleTick` / `performTick`）、
-ウォッチャ、HTTP ルータ（`startStatusServer`）、`main()`、および下記の循環に絡む 6 関数。
+#### 循環の解消と残りの解体（2026-07-28, `22e60ca` `199851a`）→ **8,122 → 601 行（-93%）**
 
-**ここから先は機械的移動では進まない**。`scheduleTick → tick → pushOutbox / pullRemoteArtifactSyncState`
-と、`markProjectContextRescanRequired → scheduleTick` が**真の相互依存**を作っている。
-解くには依存性注入（`scheduleTick` をパラメータで渡す等）が必要で、これは**関数シグネチャの変更＝設計変更**。
-バイト一致検証が使えなくなるため、独立した設計判断として別途行うこと。
+**「設計変更が必要」という上記の評価は過大だった**。実地調査で分かったこと:
+
+- **import 循環ではなかった** —— どのモジュールも index.ts を import していない。index.ts
+  **内部の呼び出し循環**だけだった。
+- **問題の辺は本番で到達不能だった** —— `markProjectContextRescanRequired` の
+  `if (state.tickRunning) tickQueued = true; else scheduleTick(...)` のうち、`else` 側に入る経路が無い。
+  そこへ至る経路は `performTick → tick` の一本で、`tick` は `performTick` の前に `tickRunning = true` を立てる。
+  この辺を通るのは `pullRemoteArtifactSyncState` を直接呼ぶテストのみ。
+- **remote pull クラスタの依存先は既に全て抽出済みだった** —— `remoteSync` / `manifestStore` /
+  `localStore`。`scheduleTick` の 1 辺だけが index.ts に縛り付けていた。
+
+採った手（案 B）: **tick スケジューラを独立モジュール化**し、tick 本体は**配線時に引数で渡す**。
+`scheduleTick` はシグネチャを保ったので**約 40 箇所の呼び出しは無変更**。
+
+| commit | 内容 | 行数 |
+|---|---|---|
+| `22e60ca` | `tickScheduler.ts`（循環の切断）+ `remotePull.ts` | 2,128 → 1,926 |
+| `199851a` | `statusServer.ts`（ループバック HTTP 34 ルート） | 1,926 → **601** |
+
+副産物として**実在の import 循環を 1 件解消**: `coreClient` が `remoteSync` から
+`stringFromUnknown` を import していたが、`remoteSync` は `coreClient` の HTTP クライアントに依存していた。
+この関数は `localStore` の `asString` と**実装がバイト一致**だったため統合した。
+
+検証:
+- **34 モジュールで import 循環ゼロ**（DFS で全経路確認）
+- **公開 API は 200 名で完全一致**（作業前後で LOST / GAINED ともゼロ）
+- 143 tests pass（うち 10 件はスケジューラの coalescing 新規テスト）
+- 移動で孤立した import 92 件を除去
+- `routeCoverage` はデーモン全ソースを再帰読みするため移動後も契約が効く
+  —— `/capture/status` を消して赤くなることを確認（空振りでないことの裏取り）
+
+index.ts に残るのは import・再エクスポート面・`performTick`・ウォッチャ・`main()` のみ。
 
 **wildcard 再エクスポートの注意**: 委譲すると `export * from "./x.js"` を書かれることがある。これは
 分割前に private だったヘルパを公開 API に昇格させてしまうため、**必ず明示リストに直す**
@@ -549,8 +576,7 @@ UI テストは 354 → **443 件**。
 ### 優先順位
 
 ```
-✅ R0 → ✅ R3 → ✅ R4' → ✅ R0.5 → ✅ Phase 0/1 → ✅ R1-pre → ✅ R1（-97%）→ 🔄 R2（-74%）→ 🔄 R5+T8（大部分完了）
-  → R2（daemon 8,073 行）→ R5 + T8（UI）
+✅ R0 → ✅ R3 → ✅ R4' → ✅ R0.5 → ✅ Phase 0/1 → ✅ R1-pre → ✅ R1（-97%）→ ✅ R2（-93%）→ 🔄 R5+T8（大部分完了）
 ```
 
 **Codex 委譲時の注意（実測）**: R1 wave 3/4 では Codex(MCP) が 30 分の無応答 abort に 2 回かかった。
@@ -593,7 +619,7 @@ R1 の前提条件は変わらず「OAuth の認可コード〜トークン〜�
 | R4' | auth 適合テスト（共通化はしない） | **完了** | commit `9b36224`・ドリフト注入で検知を確認 |
 | R1-pre | OAuth フローのテスト追加 | **完了** | 21 件。mutation 注入で有効性確認済み |
 | R1 | core/httpServer 分割 | **完了** | 7,209→192 行（-97%）。16 モジュールへ分割 |
-| R2 | sync-daemon 分割 | **機械的移動は完了** | 8,122→2,128 行（-74%）。残りは循環解消＝設計変更が必要 |
+| R2 | sync-daemon 分割 | **完了** | 8,122→601 行（-93%）。tick 循環を解消し HTTP 層も分離。34 モジュールで循環ゼロ・公開 API 200 名不変 |
 | ~~R4~~ | ~~services 共通パッケージ~~ | **取り下げ** | §4 R4 参照。R4' に置換 |
 | R5+T8 | UI feature-first 化 | **大部分完了** | api.ts 2,469→112、pages/ 11,382→3,832、Analyser 1,884→56、Settings 2,236→1,905、Artifacts 3,451→3,108、Mindmaps 1,348→977、WBS 1,227→1,087。UI テスト 443 件。contenteditable 群のテスト化で実バグ 2 件を発見・修正 |
 
