@@ -428,6 +428,25 @@ mutation で**どのアサーションが実際に効いているか**も確認�
 `loadTree` も選択・draft・mode と密結合で、抽出すると引数 8 個のフックになり
 「移しただけで悪化」になるため見送った。
 
+#### SettingsPage / AnalyserPage（2026-07-27〜28）
+
+| commit | 内容 |
+|---|---|
+| `50d4cbb` | SettingsPage sync daemon の特性化テスト 7 件 |
+| `422f888` | `hooks/useLocalDaemonSettings.ts`（state 12・ハンドラ 20） |
+| `d321964` | AnalyserPage をタブ単位のコンポーネントファイルへ分割 |
+
+- **SettingsPage 2,236 → 1,905 行**。最大クラスタ（ローカルデーモン）をフック化。
+- **AnalyserPage 1,884 → 56 行**。こちらは**既に 11 個のコンポーネントに分かれていた**ので、
+  1 ファイルに同居していたものを `analyser/components/` へ出すだけの純粋な分割。
+  移動した 30 コンポーネントはバイト一致（`ActivityTab` 311 行・`RoutinesTab` 305 行は空白まで一致）。
+
+**テスト作成中に発見した UX バグ（未修正・現状を pin）**: `saveLocalDaemonUrl` と
+`changeLocalRoutingMode`（auto/local）は確認メッセージを set した直後に `refreshLocalDaemon` を呼ぶが、
+その先頭が `setLocalDaemonMessage("")` なので**メッセージが即座に消える**。`showSuccess=false` のため
+再設定もされない。core モードだけは refresh を呼ばないので残る。
+リファクタと混ぜないため**修正せず**、テストで現状を固定した。
+
 #### 当初計画（参考）
 
 - `ArtifactsPage.tsx` 3451 行 → `ui/src/artifacts/` へ。state 39 個をまず `useReducer` か複数フックに割る。既に `ui/src/artifacts/hooks/` があるのでそこに寄せる
@@ -437,7 +456,7 @@ mutation で**どのアサーションが実際に効いているか**も確認�
 ### 優先順位
 
 ```
-✅ R0 → ✅ R3 → ✅ R4' → ✅ R0.5 → ✅ Phase 0/1 → ✅ R1-pre → ✅ R1（-97%）→ 🔄 R2（-74%）→ 🔄 R5+T8（レイアウト完了）
+✅ R0 → ✅ R3 → ✅ R4' → ✅ R0.5 → ✅ Phase 0/1 → ✅ R1-pre → ✅ R1（-97%）→ 🔄 R2（-74%）→ 🔄 R5+T8（大部分完了）
   → R2（daemon 8,073 行）→ R5 + T8（UI）
 ```
 
@@ -483,7 +502,7 @@ R1 の前提条件は変わらず「OAuth の認可コード〜トークン〜�
 | R1 | core/httpServer 分割 | **完了** | 7,209→192 行（-97%）。16 モジュールへ分割 |
 | R2 | sync-daemon 分割 | **機械的移動は完了** | 8,122→2,128 行（-74%）。残りは循環解消＝設計変更が必要 |
 | ~~R4~~ | ~~services 共通パッケージ~~ | **取り下げ** | §4 R4 参照。R4' に置換 |
-| R5+T8 | UI feature-first 化 | **レイアウトは完了** | api.ts 2,469→112 行、pages/ 11,382→3,832 行。ページ内部の分解はテスト拡充が前提 |
+| R5+T8 | UI feature-first 化 | **大部分完了** | api.ts 2,469→112、pages/ 11,382→3,832、Analyser 1,884→56、Settings 2,236→1,905、Artifacts 3,451→3,108 |
 
 ---
 
