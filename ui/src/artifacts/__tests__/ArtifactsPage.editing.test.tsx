@@ -220,6 +220,38 @@ describe("ArtifactsPage folders", () => {
   });
 });
 
+describe("ArtifactsPage context menus", () => {
+  it("opens the tree context menu on right click and clamps it inside the viewport", async () => {
+    renderPage();
+    const entry = await screen.findByText("Alpha Note");
+
+    // Far outside the jsdom viewport, so an unclamped menu would be off-screen.
+    fireEvent.contextMenu(entry, { clientX: 99999, clientY: 99999 });
+
+    const menu = await waitFor(() => {
+      const found = document.querySelector(".va-context-menu") as HTMLElement | null;
+      if (!found) throw new Error("context menu did not open");
+      return found;
+    });
+
+    expect(Number.parseInt(menu.style.left, 10)).toBeLessThanOrEqual(window.innerWidth);
+    expect(Number.parseInt(menu.style.top, 10)).toBeLessThanOrEqual(window.innerHeight);
+    expect(Number.parseInt(menu.style.left, 10)).toBeGreaterThanOrEqual(0);
+  });
+
+  it("closes the context menu on Escape", async () => {
+    renderPage();
+    const entry = await screen.findByText("Alpha Note");
+    fireEvent.contextMenu(entry, { clientX: 10, clientY: 10 });
+
+    await waitFor(() => expect(document.querySelector(".va-context-menu")).not.toBeNull());
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    await waitFor(() => expect(document.querySelector(".va-context-menu")).toBeNull());
+  });
+});
+
 describe("ArtifactsPage editor state", () => {
   it("keeps the editor on the opened item when the tree reloads", async () => {
     renderPage();

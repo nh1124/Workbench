@@ -67,6 +67,7 @@ import {
 import { useArtifactProjects } from "./hooks/useArtifactProjects";
 import { useArtifactsMarkdownEditor } from "./hooks/useArtifactsMarkdownEditor";
 import { useArtifactPreview } from "./hooks/useArtifactPreview";
+import { useArtifactContextMenus } from "./hooks/useArtifactContextMenus";
 import {
   IcoClose,
   IcoChevronLeft,
@@ -93,11 +94,6 @@ import { MarkdownOutlinePanel } from "./components/MarkdownOutlinePanel";
 import { PdfViewer } from "./components/PdfViewer";
 import "./ArtifactsPage.css";
 
-type OutlineContextMenuState = {
-  x: number;
-  y: number;
-  entry: MarkdownOutlineItem;
-};
 
 type RenameFolderState = {
   itemId: string;
@@ -141,10 +137,20 @@ export function ArtifactsPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [notePreviewMode, setNotePreviewMode] = useState<"edit" | "live">("edit");
   const { pdfBlobUrl, imageBlobUrl, pdfExpanded, setPdfExpanded } = useArtifactPreview(draft, setDraft);
-  const [contextMenu, setContextMenu] = useState<TreeContextMenuState | null>(null);
-  const [tableContextMenu, setTableContextMenu] = useState<TableContextMenuState | null>(null);
-  const [editorContextMenu, setEditorContextMenu] = useState<EditorContextMenuState | null>(null);
-  const [outlineContextMenu, setOutlineContextMenu] = useState<OutlineContextMenuState | null>(null);
+  const {
+    contextMenu,
+    setContextMenu,
+    contextMenuPosition,
+    tableContextMenu,
+    setTableContextMenu,
+    tableContextMenuPosition,
+    editorContextMenu,
+    setEditorContextMenu,
+    editorContextMenuPosition,
+    outlineContextMenu,
+    setOutlineContextMenu,
+    outlineContextMenuPosition
+  } = useArtifactContextMenus();
   const [tableSelection, setTableSelection] = useState<TableSelectionState | null>(null);
   const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
   const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
@@ -316,57 +322,9 @@ export function ArtifactsPage() {
     );
   }, [draft.projectId, draft.projectName, projectOptions]);
 
-  const contextMenuPosition = useMemo(() => {
-    if (!contextMenu) return null;
-    const menuWidth = 180;
-    const menuHeight = 320;
-    const margin = 8;
-    const maxX = window.innerWidth - menuWidth - margin;
-    const maxY = window.innerHeight - menuHeight - margin;
-    return {
-      left: Math.max(margin, Math.min(contextMenu.x, maxX)),
-      top: Math.max(margin, Math.min(contextMenu.y, maxY))
-    };
-  }, [contextMenu]);
 
-  const tableContextMenuPosition = useMemo(() => {
-    if (!tableContextMenu) return null;
-    const menuWidth = 220;
-    const menuHeight = 220;
-    const margin = 8;
-    const maxX = window.innerWidth - menuWidth - margin;
-    const maxY = window.innerHeight - menuHeight - margin;
-    return {
-      left: Math.max(margin, Math.min(tableContextMenu.x, maxX)),
-      top: Math.max(margin, Math.min(tableContextMenu.y, maxY))
-    };
-  }, [tableContextMenu]);
 
-  const editorContextMenuPosition = useMemo(() => {
-    if (!editorContextMenu) return null;
-    const menuWidth = 180;
-    const menuHeight = 110;
-    const margin = 8;
-    const maxX = window.innerWidth - menuWidth - margin;
-    const maxY = window.innerHeight - menuHeight - margin;
-    return {
-      left: Math.max(margin, Math.min(editorContextMenu.x, maxX)),
-      top: Math.max(margin, Math.min(editorContextMenu.y, maxY))
-    };
-  }, [editorContextMenu]);
 
-  const outlineContextMenuPosition = useMemo(() => {
-    if (!outlineContextMenu) return null;
-    const menuWidth = 190;
-    const menuHeight = 160;
-    const margin = 8;
-    const maxX = window.innerWidth - menuWidth - margin;
-    const maxY = window.innerHeight - menuHeight - margin;
-    return {
-      left: Math.max(margin, Math.min(outlineContextMenu.x, maxX)),
-      top: Math.max(margin, Math.min(outlineContextMenu.y, maxY))
-    };
-  }, [outlineContextMenu]);
 
   const contextDeleteCandidateIds = useMemo(() => {
     if (!contextMenu) {
@@ -669,33 +627,6 @@ export function ArtifactsPage() {
     applyTableSelectionVisual(tableSelection);
   }, [draft.contentMarkdown, draft.id, notePreviewMode, tableSelection]);
 
-  useEffect(() => {
-    if (!contextMenu && !tableContextMenu && !editorContextMenu && !outlineContextMenu) return;
-
-    const handleEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setContextMenu(null);
-        setTableContextMenu(null);
-        setEditorContextMenu(null);
-        setOutlineContextMenu(null);
-      }
-    };
-    const handleClose = () => {
-      setContextMenu(null);
-      setTableContextMenu(null);
-      setEditorContextMenu(null);
-      setOutlineContextMenu(null);
-    };
-
-    window.addEventListener("keydown", handleEscape);
-    window.addEventListener("resize", handleClose);
-    window.addEventListener("scroll", handleClose, true);
-    return () => {
-      window.removeEventListener("keydown", handleEscape);
-      window.removeEventListener("resize", handleClose);
-      window.removeEventListener("scroll", handleClose, true);
-    };
-  }, [contextMenu, editorContextMenu, outlineContextMenu, tableContextMenu]);
 
   useEffect(() => {
     const existingIds = new Set(items.map((item) => item.id));

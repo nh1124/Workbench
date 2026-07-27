@@ -1,3 +1,4 @@
+import type { MarkdownOutlineItem } from "./utils/markdownOutline";
 import type { ArtifactItem, ArtifactItemKind, ArtifactPreviewStatus } from "../types/models";
 
 export interface ArtifactEditorDraft {
@@ -86,6 +87,12 @@ export interface EditorContextMenuState {
   x: number;
   y: number;
   mode: "edit" | "live";
+}
+
+export interface OutlineContextMenuState {
+  x: number;
+  y: number;
+  entry: MarkdownOutlineItem;
 }
 
 export interface InsertLinkState {
