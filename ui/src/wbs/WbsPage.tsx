@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, DragEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { CSSProperties, DragEvent, MouseEvent as ReactMouseEvent } from "react";
 import { IcoDownload, IcoList, IcoPlus, IcoRefresh, IcoTrash } from "../tasks/components/icons";
 import { IcoClose, IcoFloppy, IcoPanelLeft, IcoSettings } from "../artifacts/components/ArtifactsIcons";
 import { projectsApi, wbsApi } from "../lib/api";
@@ -11,9 +11,7 @@ import type {
   WbsPlan
 } from "../types/models";
 import {
-  WBS_ZOOM_STEP,
   clampProgress,
-  clampWbsZoom,
   dropPositionForEvent,
   flattenWbsItems,
   isDescendantItem,
@@ -24,6 +22,7 @@ import {
   siblingRows,
   type WbsDropPosition
 } from "./utils/wbsTree";
+import { useWbsGridPan } from "./hooks/useWbsGridPan";
 import "./WbsPage.css";
 
 const statusLabels: Record<WbsItemStatus, string> = {
@@ -50,15 +49,6 @@ type WbsDropIntent = {
   draggedItemId: string;
   targetItemId: string;
   position: WbsDropPosition;
-};
-
-type WbsPanState = {
-  pointerId: number;
-  startX: number;
-  startY: number;
-  scrollLeft: number;
-  scrollTop: number;
-  hasMoved: boolean;
 };
 
 const IcoRootItem = () => (
@@ -111,10 +101,18 @@ export function WbsPage() {
   const [canvasMenu, setCanvasMenu] = useState<WbsCanvasMenu | null>(null);
   const [draggedItemId, setDraggedItemId] = useState("");
   const [dropIntent, setDropIntent] = useState<WbsDropIntent | null>(null);
-  const [isGridPanning, setIsGridPanning] = useState(false);
-  const [wbsZoom, setWbsZoom] = useState(1);
-  const gridPanRef = useRef<WbsPanState | null>(null);
-  const suppressGridClickRef = useRef(false);
+  const {
+    wbsZoom,
+    isGridPanning,
+    handleGridWheel,
+    handleGridPointerDown,
+    handleGridPointerMove,
+    finishGridPan,
+    handleGridClick
+  } = useWbsGridPan(() => {
+    setContextMenu(null);
+    setCanvasMenu(null);
+  });
 
   const rows = useMemo(() => flattenWbsItems(items), [items]);
   const selectedItem = useMemo(() => items.find((item) => item.id === selectedItemId), [items, selectedItemId]);
@@ -486,72 +484,6 @@ export function WbsPage() {
 
   function togglePanel(panel: WbsPanel): void {
     setActivePanel((current) => current === panel ? null : panel);
-  }
-
-  function handleGridWheel(event: ReactWheelEvent<HTMLDivElement>): void {
-    if (!event.shiftKey) return;
-    event.preventDefault();
-    const container = event.currentTarget;
-    const rect = container.getBoundingClientRect();
-    const pointerX = event.clientX - rect.left + container.scrollLeft;
-    const pointerY = event.clientY - rect.top + container.scrollTop;
-    const nextZoom = clampWbsZoom(wbsZoom + (event.deltaY > 0 ? -WBS_ZOOM_STEP : WBS_ZOOM_STEP));
-    if (nextZoom === wbsZoom) return;
-    setWbsZoom(nextZoom);
-    window.requestAnimationFrame(() => {
-      const ratio = nextZoom / wbsZoom;
-      container.scrollLeft = pointerX * ratio - (event.clientX - rect.left);
-      container.scrollTop = pointerY * ratio - (event.clientY - rect.top);
-    });
-  }
-
-  function handleGridPointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
-    if (event.button !== 0 || isDirectEditTarget(event.target) || isInsideWbsItem(event.target)) return;
-    setContextMenu(null);
-    setCanvasMenu(null);
-    gridPanRef.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      scrollLeft: event.currentTarget.scrollLeft,
-      scrollTop: event.currentTarget.scrollTop,
-      hasMoved: false
-    };
-    event.currentTarget.setPointerCapture(event.pointerId);
-    setIsGridPanning(true);
-  }
-
-  function handleGridPointerMove(event: ReactPointerEvent<HTMLDivElement>): void {
-    const pan = gridPanRef.current;
-    if (!pan || pan.pointerId !== event.pointerId) return;
-    const deltaX = event.clientX - pan.startX;
-    const deltaY = event.clientY - pan.startY;
-    if (Math.abs(deltaX) + Math.abs(deltaY) > 4) pan.hasMoved = true;
-    event.currentTarget.scrollLeft = pan.scrollLeft - deltaX;
-    event.currentTarget.scrollTop = pan.scrollTop - deltaY;
-  }
-
-  function finishGridPan(container: HTMLDivElement, pointerId: number): void {
-    const pan = gridPanRef.current;
-    if (!pan || pan.pointerId !== pointerId) return;
-    if (container.hasPointerCapture(pointerId)) container.releasePointerCapture(pointerId);
-    if (pan.hasMoved) {
-      suppressGridClickRef.current = true;
-      window.setTimeout(() => {
-        suppressGridClickRef.current = false;
-      }, 0);
-    }
-    gridPanRef.current = null;
-    setIsGridPanning(false);
-  }
-
-  function handleGridClick(): void {
-    if (suppressGridClickRef.current) {
-      suppressGridClickRef.current = false;
-      return;
-    }
-    setContextMenu(null);
-    setCanvasMenu(null);
   }
 
   function handleItemRowClick(event: ReactMouseEvent<HTMLTableRowElement>, itemId: string): void {
