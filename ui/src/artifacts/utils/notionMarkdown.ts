@@ -306,6 +306,12 @@ export function ensureNotionTableBlockStructure(block: HTMLElement): void {
 
 function tableCellToMarkdown(cell: HTMLTableCellElement): string {
   const inline = Array.from(cell.childNodes).map((node) => inlineNodeToMarkdown(node)).join("");
+  // An empty cell holds a lone <br> placeholder, which arrives here as a bare
+  // newline. That is not content: encoding it as the literal "<br>" below would
+  // turn every empty cell into a line break the next time the note is opened.
+  if (!inline.replace(/\n/g, "").trim()) {
+    return "";
+  }
   return inline
     .replace(/\n+/g, "<br>")
     .replace(/\|/g, "\\|")
@@ -670,6 +676,12 @@ export function placeCaretAtBlockStart(block: HTMLElement): void {
 
 export function hasMeaningfulBlockContent(block: HTMLElement): boolean {
   if (block.dataset.mdKind === "table") {
+    return true;
+  }
+  // An image or embed carries no text, but it is still content. Callers replace
+  // a block they consider empty with a <br> placeholder, so missing this would
+  // delete the image the block was holding.
+  if (block.querySelector("img, iframe, [data-md-embed-kind]")) {
     return true;
   }
   return (block.textContent ?? "").replace(/\u200b/g, "").trim().length > 0;
