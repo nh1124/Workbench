@@ -684,6 +684,7 @@ export function MindmapsPage() {
               {activeDocument ? modeLabels[activeDocument.mode] : "No document"}
               {selectedProject ? ` / ${selectedProject.name}` : ""}
               {activeDocument ? ` / ${Math.round(canvasZoom * 100)}%` : ""}
+              {isDirty ? " / Unsaved" : ""}
             </span>
           </div>
 

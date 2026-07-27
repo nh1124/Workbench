@@ -196,8 +196,8 @@ describe("MindmapsPage saving", () => {
     expect(JSON.stringify(payload.body)).toContain("Renamed A");
   });
 
-  // Save is gated on having a document, not on having unsaved edits — there is
-  // no dirty-state guard, so saving an untouched document is allowed.
+  // Save is gated on having a document, not on having unsaved edits — the dirty
+  // state drives the header indicator, not the button.
   it("enables Save whenever a document is open", async () => {
     renderPage();
     await openMap();
@@ -206,5 +206,33 @@ describe("MindmapsPage saving", () => {
 
     fireEvent.click(screen.getByLabelText("Save"));
     await waitFor(() => expect(mindmapsApi.update).toHaveBeenCalled());
+  });
+
+  it("marks the document unsaved while an edit is uncommitted, and clears it on save", async () => {
+    renderPage();
+    await openMap();
+
+    expect(screen.queryByText(/Unsaved/)).toBeNull();
+
+    fireEvent.doubleClick(node("Child A"));
+    const input = await screen.findByLabelText("Node title");
+    fireEvent.change(input, { target: { value: "Renamed A" } });
+    fireEvent.blur(input);
+
+    await waitFor(() => expect(screen.getByText(/Unsaved/)).toBeTruthy());
+
+    fireEvent.click(screen.getByLabelText("Save"));
+
+    await waitFor(() => expect(screen.queryByText(/Unsaved/)).toBeNull());
+  });
+
+  it("does not mark the document unsaved for selection alone", async () => {
+    renderPage();
+    await openMap();
+
+    fireEvent.click(node("Child B"));
+
+    await waitFor(() => expect(node("Child B").className).toContain("selected"));
+    expect(screen.queryByText(/Unsaved/)).toBeNull();
   });
 });
