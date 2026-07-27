@@ -10,13 +10,21 @@ import type {
   WbsItemStatus,
   WbsPlan
 } from "../types/models";
+import {
+  WBS_ZOOM_STEP,
+  clampProgress,
+  clampWbsZoom,
+  dropPositionForEvent,
+  flattenWbsItems,
+  isDescendantItem,
+  isDirectEditTarget,
+  isInsideWbsItem,
+  numberOrUndefined,
+  selectedProjectName,
+  siblingRows,
+  type WbsDropPosition
+} from "./utils/wbsTree";
 import "./WbsPage.css";
-
-type FlatWbsRow = {
-  item: WbsItem;
-  depth: number;
-  childCount: number;
-};
 
 const statusLabels: Record<WbsItemStatus, string> = {
   todo: "Todo",
@@ -26,7 +34,6 @@ const statusLabels: Record<WbsItemStatus, string> = {
 };
 
 type WbsPanel = "plans" | "create" | "settings" | "item" | "export";
-type WbsDropPosition = "before" | "after" | "child";
 
 type WbsContextMenu = {
   itemId: string;
@@ -53,10 +60,6 @@ type WbsPanState = {
   scrollTop: number;
   hasMoved: boolean;
 };
-
-const WBS_MIN_ZOOM = 0.65;
-const WBS_MAX_ZOOM = 1.8;
-const WBS_ZOOM_STEP = 0.08;
 
 const IcoRootItem = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
@@ -86,81 +89,6 @@ const IcoChildItem = () => (
     <rect x="14" y="14" width="6" height="6" rx="1.5" />
   </svg>
 );
-
-function selectedProjectName(projects: ProjectRecord[], projectId: string | undefined): string | undefined {
-  if (!projectId) return undefined;
-  return projects.find((project) => project.id === projectId)?.name;
-}
-
-function flattenWbsItems(items: WbsItem[]): FlatWbsRow[] {
-  const byParent = new Map<string, WbsItem[]>();
-  for (const item of items) {
-    const parentKey = item.parentId ?? "";
-    const siblings = byParent.get(parentKey) ?? [];
-    siblings.push(item);
-    byParent.set(parentKey, siblings);
-  }
-
-  for (const siblings of byParent.values()) {
-    siblings.sort((left, right) => left.sortOrder - right.sortOrder || left.code.localeCompare(right.code));
-  }
-
-  const rows: FlatWbsRow[] = [];
-  const visit = (item: WbsItem, depth: number) => {
-    const children = byParent.get(item.id) ?? [];
-    rows.push({ item, depth, childCount: children.length });
-    for (const child of children) visit(child, depth + 1);
-  };
-
-  for (const root of byParent.get("") ?? []) visit(root, 0);
-  return rows;
-}
-
-function numberOrUndefined(value: string): number | undefined {
-  if (value.trim() === "") return undefined;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function clampProgress(value: number | undefined): number | undefined {
-  if (value === undefined) return undefined;
-  return Math.min(100, Math.max(0, Math.round(value)));
-}
-
-function siblingRows(rows: FlatWbsRow[], item: WbsItem): FlatWbsRow[] {
-  return rows.filter((row) => row.item.parentId === item.parentId);
-}
-
-function clampWbsZoom(value: number): number {
-  return Math.min(WBS_MAX_ZOOM, Math.max(WBS_MIN_ZOOM, Number(value.toFixed(2))));
-}
-
-function isDirectEditTarget(target: EventTarget | null): boolean {
-  return target instanceof HTMLElement && Boolean(target.closest("input, select, textarea, button"));
-}
-
-function isInsideWbsItem(target: EventTarget | null): boolean {
-  return target instanceof HTMLElement && Boolean(target.closest("[data-wbs-item-id]"));
-}
-
-function isDescendantItem(items: WbsItem[], candidateId: string, ancestorId: string): boolean {
-  let current = items.find((item) => item.id === candidateId);
-  while (current?.parentId) {
-    if (current.parentId === ancestorId) return true;
-    current = items.find((item) => item.id === current?.parentId);
-  }
-  return false;
-}
-
-function dropPositionForEvent(event: DragEvent<HTMLTableRowElement>, depth: number): WbsDropPosition {
-  const rect = event.currentTarget.getBoundingClientRect();
-  const yRatio = rect.height > 0 ? (event.clientY - rect.top) / rect.height : 0.5;
-  if (yRatio < 0.28) return "before";
-  if (yRatio > 0.72) return "after";
-  const localX = event.clientX - rect.left;
-  const childThreshold = 150 + depth * 20;
-  return localX > childThreshold ? "child" : "after";
-}
 
 export function WbsPage() {
   const [plans, setPlans] = useState<WbsPlan[]>([]);

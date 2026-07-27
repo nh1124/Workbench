@@ -18,15 +18,24 @@ import type {
   MindmapNode,
   ProjectRecord
 } from "../types/models";
+import {
+  CANVAS_NODE_HEIGHT,
+  CANVAS_NODE_WIDTH,
+  CANVAS_ZOOM_STEP,
+  clampCanvasZoom,
+  contextMenuPosition,
+  countNodes,
+  extensionForFilename,
+  findNode,
+  formatDateTime,
+  insertChild,
+  layoutNodes,
+  removeNode,
+  selectedProjectName,
+  type PositionedMindmapNode,
+  updateNode
+} from "./utils/mindmapTree";
 import "./MindmapsPage.css";
-
-type PositionedMindmapNode = {
-  node: MindmapNode;
-  depth: number;
-  x: number;
-  y: number;
-  parentId?: string;
-};
 
 type MindmapPanel = "documents" | "create" | "settings" | "export" | null;
 type ExportDestination = "download" | "artifact";
@@ -72,12 +81,6 @@ const modeLabels: Record<MindmapMode, string> = {
   logical_tree: "Logical Tree"
 };
 
-const MIN_CANVAS_ZOOM = 0.45;
-const MAX_CANVAS_ZOOM = 2.25;
-const CANVAS_ZOOM_STEP = 0.1;
-const CANVAS_NODE_WIDTH = 218;
-const CANVAS_NODE_HEIGHT = 62;
-
 const IcoCenterView = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
     <circle cx="12" cy="12" r="7" />
@@ -85,127 +88,6 @@ const IcoCenterView = () => (
     <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
   </svg>
 );
-
-function newNode(title = "New node"): MindmapNode {
-  return {
-    id: createNodeId(),
-    title,
-    children: []
-  };
-}
-
-function createNodeId(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `node-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function formatDateTime(value: string): string {
-  return new Date(value).toLocaleString("ja-JP", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit"
-  });
-}
-
-function findNode(root: MindmapNode, id: string): MindmapNode | undefined {
-  if (root.id === id) return root;
-  for (const child of root.children ?? []) {
-    const found = findNode(child, id);
-    if (found) return found;
-  }
-  return undefined;
-}
-
-function updateNode(root: MindmapNode, id: string, updater: (node: MindmapNode) => MindmapNode): MindmapNode {
-  if (root.id === id) return updater(root);
-  return {
-    ...root,
-    children: (root.children ?? []).map((child) => updateNode(child, id, updater))
-  };
-}
-
-function removeNode(root: MindmapNode, id: string): MindmapNode {
-  return {
-    ...root,
-    children: (root.children ?? [])
-      .filter((child) => child.id !== id)
-      .map((child) => removeNode(child, id))
-  };
-}
-
-function insertChild(root: MindmapNode, id: string): { root: MindmapNode; childId: string } {
-  const child = newNode();
-  return {
-    childId: child.id,
-    root: updateNode(root, id, (node) => ({
-      ...node,
-      collapsed: false,
-      children: [...(node.children ?? []), child]
-    }))
-  };
-}
-
-function countNodes(root: MindmapNode): number {
-  return 1 + (root.children ?? []).reduce((sum, child) => sum + countNodes(child), 0);
-}
-
-function clampCanvasZoom(value: number): number {
-  return Math.min(MAX_CANVAS_ZOOM, Math.max(MIN_CANVAS_ZOOM, Number(value.toFixed(2))));
-}
-
-function layoutNodes(root: MindmapNode): { nodes: PositionedMindmapNode[]; width: number; height: number } {
-  const nodes: PositionedMindmapNode[] = [];
-  let row = 0;
-
-  function walk(node: MindmapNode, depth: number, parentId?: string): void {
-    const children = node.collapsed ? [] : (node.children ?? []);
-    const startRow = row;
-    if (children.length === 0) {
-      row += 1;
-    } else {
-      for (const child of children) {
-        walk(child, depth + 1, node.id);
-      }
-    }
-    const endRow = Math.max(row - 1, startRow);
-    nodes.push({
-      node,
-      depth,
-      parentId,
-      x: 64 + depth * 280,
-      y: 70 + ((startRow + endRow) / 2) * 106
-    });
-  }
-
-  walk(root, 0);
-  return {
-    nodes,
-    width: Math.max(1320, ...nodes.map((item) => item.x + 260)),
-    height: Math.max(760, ...nodes.map((item) => item.y + 110))
-  };
-}
-
-function selectedProjectName(projects: ProjectRecord[], projectId: string | undefined): string | undefined {
-  if (!projectId) return undefined;
-  return projects.find((project) => project.id === projectId)?.name;
-}
-
-function contextMenuPosition(event: ReactMouseEvent): { x: number; y: number } {
-  const margin = 8;
-  const width = 220;
-  const height = 170;
-  const x = Math.max(margin, Math.min(event.clientX, window.innerWidth - width - margin));
-  const y = Math.max(margin, Math.min(event.clientY, window.innerHeight - height - margin));
-  return { x, y };
-}
-
-function extensionForFilename(filename: string): string {
-  const match = filename.match(/\.[a-z0-9]+$/i);
-  return match?.[0] ?? ".txt";
-}
 
 function pickerMimeType(mimeType: string): string {
   return mimeType.split(";")[0]?.trim() || "text/plain";
