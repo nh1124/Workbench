@@ -441,11 +441,30 @@ mutation で**どのアサーションが実際に効いているか**も確認�
   1 ファイルに同居していたものを `analyser/components/` へ出すだけの純粋な分割。
   移動した 30 コンポーネントはバイト一致（`ActivityTab` 311 行・`RoutinesTab` 305 行は空白まで一致）。
 
-**テスト作成中に発見した UX バグ（未修正・現状を pin）**: `saveLocalDaemonUrl` と
-`changeLocalRoutingMode`（auto/local）は確認メッセージを set した直後に `refreshLocalDaemon` を呼ぶが、
-その先頭が `setLocalDaemonMessage("")` なので**メッセージが即座に消える**。`showSuccess=false` のため
-再設定もされない。core モードだけは refresh を呼ばないので残る。
-リファクタと混ぜないため**修正せず**、テストで現状を固定した。
+**テスト作成中に発見した UX バグ → 修正済み（`469afd2`）**: `refreshLocalDaemon` の先頭が
+`setLocalDaemonMessage("")` のため、確認メッセージを set した直後に refresh を呼ぶ経路では
+**メッセージが即座に消えていた**（`showSuccess=false` なので再設定もされない）。
+調べると影響は当初気づいた 2 箇所ではなく **5 箇所**で、「Daemon started.」「Daemon stopped.」も
+一度も表示されていなかった。`refreshLocalDaemon(showSuccess, { keepMessage })` を追加し、
+各呼び出し側が「自分がメッセージの持ち主か」を明示する形にした。初期ロードは従来どおりクリアし、
+**失敗時は必ず上書き**（エラーは見えないと困るため）。現状を pin していた 2 テストは反転させ、
+修正を戻すと赤くなることを確認済み。
+
+#### MindmapsPage / WbsPage（2026-07-28, `48aeee7`）
+
+どちらも**単一コンポーネント + 前置きの純粋関数群**という構造で、**テストが 1 件も無かった**。
+純粋関数を `mindmaps/utils/mindmapTree.ts` / `wbs/utils/wbsTree.ts` へ切り出し（23 関数バイト一致）、
+**ユニットテスト 40 件**を追加した。`notionTableOps` と同じ「抽出したからテストできた」パターン。
+
+- MindmapsPage 1,348 → **1,230 行**、WbsPage 1,227 → **1,155 行**
+- カバーした範囲: ツリーの find/update/remove/insert、ノード数、ズームのクランプ、キャンバス
+  レイアウト（折りたたみ時の子の除外含む）／WBS の行フラット化と並び順、兄弟・子孫判定、
+  進捗クランプ、イベントターゲット判定
+- 名前から読み取れない仕様を 2 つ明文化: `extensionForFilename` は**先頭のドットと大文字小文字を保持**し
+  既定は `.txt`（file-picker の accept 用のため）／`flattenWbsItems` は**親が存在しない item を落とす**
+- mutation 検証: `removeNode` の再帰を止める・`isDescendantItem` を 1 段で打ち切る、で各 1 件が赤
+
+UI テストは 278 → **318 件**。
 
 #### 当初計画（参考）
 
