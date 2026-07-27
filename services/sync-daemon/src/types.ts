@@ -15,6 +15,17 @@ import type { ManifestStore, RemoteResourceDomain, SyncErrorCategory } from "./m
  * shape without depending on the entry point.
  */
 
+/**
+ * Decides when a sync tick runs. Declared here rather than beside its factory
+ * so DaemonState can name it without the two files importing each other.
+ */
+export interface TickScheduler {
+  /** Run a tick after `delayMs`, replacing any tick already pending. */
+  schedule(delayMs?: number): void;
+  /** Run a tick now, coalescing with one already in flight. */
+  run(): Promise<void>;
+}
+
 export type LocalJob = {
   id: string;
   kind: "download_artifact" | "download_task_attachment" | "materialize_resource";
@@ -131,6 +142,8 @@ export type DaemonState = {
   tickRunning: boolean;
   tickQueued: boolean;
   tickTimer?: ReturnType<typeof setTimeout>;
+  /** Wired by the daemon at startup; absent in fixtures that never tick. */
+  ticker?: TickScheduler;
   watcher?: FSWatcher;
   pendingJobConfirmations?: Map<string, PendingLocalJobConfirmation>;
 };

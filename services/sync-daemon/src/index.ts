@@ -1,9 +1,18 @@
-import { randomUUID } from "node:crypto";
+
 import { createServer, type IncomingMessage } from "node:http";
-import { hostname, homedir, platform } from "node:os";
-import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
+import {
+  hostname,
+  platform
+} from "node:os";
+import {
+  dirname,
+  resolve
+} from "node:path";
 import { fileURLToPath } from "node:url";
-import { promises as fs, watch, type FSWatcher } from "node:fs";
+import {
+  promises as fs,
+  watch
+} from "node:fs";
 import { config as loadEnv } from "dotenv";
 import {
   readIdentity
@@ -37,7 +46,6 @@ import {
   finishLocalProjectContextWrite,
   invalidLocalProjectContextWrite,
   isLocalProjectId,
-  LOCAL_PROJECT_ID_PREFIX,
   localDefaultProjectSelection,
   localRelationPatch,
   localProjectDefaultSelection,
@@ -61,7 +69,6 @@ import {
   createLocalNote,
   deleteLocalNote,
   isLocalNoteId,
-  LOCAL_NOTE_ID_PREFIX,
   localNoteProjectSummaries,
   normalizeStringArray,
   noteOutboxPath,
@@ -69,7 +76,6 @@ import {
 } from "./localNotes.js";
 import {
   addLocalTaskToToday,
-  applyTaskRelationPushResult,
   createLocalTask,
   createLocalTaskAttachment,
   createLocalTaskSubtask,
@@ -88,10 +94,8 @@ import {
   recordLocalTaskOccurrence,
   removeLocalTaskFromToday,
   removeLocalTaskScheduleItem,
-  retargetOpenTaskOutboxReferences,
   scheduleItemId,
   setLocalTaskPin,
-  shouldDeferTaskOutboxItem,
   taskAttachments,
   taskScheduleItems,
   taskSubtasks,
@@ -159,7 +163,6 @@ import {
   projectContextEventIsStale,
   projectContextSnapshotPage,
   pushOutbox,
-  REMOTE_ARTIFACT_CURSOR_META_KEY,
   REMOTE_SYNC_CURSOR_META_KEY,
   REMOTE_SYNC_DOMAINS,
   recordHasLegacyProjectContextShape,
@@ -174,11 +177,9 @@ import {
   snapshotNextCursor,
   snapshotSupportsProjectContext,
   setSyncErrorState,
-  logSyncDaemonErrorOnce,
-  type SyncErrorDetails
+  logSyncDaemonErrorOnce
 } from "./remoteSync.js";
 import {
-  CoreHttpError,
   claimJobs,
   coreJson,
   ensureIdentity,
@@ -191,6 +192,13 @@ import {
   processJob,
   rejectPendingLocalJobConfirmation
 } from "./jobs.js";
+import { createTickScheduler, scheduleTick } from "./tickScheduler.js";
+import {
+  REMOTE_ARTIFACT_SNAPSHOT_COMPLETE_META_KEY,
+  pullRemoteArtifactSyncState,
+  requestRemoteSnapshotRescan
+} from "./remotePull.js";
+export { pullRemoteArtifactSyncState } from "./remotePull.js";
 
 export { readIdentity } from "./identityStorage.js";
 export type { ClientIdentity, SecureIdentityMode } from "./identityStorage.js";
@@ -404,30 +412,12 @@ export {
 
 import {
   getMeta,
-  getRemoteResource,
-  getResource,
   listAllRemoteResourcesForDomain,
-  listRemoteResources,
   listConflicts,
-  listOpenOutboxForResource,
-  listPendingOutbox,
-  markOutboxApplied,
-  markOutboxFailed,
-  markOutboxSuperseded,
   migrateLegacyManifestJson,
   openManifestStore,
-  recordConflict,
-  markRemoteResourceDeleted,
-  removeRemoteResource,
-  removeResource,
   resolveConflict,
-  setMeta,
-  upsertRemoteResource,
-  upsertResource as upsertManifestResource,
   writeManifestDebugSnapshot,
-  type ManifestStore,
-  type OutboxItem,
-  type RemoteResource,
   type RemoteResourceDomain
 } from "./manifestStore.js";
 import {
@@ -437,8 +427,6 @@ import {
   listLocalRemoteDomainItems,
   localRemoteDomainItem,
   refreshManifestStats,
-  remoteResourceUpdatedAt,
-  resultRecord,
   runWithClientOpId
 } from "./localStore.js";
 export {
@@ -453,19 +441,15 @@ export {
   runWithClientOpId
 } from "./localStore.js";
 import {
-  cacheProjectContextSnapshot,
   getLocalProjectBrief,
   getLocalProjectContext,
   listLocalProjectMemories,
   listLocalProjectRelations,
   LocalProjectContextError,
-  parseProjectContextSnapshot,
   PROJECT_CONTEXT_BASELINE_CURSOR_META_KEY,
   PROJECT_CONTEXT_DOMAIN,
-  PROJECT_CONTEXT_SCHEMA_VERSION,
   PROJECT_CONTEXT_SNAPSHOT_COMPLETE_META_KEY,
-  PROJECT_CONTEXT_SUPPORTED_META_KEY,
-  removeStaleProjectContextRows
+  PROJECT_CONTEXT_SUPPORTED_META_KEY
 } from "./projectContextCache.js";
 import {
   exportProjectContext,
@@ -487,170 +471,8 @@ export type { DaemonState, LocalJob } from "./types.js";
 import type {
   DaemonState,
   LocalArtifactItem,
-  LocalJob,
-  RemoteArtifactItem,
-  RemoteSyncEvent,
-  SyncSnapshotResponse
+  LocalJob
 } from "./types.js";
-
-const REMOTE_ARTIFACT_SNAPSHOT_COMPLETE_META_KEY = "remoteArtifactSnapshotComplete";
-const LAST_REMOTE_PULL_AT_META_KEY = "lastRemotePullAt";
-const REMOTE_PULL_LIMIT = 100;
-const REMOTE_CURSOR_DRAIN_LIMIT = 500;
-
-function markProjectContextRescanRequired(state: DaemonState): void {
-  setMeta(state.manifestStore, PROJECT_CONTEXT_SNAPSHOT_COMPLETE_META_KEY, undefined);
-  setMeta(state.manifestStore, PROJECT_CONTEXT_SUPPORTED_META_KEY, undefined);
-  setMeta(state.manifestStore, PROJECT_CONTEXT_BASELINE_CURSOR_META_KEY, undefined);
-  setMeta(state.manifestStore, REMOTE_ARTIFACT_SNAPSHOT_COMPLETE_META_KEY, undefined);
-  if (state.tickRunning) {
-    state.tickQueued = true;
-  } else {
-    scheduleTick(state, 0);
-  }
-}
-
-async function applyRemoteProjectContextEvent(state: DaemonState, event: RemoteSyncEvent): Promise<void> {
-  if (event.domain !== PROJECT_CONTEXT_DOMAIN) return;
-  const projectId = event.resourceId;
-  if (!projectId || projectContextEventIsStale(state, event)) return;
-  const payload = asRecord(event.payload) ?? {};
-  if (asString(payload.localClientId) === state.identity?.localClientId) return;
-  const createdAt = asString(event.createdAt) ?? new Date().toISOString();
-
-  if (isRemoteResourceTombstone(event)) {
-    markRemoteResourceDeleted(state.manifestStore, {
-      domain: PROJECT_CONTEXT_DOMAIN,
-      resourceId: projectId,
-      version: event.version,
-      payload,
-      deletedAt: createdAt,
-      lastSyncedAt: createdAt
-    });
-    return;
-  }
-
-  if (payload.schemaVersion !== PROJECT_CONTEXT_SCHEMA_VERSION) {
-    markProjectContextRescanRequired(state);
-    return;
-  }
-  if (payload.kind !== "invalidate") return;
-  if (asString(payload.projectId) !== projectId) {
-    markProjectContextRescanRequired(state);
-    return;
-  }
-  await fetchProjectContextDetail(state, projectId, event.version);
-}
-
-async function applyRemoteSyncEvent(state: DaemonState, event: RemoteSyncEvent): Promise<void> {
-  if (event.domain === PROJECT_CONTEXT_DOMAIN) {
-    await applyRemoteProjectContextEvent(state, event);
-    return;
-  }
-  if (event.domain === "artifacts") {
-    await applyRemoteArtifactEvent(state, event);
-    return;
-  }
-  applyRemoteDomainEvent(state, event);
-}
-
-async function bootstrapRemoteArtifactSnapshot(state: DaemonState): Promise<string | undefined> {
-  if (!state.identity) throw new Error("Missing local client identity");
-  let snapshot: SyncSnapshotResponse;
-  let fullSnapshotAvailable = true;
-  try {
-    snapshot = await getSyncSnapshot(state, REMOTE_SYNC_DOMAINS);
-  } catch (error) {
-    fullSnapshotAvailable = false;
-    console.warn(
-      `[sync-daemon] all-domain remote snapshot failed; falling back to artifacts-only snapshot: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
-    snapshot = await getSyncSnapshot(state, ["artifacts"]);
-  }
-  const generatedAt = asString(snapshot.generatedAt) ?? new Date().toISOString();
-  await applyRemoteSnapshot(state, snapshot, generatedAt);
-  await bootstrapPagedDomainSnapshots(state, snapshot, generatedAt);
-
-  let contextBaselineCursor: string | undefined;
-  if (fullSnapshotAvailable && snapshotSupportsProjectContext(snapshot)) {
-    const contextBootstrap = await bootstrapProjectContextSnapshot(state, asString(snapshot.baselineCursor));
-    contextBaselineCursor = contextBootstrap.supported ? contextBootstrap.baselineCursor : undefined;
-  } else if (fullSnapshotAvailable) {
-    setMeta(state.manifestStore, PROJECT_CONTEXT_SUPPORTED_META_KEY, "0");
-  }
-
-  const snapshotBaselineCursor = asString(snapshot.baselineCursor);
-  let cursor: string | undefined = contextBaselineCursor ?? snapshotBaselineCursor;
-  const drainFromBaseline = cursor !== undefined;
-  for (let pageIndex = 0; pageIndex < 20; pageIndex += 1) {
-    const page = await getSyncPullPage(state, cursor, REMOTE_CURSOR_DRAIN_LIMIT);
-    const events = page.events ?? [];
-    for (const event of events) {
-      if (drainFromBaseline) {
-        await applyRemoteSyncEvent(state, event);
-      } else {
-        const eventTime = event.createdAt ? Date.parse(event.createdAt) : Number.NaN;
-        if (Number.isFinite(eventTime) && eventTime > Date.parse(generatedAt)) {
-          await applyRemoteSyncEvent(state, event);
-        }
-      }
-    }
-    if (!page.nextCursor || page.nextCursor === cursor) {
-      return cursor ?? "0";
-    }
-    cursor = page.nextCursor;
-    if (events.length < REMOTE_CURSOR_DRAIN_LIMIT) {
-      return cursor;
-    }
-  }
-  return cursor ?? "0";
-}
-
-export async function pullRemoteArtifactSyncState(state: DaemonState): Promise<void> {
-  if (!state.identity) return;
-  let cursor = getMeta(state.manifestStore, REMOTE_SYNC_CURSOR_META_KEY)
-    ?? getMeta(state.manifestStore, REMOTE_ARTIFACT_CURSOR_META_KEY)
-    ?? state.remoteArtifactCursor;
-  const snapshotComplete = getMeta(state.manifestStore, REMOTE_ARTIFACT_SNAPSHOT_COMPLETE_META_KEY) === "1";
-  const contextSupported = getMeta(state.manifestStore, PROJECT_CONTEXT_SUPPORTED_META_KEY);
-  const contextSnapshotComplete = getMeta(state.manifestStore, PROJECT_CONTEXT_SNAPSHOT_COMPLETE_META_KEY) === "1";
-  const contextBootstrapRequired = contextSupported === undefined
-    || (contextSupported === "1" && !contextSnapshotComplete);
-  if (!cursor || !snapshotComplete || contextBootstrapRequired) {
-    cursor = await bootstrapRemoteArtifactSnapshot(state);
-    setMeta(state.manifestStore, REMOTE_ARTIFACT_SNAPSHOT_COMPLETE_META_KEY, "1");
-  } else {
-    const page = await getSyncPullPage(state, cursor, REMOTE_PULL_LIMIT);
-    for (const event of page.events ?? []) {
-      await applyRemoteSyncEvent(state, event);
-    }
-    cursor = page.nextCursor ?? cursor;
-  }
-
-  const now = new Date().toISOString();
-  setMeta(state.manifestStore, REMOTE_SYNC_CURSOR_META_KEY, cursor ?? "0");
-  setMeta(state.manifestStore, REMOTE_ARTIFACT_CURSOR_META_KEY, cursor ?? "0");
-  setMeta(state.manifestStore, LAST_REMOTE_PULL_AT_META_KEY, now);
-  state.remoteArtifactCursor = cursor ?? "0";
-  state.lastRemotePullAt = now;
-  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
-  await refreshManifestStats(state);
-}
-
-async function requestRemoteSnapshotRescan(state: DaemonState): Promise<void> {
-  setMeta(state.manifestStore, REMOTE_SYNC_CURSOR_META_KEY, undefined);
-  setMeta(state.manifestStore, REMOTE_ARTIFACT_CURSOR_META_KEY, undefined);
-  setMeta(state.manifestStore, REMOTE_ARTIFACT_SNAPSHOT_COMPLETE_META_KEY, undefined);
-  setMeta(state.manifestStore, PROJECT_CONTEXT_SNAPSHOT_COMPLETE_META_KEY, undefined);
-  setMeta(state.manifestStore, PROJECT_CONTEXT_SUPPORTED_META_KEY, undefined);
-  setMeta(state.manifestStore, PROJECT_CONTEXT_BASELINE_CURSOR_META_KEY, undefined);
-  state.remoteArtifactCursor = undefined;
-  scheduleTick(state, 0);
-  await writeManifestDebugSnapshot(state.config.syncRoot, state.manifestStore);
-  await refreshManifestStats(state);
-}
 
 async function performTick(state: DaemonState): Promise<void> {
   let recoverablePullError = false;
@@ -716,32 +538,6 @@ async function performTick(state: DaemonState): Promise<void> {
     setSyncErrorState(state, details);
     logSyncDaemonErrorOnce(state, details.errorMessage);
   }
-}
-
-async function tick(state: DaemonState): Promise<void> {
-  if (state.tickRunning) {
-    state.tickQueued = true;
-    return;
-  }
-  state.tickRunning = true;
-  try {
-    do {
-      state.tickQueued = false;
-      await performTick(state);
-    } while (state.tickQueued);
-  } finally {
-    state.tickRunning = false;
-  }
-}
-
-function scheduleTick(state: DaemonState, delayMs = state.config.watchDebounceMs): void {
-  if (state.tickTimer) {
-    clearTimeout(state.tickTimer);
-  }
-  state.tickTimer = setTimeout(() => {
-    state.tickTimer = undefined;
-    void tick(state);
-  }, delayMs);
 }
 
 function startSyncWatcher(state: DaemonState): void {
@@ -2068,6 +1864,8 @@ async function main(): Promise<void> {
     tickRunning: false,
     tickQueued: false
   };
+  // Wired before anything can ask for a tick, so scheduleTick always lands.
+  state.ticker = createTickScheduler(state, performTick);
   const captureGetJson = async <T>(pathValue: string): Promise<T> => {
     const identity = state.identity;
     if (!identity) throw new Error("Local client identity is not registered.");
@@ -2117,9 +1915,9 @@ async function main(): Promise<void> {
   await state.capture.startFromConfig();
   startStatusServer(state);
   startSyncWatcher(state);
-  await tick(state);
+  await state.ticker.run();
   setInterval(() => {
-    void tick(state);
+    void state.ticker?.run();
   }, config.intervalMs);
 }
 

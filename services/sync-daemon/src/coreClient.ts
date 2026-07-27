@@ -15,8 +15,10 @@ import {
   sanitizeFileName,
   uniquePath
 } from "./paths.js";
-import { refreshManifestStats } from "./localStore.js";
-import { stringFromUnknown } from "./remoteSync.js";
+// asString rather than remoteSync's identical stringFromUnknown: importing it
+// from there closed a cycle, since remoteSync depends on this module's HTTP
+// client.
+import { asString, refreshManifestStats } from "./localStore.js";
 import type { DaemonState, LocalJob } from "./types.js";
 
 export class CoreHttpError extends Error {
@@ -39,8 +41,8 @@ function coreHttpError(response: Response, body: string): CoreHttpError {
   if (trimmed.startsWith("{") || response.headers.get("content-type")?.includes("application/json")) {
     try {
       const parsed = JSON.parse(trimmed) as { message?: unknown; error?: unknown; code?: unknown };
-      message = stringFromUnknown(parsed.message) ?? stringFromUnknown(parsed.error);
-      code = stringFromUnknown(parsed.code);
+      message = asString(parsed.message) ?? asString(parsed.error);
+      code = asString(parsed.code);
     } catch {
       // Fall through to the compact non-JSON response below.
     }
