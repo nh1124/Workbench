@@ -1,31 +1,17 @@
-import {
-  type MouseEvent as ReactMouseEvent,
-  type PointerEvent as ReactPointerEvent,
-  type WheelEvent as ReactWheelEvent,
-  useEffect,
-  useMemo,
-  useRef,
-  useState
-} from "react";
+import { type MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { IcoDownload, IcoList, IcoPlus, IcoRefresh, IcoTrash, IcoX } from "../tasks/components/icons";
 import { IcoFloppy, IcoSettings } from "../artifacts/components/ArtifactsIcons";
-import { artifactsApi, mindmapsApi, projectsApi, saveFileWithDialog } from "../lib/api";
+import { artifactsApi, mindmapsApi, projectsApi } from "../lib/api";
 import type {
   MindmapDocument,
   MindmapDocumentBody,
-  MindmapExportFormat,
   MindmapMode,
   MindmapNode,
   ProjectRecord
 } from "../types/models";
 import {
-  CANVAS_NODE_HEIGHT,
-  CANVAS_NODE_WIDTH,
-  CANVAS_ZOOM_STEP,
-  clampCanvasZoom,
   contextMenuPosition,
   countNodes,
-  extensionForFilename,
   findNode,
   formatDateTime,
   insertChild,
@@ -35,46 +21,27 @@ import {
   type PositionedMindmapNode,
   updateNode
 } from "./utils/mindmapTree";
+import { useMindmapCanvas } from "./hooks/useMindmapCanvas";
+import {
+  downloadBlobFile,
+  downloadTextFile,
+  extensionForExportFormat,
+  isRasterExportFormat,
+  rasterizeSvg,
+  splitArtifactUploadPath,
+  withFileExtension,
+  type ExportDestination,
+  type MindmapUiExportFormat
+} from "./utils/mindmapExport";
 import "./MindmapsPage.css";
 
 type MindmapPanel = "documents" | "create" | "settings" | "export" | null;
-type ExportDestination = "download" | "artifact";
-type RasterExportFormat = "png" | "jpeg";
-type MindmapUiExportFormat = MindmapExportFormat | RasterExportFormat;
 
 type NodeContextMenu = {
   nodeId: string;
   x: number;
   y: number;
 } | null;
-
-type CanvasPanState = {
-  pointerId: number;
-  startX: number;
-  startY: number;
-  scrollLeft: number;
-  scrollTop: number;
-  hasMoved: boolean;
-};
-
-type FileSavePicker = {
-  suggestedName?: string;
-  types?: Array<{
-    description: string;
-    accept: Record<string, string[]>;
-  }>;
-};
-
-type WritableFileHandle = {
-  createWritable: () => Promise<{
-    write: (data: Blob) => Promise<void>;
-    close: () => Promise<void>;
-  }>;
-};
-
-type WindowWithSavePicker = Window & {
-  showSaveFilePicker?: (options?: FileSavePicker) => Promise<WritableFileHandle>;
-};
 
 const modeLabels: Record<MindmapMode, string> = {
   mindmap: "Mindmap",
@@ -88,126 +55,6 @@ const IcoCenterView = () => (
     <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
   </svg>
 );
-
-function pickerMimeType(mimeType: string): string {
-  return mimeType.split(";")[0]?.trim() || "text/plain";
-}
-
-function isRasterExportFormat(format: MindmapUiExportFormat): format is RasterExportFormat {
-  return format === "png" || format === "jpeg";
-}
-
-function extensionForExportFormat(format: MindmapUiExportFormat): string {
-  if (format === "markdown") return "md";
-  if (format === "jpeg") return "jpeg";
-  return format;
-}
-
-function withFileExtension(filename: string, extension: string): string {
-  const base = filename.trim() || "mindmap-export";
-  return `${base.replace(/\.[a-z0-9]+$/i, "")}.${extension}`;
-}
-
-function splitArtifactUploadPath(pathValue: string | undefined): { directoryPath?: string; filename?: string } {
-  const normalized = pathValue?.trim().replace(/\\/g, "/").replace(/^\/+/, "");
-  if (!normalized) return {};
-  const parts = normalized.split("/").filter(Boolean);
-  const filename = parts.pop();
-  return {
-    directoryPath: parts.length > 0 ? parts.join("/") : undefined,
-    filename
-  };
-}
-
-function parseSvgLength(value: string | null): number | undefined {
-  if (!value) return undefined;
-  const parsed = Number.parseFloat(value);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
-
-function svgDimensions(svgText: string): { width: number; height: number } {
-  const parsed = new DOMParser().parseFromString(svgText, "image/svg+xml");
-  const svg = parsed.documentElement;
-  const viewBox = svg.getAttribute("viewBox")?.split(/\s+/).map((part) => Number.parseFloat(part));
-  const viewBoxWidth = viewBox && viewBox.length === 4 && Number.isFinite(viewBox[2]) ? viewBox[2] : undefined;
-  const viewBoxHeight = viewBox && viewBox.length === 4 && Number.isFinite(viewBox[3]) ? viewBox[3] : undefined;
-  return {
-    width: Math.max(1, Math.ceil(parseSvgLength(svg.getAttribute("width")) ?? viewBoxWidth ?? 1200)),
-    height: Math.max(1, Math.ceil(parseSvgLength(svg.getAttribute("height")) ?? viewBoxHeight ?? 800))
-  };
-}
-
-async function rasterizeSvg(svgText: string, mimeType: "image/png" | "image/jpeg"): Promise<Blob> {
-  const { width, height } = svgDimensions(svgText);
-  const scale = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.ceil(width * scale);
-  canvas.height = Math.ceil(height * scale);
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("Canvas is not available.");
-  context.scale(scale, scale);
-  context.fillStyle = "#ffffff";
-  context.fillRect(0, 0, width, height);
-
-  const image = new Image();
-  const svgBlob = new Blob([svgText], { type: "image/svg+xml;charset=utf-8" });
-  const url = URL.createObjectURL(svgBlob);
-  try {
-    await new Promise<void>((resolve, reject) => {
-      image.onload = () => resolve();
-      image.onerror = () => reject(new Error("Mindmap image could not be rendered."));
-      image.src = url;
-    });
-    context.drawImage(image, 0, 0, width, height);
-    return await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob((blob) => {
-        if (blob) resolve(blob);
-        else reject(new Error("Mindmap image could not be encoded."));
-      }, mimeType, mimeType === "image/jpeg" ? 0.92 : undefined);
-    });
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
-
-async function downloadBlobFile(filename: string, mimeType: string, blob: Blob): Promise<void> {
-  if (await saveFileWithDialog(blob, filename).catch(() => false)) return;
-
-  const savePicker = (window as WindowWithSavePicker).showSaveFilePicker;
-  if (savePicker) {
-    try {
-      const acceptMimeType = pickerMimeType(mimeType);
-      const handle = await savePicker({
-        suggestedName: filename || "mindmap-export.txt",
-        types: [{
-          description: "Mindmap export",
-          accept: { [acceptMimeType]: [extensionForFilename(filename)] }
-        }]
-      });
-      const writable = await handle.createWritable();
-      await writable.write(blob);
-      await writable.close();
-      return;
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
-      throw error;
-    }
-  }
-
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename || "mindmap-export.txt";
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
-
-async function downloadTextFile(filename: string, mimeType: string, content: string): Promise<void> {
-  const blob = new Blob([content], { type: mimeType || "text/plain;charset=utf-8" });
-  await downloadBlobFile(filename, mimeType, blob);
-}
 
 export function MindmapsPage() {
   const [documents, setDocuments] = useState<MindmapDocument[]>([]);
@@ -229,21 +76,33 @@ export function MindmapsPage() {
   const [artifactPath, setArtifactPath] = useState("");
   const [editingNodeId, setEditingNodeId] = useState("");
   const [editingNodeTitle, setEditingNodeTitle] = useState("");
-  const [canvasZoom, setCanvasZoom] = useState(1);
-  const [isCanvasPanning, setIsCanvasPanning] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [error, setError] = useState("");
   const inlineTitleInputRef = useRef<HTMLInputElement>(null);
-  const canvasRef = useRef<HTMLDivElement>(null);
-  const canvasPanRef = useRef<CanvasPanState | null>(null);
-  const suppressCanvasClickRef = useRef(false);
 
   const canvasLayout = useMemo(() => {
     if (!activeDocument) return undefined;
     return layoutNodes(activeDocument.body.root);
   }, [activeDocument]);
+
+  const {
+    canvasRef,
+    canvasZoom,
+    isCanvasPanning,
+    handleCanvasWheel,
+    centerCanvasView,
+    handleCanvasPointerDown,
+    handleCanvasPointerMove,
+    finishCanvasPan,
+    handleCanvasClick
+  } = useMindmapCanvas({
+    layout: canvasLayout,
+    enabled: Boolean(activeDocument),
+    documentId: activeDocument?.id,
+    onCanvasInteract: () => setNodeMenu(null)
+  });
 
   const nodeById = useMemo(() => {
     const map = new Map<string, PositionedMindmapNode>();
@@ -310,10 +169,6 @@ export function MindmapsPage() {
   useEffect(() => {
     setEditingNodeId("");
     setEditingNodeTitle("");
-    setCanvasZoom(1);
-    setIsCanvasPanning(false);
-    canvasPanRef.current = null;
-    suppressCanvasClickRef.current = false;
   }, [activeDocument?.id]);
 
   useEffect(() => {
@@ -618,114 +473,6 @@ export function MindmapsPage() {
     setActivePanel(null);
     const { x, y } = contextMenuPosition(event);
     setNodeMenu({ nodeId, x, y });
-  }
-
-  function handleCanvasWheel(event: ReactWheelEvent<HTMLDivElement>): void {
-    if (!event.shiftKey || !activeDocument) return;
-    const target = event.target instanceof HTMLElement ? event.target : undefined;
-    if (target?.closest("input, textarea, select")) return;
-
-    event.preventDefault();
-    event.stopPropagation();
-    setNodeMenu(null);
-
-    const container = event.currentTarget;
-    const rect = container.getBoundingClientRect();
-    const pointerX = event.clientX - rect.left;
-    const pointerY = event.clientY - rect.top;
-    const contentX = (container.scrollLeft + pointerX) / canvasZoom;
-    const contentY = (container.scrollTop + pointerY) / canvasZoom;
-    const wheelDelta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
-    if (wheelDelta === 0) return;
-    const direction = wheelDelta < 0 ? 1 : -1;
-    const nextZoom = clampCanvasZoom(canvasZoom + direction * CANVAS_ZOOM_STEP);
-    if (nextZoom === canvasZoom) return;
-
-    setCanvasZoom(nextZoom);
-    window.requestAnimationFrame(() => {
-      container.scrollLeft = Math.max(0, contentX * nextZoom - pointerX);
-      container.scrollTop = Math.max(0, contentY * nextZoom - pointerY);
-    });
-  }
-
-  function centerCanvasView(): void {
-    const container = canvasRef.current;
-    if (!container || !canvasLayout?.nodes.length) return;
-    setNodeMenu(null);
-
-    const minX = Math.min(...canvasLayout.nodes.map((item) => item.x));
-    const maxX = Math.max(...canvasLayout.nodes.map((item) => item.x + CANVAS_NODE_WIDTH));
-    const minY = Math.min(...canvasLayout.nodes.map((item) => item.y));
-    const maxY = Math.max(...canvasLayout.nodes.map((item) => item.y + CANVAS_NODE_HEIGHT));
-    const centerX = ((minX + maxX) / 2) * canvasZoom;
-    const centerY = ((minY + maxY) / 2) * canvasZoom;
-    const maxScrollLeft = Math.max(0, container.scrollWidth - container.clientWidth);
-    const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
-
-    container.scrollTo({
-      left: Math.min(maxScrollLeft, Math.max(0, centerX - container.clientWidth / 2)),
-      top: Math.min(maxScrollTop, Math.max(0, centerY - container.clientHeight / 2)),
-      behavior: "smooth"
-    });
-  }
-
-  function canStartCanvasPan(event: ReactPointerEvent<HTMLDivElement>): boolean {
-    if (!activeDocument || event.button !== 0) return false;
-    const target = event.target instanceof HTMLElement ? event.target : undefined;
-    return !Boolean(target?.closest(".mindmaps-node, input, textarea, select, button, a"));
-  }
-
-  function handleCanvasPointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
-    if (!canStartCanvasPan(event)) return;
-    event.preventDefault();
-    setNodeMenu(null);
-    canvasPanRef.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      scrollLeft: event.currentTarget.scrollLeft,
-      scrollTop: event.currentTarget.scrollTop,
-      hasMoved: false
-    };
-    event.currentTarget.setPointerCapture(event.pointerId);
-    setIsCanvasPanning(true);
-  }
-
-  function handleCanvasPointerMove(event: ReactPointerEvent<HTMLDivElement>): void {
-    const pan = canvasPanRef.current;
-    if (!pan || pan.pointerId !== event.pointerId) return;
-    event.preventDefault();
-    const deltaX = event.clientX - pan.startX;
-    const deltaY = event.clientY - pan.startY;
-    if (Math.abs(deltaX) > 3 || Math.abs(deltaY) > 3) {
-      pan.hasMoved = true;
-    }
-    event.currentTarget.scrollLeft = pan.scrollLeft - deltaX;
-    event.currentTarget.scrollTop = pan.scrollTop - deltaY;
-  }
-
-  function finishCanvasPan(container: HTMLDivElement, pointerId: number): void {
-    const pan = canvasPanRef.current;
-    if (!pan || pan.pointerId !== pointerId) return;
-    if (container.hasPointerCapture(pointerId)) {
-      container.releasePointerCapture(pointerId);
-    }
-    if (pan.hasMoved) {
-      suppressCanvasClickRef.current = true;
-      window.setTimeout(() => {
-        suppressCanvasClickRef.current = false;
-      }, 0);
-    }
-    canvasPanRef.current = null;
-    setIsCanvasPanning(false);
-  }
-
-  function handleCanvasClick(): void {
-    if (suppressCanvasClickRef.current) {
-      suppressCanvasClickRef.current = false;
-      return;
-    }
-    setNodeMenu(null);
   }
 
   function renderPanel() {
