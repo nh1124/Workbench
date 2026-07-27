@@ -466,6 +466,45 @@ mutation で**どのアサーションが実際に効いているか**も確認�
 
 UI テストは 278 → **318 件**。
 
+#### MindmapsPage / WbsPage — コンポーネント本体（2026-07-28, `5c45d47` `576224e` `85ac868` `40e479c`）
+
+純粋関数の次は**コンポーネント本体**。テストが無い状態で分解するのは危険なので、
+**先に characterization テストで挙動を釘付けにしてから**切り出す順序を取った。
+
+1. **characterization テスト 18 件**（Mindmaps 8 / WBS 10）
+   - Mindmaps: ノード描画・選択、ダブルクリック編集（blur で確定 / Escape で破棄）、ノード削除、
+     ルート削除の拒否、保存ペイロード
+   - WBS: ツリー順の行描画、選択、セル編集（ローカル反映 → blur で `expectedVersion` 付き commit、
+     status のみ即時 commit）、未保存表示、詳細パネル経由の削除、競合時の再読込復帰
+   - mutation 検証 9 件すべて赤（ルート削除ガード除去 / `removeNode` 無効化 / Escape で確定 /
+     selected クラス固定 / `expectedVersion` 削除 / dirty 化しない / status を commit しない /
+     commit エラーの握り潰し）
+2. **切り出し**（テストは 1 行も変えずに緑のまま）
+   - `mindmaps/hooks/useMindmapCanvas.ts` — ズーム・ドラッグパン・センタリング。必要なのは layout と
+     「メニューを閉じる」コールバックだけで、ドキュメント state を一切持たない
+   - `mindmaps/utils/mindmapExport.ts` — 形式名・アーティファクトパス分解・SVG ラスタライズ・保存。
+     React state に触れないので module 化し、**テスト 16 件**を追加（`svgDimensions` の
+     viewBox フォールバックと非正値の無視など、ページ内では書けなかったもの）
+   - `wbs/hooks/useWbsGridPan.ts` — グリッドのズームとドラッグパン（Mindmaps と同型）
+   - MindmapsPage 1,230 → **977 行**、WbsPage 1,155 → **1,087 行**
+
+唯一の構造変更は Mindmaps のドキュメント切替時 reset effect を 2 つに割った点
+（フックが viewport を、ページがタイトル編集をリセット。触る state は互いに素）。
+
+UI テストは 318 → **352 件**。
+
+##### 発見: MindmapsPage の `isDirty` は書き込み専用（未修正）
+
+`isDirty` は 6 箇所で `setIsDirty` されるが**読む箇所が 1 つも無い**。結果として
+Save ボタンは `!activeDocument || isSaving` だけで制御され、**未編集でも常に押せる**。
+一方 **WbsPage の `isDirty` は読まれており**、ヘッダに `/ Unsaved` を出している。
+つまり「意図された挙動が Mindmaps だけ配線されていない」状態。
+
+テストは実挙動（ドキュメントが開いていれば Save 可）を pin してある。**消していない**：
+消すと未保存表示という意図ごと失われ、逆に配線すると挙動変更になるため、どちらも
+プロダクト判断としてユーザーに委ねる。選択肢は (a) WBS と同様に未保存表示を出す、
+(b) Save を dirty 時のみ有効にする、(c) `isDirty` ごと削除。
+
 #### 当初計画（参考）
 
 - `ArtifactsPage.tsx` 3451 行 → `ui/src/artifacts/` へ。state 39 個をまず `useReducer` か複数フックに割る。既に `ui/src/artifacts/hooks/` があるのでそこに寄せる
@@ -521,7 +560,7 @@ R1 の前提条件は変わらず「OAuth の認可コード〜トークン〜�
 | R1 | core/httpServer 分割 | **完了** | 7,209→192 行（-97%）。16 モジュールへ分割 |
 | R2 | sync-daemon 分割 | **機械的移動は完了** | 8,122→2,128 行（-74%）。残りは循環解消＝設計変更が必要 |
 | ~~R4~~ | ~~services 共通パッケージ~~ | **取り下げ** | §4 R4 参照。R4' に置換 |
-| R5+T8 | UI feature-first 化 | **大部分完了** | api.ts 2,469→112、pages/ 11,382→3,832、Analyser 1,884→56、Settings 2,236→1,905、Artifacts 3,451→3,108 |
+| R5+T8 | UI feature-first 化 | **大部分完了** | api.ts 2,469→112、pages/ 11,382→3,832、Analyser 1,884→56、Settings 2,236→1,905、Artifacts 3,451→3,108、Mindmaps 1,348→977、WBS 1,227→1,087。UI テスト 352 件 |
 
 ---
 
