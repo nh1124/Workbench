@@ -406,9 +406,26 @@ DB 非依存で回るようになった。**分割はテスト可能性を直接
 **全ての新規テストは mutation で有効性を確認済み**（空タイトルガード削除・削除確認バイパス・
 クランプ無効化を注入し、対応するテストだけが赤くなることを確認）。
 
-**次に抽出すべきでないもの**: table/editor クラスタ（37 参照）は contenteditable の DOM を直接
-操作しており、**テストが 1 件も無い**。jsdom での contenteditable テストは難しく、まずここの
-テストを書くのが先。`loadTree` も選択・draft・mode と密結合で、抽出すると引数 8 個のフックになり
+| `0d3bc62` | `utils/notionTableOps.ts`（テーブル操作 4 関数）+ **ユニットテスト 17 件** |
+
+`ArtifactsPage.tsx` 3,451 → **3,108 行**。UI テストは 242 → **270 件**。
+
+**table 操作は「抽出したからテストできた」例**。`notionEditorRef` を閉じ込める代わりに editor を
+引数で受け、`applyTableOperation` は setter を呼ばず次の選択を**返す**形にした。これで React の外で
+呼べるようになり、jsdom で組んだテーブルに対して直接テストできる。
+
+mutation で**どのアサーションが実際に効いているか**も確認した:
+- insert-row の above/below を入れ替える → insert 系 2 件が赤（効いている）
+- delete-columns を off-by-one にする → column 系 2 件が赤（効いている）
+- **ヘッダ保護の `Math.max(1, ...)` と空行フォールバックを外しても何も赤くならない** ——
+  削除は tbody にしか触れず、後段の `ensureNotionTableBlockStructure` が正規化し直すため。
+  つまりこの 2 つは冗長。ただし**テストが赤くならないことを理由に消すのは危険**なので現状維持とした。
+
+判明した仕様: テーブルは**本文 1 行以上・2 列以上**を維持する（それ以下に削除すると空の行/列が補充される）。
+
+**まだ抽出していないもの**: editor の contenteditable 操作（マウスドラッグによるセル選択、
+`handleNotionEditor*`）。jsdom では Selection API が限定的で、テストの投資が大きい。
+`loadTree` も選択・draft・mode と密結合で、抽出すると引数 8 個のフックになり
 「移しただけで悪化」になるため見送った。
 
 #### 当初計画（参考）
