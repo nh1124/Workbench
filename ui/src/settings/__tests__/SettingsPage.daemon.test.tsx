@@ -106,7 +106,7 @@ describe("SettingsPage sync daemon", () => {
     await waitFor(() => expect(within(section).getByText("connection refused")).toBeTruthy());
   });
 
-  it("persists the daemon URL", async () => {
+  it("persists the daemon URL and confirms it", async () => {
     renderSettings();
     const section = await openDaemonSection();
 
@@ -115,6 +115,8 @@ describe("SettingsPage sync daemon", () => {
     fireEvent.click(within(section).getByRole("button", { name: "Save URL" }));
 
     await waitFor(() => expect(getWorkbenchLocalDaemonUrl()).toBe("http://127.0.0.1:41000"));
+    // The confirmation must survive the background refresh that follows.
+    await waitFor(() => expect(within(section).getByText(/Local daemon URL saved/)).toBeTruthy());
   });
 
   it("rejects an invalid daemon URL without persisting it", async () => {
@@ -143,7 +145,7 @@ describe("SettingsPage sync daemon", () => {
     expect(within(section).getByRole("radio", { name: "Local" }).getAttribute("aria-checked")).toBe("true");
   });
 
-  it("keeps the Core-mode confirmation, which is the one not wiped by a refresh", async () => {
+  it("confirms Core mode, which does not trigger a background refresh", async () => {
     setWorkbenchLocalRoutingMode("local");
     renderSettings();
     const section = await openDaemonSection();
@@ -154,22 +156,30 @@ describe("SettingsPage sync daemon", () => {
     expect(within(section).getByText("Core API mode enabled.")).toBeTruthy();
   });
 
-  // Current behaviour, pinned deliberately: saving a URL and switching to
-  // Auto/Local both set a confirmation and then call refreshLocalDaemon, whose
-  // first act is setLocalDaemonMessage(""). With showSuccess=false nothing
-  // replaces it, so the confirmation never reaches the user. Only Core mode
-  // keeps its message, because that path does not refresh. This looks like a
-  // UX bug rather than an intent, so it is recorded rather than asserted as
-  // desirable.
-  it("drops the confirmation when the follow-up refresh clears it", async () => {
+  // Auto and Local do trigger a background refresh. The confirmation used to be
+  // wiped by it, because refreshLocalDaemon cleared the message and, with
+  // showSuccess false, put nothing back. It now survives.
+  it("keeps the confirmation through the background refresh", async () => {
     renderSettings();
     const section = await openDaemonSection();
 
     fireEvent.click(within(section).getByRole("radio", { name: "Auto" }));
 
     await waitFor(() => expect(getWorkbenchLocalRoutingMode()).toBe("auto"));
-    expect(
-      within(section).queryByText("Auto mode enabled. Core is used online; the daemon is used offline.")
-    ).toBeNull();
+    await waitFor(() =>
+      expect(
+        within(section).getByText("Auto mode enabled. Core is used online; the daemon is used offline.")
+      ).toBeTruthy()
+    );
+  });
+
+  it("still lets a refresh failure replace a confirmation", async () => {
+    renderSettings();
+    const section = await openDaemonSection();
+
+    vi.mocked(localDaemonApi.status).mockRejectedValue(new Error("connection refused"));
+    fireEvent.click(within(section).getByRole("radio", { name: "Auto" }));
+
+    await waitFor(() => expect(within(section).getByText("connection refused")).toBeTruthy());
   });
 });

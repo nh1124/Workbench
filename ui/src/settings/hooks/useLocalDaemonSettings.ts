@@ -85,9 +85,21 @@ export function useLocalDaemonSettings({
     return { status, conflicts, pendingJobs };
   };
 
-  const refreshLocalDaemon = async (showSuccess = true) => {
+  /**
+   * `keepMessage` is for callers that have just set their own confirmation and
+   * only want the state refreshed behind it. Without it the refresh clears the
+   * message immediately and, with showSuccess false, nothing replaces it — so
+   * confirmations like "Daemon started." never reached the user. A failure
+   * still overwrites the message, since that must be visible.
+   */
+  const refreshLocalDaemon = async (
+    showSuccess = true,
+    options: { keepMessage?: boolean } = {}
+  ) => {
     setLocalDaemonLoading(true);
-    setLocalDaemonMessage("");
+    if (!options.keepMessage) {
+      setLocalDaemonMessage("");
+    }
     try {
       await loadLocalDaemonState();
       if (showSuccess) {
@@ -129,7 +141,7 @@ export function useLocalDaemonSettings({
           ? "Local daemon URL saved."
           : "Local daemon URL saved. Local routing can use this daemon."
       );
-      void refreshLocalDaemon(false);
+      void refreshLocalDaemon(false, { keepMessage: true });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Invalid local daemon URL";
       setLocalDaemonMessage(message);
@@ -151,7 +163,7 @@ export function useLocalDaemonSettings({
       };
       setLocalDaemonMessage(messages[persisted]);
       if (persisted !== "core") {
-        void refreshLocalDaemon(false);
+        void refreshLocalDaemon(false, { keepMessage: true });
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Invalid local daemon URL";
@@ -316,7 +328,7 @@ export function useLocalDaemonSettings({
       await syncNativeDaemonCoreUrl();
       const started = await nativeDaemonApi.start();
       setLocalDaemonMessage(started ? "Daemon started." : "Daemon is already running.");
-      void refreshLocalDaemon(false);
+      void refreshLocalDaemon(false, { keepMessage: true });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to start daemon";
       setLocalDaemonMessage(message);
@@ -328,7 +340,7 @@ export function useLocalDaemonSettings({
     try {
       const stopped = await nativeDaemonApi.stop();
       setLocalDaemonMessage(stopped ? "Daemon stopped." : "Daemon was not started by this app.");
-      void refreshLocalDaemon(false);
+      void refreshLocalDaemon(false, { keepMessage: true });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to stop daemon";
       setLocalDaemonMessage(message);
