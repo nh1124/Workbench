@@ -506,6 +506,40 @@ Save ボタンは `!activeDocument || isSaving` だけで制御され、**未編
 （編集で表示 → save で消える／選択だけでは立たない）。mutation 検証: 表示を on/off に固定、
 save で dirty を残す、で各 1 件が赤。
 
+#### ArtifactsPage contenteditable / Selection 群（2026-07-28, `bc44ad7` `48e2c7a` `984346b`）
+
+「テスト戦略が必要」としていた領域。**Selection API を直接叩かずに済む切り口**を取った:
+エディタは**ドキュメントを markdown で保存し DOM で編集する**ので、保存のたびに
+`markdown → HTML → markdown` が走る。**この往復が恒等でなければ、開いて保存しただけで
+ユーザーのドキュメントが書き換わる**。この性質は jsdom だけで検証できる。
+
+往復しない入力を探索したところ、**実バグ 2 件**が出た（どちらも無自覚にデータを壊す）:
+
+1. **空のテーブルセルが文字列 `<br>` に化ける** — 空セルは `<br>` プレースホルダで描画され、
+   戻り変換で改行になり、`tableCellToMarkdown` がそれを**リテラル `<br>`**（この形式に
+   おける改行の綴り）として書き出していた。**開いて保存するだけで全空セルが改行に変わる**。
+2. **画像だけのブロックで Enter を押すと画像が消える** — `hasMeaningfulBlockContent` が
+   `textContent` しか見ないため画像のみのブロックを空と判定し、呼び出し側が
+   `innerHTML = "<br>"` で上書きしていた（[useArtifactsMarkdownEditor.ts:665](../../ui/src/artifacts/hooks/useArtifactsMarkdownEditor.ts#L665)）。
+
+どちらも修正済み。加えて 3 モジュールにテストを追加:
+
+| 対象 | 件数 | 内容 |
+|---|---|---|
+| `notionMarkdown.ts` | 42 | 全ブロック種別の往復、**往復の冪等性**、テーブルセル（空／画像のみ／`\|` エスケープ／実 BR ノード）、エスケープ、ブロック属性 |
+| `editorTransforms.ts` | 26 | Tab/Shift-Tab、Ctrl-B/Ctrl-D、Enter 継続。**返す選択オフセット**まで（ずれると毎打鍵でカーソルが飛ぶ） |
+| `markdownOutline(Ops).ts` | 21 | 見出しパース、セクションの子ごと移動、レベル変更、自己内ドロップ拒否、前方移動の index 補正 |
+
+**mutation 検証 18/18 検出**。うち 2 件は mutation が緑のまま通り抜けたことで
+テスト側の穴が判明したもので、塞いだ:
+`a<br>b` は escapeHtml でリテラル文字列になり**実 BR ノードを通っていなかった**／
+前方移動の index 補正誤りが**クランプに覆い隠されていた**。
+
+挙動として記録（変更せず）: 空の箇条書きで Enter を押すとリストを抜けず次の項目が出る／
+タイトルが `#` 一文字の見出しはそのまま保持される／`preprocessMarkdownBullets` は恒等関数。
+
+UI テストは 354 → **443 件**。
+
 #### 当初計画（参考）
 
 - `ArtifactsPage.tsx` 3451 行 → `ui/src/artifacts/` へ。state 39 個をまず `useReducer` か複数フックに割る。既に `ui/src/artifacts/hooks/` があるのでそこに寄せる
@@ -561,7 +595,7 @@ R1 の前提条件は変わらず「OAuth の認可コード〜トークン〜�
 | R1 | core/httpServer 分割 | **完了** | 7,209→192 行（-97%）。16 モジュールへ分割 |
 | R2 | sync-daemon 分割 | **機械的移動は完了** | 8,122→2,128 行（-74%）。残りは循環解消＝設計変更が必要 |
 | ~~R4~~ | ~~services 共通パッケージ~~ | **取り下げ** | §4 R4 参照。R4' に置換 |
-| R5+T8 | UI feature-first 化 | **大部分完了** | api.ts 2,469→112、pages/ 11,382→3,832、Analyser 1,884→56、Settings 2,236→1,905、Artifacts 3,451→3,108、Mindmaps 1,348→977、WBS 1,227→1,087。UI テスト 352 件 |
+| R5+T8 | UI feature-first 化 | **大部分完了** | api.ts 2,469→112、pages/ 11,382→3,832、Analyser 1,884→56、Settings 2,236→1,905、Artifacts 3,451→3,108、Mindmaps 1,348→977、WBS 1,227→1,087。UI テスト 443 件。contenteditable 群のテスト化で実バグ 2 件を発見・修正 |
 
 ---
 
