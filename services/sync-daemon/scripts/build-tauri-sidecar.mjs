@@ -131,6 +131,42 @@ function replaceOnce(source, search, replacement, label) {
   return source.replace(search, replacement);
 }
 
+/**
+ * Repoint every sibling import at the real source tree.
+ *
+ * The generated entry is written two directories below the daemon root, so
+ * `./config.js` would resolve next to the copy rather than to `src/`. This used
+ * to be a hand-written list of the specifiers index.ts happened to have, which
+ * broke every time a module was added or moved — three times so far. Rewriting
+ * whatever is actually there keeps it correct without maintenance, and each
+ * target is checked so a bad specifier fails here with a clear message instead
+ * of inside esbuild.
+ */
+function retargetSiblingImports(source) {
+  const specifier = /(from\s+")\.\/([A-Za-z0-9/_.-]+)\.js(")/g;
+  const seen = [];
+  const missing = [];
+
+  const rewritten = source.replace(specifier, (whole, before, modulePath, after) => {
+    seen.push(modulePath);
+    if (!fs.existsSync(path.resolve(daemonRoot, "src", `${modulePath}.ts`))) {
+      missing.push(modulePath);
+      return whole;
+    }
+    return `${before}../../src/${modulePath}.ts${after}`;
+  });
+
+  if (seen.length === 0) {
+    throw new Error("Unable to prepare sidecar entry; src/index.ts has no sibling imports to retarget.");
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `Unable to prepare sidecar entry; src/index.ts imports modules with no source file: ${missing.join(", ")}`
+    );
+  }
+  return rewritten;
+}
+
 function makeSidecarEntry() {
   let source = fs.readFileSync(sourceEntry, "utf8");
   source = replaceOnce(
@@ -139,54 +175,7 @@ function makeSidecarEntry() {
     'const __filename = process.execPath;',
     "import.meta filename initialization"
   );
-  source = replaceOnce(
-    source,
-    'from "./coreUrl.js";',
-    'from "../../src/coreUrl.ts";',
-    "core URL import"
-  );
-  source = replaceOnce(
-    source,
-    '} from "./manifestStore.js";',
-    '} from "../../src/manifestStore.ts";',
-    "manifestStore import"
-  );
-  source = replaceOnce(
-    source,
-    '} from "./identityStorage.js";',
-    '} from "../../src/identityStorage.ts";',
-    "identityStorage import"
-  );
-  source = replaceOnce(
-    source,
-    '} from "./projectContextCache.js";',
-    '} from "../../src/projectContextCache.ts";',
-    "projectContextCache import"
-  );
-  source = replaceOnce(
-    source,
-    '} from "./projectContextExport.js";',
-    '} from "../../src/projectContextExport.ts";',
-    "projectContextExport import"
-  );
-  source = replaceOnce(
-    source,
-    '} from "./capture/index.js";',
-    '} from "../../src/capture/index.ts";',
-    "capture module import"
-  );
-  source = replaceOnce(
-    source,
-    'export { readIdentity } from "./identityStorage.js";',
-    'export { readIdentity } from "../../src/identityStorage.ts";',
-    "identityStorage value export"
-  );
-  source = replaceOnce(
-    source,
-    'export type { ClientIdentity, SecureIdentityMode } from "./identityStorage.js";',
-    'export type { ClientIdentity, SecureIdentityMode } from "../../src/identityStorage.ts";',
-    "identityStorage type export"
-  );
+  source = retargetSiblingImports(source);
 
   const mainBlockPattern = /if \(process\.argv\[1\] && resolve\(process\.argv\[1\]\) === __filename\) \{\r?\n  await main\(\);\r?\n\}\s*$/;
   if (!mainBlockPattern.test(source)) {
