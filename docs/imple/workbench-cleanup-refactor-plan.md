@@ -627,5 +627,38 @@ R1 の前提条件は変わらず「OAuth の認可コード〜トークン〜�
 
 ## 6. 未解決事項
 
+### 本番サーバ作業（2026-07-28 実施）
+
+**実施済み**:
+- `~/Workbench/services/lbs/` 削除（94MB）。`~/backups/lbs-retired-20260728/` に
+  `lbs.db` / `.env` / `src` を退避し sha256 一致を確認してから削除。参照プロセス・unit 無し
+- **B: `DOCKER-USER` に DROP ルール** ——
+  `-A DOCKER-USER -d 172.21.0.0/16 -i ens3 -p tcp --dport 5432 -j DROP`。
+  workbench の Postgres 9 台を一括で外部から遮断。`workbench-db-firewall.service` で永続化
+  （このホストは iptables-services 未導入・nftables disabled のため reboot でルールが消える）。
+  **サービス無停止**。DOCKER-USER は FORWARD 経路なので SSH（INPUT）を巻き込まない。
+  host→DB は OUTPUT 経路、container→container は bridge 経路のため、どちらも影響なし
+- **C: `docker-compose.yml` の DB バインドを `127.0.0.1:` へ**（9 台）。次回コンテナ再作成時に反映
+- **D: 全 9 サービスに `pool.on("error")` を追加**（commit `8775b71`）
+
+**当初計画からの重要な訂正**:
+1. **「DB がグローバル IP から直接到達可能」は誤りだった**。ホストに firewalld/iptables INPUT が
+   無いことから推測したが未実測だった。実測すると **22 番以外すべて上流（VPS 事業者）で遮断**
+   されており、DNAT カウンタも `packets 0`（外部到達実績ゼロ）。深刻度は P0 露出ではなく多層防御
+2. **A（compose 編集＋コンテナ再作成）は実行しなかった**。8 サービスが単一の `concurrently -k`
+   （tmux `workbench` 配下）で束ねられ、かつ **`pool.on("error")` が 1 つも無かった**ため、
+   DB 再作成 → 接続断 → tasks クラッシュ → `-k` が残り 7 つを kill → **手動復旧まで全停止**
+   となる構造だった。これが過去の全体停止の原因と見られる。D で塞いだので、次回は安全に行える
+3. **データ消失リスクは無かった** —— `workbench_*_pgdata` は named volume で、コンテナ recreate
+   では消えない。消えるのは `down -v` / `volume rm` / `volume prune`
+
+**残**:
+- **systemd scope 化が外れている** —— 2026-07-20 に `systemd-run --user --scope` を採用したはずが、
+  現在は `systemd → tmux new-session -s workbench → ... → concurrently -k` に戻っている
+  （cgroup が `tmux-spawn-….scope`）。tmux が落ちれば再び全滅する。入れ直しを推奨
+- C の反映（次回の計画的な再起動時）。反映後は B のルールが二重の防御として残る
+
+### その他
+
 - ~~`HomePage` の並行編集~~: 解決。ユーザーが別プロセスに依頼した HomePage 刷新であることを確認し、レビューのうえ commit `75839be` として取り込んだ。レビュー時に、データ読込 effect の依存が `[]` → `[todayKey]` に変わったのに旧版が持っていたキャンセルガードが失われていた点（S3 と同型の退行）を修正済み
 - §1 の行数などの数値は `8ae1585` 時点の HEAD 基準。HomePage 刷新（`75839be`）以降は UI 側の実測とわずかにずれる
