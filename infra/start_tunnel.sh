@@ -25,5 +25,15 @@ if [[ ! -f "$ENV_FILE" ]]; then
 fi
 
 echo "Starting Cloudflare tunnel service..."
+# Detached on purpose. The compose service sets `restart: unless-stopped`, which
+# only means anything if the tunnel outlives the shell that started it; running
+# it in the foreground tied the tunnel to that terminal and took it down with
+# the SSH session.
 EDGE_ENV_FILE="$EDGE_ENV_FILE" \
-    $DOCKER_COMPOSE --env-file "$ENV_FILE" -f "$COMPOSE_FILE" --profile edge up --build tunnel
+    $DOCKER_COMPOSE --env-file "$ENV_FILE" -f "$COMPOSE_FILE" --profile edge up -d --build tunnel
+
+echo
+echo "Tunnel started in the background."
+echo "  status: docker ps --filter name=workbench-tunnel"
+echo "  logs:   docker logs -f workbench-tunnel"
+echo "  stop:   ./infra/stop_tunnel.sh"

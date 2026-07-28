@@ -29,7 +29,15 @@ if not errorlevel 1 (
 )
 
 echo Starting Cloudflare tunnel service...
+REM Detached on purpose. The compose service sets `restart: unless-stopped`,
+REM which only means anything if the tunnel outlives the shell that started it.
 set "EDGE_ENV_FILE=%EDGE_ENV_FILE%"
-%DC% --env-file "%ENV_FILE%" -f "%COMPOSE_FILE%" --profile edge up --build tunnel
+%DC% --env-file "%ENV_FILE%" -f "%COMPOSE_FILE%" --profile edge up -d --build tunnel
+
+echo.
+echo Tunnel started in the background.
+echo   status: docker ps --filter name=workbench-tunnel
+echo   logs:   docker logs -f workbench-tunnel
+echo   stop:   infra\stop_tunnel.bat
 
 endlocal
