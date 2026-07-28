@@ -4,6 +4,13 @@
 #
 # The Cloudflare tunnel is a separate stack: infra/docker-compose.edge.yml,
 # started by infra/start_tunnel.{sh,bat}.
+#
+# The database ports are bound to 127.0.0.1 on purpose. Every service reaches
+# its database over loopback (see services/*/.env), and the Artifacts container
+# reaches its own over the compose network by service name, so nothing needs
+# these published on all interfaces. Publishing them on 0.0.0.0 put nine
+# Postgres instances — with the passwords written a few lines above — on every
+# interface of the host.
 services:
   workbench-core-db:
     image: postgres:16-alpine
@@ -14,7 +21,7 @@ services:
       POSTGRES_USER: workbench_user
       POSTGRES_PASSWORD: workbench_pass
     ports:
-      - "5542:5432"
+      - "127.0.0.1:5542:5432"
     volumes:
       - workbench_core_pgdata:/var/lib/postgresql/data
 
@@ -27,7 +34,7 @@ services:
       POSTGRES_USER: notes_user
       POSTGRES_PASSWORD: notes_pass
     ports:
-      - "5543:5432"
+      - "127.0.0.1:5543:5432"
     volumes:
       - notes_pgdata:/var/lib/postgresql/data
 
@@ -40,7 +47,7 @@ services:
       POSTGRES_USER: artifacts_user
       POSTGRES_PASSWORD: artifacts_pass
     ports:
-      - "5544:5432"
+      - "127.0.0.1:5544:5432"
     volumes:
       - artifacts_pgdata:/var/lib/postgresql/data
 
@@ -86,7 +93,7 @@ services:
       POSTGRES_USER: tasks_user
       POSTGRES_PASSWORD: tasks_pass
     ports:
-      - "5545:5432"
+      - "127.0.0.1:5545:5432"
     volumes:
       - tasks_pgdata:/var/lib/postgresql/data
 
@@ -99,7 +106,7 @@ services:
       POSTGRES_USER: projects_user
       POSTGRES_PASSWORD: projects_pass
     ports:
-      - "5546:5432"
+      - "127.0.0.1:5546:5432"
     volumes:
       - projects_pgdata:/var/lib/postgresql/data
 
@@ -112,7 +119,7 @@ services:
       POSTGRES_USER: images_user
       POSTGRES_PASSWORD: images_pass
     ports:
-      - "5547:5432"
+      - "127.0.0.1:5547:5432"
     volumes:
       - images_pgdata:/var/lib/postgresql/data
 
@@ -125,7 +132,7 @@ services:
       POSTGRES_USER: mindmaps_user
       POSTGRES_PASSWORD: mindmaps_pass
     ports:
-      - "5548:5432"
+      - "127.0.0.1:5548:5432"
     volumes:
       - mindmaps_pgdata:/var/lib/postgresql/data
 
@@ -138,7 +145,7 @@ services:
       POSTGRES_USER: wbs_user
       POSTGRES_PASSWORD: wbs_pass
     ports:
-      - "5549:5432"
+      - "127.0.0.1:5549:5432"
     volumes:
       - wbs_pgdata:/var/lib/postgresql/data
 
@@ -151,7 +158,7 @@ services:
       POSTGRES_USER: analyser_user
       POSTGRES_PASSWORD: analyser_pass
     ports:
-      - "5551:5432"
+      - "127.0.0.1:5551:5432"
     volumes:
       - analyser_pgdata:/var/lib/postgresql/data
 

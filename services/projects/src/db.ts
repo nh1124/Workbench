@@ -24,6 +24,17 @@ const pool = new Pool({
   password: requireEnv("PROJECTS_DB_PASSWORD")
 });
 
+// pg emits this when an idle pooled client's connection drops: a database
+// restart, a network blip, an idle timeout. Without a listener Node treats it
+// as an unhandled 'error' event and kills the process — and these services are
+// supervised together by `concurrently -k`, so one of them dying takes all of
+// them down until someone restarts them by hand. The pool discards the broken
+// client and reconnects on the next query by itself, so logging is all that is
+// owed here.
+pool.on("error", (error) => {
+  console.error("[db] idle client error", error);
+});
+
 const DB_STARTUP_RETRY_ATTEMPTS = 20;
 const DB_STARTUP_RETRY_DELAY_MS = 1000;
 
