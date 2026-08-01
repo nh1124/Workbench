@@ -1,10 +1,15 @@
 mod commands;
+mod daemon_guard;
 mod secure_storage;
 mod shortcuts;
+mod titlebar;
+mod variant;
 mod window;
 
 #[cfg(desktop)]
 const TRAY_MENU_OPEN_MAIN_ID: &str = "tray-open-main";
+#[cfg(desktop)]
+const TRAY_MENU_DAEMON_LOG_ID: &str = "tray-daemon-log";
 #[cfg(desktop)]
 const TRAY_MENU_QUIT_ID: &str = "tray-quit";
 
@@ -26,9 +31,18 @@ fn initialize_tray_icon(app: &tauri::App) -> Result<(), String> {
     None::<&str>,
   )
   .map_err(|error| format!("failed to create tray menu item: {error}"))?;
+  // The sync daemon runs without a console window, so its output is reachable from here.
+  let daemon_log_item = MenuItem::with_id(
+    app,
+    TRAY_MENU_DAEMON_LOG_ID,
+    "Open sync daemon log",
+    true,
+    None::<&str>,
+  )
+  .map_err(|error| format!("failed to create tray menu item: {error}"))?;
   let quit_item = MenuItem::with_id(app, TRAY_MENU_QUIT_ID, "Quit", true, None::<&str>)
     .map_err(|error| format!("failed to create tray menu item: {error}"))?;
-  let tray_menu = Menu::with_items(app, &[&open_main_item, &quit_item])
+  let tray_menu = Menu::with_items(app, &[&open_main_item, &daemon_log_item, &quit_item])
     .map_err(|error| format!("failed to build tray menu: {error}"))?;
 
   TrayIconBuilder::with_id("workbench-tray")
@@ -52,6 +66,10 @@ fn initialize_tray_icon(app: &tauri::App) -> Result<(), String> {
       if event.id() == TRAY_MENU_OPEN_MAIN_ID {
         if let Err(error) = window::show_or_create_main_window(app) {
           eprintln!("[workbench-native] tray menu failed to restore main window: {error}");
+        }
+      } else if event.id() == TRAY_MENU_DAEMON_LOG_ID {
+        if let Err(error) = commands::open_daemon_log(app.clone()) {
+          eprintln!("[workbench-native] tray menu failed to open the daemon log: {error}");
         }
       } else if event.id() == TRAY_MENU_QUIT_ID {
         app.exit(0);
@@ -80,17 +98,23 @@ pub fn run() {
     .setup(|app| {
       #[cfg(desktop)]
       {
-        // Close any windows created from tauri.conf.json (they lack disable_drag_drop_handler).
-        // We recreate the main window here so drag-and-drop works correctly in the WebView.
+        // tauri.conf.json declares no windows: every window is built here so it gets the
+        // shared WebView2 data directory and `disable_drag_drop_handler`. This sweep is a
+        // safety net — a config-declared window would already hold the process to the
+        // per-identifier default data folder, so closing it here cannot undo that.
         use tauri::Manager;
         for window in app.webview_windows().values() {
           let _ = window.close();
         }
+        // The snap-layout subclass callback cannot capture state, so hand it the handle.
+        titlebar::remember_app_handle(app.handle());
         window::open_new_main_window(app.handle())
           .map_err(|e| Box::<dyn std::error::Error>::from(e))?;
 
-        if let Err(error) = initialize_tray_icon(app) {
-          eprintln!("[workbench-native] tray icon setup failed: {error}");
+        if variant::current(app.handle()).is_main() {
+          if let Err(error) = initialize_tray_icon(app) {
+            eprintln!("[workbench-native] tray icon setup failed: {error}");
+          }
         }
 
         commands::start_daemon_if_auto_start_enabled(app.handle());
@@ -119,6 +143,13 @@ pub fn run() {
       commands::open_sync_folder,
       commands::open_downloads_folder,
       commands::read_daemon_status,
+      commands::open_daemon_log,
+      commands::window_minimize,
+      commands::window_toggle_maximize,
+      commands::window_is_maximized,
+      commands::window_close,
+      commands::window_start_drag,
+      titlebar::set_maximize_button_rect,
       commands::read_daemon_preferences,
       commands::set_daemon_auto_start,
       commands::set_daemon_resident_mode,

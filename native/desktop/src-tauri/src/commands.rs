@@ -7,18 +7,24 @@ use std::{
   path::{Path, PathBuf},
   process::{Child, Command, Stdio},
   sync::{Mutex, OnceLock},
-  time::Duration,
+  time::{Duration, Instant},
 };
 
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 
-use crate::{secure_storage, window};
+use crate::{daemon_guard, secure_storage, window};
 
 const DEFAULT_DAEMON_HTTP_PORT: u16 = 35780;
 const DAEMON_STATUS_TIMEOUT: Duration = Duration::from_secs(2);
+const DAEMON_READINESS_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const DAEMON_READINESS_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_DAEMON_STATUS_RESPONSE_BYTES: usize = 1024 * 1024;
 const DAEMON_PREFERENCES_FILE: &str = "daemon-preferences.json";
+const DAEMON_LOG_FILE: &str = "sync-daemon.log";
+/// `CREATE_NO_WINDOW` — keeps the console sidecar from flashing up a console window.
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const DEFAULT_DAEMON_SIDECAR_NAME: &str = "workbench-sync-daemon";
 const LOCAL_CLIENT_ID_ENV: &str = "WORKBENCH_LOCAL_CLIENT_ID";
 const LOCAL_CLIENT_TOKEN_ENV: &str = "WORKBENCH_LOCAL_CLIENT_TOKEN";
@@ -352,6 +358,52 @@ fn read_loopback_status(port: u16) -> Result<serde_json::Value, String> {
     .map_err(|error| format!("failed to parse sync daemon status JSON: {error}"))
 }
 
+fn daemon_is_running_externally() -> bool {
+  let Ok(port) = configured_daemon_port(None) else {
+    return false;
+  };
+  read_loopback_status(port).is_ok()
+}
+
+fn wait_for_daemon_readiness_with<P, S, N>(
+  poll_interval: Duration,
+  timeout: Duration,
+  mut probe: P,
+  mut sleep: S,
+  mut now: N,
+) -> bool
+where
+  P: FnMut() -> bool,
+  S: FnMut(Duration),
+  N: FnMut() -> Instant,
+{
+  let started = now();
+  loop {
+    if now().saturating_duration_since(started) >= timeout {
+      return false;
+    }
+    if probe() {
+      return true;
+    }
+
+    let elapsed = now().saturating_duration_since(started);
+    if elapsed >= timeout {
+      return false;
+    }
+    sleep(poll_interval.min(timeout.saturating_sub(elapsed)));
+  }
+}
+
+fn wait_for_daemon_readiness() -> bool {
+  wait_for_daemon_readiness_with(
+    DAEMON_READINESS_POLL_INTERVAL,
+    DAEMON_READINESS_TIMEOUT,
+    daemon_is_running_externally,
+    std::thread::sleep,
+    Instant::now,
+  )
+}
+
 fn split_daemon_args(args: &str) -> Vec<String> {
   args.split_whitespace().map(ToString::to_string).collect()
 }
@@ -682,6 +734,43 @@ fn configure_daemon_client_identity_env(
   }
 }
 
+/// Path the daemon's console output is captured to, so it can be reviewed without a
+/// console window ever appearing.
+pub fn daemon_log_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+  app
+    .path()
+    .app_config_dir()
+    .map(|path| path.join(DAEMON_LOG_FILE))
+    .map_err(|error| format!("failed to resolve app config directory: {error}"))
+}
+
+/// Redirects the daemon's stdout/stderr into the log file, truncating what was there.
+///
+/// Returns `None` when the log cannot be opened; the caller then falls back to discarding
+/// output rather than letting it reach a console.
+fn daemon_log_sinks(app: Option<&tauri::AppHandle>) -> Option<(Stdio, Stdio)> {
+  let path = app.and_then(|app| daemon_log_path(app).ok())?;
+  if let Some(parent) = path.parent() {
+    fs::create_dir_all(parent).ok()?;
+  }
+
+  let file = fs::File::create(&path)
+    .map_err(|error| {
+      eprintln!(
+        "[workbench-native] failed to open sync daemon log {}: {error}",
+        path.display()
+      );
+    })
+    .ok()?;
+  let stderr = file
+    .try_clone()
+    .map_err(|error| {
+      eprintln!("[workbench-native] failed to duplicate sync daemon log handle: {error}");
+    })
+    .ok()?;
+  Some((Stdio::from(file), Stdio::from(stderr)))
+}
+
 fn spawn_daemon(app: Option<&tauri::AppHandle>) -> Result<Child, String> {
   let daemon_command = resolve_daemon_command(app)?;
   let mut command = Command::new(&daemon_command.program);
@@ -689,6 +778,24 @@ fn spawn_daemon(app: Option<&tauri::AppHandle>) -> Result<Child, String> {
     .args(&daemon_command.args)
     .current_dir(&daemon_command.cwd)
     .stdin(Stdio::null());
+
+  // The sidecar is a console executable. Spawned from a GUI app it would pop up a console
+  // window, so suppress it and send the output to a log file instead.
+  #[cfg(target_os = "windows")]
+  {
+    use std::os::windows::process::CommandExt;
+    command.creation_flags(CREATE_NO_WINDOW);
+  }
+
+  match daemon_log_sinks(app) {
+    Some((stdout, stderr)) => {
+      command.stdout(stdout).stderr(stderr);
+    }
+    None => {
+      command.stdout(Stdio::null()).stderr(Stdio::null());
+    }
+  }
+
   configure_daemon_env(&mut command, app)?;
 
   command.spawn().map_err(|error| {
@@ -1022,6 +1129,10 @@ fn reset_daemon_preference_paths(
   daemon_preferences_response(app, preferences)
 }
 
+/// Starts the sync daemon when needed.
+///
+/// Returns `true` when this process spawned it, or `false` when it was already
+/// running in this process or another one.
 fn start_daemon_with_app(app: Option<&tauri::AppHandle>) -> Result<bool, String> {
   let mut managed = managed_daemon()
     .lock()
@@ -1037,8 +1148,21 @@ fn start_daemon_with_app(app: Option<&tauri::AppHandle>) -> Result<bool, String>
     }
   }
 
+  let _guard = daemon_guard::acquire();
+  if daemon_is_running_externally() {
+    return Ok(false);
+  }
+
   let child = spawn_daemon(app)?;
   *managed = Some(ManagedDaemon { child });
+  drop(managed);
+
+  if !wait_for_daemon_readiness() {
+    eprintln!(
+      "[workbench-native] sync daemon did not become observable within {} seconds",
+      DAEMON_READINESS_TIMEOUT.as_secs()
+    );
+  }
   Ok(true)
 }
 
@@ -1059,9 +1183,12 @@ pub fn start_daemon_if_auto_start_enabled(app: &tauri::AppHandle) {
     return;
   }
 
-  if let Err(error) = start_daemon_with_app(Some(app)) {
-    eprintln!("[workbench-native] failed to auto-start sync daemon: {error}");
-  }
+  let app = app.clone();
+  let _ = std::thread::spawn(move || {
+    if let Err(error) = start_daemon_with_app(Some(&app)) {
+      eprintln!("[workbench-native] failed to auto-start sync daemon: {error}");
+    }
+  });
 }
 
 #[cfg(target_os = "windows")]
@@ -1225,9 +1352,97 @@ pub fn open_downloads_folder(app: tauri::AppHandle) -> Result<bool, String> {
   ensure_folder_and_open(configured_downloads_folder(&app, &preferences)?)
 }
 
+/// Window controls for the dedicated apps, which run undecorated and draw their own
+/// title bar. Each acts on the window that invoked it.
+#[tauri::command]
+pub fn window_minimize(window: tauri::Window) -> Result<(), String> {
+  window
+    .minimize()
+    .map_err(|error| format!("failed to minimize window: {error}"))
+}
+
+#[tauri::command]
+pub fn window_toggle_maximize(window: tauri::Window) -> Result<(), String> {
+  let maximized = window
+    .is_maximized()
+    .map_err(|error| format!("failed to read window state: {error}"))?;
+  if maximized {
+    window
+      .unmaximize()
+      .map_err(|error| format!("failed to restore window: {error}"))
+  } else {
+    window
+      .maximize()
+      .map_err(|error| format!("failed to maximize window: {error}"))
+  }
+}
+
+#[tauri::command]
+pub fn window_is_maximized(window: tauri::Window) -> Result<bool, String> {
+  window
+    .is_maximized()
+    .map_err(|error| format!("failed to read window state: {error}"))
+}
+
+#[tauri::command]
+pub fn window_close(window: tauri::Window) -> Result<(), String> {
+  window
+    .close()
+    .map_err(|error| format!("failed to close window: {error}"))
+}
+
+#[tauri::command]
+pub fn window_start_drag(window: tauri::Window) -> Result<(), String> {
+  window
+    .start_dragging()
+    .map_err(|error| format!("failed to start window drag: {error}"))
+}
+
+/// Opens the captured daemon output in the OS text editor.
+///
+/// The daemon runs without a console window, so this is how its console state is reviewed.
+#[tauri::command]
+pub fn open_daemon_log(app: tauri::AppHandle) -> Result<bool, String> {
+  let path = daemon_log_path(&app)?;
+  if !path.is_file() {
+    return Err(format!(
+      "no sync daemon log yet at {} — start the daemon first",
+      path.display()
+    ));
+  }
+  open_with_default_app(&path)?;
+  Ok(true)
+}
+
 #[tauri::command]
 pub fn read_daemon_status(port: Option<u16>) -> Result<serde_json::Value, String> {
-  read_loopback_status(configured_daemon_port(port)?)
+  let mut status = read_loopback_status(configured_daemon_port(port)?)?;
+  if let Some(object) = status.as_object_mut() {
+    let native_owned = {
+      let mut managed = managed_daemon()
+        .lock()
+        .map_err(|_| "sync daemon process lock was poisoned".to_string())?;
+      match managed.as_mut() {
+        Some(daemon) => match daemon.child.try_wait() {
+          Ok(None) => true,
+          Ok(Some(_status)) => {
+            *managed = None;
+            false
+          }
+          Err(error) => {
+            eprintln!("[workbench-native] failed to inspect sync daemon process: {error}");
+            false
+          }
+        },
+        None => false,
+      }
+    };
+    object.insert(
+      "nativeOwned".to_string(),
+      serde_json::Value::Bool(native_owned),
+    );
+  }
+  Ok(status)
 }
 
 #[tauri::command]
@@ -1341,6 +1556,7 @@ pub fn stop_daemon() -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::{cell::Cell, net::TcpListener};
 
   fn unique_test_root(name: &str) -> PathBuf {
     let nanos = std::time::SystemTime::now()
@@ -1446,6 +1662,94 @@ mod tests {
     assert_eq!(account.user_id, "core-user-1");
     assert_eq!(account.username, "alice");
     assert_eq!(account.access_token.as_deref(), Some("access-1"));
+  }
+
+  #[test]
+  fn detects_loopback_daemon_status() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("test status listener should bind");
+    let port = listener
+      .local_addr()
+      .expect("test status listener should have an address")
+      .port();
+    let server = std::thread::spawn(move || {
+      let (mut stream, _) = listener.accept().expect("status request should connect");
+      let mut request = [0_u8; 1024];
+      stream
+        .read(&mut request)
+        .expect("status request should be readable");
+      let body = r#"{"status":"ok"}"#;
+      write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+      )
+      .expect("status response should be written");
+    });
+
+    assert_eq!(
+      read_loopback_status(port).expect("running status listener should be detected"),
+      serde_json::json!({ "status": "ok" })
+    );
+    server.join().expect("status server should not panic");
+
+    let unused_listener =
+      TcpListener::bind(("127.0.0.1", 0)).expect("unused port listener should bind");
+    let unused_port = unused_listener
+      .local_addr()
+      .expect("unused port listener should have an address")
+      .port();
+    drop(unused_listener);
+    assert!(read_loopback_status(unused_port).is_err());
+  }
+
+  #[test]
+  fn readiness_wait_retries_until_daemon_is_observable() {
+    let started = Instant::now();
+    let elapsed = Cell::new(Duration::ZERO);
+    let attempts = Cell::new(0);
+    let sleeps = Cell::new(0);
+
+    let ready = wait_for_daemon_readiness_with(
+      Duration::from_millis(4),
+      Duration::from_millis(20),
+      || {
+        let next = attempts.get() + 1;
+        attempts.set(next);
+        next == 3
+      },
+      |duration| {
+        sleeps.set(sleeps.get() + 1);
+        elapsed.set(elapsed.get() + duration);
+      },
+      || started + elapsed.get(),
+    );
+
+    assert!(ready);
+    assert_eq!(attempts.get(), 3);
+    assert_eq!(sleeps.get(), 2);
+    assert_eq!(elapsed.get(), Duration::from_millis(8));
+  }
+
+  #[test]
+  fn readiness_wait_stops_at_timeout() {
+    let started = Instant::now();
+    let elapsed = Cell::new(Duration::ZERO);
+    let attempts = Cell::new(0);
+
+    let ready = wait_for_daemon_readiness_with(
+      Duration::from_millis(4),
+      Duration::from_millis(10),
+      || {
+        attempts.set(attempts.get() + 1);
+        false
+      },
+      |duration| elapsed.set(elapsed.get() + duration),
+      || started + elapsed.get(),
+    );
+
+    assert!(!ready);
+    assert_eq!(attempts.get(), 3);
+    assert_eq!(elapsed.get(), Duration::from_millis(10));
   }
 }
 

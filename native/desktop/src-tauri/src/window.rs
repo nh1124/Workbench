@@ -29,6 +29,24 @@ fn is_main_window_label(label: &str) -> bool {
   label.starts_with("main-")
 }
 
+/// Points a window at the storage shared by the main app and every variant.
+///
+/// This must be applied to **every** window this module builds. Tauri keys its
+/// `WebContext` on the data directory, so a window left on the default would get a
+/// separate localStorage from its siblings.
+fn with_shared_data_directory<'a, R, M>(
+  builder: WebviewWindowBuilder<'a, R, M>,
+) -> WebviewWindowBuilder<'a, R, M>
+where
+  R: tauri::Runtime,
+  M: tauri::Manager<R>,
+{
+  match crate::variant::shared_webview_data_directory() {
+    Some(path) => builder.data_directory(path),
+    None => builder,
+  }
+}
+
 #[cfg(desktop)]
 fn build_main_window_label() -> String {
   let ts = SystemTime::now()
@@ -45,20 +63,55 @@ fn build_main_window_label() -> String {
 pub fn open_new_main_window(app: &tauri::AppHandle) -> Result<(), String> {
   #[cfg(desktop)]
   {
+    let variant = crate::variant::current(app);
+    // Tauri collapses an App URL to the site root only for the exact string "index.html"
+    // (tauri/src/manager/webview.rs). "index.html?app=tasks" would therefore land on
+    // /index.html, which the router resolves to NotFound. A query-only relative reference
+    // keeps the base path, so variants get "/" with the query intact.
+    let app_url = variant
+      .start_query()
+      .map(|query| format!("?app={query}"))
+      .unwrap_or_else(|| "index.html".to_string());
+    let is_main_variant = variant.is_main();
     let window_label = build_main_window_label();
-    WebviewWindowBuilder::new(app, window_label, WebviewUrl::App("index.html".into()))
-      .title("Workbench")
+    with_shared_data_directory(WebviewWindowBuilder::new(
+      app,
+      window_label,
+      WebviewUrl::App(app_url.into()),
+    ))
+      .title(variant.window_title())
       .inner_size(1280.0, 860.0)
       .resizable(true)
       .focused(true)
+      // Dedicated apps draw their own title bar so the account control can live in the
+      // window frame. Main keeps the native one.
+      .decorations(is_main_variant)
       .disable_drag_drop_handler()
       .build()
       .and_then(|window| {
+        if !is_main_variant {
+          // Undecorated windows get no native maximize button, so Windows would never
+          // offer Snap Layouts without this.
+          if let Err(error) = crate::titlebar::install(&window) {
+            eprintln!("[workbench-native] snap layout support unavailable: {error}");
+          }
+        }
+        #[cfg(target_os = "windows")]
+        let tracked_hwnd = window.hwnd().ok().map(|handle| handle.0 as isize);
         let event_window = window.clone();
         window.on_window_event(move |event| {
+          #[cfg(target_os = "windows")]
+          if matches!(event, WindowEvent::Destroyed) {
+            if let Some(hwnd) = tracked_hwnd {
+              crate::titlebar::forget_window(hwnd);
+            }
+          }
           if let WindowEvent::CloseRequested { api, .. } = event {
             // Keep exactly one resident main window alive.
             // If this is the last main window, hide it instead of closing.
+            if !is_main_variant {
+              return;
+            }
             if !crate::commands::daemon_resident_mode_enabled(event_window.app_handle()) {
               return;
             }
@@ -152,11 +205,11 @@ pub fn open_new_quick_note_window(app: &tauri::AppHandle) -> Result<(), String> 
   #[cfg(desktop)]
   {
     let window_label = build_quick_note_window_label();
-    WebviewWindowBuilder::new(
+    with_shared_data_directory(WebviewWindowBuilder::new(
       app,
       window_label,
       WebviewUrl::App("index.html?quick-note-window=1".into()),
-    )
+    ))
     .title("Quick Note")
     .inner_size(560.0, 760.0)
     .resizable(true)
@@ -203,7 +256,7 @@ pub fn open_calendar_window(app: &tauri::AppHandle, url: &str) -> Result<(), Str
       "http" | "https" => WebviewUrl::External(target_url),
       _ => WebviewUrl::CustomProtocol(target_url),
     };
-    WebviewWindowBuilder::new(app, "calendar", webview_url)
+    with_shared_data_directory(WebviewWindowBuilder::new(app, "calendar", webview_url))
       .title("Workbench Calendar")
       .inner_size(1100.0, 800.0)
       .resizable(true)
@@ -242,7 +295,11 @@ pub fn open_new_app_window(
       _ => WebviewUrl::CustomProtocol(target_url),
     };
 
-    WebviewWindowBuilder::new(app, build_app_window_label(), webview_url)
+    with_shared_data_directory(WebviewWindowBuilder::new(
+      app,
+      build_app_window_label(),
+      webview_url,
+    ))
       .title("Workbench")
       .inner_size(1280.0, 860.0)
       .resizable(true)
