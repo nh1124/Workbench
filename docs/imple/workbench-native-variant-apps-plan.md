@@ -524,3 +524,90 @@ P2-1 でメインと設定を共有するため通常運用では問題になら
 - 稼働中の `workbench-sync-daemon.exe` が `target/debug` のサイドカーをロックするため、
   アプリ起動中の `cargo test` / `cargo check` は tauri-build が `PermissionDenied` で panic する。
   隔離した `CARGO_TARGET_DIR` を使う。
+
+---
+
+# Phase 3: native UI を web から完全独立させる（2026-08-02）
+
+Phase 2 までは native と web が `ui/` を共有していた。ユーザー判断により、**native と web の TS コードを
+完全に分離**し、以後それぞれの環境に最適化して分岐させる。
+
+## 決定事項（ユーザー指示）
+
+1. **native と web の TS コードを完全独立にする**。使える部分はコピーして使い、以後は環境最適化を優先する。
+2. **UI の DLL 化・ネイティブ描画への移行はしない**。これまでどおり TS で書く（レイアウトはスクリプト優位）。
+3. **URL クエリ（`?app=<variant>`）をやめ、variant は Rust から直接渡す**。
+4. fork の範囲は **main アプリを含む全体**（`ui/src` 225 ファイル / 約 59,000 行）。
+5. fork 後、**web 側の `ui/` から variant 専用コードを剥がす**。
+
+## 背景: なぜ `?app=` が問題なのか
+
+variant の権威は **Rust 側**にある（[`variant.rs`](../../native/desktop/src-tauri/src/variant.rs) が
+`app.config().identifier` から導出）。それを `?app=artifacts` という文字列に落として URL 経由で JS へ渡し、
+JS が読み直している（[`window.rs`](../../native/desktop/src-tauri/src/window.rs) の `app_url` 組み立て →
+[`App.tsx`](../../ui/src/App.tsx) の `resolveVariantStartPage`）。**既に知っている事実の往復**であり、
+かつその往復路は URL クエリなので **web からも `https://<host>/?app=artifacts` で到達できてしまう**。
+
+到達した先の専用シェルには responsive ルールが 1 件も無く（`styles.css` の `@media` 内に `.variant-*` は 0 件）、
+タイトルバーのボタンは `window.__TAURI_INTERNALS__` を叩くため web では例外になる。
+つまり**最初から web 非対応の画面が web から開ける**状態だった。
+
+### 誤解しやすい点（記録）
+
+`frontendDist` の中身は **Tauri がバイナリに埋め込む**。`ui/dist` は `.gitignore` 済みの生成物であり、
+実行時に web サーバから UI を取得しているわけではない。`http://tauri.localhost/...` は
+埋め込みアセットに対する WebView2 内部のアドレッシングであって、ネットワーク上の住所ではない。
+「UI を実行ファイルに埋め込む」は既に満たされている。
+
+## Wave 分割
+
+### N1: variant を Rust から注入し `?app=` を廃止
+
+- `window.rs`: 各ウィンドウビルダーに `initialization_script` を付け、ページ読み込み前に
+  `window.__WORKBENCH_VARIANT__` を同期注入する
+  （`tauri-2.10.3/src/webview/webview_window.rs:946`。doc の例が文字どおりこの用途）。
+- App URL は全 variant で `index.html` に戻る。訂正1（`?app=` でないと NotFound になる問題）は
+  **クエリを使わなくなることで消滅する**。
+- `App.tsx`: `resolveVariantStartPage(window.location.search)` → 注入値を読む形へ。
+- ウィンドウ固有のパラメータ（`note=<id>`、`quick-note-window=1`）は**アプリ同一性ではなく
+  そのウィンドウのデータ**なので URL のまま残す。
+- 検証: `cargo test`、`npx tsc --noEmit`、ui vitest。
+
+### N2: `ui/` を `native/desktop/ui/` へ fork
+
+- 新 workspace `native/desktop/ui`（ルート `package.json` の `workspaces` に追加）。
+- `NATIVE_FRONTEND_DIST`: `../../../ui/dist` → `../ui/dist`（`src-tauri` からの相対）。
+- `NATIVE_DEV_URL`: web の dev サーバ（5174）ではなく native 専用ポートへ。
+  [`workbench-env.mjs`](../../infra/scripts/workbench-env.mjs) が `uiDevUrl` を流用しているため要変更。
+- ルートスクリプト: `build:native` / `build:native:all` / `dev:native` を native UI 側へ向ける。
+  `build:web` と `dev:web` は `ui` のまま。
+- `services/workbench-core` が web に配信するのは従来どおり `ui/dist`。
+
+### N3: web 側の variant 専用コードを剥がす
+
+- `VariantShell` / `VariantTitleBar` / `VariantChrome` / `VariantAccountBar` と
+  `App.tsx` の `?app=` 分岐、`resolveVariantStartPage`。
+- Phase 2 で各ページに入れた専用アプリ分岐（Artifacts のレール・フォルダツリー・title bar portal、
+  Notes の `NotesAppView`）も web からは除去する。
+- これにより「web から `?app=` に到達できる」問題が根本から消える。
+
+### N4: native 側の環境最適化（別計画）
+
+fork 完了後に着手。Phase 2 の残作業（Tasks のフォルダベース化、Notes 複数選択、
+タイトルバーの折り返し）は **native 側の計画として引き継ぐ**。
+
+## リスクと許容
+
+- **約 59,000 行が二重化する**。以後 web の修正は native に自動で入らない。これは
+  「環境最適化を優先する」という決定の裏返しとして**意図的に受け入れる**。
+- テストスイートが 2 系統になる（現在 ui vitest 486 件）。
+- 共通のつもりだった `lib/api` も分岐する。Core の API 変更時は両方の追従が必要。
+
+## Phase 3 進捗ボード
+
+| Wave | 内容 | 状態 |
+|---|---|---|
+| N1 | variant を Rust から注入し `?app=` 廃止 | [pending] |
+| N2 | `ui/` を `native/desktop/ui/` へ fork | [pending] |
+| N3 | web 側から variant 専用コードを除去 | [pending] |
+| N4 | native 側の環境最適化 | [pending] 別計画 |
