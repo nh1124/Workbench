@@ -36,6 +36,17 @@
   padding: 0.4rem 0.35rem;
 }
 
+@media (max-width: 900px) {
+  /* A 232px rail plus the 280px outline sidebar can leave no width for the editor. */
+  body.workbench-artifacts-edit-mode .va-app-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body.workbench-artifacts-edit-mode .va-app-rail {
+    display: none;
+  }
+}
+
 .va-shell {
   position: relative;
   height: 100%;

@@ -115,14 +115,26 @@ type MoveFolderProjectState = {
 const ARTIFACTS_RAIL_VISIBLE_STORAGE_KEY = "workbench-artifacts-rail-visible";
 type ArtifactsSearchShortcutAction = "ignore" | "focus" | "expand";
 
+function storageAvailable(): boolean {
+  return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
+}
+
 export function readArtifactsRailVisible(): boolean {
-  if (typeof window === "undefined") return true;
-  return window.localStorage.getItem(ARTIFACTS_RAIL_VISIBLE_STORAGE_KEY) !== "0";
+  if (!storageAvailable()) return true;
+  try {
+    return window.localStorage.getItem(ARTIFACTS_RAIL_VISIBLE_STORAGE_KEY) !== "0";
+  } catch {
+    return true;
+  }
 }
 
 export function writeArtifactsRailVisible(visible: boolean): void {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(ARTIFACTS_RAIL_VISIBLE_STORAGE_KEY, visible ? "1" : "0");
+  if (!storageAvailable()) return;
+  try {
+    window.localStorage.setItem(ARTIFACTS_RAIL_VISIBLE_STORAGE_KEY, visible ? "1" : "0");
+  } catch {
+    // Best effort; persisting the rail preference should never block Artifacts.
+  }
 }
 
 export function getArtifactsSearchShortcutAction(params: {

@@ -28,4 +28,30 @@ describe("artifacts rail visibility", () => {
     writeArtifactsRailVisible(false);
     expect(readArtifactsRailVisible()).toBe(false);
   });
+
+  it("defaults to visible when reading storage fails", () => {
+    const originalGetItem = window.localStorage.getItem;
+    window.localStorage.getItem = () => {
+      throw new Error("storage unavailable");
+    };
+
+    try {
+      expect(readArtifactsRailVisible()).toBe(true);
+    } finally {
+      window.localStorage.getItem = originalGetItem;
+    }
+  });
+
+  it("does not throw when writing storage fails", () => {
+    const originalSetItem = window.localStorage.setItem;
+    window.localStorage.setItem = () => {
+      throw new Error("storage unavailable");
+    };
+
+    try {
+      expect(() => writeArtifactsRailVisible(false)).not.toThrow();
+    } finally {
+      window.localStorage.setItem = originalSetItem;
+    }
+  });
 });
