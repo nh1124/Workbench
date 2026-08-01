@@ -440,9 +440,29 @@ Rust コマンドを呼ぶ方式（[`transport.ts:64-73`](../../ui/src/lib/api/t
 | A1 | `ArtifactsQuickAccess` の切り出し + 専用アプリでの左レール描画（開閉トグル込み） | [done] 2026-08-01 `a541a0c` |
 | A2 | 検索とプロジェクト選択を title bar へ移設 + `.variant-shell` スコープの余白詰め | [done] 2026-08-01 `e010609` |
 | A3 | 最終レビュー指摘の修正（下記） | [done] 2026-08-01 `1714e50` |
-| A4 | 実機の見た目確認（ユーザー実施） | [pending] |
+| A4 | 旧 2 ペインレイアウトの死にコード除去 | [done] 2026-08-02 `357bca7` |
+| A5 | レールにフォルダツリーを追加 | [done] 2026-08-02 `ee97e7c` |
+| A6 | 実機の見た目確認（ユーザー実施） | [pending] |
 
-検証: `npx tsc --noEmit` 通過、ui vitest 482 件パス（着手前 476 件）。
+検証: `npx tsc --noEmit` 通過、ui vitest 486 件パス（着手前 476 件）。
+
+#### レールの構成（A5 時点）
+
+`ArtifactsQuickAccess`（Pinned / Projects / Recent、自然高さ・詰まったら自前スクロール）+
+[`ArtifactsFolderTree`](../../ui/src/artifacts/components/ArtifactsFolderTree.tsx)（残りを占有してスクロール）。
+
+- ツリーは**フォルダのみ**描画する。ファイルはディレクトリペインの担当。
+- 展開状態はツリーのローカル state。ページの `collapsedFolders` は
+  `collectVisibleSelectableItemIds`（ctrl/shift の範囲選択）が使うため**共有しない**。
+- `currentFolderPath` の祖先は navigation のたびに**マージ**する（置換しない）ので、
+  手で開いたフォルダは畳まれない。
+- 編集中にフォルダを選んだら `returnToDirectoryView()` を通す。通さないと選んだフォルダが
+  エディタの裏に隠れ、クリックが効いていないように見える（枠の検索が編集モードで inert だったのと同種）。
+- レールは `overflow: hidden` なので、中の 2 セクションは必ず自前でスクロールできること。
+  Pinned は**件数上限が無い**（Projects は 8 件上限）ため、固定高セクションにすると
+  ピンとツリーの両方が黙って切られる。
+
+未実装: レールへのドラッグ&ドロップ（ディレクトリペインは対応済み）。
 
 #### 実装中に確定した判断
 
