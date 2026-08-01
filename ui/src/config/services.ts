@@ -90,11 +90,28 @@ let workbenchLocalDaemonTokenCache: string | undefined;
 let workbenchLocalRoutingModeCache: WorkbenchLocalRoutingMode | undefined;
 let workbenchAutoLocalFallbackActive = false;
 
-function isServedByWorkbenchCore(): boolean {
+/**
+ * True when the page itself is being served by Workbench Core, so the current origin is
+ * the Core URL and any stored value is stale.
+ *
+ * The native app must never match. A packaged Tauri build serves the UI from
+ * `http://tauri.localhost`, which is http with no port, so a release build satisfied every
+ * condition here and resolved Core to its own origin — where `/api/*` just returns
+ * index.html. That is why a freshly launched native app showed no data until the user
+ * signed in again: signing in writes the cache directly, masking the bad resolution until
+ * the next restart.
+ */
+export function isServedByWorkbenchCore(): boolean {
   if (typeof window === "undefined") return false;
-  const { protocol, port } = window.location;
+  const { protocol, port, hostname } = window.location;
   if (protocol !== "http:" && protocol !== "https:") return false;
+  if (isTauriAppHostname(hostname)) return false;
   return !import.meta.env.DEV || port === "";
+}
+
+/** Hostname the packaged native app serves its own assets from. */
+function isTauriAppHostname(hostname: string): boolean {
+  return hostname.toLowerCase() === "tauri.localhost";
 }
 
 function currentOriginWorkbenchCoreUrl(): string {
