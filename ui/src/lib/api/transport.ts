@@ -43,7 +43,6 @@ declare global {
     __TAURI_INTERNALS__?: {
       invoke: <T = unknown>(command: string, args?: Record<string, unknown>) => Promise<T>;
     };
-    __WORKBENCH_VARIANT__?: string;
   }
 }
 

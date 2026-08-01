@@ -3,7 +3,6 @@ import JSZip from "jszip";
 import { Link, useSearchParams } from "react-router-dom";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { TextInputDialog } from "../components/TextInputDialog";
-import { TitleBarPortal, useHasTitleBarSlot } from "../components/VariantChrome";
 import { artifactsApi, isTauriNativeRuntime, openFileWithDefaultApp, saveFileWithDialog } from "../lib/api";
 import { formatDateTime, normalizeProjectName } from "../lib/format";
 import { isTextEditingTarget } from "../lib/keyboardShortcuts";
@@ -91,8 +90,6 @@ import {
 } from "./components/ArtifactsIcons";
 import { DirectoryBrowser } from "./components/DirectoryBrowser";
 import type { DirectoryViewMode } from "./components/DirectoryBrowser";
-import { ArtifactsFolderTree } from "./components/ArtifactsFolderTree";
-import { ArtifactsQuickAccess } from "./components/ArtifactsQuickAccess";
 import { ProjectCardGrid } from "./components/ProjectCardGrid";
 import { ArtifactProjectMemberships } from "./components/ArtifactProjectMemberships";
 import { MarkdownOutlinePanel } from "./components/MarkdownOutlinePanel";
@@ -113,42 +110,8 @@ type MoveFolderProjectState = {
   targetProjectId: string;
 };
 
-const ARTIFACTS_RAIL_VISIBLE_STORAGE_KEY = "workbench-artifacts-rail-visible";
-type ArtifactsSearchShortcutAction = "ignore" | "focus" | "expand";
-
-function storageAvailable(): boolean {
-  return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
-}
-
-export function readArtifactsRailVisible(): boolean {
-  if (!storageAvailable()) return true;
-  try {
-    return window.localStorage.getItem(ARTIFACTS_RAIL_VISIBLE_STORAGE_KEY) !== "0";
-  } catch {
-    return true;
-  }
-}
-
-export function writeArtifactsRailVisible(visible: boolean): void {
-  if (!storageAvailable()) return;
-  try {
-    window.localStorage.setItem(ARTIFACTS_RAIL_VISIBLE_STORAGE_KEY, visible ? "1" : "0");
-  } catch {
-    // Best effort; persisting the rail preference should never block Artifacts.
-  }
-}
-
-export function getArtifactsSearchShortcutAction(params: {
-  isDedicatedApp: boolean;
-  hasDetailSelection: boolean;
-}): ArtifactsSearchShortcutAction {
-  if (params.hasDetailSelection) return "ignore";
-  return params.isDedicatedApp ? "focus" : "expand";
-}
-
 export function ArtifactsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const isDedicatedApp = useHasTitleBarSlot();
   const searchParamsKey = searchParams.toString();
   const requestedProjectId = searchParams.get("project")?.trim() ?? "";
   const requestedFolderPath = searchParams.get("folder")
@@ -203,8 +166,6 @@ export function ArtifactsPage() {
   const [editSidebarCollapsed, setEditSidebarCollapsed] = useState(false);
   const [outlineCollapsed, setOutlineCollapsed] = useState(false);
   const [outlineBodyHeight, setOutlineBodyHeight] = useState(170);
-  const [railVisible, setRailVisible] = useState(() => readArtifactsRailVisible());
-
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const draggingItemRef = useRef<ArtifactItem | null>(null);
@@ -216,10 +177,7 @@ export function ArtifactsPage() {
   const handleSaveRef = useRef<() => Promise<void>>(async () => {});
   const handleArtifactHistoryNavRef = useRef<(direction: -1 | 1) => void>(() => {});
   const shortcutStateRef = useRef({ canSave: false, isSaving: false, markdownEditorVisible: false, pdfViewerVisible: false });
-  const searchShortcutStateRef = useRef<{
-    action: ArtifactsSearchShortcutAction;
-    searchExpanded: boolean;
-  }>({ action: "expand", searchExpanded: false });
+  const searchShortcutStateRef = useRef({ directoryVisible: true, searchExpanded: false });
   const artifactNavHistoryRef = useRef<{ ids: string[]; index: number }>({ ids: [], index: -1 });
   const suppressArtifactNavPushRef = useRef(false);
   const lastSearchParamsKeyRef = useRef(searchParamsKey);
@@ -328,10 +286,7 @@ export function ArtifactsPage() {
   }, [items, searchTerms]);
   const visibleSearchItems = matchingSearchItems.slice(0, 100);
   const hasActiveSearchQuery = searchTerms.length > 0;
-  searchShortcutStateRef.current = {
-    action: getArtifactsSearchShortcutAction({ isDedicatedApp, hasDetailSelection }),
-    searchExpanded
-  };
+  searchShortcutStateRef.current = { directoryVisible: !hasDetailSelection, searchExpanded };
 
   useEffect(() => {
     document.body.classList.toggle("workbench-artifacts-edit-mode", hasDetailSelection);
@@ -715,21 +670,16 @@ export function ArtifactsPage() {
         return;
       }
 
-      const searchShortcutAction = searchShortcutStateRef.current.action;
       if (
         e.key === "/" &&
         !e.ctrlKey &&
         !e.metaKey &&
         !e.altKey &&
-        searchShortcutAction !== "ignore" &&
+        searchShortcutStateRef.current.directoryVisible &&
         !isTextEditingTarget(e.target)
       ) {
         e.preventDefault();
-        if (searchShortcutAction === "focus") {
-          searchInputRef.current?.focus();
-        } else {
-          setSearchExpanded(true);
-        }
+        setSearchExpanded(true);
         return;
       }
 
@@ -1316,13 +1266,6 @@ export function ArtifactsPage() {
     setMode("view");
     setEditorExpanded(false);
     setPdfExpanded(false);
-  };
-
-  const handleRailFolderSelect = (path: string) => {
-    if (hasDetailSelection) {
-      returnToDirectoryView();
-    }
-    setSelectedFolderPath(path);
   };
 
   const closeSearch = () => {
@@ -2263,7 +2206,7 @@ export function ArtifactsPage() {
     }
   };
 
-  const artifactsSection = (
+  return (
     <section
       className="va-artifacts-page"
       onClick={() => {
@@ -2298,9 +2241,7 @@ export function ArtifactsPage() {
             </div>
 
             <div className="va-toolbar-right">
-              {!isDedicatedApp ? (
-                <>
-                  {searchExpanded ? (
+              {searchExpanded ? (
                     <div className="va-search-box">
                       <span className="va-search-box-icon" aria-hidden="true"><IcoSearch /></span>
                       <input
@@ -2334,7 +2275,7 @@ export function ArtifactsPage() {
                       <IcoSearch />
                     </button>
                   )}
-                  <label className="va-project-select-wrap">
+              <label className="va-project-select-wrap">
                     <span>Project</span>
                     <select value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}>
                       <option value="">All</option>
@@ -2344,9 +2285,7 @@ export function ArtifactsPage() {
                         </option>
                       ))}
                     </select>
-                  </label>
-                </>
-              ) : null}
+              </label>
 
               {!isProjectCardView ? (
                 <>
@@ -3158,82 +3097,5 @@ export function ArtifactsPage() {
         onChange={(event) => void handleUploadFiles(event.target.files)}
       />
     </section>
-  );
-
-  if (!isDedicatedApp) {
-    return artifactsSection;
-  }
-
-  const railToggleLabel = railVisible ? "Hide the quick access rail" : "Show the quick access rail";
-
-  return (
-    <>
-      <TitleBarPortal>
-        {/* Search results can only render in the directory pane, so these controls would be inert in detail view. */}
-        {!hasDetailSelection ? (
-          <>
-            <input
-              ref={searchInputRef}
-              className="chrome-search"
-              type="search"
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  setSearchQuery("");
-                }
-              }}
-              placeholder="Search artifacts"
-              aria-label="Search artifacts"
-            />
-            <select
-              className="chrome-select"
-              value={projectFilter}
-              onChange={(event) => setProjectFilter(event.target.value)}
-              aria-label="Filter by project"
-            >
-              <option value="">All</option>
-              {projectOptions.map((project) => (
-                <option key={project.projectId} value={project.projectId}>
-                  {normalizeProjectName(project.projectId, project.projectName)}
-                </option>
-              ))}
-            </select>
-          </>
-        ) : null}
-        <button
-          type="button"
-          className={railVisible ? "chrome-icon-button active" : "chrome-icon-button"}
-          aria-pressed={railVisible}
-          aria-label={railToggleLabel}
-          title={railToggleLabel}
-          onClick={() => {
-            const nextVisible = !railVisible;
-            setRailVisible(nextVisible);
-            writeArtifactsRailVisible(nextVisible);
-          }}
-        >
-          <svg viewBox="0 0 16 16" aria-hidden="true">
-            <rect x="2" y="3" width="12" height="10" fill="none" stroke="currentColor" strokeWidth="1.4" />
-            <path d="M6 3v10" stroke="currentColor" strokeWidth="1.4" />
-          </svg>
-        </button>
-      </TitleBarPortal>
-      <div className={railVisible ? "va-app-layout" : "va-app-layout rail-hidden"}>
-        {railVisible ? (
-          <aside className="va-app-rail">
-            <ArtifactsQuickAccess />
-            <ArtifactsFolderTree
-              root={treeRoot}
-              currentFolderPath={currentFolderPath}
-              onSelectFolder={handleRailFolderSelect}
-            />
-          </aside>
-        ) : null}
-        {artifactsSection}
-      </div>
-    </>
   );
 }

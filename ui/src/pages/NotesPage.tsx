@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Link } from "react-router-dom";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import { useHasTitleBarSlot } from "../components/VariantChrome";
-import { NotesAppView } from "../notes/NotesAppView";
 import { notesApi, projectsApi } from "../lib/api";
 import { formatDateTime, normalizeProjectName } from "../lib/format";
 import type { Note } from "../types/models";
@@ -157,14 +155,6 @@ export function NotesPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [deleteConfirmNote, setDeleteConfirmNote] = useState<{ id: string; title: string } | null>(null);
-  // Dedicated-app presentation: a list beside a reading pane, instead of a card wall.
-  const inAppShell = useHasTitleBarSlot();
-  // A window opened for a single note carries it in the URL, like the quick-note window.
-  const standaloneNoteId = useMemo(() => {
-    if (typeof window === "undefined") return null;
-    return new URLSearchParams(window.location.search).get("note");
-  }, []);
-  const [selectedNoteId, setSelectedNoteId] = useState<string | null>(standaloneNoteId);
   const contentInputRef = useRef<HTMLTextAreaElement | null>(null);
   const tagInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -317,42 +307,6 @@ export function NotesPage() {
     }
   };
 
-  /**
-   * Inline save for the dedicated app, where the reading pane is the editor.
-   *
-   * Patches only what changed and updates the row in place, so autosave never reorders or
-   * re-fetches the list under the cursor.
-   */
-  const saveNoteInline = async (noteId: string, patch: { title?: string; content?: string }) => {
-    try {
-      const updated = await notesApi.update(noteId, patch);
-      setNotes((prev) => prev.map((note) => (note.id === noteId ? updated : note)));
-      setError(null);
-    } catch (saveError) {
-      const message = saveError instanceof Error ? saveError.message : "Unable to save note.";
-      setError(isAuthErrorMessage(message) ? "Sign-in is required to save notes." : message);
-    }
-  };
-
-  const createNoteInline = async () => {
-    const projectId = projectFilter.trim() || defaultProject?.projectId || DEFAULT_PROJECT_ID;
-    try {
-      const created = await notesApi.create({
-        title: "Untitled",
-        content: "",
-        projectId,
-        projectName: resolveProjectName(projectId),
-        tags: []
-      } as Omit<Note, "id" | "createdAt" | "updatedAt">);
-      setNotes((prev) => [created, ...prev]);
-      setSelectedNoteId(created.id);
-      setError(null);
-    } catch (createError) {
-      const message = createError instanceof Error ? createError.message : "Unable to create note.";
-      setError(isAuthErrorMessage(message) ? "Sign-in is required to create notes." : message);
-    }
-  };
-
   const handleSave = async () => {
     if (!draft.title.trim() && !draft.content.trim()) {
       setError("Title or content is required.");
@@ -437,37 +391,8 @@ export function NotesPage() {
   const showNoData = !isLoading && !authRequired && filteredNotes.length === 0;
   const hasActiveFilters = projectFilter.length > 0 || searchQuery.trim().length > 0;
 
-  const selectedNote = useMemo(() => {
-    // A standalone window shows its own note even when the filters would exclude it.
-    if (standaloneNoteId) {
-      return notes.find((note) => note.id === standaloneNoteId) ?? null;
-    }
-    return filteredNotes.find((note) => note.id === selectedNoteId) ?? filteredNotes[0] ?? null;
-  }, [notes, filteredNotes, selectedNoteId, standaloneNoteId]);
-
   return (
-    <section className={inAppShell ? "notes-page notes-page-app" : "notes-page"}>
-      {inAppShell ? (
-        <NotesAppView
-          notes={filteredNotes}
-          selectedNote={selectedNote}
-          onSelect={setSelectedNoteId}
-          projectOptions={projectOptions}
-          projectFilter={projectFilter}
-          onProjectFilterChange={setProjectFilter}
-          searchQuery={searchQuery}
-          onSearchQueryChange={setSearchQuery}
-          isLoading={isLoading}
-          authRequired={authRequired}
-          hasActiveFilters={hasActiveFilters}
-          onCreate={() => void createNoteInline()}
-          onSave={saveNoteInline}
-          onDelete={requestDelete}
-          error={error}
-          standaloneNoteId={standaloneNoteId}
-        />
-      ) : (
-        <>
+    <section className="notes-page">
       <header className="notes-header-row">
         <div className="notes-header-title-wrap">
           <span className="notes-header-icon" aria-hidden="true">
@@ -600,9 +525,6 @@ export function NotesPage() {
           )
         ) : null}
       </section>
-
-        </>
-      )}
 
       {modalMode ? (
         <div className="modal-backdrop" role="presentation" onClick={() => closeModal()}>

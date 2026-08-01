@@ -17,25 +17,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { ShortcutsPage } from "./pages/ShortcutsPage";
 import { TasksPage } from "./pages/TasksPage";
 import { TasksCalendarWindowPage } from "./pages/TasksCalendarWindowPage";
-import { VariantShell } from "./components/VariantShell";
-import { VariantChromeProvider } from "./components/VariantChrome";
-import { VariantTitleBar, variantAppName } from "./components/VariantTitleBar";
 import { WbsPage } from "./pages/WbsPage";
-
-const variantStartPages: Record<string, string> = {
-  tasks: "/tasks",
-  notes: "/notes",
-  artifacts: "/artifacts"
-};
-
-/**
- * Resolves the start page for a variant native app (Workbench Tasks / Notes / Artifacts).
- * Returns null for the main app and for missing or unknown values.
- */
-export function resolveVariantStartPage(variant: string | null | undefined): string | null {
-  if (!variant || variant === "main") return null;
-  return variantStartPages[variant] ?? null;
-}
 
 function resolveStartPage(): string {
   try {
@@ -68,13 +50,7 @@ export default function App() {
     }
   }
 
-  const variant = typeof window === "undefined" ? undefined : window.__WORKBENCH_VARIANT__;
-  const variantStartPage = resolveVariantStartPage(variant);
-  const startPage = variantStartPage ?? resolveStartPage();
-  // A dedicated app launches into one feature, so it drops the cross-feature chrome.
-  const isVariantApp = variantStartPage !== null;
-  const shell = isVariantApp ? <VariantShell /> : <Layout />;
-  const appName = variantAppName(variant);
+  const startPage = resolveStartPage();
 
   const routes = (
     <Routes>
@@ -82,7 +58,7 @@ export default function App() {
         <Route path="/register" element={<RegisterPage />} />
         <Route path="/tasks/calendar" element={<TasksCalendarWindowPage />} />
 
-        <Route path="/" element={shell}>
+        <Route path="/" element={<Layout />}>
           <Route index element={startPage === "/" ? <HomePage /> : <Navigate to={startPage} replace />} />
           <Route path="projects" element={<ProjectsPage />} />
           <Route path="analyser" element={<AnalyserPage />} />
@@ -102,22 +78,6 @@ export default function App() {
       </Routes>
   );
 
-  return (
-    <BrowserRouter>
-      {isVariantApp ? (
-        // The window is undecorated in a dedicated app, so the title bar has to exist on
-        // every route — including the sign-in page, which lives outside the shell. Without
-        // it that window could not be moved or closed.
-        <VariantChromeProvider>
-          <div className="variant-window">
-            <VariantTitleBar appName={appName} />
-            {routes}
-          </div>
-        </VariantChromeProvider>
-      ) : (
-        routes
-      )}
-    </BrowserRouter>
-  );
+  return <BrowserRouter>{routes}</BrowserRouter>;
 }
 
