@@ -394,8 +394,50 @@ Rust コマンドを呼ぶ方式（[`transport.ts:64-73`](../../ui/src/lib/api/t
 | 項目 | 内容 |
 |---|---|
 | Notes 複数選択 | shift / ctrl の範囲選択 + 右クリックの一括操作（削除など）。**未着手** |
-| Artifacts | サイドメニュー復活（プロジェクト選択が不能な機能欠落）、プロジェクト選択と検索を枠へ、余白除去 |
+| Artifacts | 下記「Artifacts の設計」参照。**着手中** |
 | Tasks | フィルタベース → フォルダベースへ意味論変更、Task List / Due Calendar / Schedule の切替を枠へ |
+
+### Artifacts の設計（2026-08-01 調査で確定）
+
+#### 機能欠落の実体
+
+`Layout.tsx` の [`ArtifactsQuickAccess`](../../ui/src/components/Layout.tsx)（Pinned / Projects / Recent、
+プロジェクト行ごとの「+ New Note」）は **`Layout` の中に定義されており、`/artifacts` のときだけ
+セカンダリサイドバーとして描画される**。専用アプリは `VariantShell` を使い `Layout` を通らないため、
+この導線が丸ごと消えている。これが「プロジェクト選択が不能」の正体。
+
+プロジェクトカードのランディング（`isProjectCardView`）は生きているので選択が完全に不可能なわけではないが、
+ピン留め・最近使った項目・プロジェクトの即時切替という常用導線が無い。
+
+#### 方針
+
+- `ArtifactsQuickAccess` とその補助（`buildArtifactsHref` / `ArtifactMenuIcon` / `pinnedArtifactHref` /
+  `recentArtifactHref` / `ARTIFACT_PROJECT_ROW_LIMIT`）を `artifacts/components/ArtifactsQuickAccess.tsx`
+  へ**純粋な移動**として切り出す。`Layout` は import して従来どおり使う（メインの挙動は不変）。
+  P2-3 の「専用シェル配下の共通部品はメインからも使える粒度で切る」に沿う。
+- 専用アプリでは `ArtifactsPage` が `useHasTitleBarSlot()` を見て、左レールとして自前で描画する。
+  ページ側が持つのは Artifacts 固有の導線なので、`VariantShell` は汎用のまま触らない。
+- **枠にアプリ全体の操作**（P2-3b の原則）に従い、`va-toolbar` の検索ボックスとプロジェクト `<select>` は
+  専用アプリでは `TitleBarPortal` へ移す。パンくず / Home / Upload / New Folder / New Note / 表示切替は
+  「今いるディレクトリ」に対する操作なので `va-toolbar` に残す。
+- レールは title bar のトグルで開閉できるようにする（Notes のリスト折りたたみと同じ作法）。
+- 余白は `.variant-shell` 配下にスコープした CSS でのみ詰める。メイン側の `va-*` 寸法は変更しない。
+
+#### 罠（Notes から引き継ぐ確認事項）
+
+- `.va-artifacts-page` は `height: 100%` / `overflow: hidden` のグリッド。Notes で踏んだ「中央寄せの幅制限」は
+  Artifacts には無いが、レールを足すときに `grid-template-columns` を壊さないこと。
+- `.variant-shell .page-frame { padding: 0 }` は既に効いている。残っているのは `.va-toolbar` の
+  `0.72rem 1.1rem` などページ内部の余白。
+- `ArtifactsPage` は `searchParams` から `isProjectCardView` を導出する。`?app=artifacts` は
+  最初のナビゲーションで消えるため干渉しないが、レールのリンクが `?project=` を張る点は変わらない。
+
+#### Wave 分割
+
+| Wave | 内容 |
+|---|---|
+| A1 | `ArtifactsQuickAccess` の切り出し + 専用アプリでの左レール描画（開閉トグル込み） |
+| A2 | 検索とプロジェクト選択を title bar へ移設 + `.variant-shell` スコープの余白詰め |
 
 ## P2-6 の仕様
 
