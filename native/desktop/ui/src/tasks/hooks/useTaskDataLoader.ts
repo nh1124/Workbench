@@ -1,0 +1,309 @@
+/**
+ * useTaskDataLoader.ts
+ * Owns the primary data-fetch lifecycle: tasks, projects, today-list,
+ * calendar status map, inbox rows, and planned/overdue counters.
+ *
+ * Behavior is identical to the `load()` function that lived in TasksPage.tsx.
+ */
+
+import { useState, useCallback, useEffect, useRef } from "react";
+import { projectsApi, tasksApi } from "../../lib/api";
+import { buildInboxRows } from "../../lib/inboxBuilder";
+import { pushErrorNotification } from "../../lib/notificationService";
+import { addDays, startOfDay, toDateKey } from "../../lib/taskDateUtils";
+import {
+  filterProjectOptionsByAllowedIds,
+  isAuthErrorMessage,
+  mergeProjectOptions,
+  type ProjectOption
+} from "../../lib/taskDisplayUtils";
+import type { Task, TaskScheduleDay, TaskStatus, TodayTask } from "../../types/models";
+import {
+  OCCURRENCE_PAGE_DAYS,
+  type TaskOccurrenceRow,
+  toTaskStatus
+} from "../types";
+import { buildTodayRows } from "../lib/taskTodayRows";
+import { countDistinctOverdueTasks, countDistinctPlannedTasks } from "../lib/taskOccurrenceCounts";
+import { normalizeDateKey, taskOccurrenceRowKey } from "../lib/taskOccurrenceIdentity";
+
+export interface TaskDataState {
+  tasks: Task[];
+  projectOptions: ProjectOption[];
+  todayTaskIds: Set<string>;
+  todayScheduleOccurrenceStatuses: Map<string, TaskStatus>;
+  todayMembershipKeys: Set<string>;
+  todayRows: TaskOccurrenceRow[];
+  inboxUpcomingRows: TaskOccurrenceRow[];
+  inboxDoneRows: TaskOccurrenceRow[];
+  plannedCount: number;
+  overdueCount: number;
+  /** date-key ↁEtaskId ↁETaskStatus (for calendar per-date display) */
+  calendarStatusMap: Map<string, Map<string, TaskStatus>>;
+  isLoading: boolean;
+  isSecondaryLoading: boolean;
+  error: string | null;
+}
+
+export interface TaskDataLoaderActions {
+  load: (options?: TaskDataLoadOptions) => Promise<boolean>;
+  isLoadInFlight: () => boolean;
+  setTasks: React.Dispatch<React.SetStateAction<Task[]>>;
+  setProjectOptions: React.Dispatch<React.SetStateAction<ProjectOption[]>>;
+  setTodayRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>;
+  setTodayMembershipKeys: React.Dispatch<React.SetStateAction<Set<string>>>;
+  setInboxUpcomingRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>;
+  setInboxDoneRows: React.Dispatch<React.SetStateAction<TaskOccurrenceRow[]>>;
+}
+
+export interface TaskDataLoadOptions {
+  silent?: boolean;
+  /** Rechecked immediately before a silent response is committed. */
+  shouldApply?: () => boolean;
+}
+
+/**
+ * @param contextFilter - currently active project/context filter (empty = all)
+ * @param selectedTaskId - if set and the task disappears after reload, caller should clear it
+ * @param onTaskGone - called when selectedTaskId is no longer in the refreshed task list
+ */
+export function useTaskDataLoader(
+  contextFilter: string,
+  selectedTaskId: string | null,
+  onTaskGone: () => void,
+  dayCompositionDate?: string
+): TaskDataState & TaskDataLoaderActions {
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [projectOptions, setProjectOptions] = useState<ProjectOption[]>([]);
+  const [todayTaskIds, setTodayTaskIds] = useState<Set<string>>(new Set());
+  const [todayScheduleOccurrenceStatuses, setTodayScheduleOccurrenceStatuses] = useState<Map<string, TaskStatus>>(new Map());
+  const [todayMembershipKeys, setTodayMembershipKeys] = useState<Set<string>>(new Set());
+  const [todayRows, setTodayRows] = useState<TaskOccurrenceRow[]>([]);
+  const [inboxUpcomingRows, setInboxUpcomingRows] = useState<TaskOccurrenceRow[]>([]);
+  const [inboxDoneRows, setInboxDoneRows] = useState<TaskOccurrenceRow[]>([]);
+  const [plannedCount, setPlannedCount] = useState(0);
+  const [overdueCount, setOverdueCount] = useState(0);
+  const [calendarStatusMap, setCalendarStatusMap] = useState<Map<string, Map<string, TaskStatus>>>(new Map());
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSecondaryLoading, setIsSecondaryLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const selectedTaskIdRef = useRef<string | null>(selectedTaskId);
+  const onTaskGoneRef = useRef(onTaskGone);
+  const loadInFlightCountRef = useRef(0);
+  const visibleLoadCountRef = useRef(0);
+  const visibleSecondaryLoadCountRef = useRef(0);
+  const loadRequestSequenceRef = useRef(0);
+
+  useEffect(() => {
+    selectedTaskIdRef.current = selectedTaskId;
+  }, [selectedTaskId]);
+
+  useEffect(() => {
+    onTaskGoneRef.current = onTaskGone;
+  }, [onTaskGone]);
+
+  const load = useCallback(async (options: TaskDataLoadOptions = {}) => {
+    const silent = options.silent === true;
+    const requestId = ++loadRequestSequenceRef.current;
+    loadInFlightCountRef.current += 1;
+    if (!silent) {
+      visibleLoadCountRef.current += 1;
+      visibleSecondaryLoadCountRef.current += 1;
+      setIsLoading(true);
+      setIsSecondaryLoading(true);
+      setError(null);
+    }
+
+    const todayDate = startOfDay(new Date());
+    const todayKey = toDateKey(todayDate);
+    const compositionDateKey = normalizeDateKey(dayCompositionDate) ?? todayKey;
+    const countFrom = toDateKey(addDays(todayDate, -(OCCURRENCE_PAGE_DAYS - 1)));
+    const countTo = toDateKey(addDays(todayDate, OCCURRENCE_PAGE_DAYS - 1));
+
+    const phaseAPromise = (async () => {
+      try {
+        const [
+          taskList,
+          taskProjects,
+          projectsResult,
+          todaySchedule,
+          myDayTasks
+        ] = await Promise.all([
+          tasksApi.list(contextFilter || undefined),
+          tasksApi.projects(),
+          projectsApi.list(undefined, "active", 200)
+            .then((result) => ({ ok: true as const, result }))
+            .catch(() => ({ ok: false as const, result: { items: [] } })),
+          tasksApi.schedule(compositionDateKey, compositionDateKey, contextFilter || undefined).catch(() => [] as TaskScheduleDay[]),
+          tasksApi.todayList(compositionDateKey).catch(() => [] as TodayTask[])
+        ]);
+
+        // Build Today status map from LBS schedule (used to merge live status into task list)
+        const todayIds = new Set<string>();
+        const todayStatusMap = new Map<string, TaskStatus>();
+        const todayOccurrenceStatuses = new Map<string, TaskStatus>();
+        for (const day of todaySchedule) {
+          for (const item of day.tasks) {
+            const status = toTaskStatus(item.status);
+            todayIds.add(item.taskId);
+            todayStatusMap.set(item.taskId, status);
+            todayOccurrenceStatuses.set(taskOccurrenceRowKey({
+              taskId: item.taskId,
+              occurrenceDate: day.date
+            }), status);
+          }
+        }
+
+        const {
+          rows: builtTodayRows,
+          membershipKeys: todayMemberships
+        } = buildTodayRows(taskList, myDayTasks, todaySchedule, compositionDateKey, contextFilter || undefined);
+
+        // Merge live today-status into the task list
+        const mergedTasks = taskList.map((task) => {
+          const status = todayStatusMap.get(task.id);
+          if (!status) return task;
+          return { ...task, status };
+        });
+
+        const serviceProjects = projectsResult.result.items.map((project) => ({
+          projectId: project.id,
+          projectName: project.name
+        }));
+        const activeProjectIds = new Set(serviceProjects.map((project) => project.projectId));
+        const taskProjectOptions = taskProjects.map((p) => ({
+          projectId: p.projectId,
+          projectName: p.projectName
+        }));
+
+        if (requestId !== loadRequestSequenceRef.current) {
+          return { applied: false as const };
+        }
+        if (silent && options.shouldApply && !options.shouldApply()) {
+          return { applied: false as const };
+        }
+
+        setError(null);
+        setTasks(mergedTasks);
+        setTodayRows(builtTodayRows);
+        setTodayTaskIds(todayIds);
+        setTodayScheduleOccurrenceStatuses(todayOccurrenceStatuses);
+        setTodayMembershipKeys(todayMemberships);
+        setProjectOptions(
+          projectsResult.ok
+            ? mergeProjectOptions(
+                filterProjectOptionsByAllowedIds(taskProjectOptions, activeProjectIds),
+                serviceProjects
+              )
+            : mergeProjectOptions(taskProjectOptions)
+        );
+
+        const currentSelectedTaskId = selectedTaskIdRef.current;
+        if (currentSelectedTaskId && !mergedTasks.find((t) => t.id === currentSelectedTaskId)) {
+          onTaskGoneRef.current();
+        }
+        return { applied: true as const, taskList };
+      } catch (e) {
+        if (requestId !== loadRequestSequenceRef.current) {
+          return { applied: false as const };
+        }
+        const message = e instanceof Error ? e.message : "Failed to load tasks.";
+        if (!silent) {
+          setTodayTaskIds(new Set());
+          setTodayScheduleOccurrenceStatuses(new Map());
+          setTodayMembershipKeys(new Set());
+        }
+        if (isAuthErrorMessage(message)) {
+          setError(message);
+        } else {
+          pushErrorNotification(message, "Failed to load tasks");
+        }
+        return { applied: false as const };
+      } finally {
+        loadInFlightCountRef.current = Math.max(0, loadInFlightCountRef.current - 1);
+        if (!silent) {
+          visibleLoadCountRef.current = Math.max(0, visibleLoadCountRef.current - 1);
+          if (visibleLoadCountRef.current === 0) setIsLoading(false);
+        }
+      }
+    })();
+
+    void (async () => {
+      try {
+        const [countSchedule, countScheduleCalendar] = await Promise.all([
+          tasksApi.schedule(countFrom, countTo, contextFilter || undefined),
+          tasksApi.scheduleCalendar(countFrom, countTo)
+        ]);
+        const phaseAResult = await phaseAPromise;
+        if (!phaseAResult.applied) return;
+        if (requestId !== loadRequestSequenceRef.current) return;
+        if (silent && options.shouldApply && !options.shouldApply()) return;
+
+        const nextPlannedCount = countDistinctPlannedTasks(countScheduleCalendar, todayKey, contextFilter);
+        const nextOverdueCount = countDistinctOverdueTasks(countSchedule, todayKey, contextFilter);
+        const { upcomingRows: builtInboxUpcoming, doneRows: builtInboxDone } =
+          buildInboxRows(phaseAResult.taskList, {
+            countSchedule,
+            scheduleCalendar: countScheduleCalendar,
+            todayKey
+          });
+
+        // Build per-date execution status map for calendar display
+        const csMap = new Map<string, Map<string, TaskStatus>>();
+        for (const day of countSchedule) {
+          for (const item of day.tasks) {
+            if (!csMap.has(day.date)) csMap.set(day.date, new Map());
+            csMap.get(day.date)!.set(item.taskId, toTaskStatus(item.status));
+          }
+        }
+
+        setPlannedCount(nextPlannedCount);
+        setOverdueCount(nextOverdueCount);
+        setInboxUpcomingRows(builtInboxUpcoming);
+        setInboxDoneRows(builtInboxDone);
+        setCalendarStatusMap(csMap);
+      } catch {
+        // Preserve the previous secondary data when a wide-range request fails.
+      } finally {
+        if (!silent) {
+          visibleSecondaryLoadCountRef.current = Math.max(
+            0,
+            visibleSecondaryLoadCountRef.current - 1
+          );
+          if (visibleSecondaryLoadCountRef.current === 0) {
+            setIsSecondaryLoading(false);
+          }
+        }
+      }
+    })();
+
+    const phaseAResult = await phaseAPromise;
+    return phaseAResult.applied;
+  }, [contextFilter, dayCompositionDate]);
+
+  return {
+    tasks,
+    projectOptions,
+    todayTaskIds,
+    todayScheduleOccurrenceStatuses,
+    todayMembershipKeys,
+    todayRows,
+    inboxUpcomingRows,
+    inboxDoneRows,
+    plannedCount,
+    overdueCount,
+    calendarStatusMap,
+    isLoading,
+    isSecondaryLoading,
+    error,
+    load,
+    isLoadInFlight: () => loadInFlightCountRef.current > 0,
+    setTasks,
+    setProjectOptions,
+    setTodayRows,
+    setTodayMembershipKeys,
+    setInboxUpcomingRows,
+    setInboxDoneRows
+  };
+}
+

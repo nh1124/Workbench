@@ -1,0 +1,744 @@
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { NavLink, Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { ArtifactsQuickAccess } from "../artifacts/components/ArtifactsQuickAccess";
+import { readArtifactsLastLocation } from "../artifacts/utils/lastLocation";
+import {
+  WORKBENCH_LOCAL_DAEMON_URL_CHANGED_EVENT,
+  WORKBENCH_LOCAL_MODE_CHANGED_EVENT,
+  getWorkbenchAutoLocalFallbackActive,
+  navItems
+} from "../config/services";
+import {
+  WORKBENCH_KEYBOARD_SHORTCUTS_CHANGED_EVENT,
+  isTextEditingTarget,
+  loadShortcutBindings,
+  shortcutMatchesEvent,
+  type ShortcutActionId,
+  type ShortcutBindings
+} from "../lib/keyboardShortcuts";
+import {
+  clearWorkbenchSession,
+  localDaemonApi,
+  openCalendarWindow,
+  openMainWindow,
+  openQuickNoteWindow,
+  readWorkbenchSession,
+  syncNativeGlobalShortcuts
+} from "../lib/api";
+import { buildStandaloneCalendarUrl } from "../tasks/lib/calendarInteractionUtils";
+import { useNotifications } from "../lib/notificationService";
+import type { LocalDaemonStatus } from "../types/models";
+import { QuickNoteModal } from "./QuickNoteModal";
+import { ShortcutsModal } from "./ShortcutsModal";
+
+const COMPACT_SIDEBAR_BREAKPOINT = 1100;
+
+const navIconMap: Record<string, ReactNode> = {
+  Home: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <path d="M3 10.5L12 3l9 7.5" />
+      <path d="M5.5 9.5V21h13V9.5" />
+    </svg>
+  ),
+  Project: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <rect x="4" y="4" width="16" height="16" rx="2.4" />
+      <path d="M8 8h8M8 12h8M8 16h5" />
+    </svg>
+  ),
+  Analyser: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <path d="M5 5h14v14H5z" />
+      <path d="M8 9h8M8 13h5" />
+      <path d="M16.5 13.5l1.2 1.2 2.3-2.7" />
+    </svg>
+  ),
+  Tasks: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <rect x="5" y="4" width="14" height="16" rx="2" />
+      <path d="M9 9h6M9 13h6M9 17h4" />
+    </svg>
+  ),
+  Notes: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <path d="M7 3h8l4 4v14H7z" />
+      <path d="M15 3v4h4M9 12h6M9 16h6" />
+    </svg>
+  ),
+  Research: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <circle cx="10.5" cy="10.5" r="5.5" />
+      <path d="M15.2 15.2L21 21" />
+      <path d="M8.5 10.5h4M10.5 8.5v4" />
+    </svg>
+  ),
+  Images: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <rect x="4" y="5" width="16" height="14" rx="2" />
+      <path d="M7 15l3.2-3.2 2.3 2.3 1.5-1.5L17 15" />
+      <circle cx="15.5" cy="9.5" r="1.2" />
+    </svg>
+  ),
+  Mindmap: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <circle cx="6" cy="12" r="2.4" />
+      <circle cx="16.5" cy="6.5" r="2.2" />
+      <circle cx="17" cy="17" r="2.2" />
+      <path d="M8.1 10.8l6.4-3.2M8.2 13.1l6.7 2.8" />
+    </svg>
+  ),
+  WBS: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <path d="M4 5h16M4 12h16M4 19h16" />
+      <path d="M8 5v14M14 5v14" />
+      <path d="M4 9h16M4 16h16" opacity="0.55" />
+    </svg>
+  ),
+  Artifacts: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <path d="M3 7h6l2 2h10v11H3z" />
+    </svg>
+  )
+};
+
+type NavItem = (typeof navItems)[number];
+
+const sidebarNavSections: Array<{ label?: string; items: NavItem[] }> = [
+  {
+    items: navItems.filter((item) => item.label === "Home")
+  },
+  {
+    label: "Project",
+    items: navItems.filter((item) => ["Project", "Tasks", "Notes", "Artifacts"].includes(item.label))
+  },
+  {
+    label: "Tool",
+    items: navItems.filter((item) => ["Analyser", "Research", "Images", "Mindmap", "WBS"].includes(item.label))
+  }
+];
+
+export function Layout() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const sessionUser = readWorkbenchSession();
+  if (!sessionUser) {
+    return <Navigate to="/login" replace />;
+  }
+  const username = sessionUser?.username ?? "guest";
+  const shortName = username.length > 12 ? `${username.slice(0, 12)}...` : username;
+  const userBadge = username.charAt(0).toUpperCase();
+  const isTasksRoute = location.pathname.startsWith("/tasks");
+  const isArtifactsRoute = location.pathname.startsWith("/artifacts");
+  const isResearchRoute = location.pathname.startsWith("/research");
+  const isImagesRoute = location.pathname.startsWith("/images");
+  const isMindmapsRoute = location.pathname.startsWith("/mindmaps");
+  const isWbsRoute = location.pathname.startsWith("/wbs");
+  const userMenuRef = useRef<HTMLDivElement>(null);
+  const notificationMenuRef = useRef<HTMLDivElement>(null);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
+  const [isQuickNoteOpen, setIsQuickNoteOpen] = useState(false);
+  const [isNotificationOpen, setIsNotificationOpen] = useState(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [daemonStatus, setDaemonStatus] = useState<LocalDaemonStatus | undefined>(undefined);
+  const [daemonStatusChecked, setDaemonStatusChecked] = useState(false);
+  const [daemonStatusError, setDaemonStatusError] = useState(false);
+  const [autoLocalFallbackActive, setAutoLocalFallbackActive] = useState(
+    getWorkbenchAutoLocalFallbackActive
+  );
+  const [shortcutBindings, setShortcutBindings] = useState<ShortcutBindings>(() => loadShortcutBindings());
+  const [isCompactSidebarMode, setIsCompactSidebarMode] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth <= COMPACT_SIDEBAR_BREAKPOINT : false
+  );
+  const [sidebarView, setSidebarView] = useState<"main" | "artifacts">(() =>
+    isArtifactsRoute ? "artifacts" : "main"
+  );
+  const {
+    items: notifications,
+    unreadCount,
+    markNotificationRead,
+    markAllNotificationsRead,
+    clearNotifications
+  } = useNotifications();
+  const isNativeRuntime = typeof window !== "undefined" && typeof window.__TAURI_INTERNALS__?.invoke === "function";
+
+  const daemonSignal = useMemo(() => {
+    if (autoLocalFallbackActive) {
+      return {
+        className: "syncing",
+        label: "Local (auto)",
+        title: "Auto routing is using the local daemon for reads"
+      };
+    }
+    if (!daemonStatusChecked) {
+      return {
+        className: "checking",
+        label: "Checking",
+        title: "Checking local daemon status"
+      };
+    }
+
+    if (daemonStatusError || !daemonStatus) {
+      return {
+        className: "offline",
+        label: "Local off",
+        title: "Local daemon is not reachable"
+      };
+    }
+
+    const conflictsOpen = daemonStatus.conflictsOpen ?? 0;
+    const outboxFailed = daemonStatus.outboxFailed ?? 0;
+    const outboxPending = daemonStatus.outboxPending ?? 0;
+    const syncActive = daemonStatus.syncActive || daemonStatus.tickRunning || daemonStatus.tickQueued;
+    const snapshotComplete = daemonStatus.remoteArtifactSnapshotComplete === true;
+    if (conflictsOpen > 0) {
+      return {
+        className: "issue",
+        label: `${conflictsOpen} conflict${conflictsOpen === 1 ? "" : "s"}`,
+        title: `Local daemon has ${conflictsOpen} open conflict${conflictsOpen === 1 ? "" : "s"}`
+      };
+    }
+    if (outboxFailed > 0) {
+      return {
+        className: "issue",
+        label: `${outboxFailed} failed`,
+        title: `Local daemon has ${outboxFailed} failed outbox item${outboxFailed === 1 ? "" : "s"}`
+      };
+    }
+    if (daemonStatus.lastError) {
+      return {
+        className: "issue",
+        label: "Sync issue",
+        title: `Cloud sync failed: ${daemonStatus.lastError}`
+      };
+    }
+    if (syncActive || !snapshotComplete) {
+      return {
+        className: "syncing",
+        label: "Syncing",
+        title: snapshotComplete ? "Local daemon is syncing changes" : "Local daemon is completing the initial cloud snapshot"
+      };
+    }
+    if (!daemonStatus.watcherActive) {
+      return {
+        className: "offline",
+        label: "Watcher off",
+        title: daemonStatus.lastError ? `Local watcher is off: ${daemonStatus.lastError}` : "Local watcher is off"
+      };
+    }
+    if (outboxPending > 0) {
+      return {
+        className: "syncing",
+        label: `${outboxPending} pending`,
+        title: `Local daemon has ${outboxPending} pending outbox item${outboxPending === 1 ? "" : "s"}`
+      };
+    }
+
+    return {
+      className: "ok",
+      label: "Synced",
+      title: "Local daemon is online and synced"
+    };
+  }, [autoLocalFallbackActive, daemonStatus, daemonStatusChecked, daemonStatusError]);
+
+  useEffect(() => {
+    const refreshAutoLocalFallback = () => {
+      setAutoLocalFallbackActive(getWorkbenchAutoLocalFallbackActive());
+    };
+    window.addEventListener(WORKBENCH_LOCAL_MODE_CHANGED_EVENT, refreshAutoLocalFallback);
+    return () => window.removeEventListener(WORKBENCH_LOCAL_MODE_CHANGED_EVENT, refreshAutoLocalFallback);
+  }, []);
+
+  useEffect(() => {
+    setIsUserMenuOpen(false);
+    setIsNotificationOpen(false);
+    setIsMobileMenuOpen(false);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    const onResize = () => {
+      setIsCompactSidebarMode(window.innerWidth <= COMPACT_SIDEBAR_BREAKPOINT);
+    };
+
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  useEffect(() => {
+    setSidebarView(isArtifactsRoute ? "artifacts" : "main");
+  }, [isArtifactsRoute]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const refreshDaemonStatus = async () => {
+      try {
+        const status = await localDaemonApi.status();
+        if (cancelled) return;
+        setDaemonStatus(status);
+        setDaemonStatusError(false);
+      } catch {
+        if (cancelled) return;
+        setDaemonStatus(undefined);
+        setDaemonStatusError(true);
+      } finally {
+        if (!cancelled) {
+          setDaemonStatusChecked(true);
+        }
+      }
+    };
+
+    void refreshDaemonStatus();
+    const intervalId = window.setInterval(() => void refreshDaemonStatus(), 30000);
+    const onDaemonUrlChanged = () => void refreshDaemonStatus();
+    const onVisibilityChange = () => {
+      if (!document.hidden) {
+        void refreshDaemonStatus();
+      }
+    };
+
+    window.addEventListener(WORKBENCH_LOCAL_DAEMON_URL_CHANGED_EVENT, onDaemonUrlChanged);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+      window.removeEventListener(WORKBENCH_LOCAL_DAEMON_URL_CHANGED_EVENT, onDaemonUrlChanged);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isCompactSidebarMode) {
+      setIsSidebarCollapsed(false);
+      return;
+    }
+    setIsMobileMenuOpen(false);
+  }, [isCompactSidebarMode]);
+
+  useEffect(() => {
+    const reloadShortcuts = () => setShortcutBindings(loadShortcutBindings());
+    window.addEventListener(WORKBENCH_KEYBOARD_SHORTCUTS_CHANGED_EVENT, reloadShortcuts);
+    window.addEventListener("storage", reloadShortcuts);
+    return () => {
+      window.removeEventListener(WORKBENCH_KEYBOARD_SHORTCUTS_CHANGED_EVENT, reloadShortcuts);
+      window.removeEventListener("storage", reloadShortcuts);
+    };
+  }, []);
+
+  useEffect(() => {
+    void syncNativeGlobalShortcuts(shortcutBindings).catch((error) => {
+      console.warn("[workbench] failed to sync native global shortcuts", error);
+    });
+  }, [shortcutBindings]);
+
+  useEffect(() => {
+    const onMouseDown = (event: MouseEvent) => {
+      if (!userMenuRef.current?.contains(event.target as Node)) {
+        setIsUserMenuOpen(false);
+      }
+      if (!notificationMenuRef.current?.contains(event.target as Node)) {
+        setIsNotificationOpen(false);
+      }
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      const matchesShortcut = (actionId: ShortcutActionId) =>
+        shortcutMatchesEvent(shortcutBindings[actionId], event);
+
+      if (matchesShortcut("close_cancel")) {
+        event.preventDefault();
+        setIsShortcutsOpen(false);
+        setIsNotificationOpen(false);
+        setIsUserMenuOpen(false);
+        setIsQuickNoteOpen(false);
+        return;
+      }
+
+      if (isTextEditingTarget(event.target)) {
+        return;
+      }
+
+      const isQuickNoteShortcut = matchesShortcut("quick_note") || matchesShortcut("quick_note_alt");
+      if (isQuickNoteShortcut) {
+        event.preventDefault();
+        if (isNativeRuntime) {
+          void openQuickNoteWindow();
+          return;
+        }
+        const width = 560;
+        const height = 760;
+        const left = Math.max(0, window.screenX + Math.round((window.outerWidth - width) / 2));
+        const top = Math.max(0, window.screenY + Math.round((window.outerHeight - height) / 2));
+        const features = `popup=yes,width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=no`;
+        const quickNoteWindowName = `workbench-quick-note-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+        const quickNoteWindow = window.open("/?quick-note-window=1", quickNoteWindowName, features);
+        if (quickNoteWindow) {
+          quickNoteWindow.focus();
+        } else {
+          setIsQuickNoteOpen(true);
+        }
+        setIsUserMenuOpen(false);
+        setIsShortcutsOpen(false);
+        setIsNotificationOpen(false);
+        return;
+      }
+
+      if (matchesShortcut("open_calendar_window")) {
+        event.preventDefault();
+        void openCalendarWindow(buildStandaloneCalendarUrl());
+        return;
+      }
+
+      if (matchesShortcut("new_window")) {
+        event.preventDefault();
+        if (isNativeRuntime) {
+          void openMainWindow();
+        } else {
+          window.open("/", "_blank", "noopener,noreferrer");
+        }
+        return;
+      }
+
+      const navigationShortcuts: Array<[ShortcutActionId, string]> = [
+        ["open_home", "/"],
+        ["open_project", "/projects"],
+        ["open_tasks", "/tasks"],
+        ["open_notes", "/notes"],
+        ["open_artifacts", "/artifacts"],
+        ["open_settings", "/settings"]
+      ];
+      const matchedNavigation = navigationShortcuts.find(([actionId]) => matchesShortcut(actionId));
+      if (matchedNavigation) {
+        event.preventDefault();
+        const target = matchedNavigation[0] === "open_artifacts" && !isArtifactsRoute
+          ? readArtifactsLastLocation() ?? matchedNavigation[1]
+          : matchedNavigation[1];
+        navigate(target);
+      }
+    };
+
+    document.addEventListener("mousedown", onMouseDown);
+    document.addEventListener("keydown", onKeyDown);
+
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [isArtifactsRoute, isNativeRuntime, navigate, shortcutBindings]);
+
+  const logout = async () => {
+    await clearWorkbenchSession();
+    setIsUserMenuOpen(false);
+    navigate("/login", { replace: true });
+  };
+
+  const activeSidebarView = isSidebarCollapsed || isCompactSidebarMode ? "main" : sidebarView;
+
+  return (
+    <div className={[
+      "app-shell",
+      isSidebarCollapsed ? "sidebar-collapsed" : "",
+      isCompactSidebarMode ? "compact-sidebar-mode" : "",
+      isMobileMenuOpen ? "mobile-menu-open" : ""
+    ].filter(Boolean).join(" ")}>
+      {isCompactSidebarMode && isMobileMenuOpen && (
+        <div
+          className="mobile-sidebar-backdrop"
+          aria-hidden="true"
+          onClick={() => setIsMobileMenuOpen(false)}
+        />
+      )}
+      <aside className={isCompactSidebarMode && isMobileMenuOpen ? "sidebar mobile-sidebar-open" : "sidebar"}>
+        <div className={activeSidebarView === "artifacts" ? "sidebar-views artifacts-active" : "sidebar-views"}>
+          <div className="sidebar-views-track">
+            <div className="sidebar-view sidebar-main-view" aria-hidden={activeSidebarView !== "main"} inert={activeSidebarView !== "main"}>
+              <div className="sidebar-top">
+                <button
+                  type="button"
+                  className="sidebar-toggle"
+                  aria-label={
+                    isCompactSidebarMode
+                      ? "Close navigation menu"
+                      : isSidebarCollapsed
+                        ? "Expand sidebar"
+                        : "Collapse sidebar"
+                  }
+                  onClick={() => {
+                    if (isCompactSidebarMode) {
+                      setIsMobileMenuOpen(false);
+                      return;
+                    }
+                    setIsSidebarCollapsed((prev) => !prev);
+                  }}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                    <path d="M4 7h16M4 12h16M4 17h16" />
+                  </svg>
+                </button>
+              </div>
+
+              <nav className="main-nav" aria-label="Primary">
+                {sidebarNavSections.map((section, index) => (
+                  <section className="nav-section" key={section.label ?? `primary-${index}`}>
+                    {section.label ? <div className="nav-section-label">{section.label}</div> : null}
+                    <div className="nav-section-links">
+                      {section.items.map((item) => (
+                        <NavLink
+                          key={item.path}
+                          to={item.path}
+                          className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
+                          end={item.path === "/"}
+                          onClick={(event) => {
+                            const isPlainPrimaryClick =
+                              event.button === 0 &&
+                              !event.metaKey &&
+                              !event.ctrlKey &&
+                              !event.shiftKey &&
+                              !event.altKey;
+                            if (item.label !== "Artifacts" || !isPlainPrimaryClick) {
+                              return;
+                            }
+                            setSidebarView("artifacts");
+                            if (isArtifactsRoute) {
+                              return;
+                            }
+                            event.preventDefault();
+                            navigate(readArtifactsLastLocation() ?? "/artifacts");
+                          }}
+                        >
+                          <span className="nav-icon" aria-hidden="true">
+                            {navIconMap[item.label]}
+                          </span>
+                          <span className="nav-label">{item.label}</span>
+                        </NavLink>
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              </nav>
+            </div>
+
+            <div
+              className="sidebar-view sidebar-artifacts-view"
+              aria-hidden={activeSidebarView !== "artifacts"}
+              inert={activeSidebarView !== "artifacts"}
+            >
+              <div className="artifacts-sidebar-header">
+                <button
+                  type="button"
+                  className="artifacts-sidebar-back"
+                  aria-label="Back to main menu"
+                  onClick={() => setSidebarView("main")}
+                >
+                  <span aria-hidden="true">←</span>
+                </button>
+                <span className="nav-icon" aria-hidden="true">
+                  {navIconMap.Artifacts}
+                </span>
+                <span>Artifacts</span>
+              </div>
+              <ArtifactsQuickAccess />
+            </div>
+          </div>
+        </div>
+
+        <div className="sidebar-footer-wrap" ref={userMenuRef}>
+          {isUserMenuOpen ? (
+            <div className="user-menu" role="menu" aria-label="User menu">
+              <button
+                type="button"
+                className="user-menu-item"
+                role="menuitem"
+                onClick={() => {
+                  setIsUserMenuOpen(false);
+                  navigate("/settings");
+                }}
+              >
+                <span className="user-menu-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                    <path d="M10.6 3.4h2.8l.5 2a6.7 6.7 0 0 1 1.6.9l1.9-.8 1.4 2.4-1.5 1.4c.1.5.2 1 .2 1.5s-.1 1-.2 1.5l1.5 1.4-1.4 2.4-1.9-.8c-.5.4-1 .7-1.6.9l-.5 2h-2.8l-.5-2a6.7 6.7 0 0 1-1.6-.9l-1.9.8-1.4-2.4 1.5-1.4a6 6 0 0 1 0-3l-1.5-1.4 1.4-2.4 1.9.8c.5-.4 1-.7 1.6-.9l.5-2z" />
+                    <circle cx="12" cy="12" r="2.5" />
+                  </svg>
+                </span>
+                <span className="user-menu-label">Settings</span>
+              </button>
+              <button
+                type="button"
+                className="user-menu-item"
+                role="menuitem"
+                onClick={() => {
+                  setIsUserMenuOpen(false);
+                  setIsShortcutsOpen(true);
+                }}
+              >
+                <span className="user-menu-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                    <rect x="3.5" y="6.5" width="17" height="11" rx="2" />
+                    <path d="M7 10h1.5M10.5 10H12M14 10h1.5M17.5 10H19M7 13.5h5M13.5 13.5H19" />
+                  </svg>
+                </span>
+                <span className="user-menu-label">Keyboard Shortcuts</span>
+              </button>
+              <button type="button" className="user-menu-item danger" role="menuitem" onClick={() => void logout()}>
+                <span className="user-menu-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                    <path d="M9 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4" />
+                    <path d="M16 16l5-4-5-4" />
+                    <path d="M21 12H9" />
+                  </svg>
+                </span>
+                <span className="user-menu-label">Log out</span>
+              </button>
+            </div>
+          ) : null}
+
+          <button
+            type="button"
+            className={isSidebarCollapsed ? "sidebar-footer collapsed" : "sidebar-footer"}
+            aria-haspopup="menu"
+            aria-expanded={isUserMenuOpen}
+            onClick={() => setIsUserMenuOpen((prev) => !prev)}
+          >
+            <div className="user-badge">{userBadge}</div>
+            <div>
+              <strong>{shortName}</strong>
+            </div>
+          </button>
+        </div>
+      </aside>
+
+      <main className="workspace-main">
+        <header className="workspace-topbar">
+          <div className="topbar-left">
+            <button
+              type="button"
+              className="mobile-hamburger"
+              aria-label={isMobileMenuOpen ? "Close navigation menu" : "Open navigation menu"}
+              onClick={() => setIsMobileMenuOpen((prev) => !prev)}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                <path d="M4 7h16M4 12h16M4 17h16" />
+              </svg>
+            </button>
+            <p className="topbar-brand">
+              <span className="topbar-dot" aria-hidden="true" />
+              WORKBENCH
+            </p>
+          </div>
+          <div className="topbar-actions">
+            <button
+              type="button"
+              className={`sync-status-button ${daemonSignal.className}`}
+              title={daemonSignal.title}
+              aria-label={`Local sync status: ${daemonSignal.label}`}
+              onClick={() => navigate("/settings?tab=account&section=sync-daemon")}
+            >
+              <span className="sync-status-dot" aria-hidden="true" />
+              <span className="sync-status-label">{daemonSignal.label}</span>
+            </button>
+            <div className="notification-menu-wrap" ref={notificationMenuRef}>
+              <button
+                type="button"
+                className={unreadCount > 0 ? "icon-button topbar-icon-button has-unread" : "icon-button topbar-icon-button"}
+                aria-label="Notifications"
+                aria-haspopup="menu"
+                aria-expanded={isNotificationOpen}
+                onClick={() => setIsNotificationOpen((prev) => !prev)}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                  <path d="M12 4a4 4 0 0 0-4 4v2.5c0 .7-.2 1.3-.6 1.9L6 15h12l-1.4-2.6c-.4-.6-.6-1.2-.6-1.9V8a4 4 0 0 0-4-4z" />
+                  <path d="M10 18a2 2 0 0 0 4 0" />
+                </svg>
+                {unreadCount > 0 ? (
+                  <span className="notification-badge" aria-hidden="true">
+                    {unreadCount > 99 ? "99+" : unreadCount}
+                  </span>
+                ) : null}
+              </button>
+
+              {isNotificationOpen ? (
+                <div className="notification-menu" role="menu" aria-label="Notifications">
+                  <div className="notification-menu-head">
+                    <div className="notification-menu-head-left">
+                      <div className="notification-menu-actions">
+                        <button type="button" onClick={() => markAllNotificationsRead()}>Mark all read</button>
+                        <button type="button" onClick={() => clearNotifications()}>Clear</button>
+                      </div>
+                      <strong>Notifications</strong>
+                    </div>
+                    <small>{unreadCount > 0 ? `${unreadCount} unread` : "All read"}</small>
+                  </div>
+                  <div className="notification-menu-list">
+                    {notifications.length === 0 ? (
+                      <p>No notifications yet.</p>
+                    ) : (
+                      notifications.map((notification) => (
+                        <button
+                          key={notification.id}
+                          type="button"
+                          className={[
+                            "notification-item",
+                            notification.read ? "read" : "",
+                            `level-${notification.level}`
+                          ].filter(Boolean).join(" ")}
+                          onClick={() => markNotificationRead(notification.id)}
+                        >
+                          <div className="notification-item-top">
+                            <strong>{notification.title}</strong>
+                            <time>
+                              {new Date(notification.createdAt).toLocaleTimeString("ja-JP", {
+                                hour: "2-digit",
+                                minute: "2-digit"
+                              })}
+                            </time>
+                          </div>
+                          <p>{notification.message}</p>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              className="icon-button topbar-icon-button"
+              aria-label="Settings"
+              onClick={() => navigate("/settings")}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                <path d="M10.6 3.4h2.8l.5 2a6.7 6.7 0 0 1 1.6.9l1.9-.8 1.4 2.4-1.5 1.4c.1.5.2 1 .2 1.5s-.1 1-.2 1.5l1.5 1.4-1.4 2.4-1.9-.8c-.5.4-1 .7-1.6.9l-.5 2h-2.8l-.5-2a6.7 6.7 0 0 1-1.6-.9l-1.9.8-1.4-2.4 1.5-1.4a6 6 0 0 1 0-3l-1.5-1.4 1.4-2.4 1.9.8c.5-.4 1-.7 1.6-.9l.5-2z" />
+                <circle cx="12" cy="12" r="2.6" />
+              </svg>
+            </button>
+          </div>
+        </header>
+        <section
+          className={
+            isTasksRoute
+              ? "page-frame tasks-page-frame"
+              : isArtifactsRoute
+                ? "page-frame artifacts-page-frame"
+                : isResearchRoute
+                  ? "page-frame research-page-frame"
+                  : isImagesRoute
+                    ? "page-frame images-page-frame"
+                    : isMindmapsRoute
+                      ? "page-frame mindmaps-page-frame"
+                      : isWbsRoute
+                        ? "page-frame wbs-page-frame"
+                        : "page-frame"
+          }
+        >
+          <Outlet />
+        </section>
+      </main>
+
+      <ShortcutsModal open={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
+      <QuickNoteModal open={isQuickNoteOpen} onClose={() => setIsQuickNoteOpen(false)} />
+    </div>
+  );
+}

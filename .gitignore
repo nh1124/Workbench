@@ -5,6 +5,7 @@ node_modules/
 /.vscode/
 *.log
 ui/dist/
+native/desktop/ui/dist/
 services/*/dist/
 services/*/docs/
 native/desktop/src-tauri/target/

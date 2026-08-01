@@ -1,0 +1,102 @@
+.artifact-memberships {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.artifact-membership-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+}
+
+.artifact-membership-list li > div {
+  display: grid;
+  gap: 0.14rem;
+  min-width: 0;
+}
+
+.artifact-memberships small {
+  color: #94a3b8;
+}
+
+.artifact-membership-list li {
+  border: 1px solid rgba(51, 65, 85, 0.72);
+  border-radius: 9px;
+  background: rgba(15, 23, 42, 0.52);
+  padding: 0.45rem 0.55rem;
+}
+
+.artifact-membership-list {
+  display: grid;
+  gap: 0.4rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.artifact-membership-list .artifact-membership-empty {
+  color: #94a3b8;
+  justify-content: flex-start;
+  min-height: 2rem;
+}
+
+.artifact-membership-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.9fr) minmax(220px, 1fr) auto;
+  gap: 0.38rem;
+}
+
+.artifact-membership-form select,
+.artifact-membership-form input {
+  min-height: 2.05rem;
+  border: 1px solid rgba(77, 97, 128, 0.72);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.64);
+  color: #d8e8fb;
+  padding: 0 0.55rem;
+}
+
+.artifact-membership-add,
+.artifact-membership-remove {
+  border: 1px solid rgba(103, 184, 224, 0.46);
+  border-radius: 8px;
+  background: transparent;
+  color: #9bdcf7;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0 0.7rem;
+}
+
+.artifact-membership-add {
+  min-height: 2.05rem;
+}
+
+.artifact-membership-remove {
+  min-height: 1.7rem;
+}
+
+.artifact-membership-add:hover:not(:disabled),
+.artifact-membership-remove:hover:not(:disabled) {
+  background: rgba(103, 184, 224, 0.1);
+}
+
+.artifact-membership-add:disabled,
+.artifact-membership-remove:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.artifact-membership-warning,
+.artifact-membership-error {
+  margin: 0;
+  font-size: 0.78rem;
+}
+
+.artifact-membership-warning { color: #fcd34d; }
+.artifact-membership-error { color: #fca5a5; }
+
+@media (max-width: 900px) {
+  .artifact-membership-form { grid-template-columns: 1fr; }
+  .artifact-membership-list li { align-items: flex-start; flex-direction: column; }
+}

@@ -106,7 +106,8 @@ function desiredRuntimeUpdates(env) {
   const mindmapsUrl = serviceUrl(env, "MINDMAPS_PORT");
   const wbsUrl = serviceUrl(env, "WBS_PORT");
   const analyserUrl = serviceUrl(env, "ANALYSER_PORT");
-  const uiDevUrl = `http://${env.UI_DEV_HOST}:${env.UI_DEV_PORT}`;
+  const nativeUiDevPort = "5175";
+  const nativeUiDevUrl = `http://${env.UI_DEV_HOST}:${nativeUiDevPort}`;
   const requireCoreMutationOrigin = env.WORKBENCH_REQUIRE_CORE_MUTATION_ORIGIN || "false";
   const coreMutationToken = env.WORKBENCH_CORE_MUTATION_TOKEN || "";
 
@@ -215,10 +216,20 @@ function desiredRuntimeUpdates(env) {
       },
     },
     {
+      file: "native/desktop/ui/.env",
+      sample: "native/desktop/ui/.env.example",
+      updates: {
+        UI_DEV_HOST: env.UI_DEV_HOST,
+        UI_DEV_PORT: nativeUiDevPort,
+        VITE_WORKBENCH_CORE_URL: coreUrl,
+      },
+    },
+    {
       file: "native/desktop/.env",
       sample: "native/desktop/.env.example",
       updates: {
-        NATIVE_DEV_URL: uiDevUrl,
+        NATIVE_DEV_URL: nativeUiDevUrl,
+        NATIVE_FRONTEND_DIST: "../ui/dist",
       },
     },
   ];
