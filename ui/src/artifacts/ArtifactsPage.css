@@ -32,6 +32,10 @@
   padding: 0;
 }
 
+.variant-shell .va-app-rail {
+  padding: 0.4rem 0.35rem;
+}
+
 .va-shell {
   position: relative;
   height: 100%;
@@ -70,6 +74,10 @@
   padding: 0.72rem 1.1rem;
   border-bottom: 1px solid rgba(47, 65, 93, 0.8);
   background: linear-gradient(180deg, rgba(8, 17, 35, 0.96), rgba(5, 12, 25, 0.95));
+}
+
+.variant-shell .va-toolbar {
+  padding: 0.4rem 0.6rem;
 }
 
 .va-toolbar-left {
@@ -366,6 +374,10 @@
   align-content: start;
 }
 
+.variant-shell .va-directory-pane > .va-tree-list.tile-view {
+  padding: 0.4rem 0.35rem;
+}
+
 .va-project-card-grid {
   min-height: 0;
   overflow: auto;
@@ -573,6 +585,10 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 0;
+}
+
+.variant-shell .va-directory-pane > .va-tree-list.list-view {
+  padding: 0.24rem 0.35rem 0.4rem;
 }
 
 .va-tree-list-header {

@@ -113,6 +113,7 @@ type MoveFolderProjectState = {
 };
 
 const ARTIFACTS_RAIL_VISIBLE_STORAGE_KEY = "workbench-artifacts-rail-visible";
+type ArtifactsSearchShortcutAction = "ignore" | "focus" | "expand";
 
 export function readArtifactsRailVisible(): boolean {
   if (typeof window === "undefined") return true;
@@ -122,6 +123,14 @@ export function readArtifactsRailVisible(): boolean {
 export function writeArtifactsRailVisible(visible: boolean): void {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(ARTIFACTS_RAIL_VISIBLE_STORAGE_KEY, visible ? "1" : "0");
+}
+
+export function getArtifactsSearchShortcutAction(params: {
+  isDedicatedApp: boolean;
+  hasDetailSelection: boolean;
+}): ArtifactsSearchShortcutAction {
+  if (params.hasDetailSelection) return "ignore";
+  return params.isDedicatedApp ? "focus" : "expand";
 }
 
 export function ArtifactsPage() {
@@ -195,7 +204,10 @@ export function ArtifactsPage() {
   const handleSaveRef = useRef<() => Promise<void>>(async () => {});
   const handleArtifactHistoryNavRef = useRef<(direction: -1 | 1) => void>(() => {});
   const shortcutStateRef = useRef({ canSave: false, isSaving: false, markdownEditorVisible: false, pdfViewerVisible: false });
-  const searchShortcutStateRef = useRef({ directoryVisible: true, searchExpanded: false });
+  const searchShortcutStateRef = useRef<{
+    action: ArtifactsSearchShortcutAction;
+    searchExpanded: boolean;
+  }>({ action: "expand", searchExpanded: false });
   const artifactNavHistoryRef = useRef<{ ids: string[]; index: number }>({ ids: [], index: -1 });
   const suppressArtifactNavPushRef = useRef(false);
   const lastSearchParamsKeyRef = useRef(searchParamsKey);
@@ -304,7 +316,10 @@ export function ArtifactsPage() {
   }, [items, searchTerms]);
   const visibleSearchItems = matchingSearchItems.slice(0, 100);
   const hasActiveSearchQuery = searchTerms.length > 0;
-  searchShortcutStateRef.current = { directoryVisible: !hasDetailSelection, searchExpanded };
+  searchShortcutStateRef.current = {
+    action: getArtifactsSearchShortcutAction({ isDedicatedApp, hasDetailSelection }),
+    searchExpanded
+  };
 
   useEffect(() => {
     document.body.classList.toggle("workbench-artifacts-edit-mode", hasDetailSelection);
@@ -688,16 +703,21 @@ export function ArtifactsPage() {
         return;
       }
 
+      const searchShortcutAction = searchShortcutStateRef.current.action;
       if (
         e.key === "/" &&
         !e.ctrlKey &&
         !e.metaKey &&
         !e.altKey &&
-        searchShortcutStateRef.current.directoryVisible &&
+        searchShortcutAction !== "ignore" &&
         !isTextEditingTarget(e.target)
       ) {
         e.preventDefault();
-        setSearchExpanded(true);
+        if (searchShortcutAction === "focus") {
+          searchInputRef.current?.focus();
+        } else {
+          setSearchExpanded(true);
+        }
         return;
       }
 
@@ -2263,51 +2283,55 @@ export function ArtifactsPage() {
             </div>
 
             <div className="va-toolbar-right">
-              {searchExpanded ? (
-                <div className="va-search-box">
-                  <span className="va-search-box-icon" aria-hidden="true"><IcoSearch /></span>
-                  <input
-                    ref={searchInputRef}
-                    type="search"
-                    value={searchQuery}
-                    onChange={(event) => setSearchQuery(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Escape") {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        closeSearch();
-                      }
-                    }}
-                    aria-label="Search artifacts"
-                    placeholder="Search artifacts"
-                    autoFocus
-                  />
-                  <button type="button" onClick={closeSearch} aria-label="Close search" title="Close Search">
-                    <IcoClose />
-                  </button>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  className="va-toolbar-icon-btn"
-                  onClick={() => setSearchExpanded(true)}
-                  aria-label="Search artifacts"
-                  title="Search (/)"
-                >
-                  <IcoSearch />
-                </button>
-              )}
-              <label className="va-project-select-wrap">
-                <span>Project</span>
-                <select value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}>
-                  <option value="">All</option>
-                  {projectOptions.map((project) => (
-                    <option key={project.projectId} value={project.projectId}>
-                      {normalizeProjectName(project.projectId, project.projectName)}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              {!isDedicatedApp ? (
+                <>
+                  {searchExpanded ? (
+                    <div className="va-search-box">
+                      <span className="va-search-box-icon" aria-hidden="true"><IcoSearch /></span>
+                      <input
+                        ref={searchInputRef}
+                        type="search"
+                        value={searchQuery}
+                        onChange={(event) => setSearchQuery(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Escape") {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            closeSearch();
+                          }
+                        }}
+                        aria-label="Search artifacts"
+                        placeholder="Search artifacts"
+                        autoFocus
+                      />
+                      <button type="button" onClick={closeSearch} aria-label="Close search" title="Close Search">
+                        <IcoClose />
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className="va-toolbar-icon-btn"
+                      onClick={() => setSearchExpanded(true)}
+                      aria-label="Search artifacts"
+                      title="Search (/)"
+                    >
+                      <IcoSearch />
+                    </button>
+                  )}
+                  <label className="va-project-select-wrap">
+                    <span>Project</span>
+                    <select value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}>
+                      <option value="">All</option>
+                      {projectOptions.map((project) => (
+                        <option key={project.projectId} value={project.projectId}>
+                          {normalizeProjectName(project.projectId, project.projectName)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </>
+              ) : null}
 
               {!isProjectCardView ? (
                 <>
@@ -3130,6 +3154,40 @@ export function ArtifactsPage() {
   return (
     <>
       <TitleBarPortal>
+        {/* Search results can only render in the directory pane, so these controls would be inert in detail view. */}
+        {!hasDetailSelection ? (
+          <>
+            <input
+              ref={searchInputRef}
+              className="chrome-search"
+              type="search"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setSearchQuery("");
+                }
+              }}
+              placeholder="Search artifacts"
+              aria-label="Search artifacts"
+            />
+            <select
+              className="chrome-select"
+              value={projectFilter}
+              onChange={(event) => setProjectFilter(event.target.value)}
+              aria-label="Filter by project"
+            >
+              <option value="">All</option>
+              {projectOptions.map((project) => (
+                <option key={project.projectId} value={project.projectId}>
+                  {normalizeProjectName(project.projectId, project.projectName)}
+                </option>
+              ))}
+            </select>
+          </>
+        ) : null}
         <button
           type="button"
           className={railVisible ? "chrome-icon-button active" : "chrome-icon-button"}
