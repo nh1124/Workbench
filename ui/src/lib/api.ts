@@ -70,6 +70,50 @@ export async function openMainWindow(): Promise<boolean> {
   return true;
 }
 
+/**
+ * Window controls for the dedicated apps, which run undecorated and draw their own title
+ * bar. Outside the native runtime these are no-ops, so the same UI renders in a browser
+ * without throwing.
+ */
+async function invokeWindowCommand(command: string): Promise<boolean> {
+  if (!isTauriNativeRuntime()) {
+    return false;
+  }
+  await invokeNative<void>(command);
+  return true;
+}
+
+export const nativeWindowControls = {
+  minimize: (): Promise<boolean> => invokeWindowCommand("window_minimize"),
+  toggleMaximize: (): Promise<boolean> => invokeWindowCommand("window_toggle_maximize"),
+  isMaximized: async (): Promise<boolean> => {
+    if (!isTauriNativeRuntime()) {
+      return false;
+    }
+    return invokeNative<boolean>("window_is_maximized");
+  },
+  close: (): Promise<boolean> => invokeWindowCommand("window_close"),
+  startDrag: (): Promise<boolean> => invokeWindowCommand("window_start_drag"),
+
+  /**
+   * Tells the native side where the maximize button was drawn, in CSS pixels. Windows only
+   * offers Snap Layouts when the window reports `HTMAXBUTTON` for that area, and it cannot
+   * know where the webview put the button.
+   */
+  reportMaximizeButtonRect: async (rect: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }): Promise<boolean> => {
+    if (!isTauriNativeRuntime()) {
+      return false;
+    }
+    await invokeNative<void>("set_maximize_button_rect", rect);
+    return true;
+  }
+};
+
 export async function syncNativeGlobalShortcuts(bindings: ShortcutBindings): Promise<boolean> {
   if (!isTauriNativeRuntime()) {
     return false;
