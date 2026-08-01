@@ -41,6 +41,43 @@ function envHas(name) {
   return Object.prototype.hasOwnProperty.call(process.env, name);
 }
 
+const variants = {
+  tasks: {
+    productName: "Workbench Tasks",
+    identifier: "com.workbench.desktop.tasks",
+    windowTitle: "Workbench Tasks",
+    iconDir: "icons/tasks"
+  },
+  notes: {
+    productName: "Workbench Notes",
+    identifier: "com.workbench.desktop.notes",
+    windowTitle: "Workbench Notes",
+    iconDir: "icons/notes"
+  },
+  artifacts: {
+    productName: "Workbench Artifacts",
+    identifier: "com.workbench.desktop.artifacts",
+    windowTitle: "Workbench Artifacts",
+    iconDir: "icons/artifacts"
+  }
+};
+
+const appVariant = process.env.NATIVE_APP_VARIANT?.trim() ?? "";
+if (appVariant !== "" && !Object.prototype.hasOwnProperty.call(variants, appVariant)) {
+  throw new Error(
+    `Unknown NATIVE_APP_VARIANT: ${appVariant}. Valid variants: tasks, notes, artifacts, or unset/empty for main.`
+  );
+}
+
+const appConfig = appVariant === ""
+  ? {
+      productName: required("NATIVE_APP_NAME"),
+      identifier: required("NATIVE_APP_IDENTIFIER"),
+      windowTitle: required("NATIVE_WINDOW_TITLE"),
+      iconDir: "icons"
+    }
+  : variants[appVariant];
+
 function resolveManifestPath(manifestPath, value) {
   return path.isAbsolute(value) ? value : path.resolve(path.dirname(manifestPath), value);
 }
@@ -86,9 +123,9 @@ const bundleActive = optionalBoolean("NATIVE_BUNDLE_ACTIVE", daemonExternalBins.
 
 const config = {
   $schema: "https://schema.tauri.app/config/2",
-  productName: required("NATIVE_APP_NAME"),
+  productName: appConfig.productName,
   version: "0.1.0",
-  identifier: required("NATIVE_APP_IDENTIFIER"),
+  identifier: appConfig.identifier,
   build: {
     beforeDevCommand: "",
     beforeBuildCommand: "",
@@ -96,18 +133,23 @@ const config = {
     frontendDist: required("NATIVE_FRONTEND_DIST")
   },
   app: {
-    windows: [
-      {
-        title: required("NATIVE_WINDOW_TITLE"),
-        width: Number(required("NATIVE_WINDOW_WIDTH")),
-        height: Number(required("NATIVE_WINDOW_HEIGHT")),
-        resizable: true,
-        fullscreen: false
-      }
-    ]
+    // Declare no windows here. Every window is created in Rust (window.rs) so it can carry
+    // the shared WebView2 data directory. A window declared in this config would be created
+    // first on the per-identifier default path, and because a process can only use ONE user
+    // data folder, the next window would fail to build and the app would exit on startup.
+    windows: []
   },
   bundle: {
-    active: bundleActive
+    active: bundleActive,
+    // Paths are relative to src-tauri/. The bundler needs an explicit list:
+    // without it there is no .ico to embed and `tauri build` fails at bundle time.
+    icon: [
+      `${appConfig.iconDir}/32x32.png`,
+      `${appConfig.iconDir}/128x128.png`,
+      `${appConfig.iconDir}/128x128@2x.png`,
+      `${appConfig.iconDir}/icon.icns`,
+      `${appConfig.iconDir}/icon.ico`
+    ]
   }
 };
 
@@ -115,7 +157,20 @@ if (daemonExternalBins.length > 0) {
   config.bundle.externalBin = daemonExternalBins;
 }
 
-if (!Number.isFinite(config.app.windows[0].width) || !Number.isFinite(config.app.windows[0].height)) {
+if (appVariant === "") {
+  // Only the main build creates an installer; it uses the vendored components-page template.
+  config.bundle.windows = {
+    nsis: {
+      template: "nsis/installer.nsi"
+    }
+  };
+}
+
+// Validated for the sake of the .env contract even though window.rs owns the real geometry.
+if (
+  !Number.isFinite(Number(required("NATIVE_WINDOW_WIDTH"))) ||
+  !Number.isFinite(Number(required("NATIVE_WINDOW_HEIGHT")))
+) {
   throw new Error("NATIVE_WINDOW_WIDTH and NATIVE_WINDOW_HEIGHT must be numeric values.");
 }
 

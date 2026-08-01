@@ -22,7 +22,8 @@
     "test:e2e:api": "node infra/scripts/e2e-api.mjs",
     "build": "npm run -ws build",
     "build:web": "npm run build --workspace ui",
-    "build:native": "npm run build:web && npm run tauri:build --workspace native/desktop"
+    "build:native": "npm run build:web && npm run tauri:build --workspace native/desktop",
+    "build:native:all": "npm run build:web && node native/desktop/scripts/build-variants.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.2.1"
