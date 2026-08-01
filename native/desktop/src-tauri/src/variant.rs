@@ -54,6 +54,20 @@ pub fn current(app: &tauri::AppHandle) -> AppVariant {
   from_identifier(&app.config().identifier)
 }
 
+/// Reads the variant out of a window query such as `?app=notes&note=<id>`.
+pub fn from_query(query: &str) -> AppVariant {
+  let value = query
+    .trim_start_matches('?')
+    .split('&')
+    .find_map(|pair| pair.strip_prefix("app="));
+  match value {
+    Some("tasks") => AppVariant::Tasks,
+    Some("notes") => AppVariant::Notes,
+    Some("artifacts") => AppVariant::Artifacts,
+    _ => AppVariant::Main,
+  }
+}
+
 impl AppVariant {
   pub fn is_main(&self) -> bool {
     matches!(self, AppVariant::Main)

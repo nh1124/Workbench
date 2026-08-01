@@ -147,6 +147,7 @@ pub fn run() {
       commands::window_minimize,
       commands::window_toggle_maximize,
       commands::window_is_maximized,
+      commands::open_variant_window,
       commands::window_close,
       commands::window_start_drag,
       titlebar::set_maximize_button_rect,

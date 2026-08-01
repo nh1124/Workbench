@@ -1377,6 +1377,12 @@ pub fn window_toggle_maximize(window: tauri::Window) -> Result<(), String> {
   }
 }
 
+/// Opens another dedicated-app window, e.g. one note in its own window.
+#[tauri::command]
+pub fn open_variant_window(app: tauri::AppHandle, query: String) -> Result<(), String> {
+  window::open_variant_window(&app, &query)
+}
+
 #[tauri::command]
 pub fn window_is_maximized(window: tauri::Window) -> Result<bool, String> {
   window

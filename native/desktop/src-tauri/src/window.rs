@@ -138,6 +138,50 @@ pub fn open_new_main_window(app: &tauri::AppHandle) -> Result<(), String> {
   Err("main window duplication is not supported on this platform".to_string())
 }
 
+/// Opens another window of a dedicated app at `query`, e.g. `?app=notes&note=<id>`.
+///
+/// This goes through the same path as the app's own window — undecorated, shared WebView2
+/// data directory, snap-layout hit testing — rather than the generic app-window command,
+/// which produces a decorated window that does not carry any of that setup.
+pub fn open_variant_window(app: &tauri::AppHandle, query: &str) -> Result<(), String> {
+  #[cfg(desktop)]
+  {
+    if !query.starts_with("?app=") {
+      return Err("variant window query must start with ?app=".to_string());
+    }
+
+    let variant = crate::variant::from_query(query);
+    let window_label = build_main_window_label();
+    with_shared_data_directory(WebviewWindowBuilder::new(
+      app,
+      window_label,
+      WebviewUrl::App(query.into()),
+    ))
+    .title(variant.window_title())
+    .inner_size(760.0, 820.0)
+    .resizable(true)
+    .focused(true)
+    .decorations(false)
+    .disable_drag_drop_handler()
+    .build()
+    .and_then(|window| {
+      if let Err(error) = crate::titlebar::install(&window) {
+        eprintln!("[workbench-native] snap layout support unavailable: {error}");
+      }
+      let _ = window.unminimize();
+      let _ = window.show();
+      let _ = window.set_focus();
+      Ok(())
+    })
+    .map_err(|error| format!("failed to open variant window: {error}"))
+  }
+  #[cfg(not(desktop))]
+  {
+    let _ = (app, query);
+    Err("variant windows are not supported on this platform".to_string())
+  }
+}
+
 /// Shows an existing main window if present; otherwise creates a new one.
 ///
 /// This is used by tray interactions to restore the app from resident state.
