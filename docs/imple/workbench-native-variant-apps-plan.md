@@ -394,8 +394,9 @@ Rust コマンドを呼ぶ方式（[`transport.ts:64-73`](../../ui/src/lib/api/t
 | 項目 | 内容 |
 |---|---|
 | Notes 複数選択 | shift / ctrl の範囲選択 + 右クリックの一括操作（削除など）。**未着手** |
-| Artifacts | 下記「Artifacts の設計」参照。**着手中** |
-| Tasks | フィルタベース → フォルダベースへ意味論変更、Task List / Due Calendar / Schedule の切替を枠へ |
+| Artifacts | 下記「Artifacts の設計」参照。**コード完了、実機確認待ち** |
+| Tasks | フィルタベース → フォルダベースへ意味論変更、Task List / Due Calendar / Schedule の切替を枠へ。**未着手** |
+| タイトルバーの折り返し | 細いウィンドウで枠のコントロールがはみ出す。3 アプリ共通。**未着手** |
 
 ### Artifacts の設計（2026-08-01 調査で確定）
 
@@ -434,10 +435,42 @@ Rust コマンドを呼ぶ方式（[`transport.ts:64-73`](../../ui/src/lib/api/t
 
 #### Wave 分割
 
-| Wave | 内容 |
-|---|---|
-| A1 | `ArtifactsQuickAccess` の切り出し + 専用アプリでの左レール描画（開閉トグル込み） |
-| A2 | 検索とプロジェクト選択を title bar へ移設 + `.variant-shell` スコープの余白詰め |
+| Wave | 内容 | 状態 |
+|---|---|---|
+| A1 | `ArtifactsQuickAccess` の切り出し + 専用アプリでの左レール描画（開閉トグル込み） | [done] 2026-08-01 `a541a0c` |
+| A2 | 検索とプロジェクト選択を title bar へ移設 + `.variant-shell` スコープの余白詰め | [done] 2026-08-01 `e010609` |
+| A3 | 最終レビュー指摘の修正（下記） | [done] 2026-08-01 `1714e50` |
+| A4 | 実機の見た目確認（ユーザー実施） | [pending] |
+
+検証: `npx tsc --noEmit` 通過、ui vitest 482 件パス（着手前 476 件）。
+
+#### 実装中に確定した判断
+
+- **枠の検索・プロジェクト選択は編集モードで消す**。検索結果はディレクトリペイン内
+  （`hasActiveSearchQuery` 分岐）でしか描画されないため、artifact を開いている間は入力しても
+  何も起きない。`va-toolbar` 自体が `hasDetailSelection` で丸ごと隠れる既存設計に合わせた。
+  レール開閉トグルはウィンドウレイアウトの操作なので編集中も残す。
+- `/` ショートカットは `getArtifactsSearchShortcutAction` に切り出した。
+  main = `expand`（従来どおり）、専用アプリのディレクトリ表示 = `focus`、編集モード = `ignore`。
+  メイン側の挙動が変わっていないことは単体テストの真理値表で固定している。
+
+#### 最終レビューで見つかった欠陥（A3 で修正済み）
+
+- **レール 232px + アウトラインサイドバー 280px で、幅 512px 未満のウィンドウでは
+  エディタが幅ゼロになり消える**。ウィンドウに最小幅は無くレールは既定で表示なので、
+  ウィンドウを細めて artifact を開くだけで踏める。`body.workbench-artifacts-edit-mode` を使い、
+  **編集中かつ 900px 以下のときだけ**レールを退避させる（ディレクトリ表示は全幅で維持）。
+- レールの localStorage ヘルパが素の `localStorage` を叩いていた。この feature の他の設定
+  （`utils/lastLocation.ts` / `utils/pins.ts`）は `storageAvailable()` + `try`/`catch` で守っている。
+  読み取りは `/artifacts` のマウント毎（メインアプリ含む）に走るため、規約に合わせた。
+
+#### 積み残し（この wave の範囲外）
+
+- **`.variant-title-bar-slot` は折り返さないので、細いウィンドウでは枠のコントロールが
+  ウィンドウボタンへはみ出す**（[`styles.css`](../../ui/src/styles.css) の `.variant-title-bar-slot`）。
+  `.chrome-search` は `clamp(140px, 24vw, 300px)` で 140px の下限を持つ。
+  これは Artifacts 固有ではなく共通シェルの問題で、コントロール数がより多い Notes の方が先に破綻する。
+  3 アプリ全部に影響するため独立して直す。
 
 ## P2-6 の仕様
 
