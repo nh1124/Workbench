@@ -3,26 +3,26 @@ import { resolveVariantStartPage } from "../App";
 
 describe("resolveVariantStartPage", () => {
   it("maps each variant to its route", () => {
-    expect(resolveVariantStartPage("?app=tasks")).toBe("/tasks");
-    expect(resolveVariantStartPage("?app=notes")).toBe("/notes");
-    expect(resolveVariantStartPage("?app=artifacts")).toBe("/artifacts");
+    expect(resolveVariantStartPage("tasks")).toBe("/tasks");
+    expect(resolveVariantStartPage("notes")).toBe("/notes");
+    expect(resolveVariantStartPage("artifacts")).toBe("/artifacts");
   });
 
-  it("returns null when the app parameter is absent", () => {
+  it("returns null for the main app", () => {
+    expect(resolveVariantStartPage("main")).toBeNull();
+  });
+
+  it("returns null when no variant was injected", () => {
+    expect(resolveVariantStartPage(undefined)).toBeNull();
+    expect(resolveVariantStartPage(null)).toBeNull();
+  });
+
+  it("returns null for an empty injected value", () => {
     expect(resolveVariantStartPage("")).toBeNull();
-    expect(resolveVariantStartPage("?quick-note-window=1")).toBeNull();
-  });
-
-  it("returns null for an empty app parameter", () => {
-    expect(resolveVariantStartPage("?app=")).toBeNull();
   });
 
   it("returns null for an unknown variant so the configured start page wins", () => {
-    expect(resolveVariantStartPage("?app=bogus")).toBeNull();
-    expect(resolveVariantStartPage("?app=settings")).toBeNull();
-  });
-
-  it("ignores other query parameters", () => {
-    expect(resolveVariantStartPage("?foo=1&app=notes&bar=2")).toBe("/notes");
+    expect(resolveVariantStartPage("bogus")).toBeNull();
+    expect(resolveVariantStartPage("settings")).toBeNull();
   });
 });

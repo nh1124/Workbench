@@ -22,11 +22,11 @@ describe("noteSnippet", () => {
 });
 
 describe("standaloneNoteUrl", () => {
-  it("keeps the app query so the new window renders the dedicated shell", () => {
-    expect(standaloneNoteUrl("abc")).toBe("?app=notes&note=abc");
+  it("includes only the window-specific note parameter", () => {
+    expect(standaloneNoteUrl("abc")).toBe("?note=abc");
   });
 
   it("encodes ids that need it", () => {
-    expect(standaloneNoteUrl("a/b c")).toBe("?app=notes&note=a%2Fb%20c");
+    expect(standaloneNoteUrl("a/b c")).toBe("?note=a%2Fb%20c");
   });
 });

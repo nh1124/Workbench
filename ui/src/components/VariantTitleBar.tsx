@@ -17,8 +17,7 @@ const variantAppNames: Record<string, string> = {
   artifacts: "Workbench Artifacts"
 };
 
-export function variantAppName(search: string): string {
-  const variant = new URLSearchParams(search).get("app");
+export function variantAppName(variant: string | null | undefined): string {
   return (variant && variantAppNames[variant]) || "Workbench";
 }
 

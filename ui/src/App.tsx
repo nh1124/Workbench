@@ -29,15 +29,11 @@ const variantStartPages: Record<string, string> = {
 };
 
 /**
- * Resolves the start page for a variant native app (Workbench Tasks / Notes / Artifacts),
- * which launches with `?app=<variant>`. Returns null for the main app and for unknown values.
+ * Resolves the start page for a variant native app (Workbench Tasks / Notes / Artifacts).
+ * Returns null for the main app and for missing or unknown values.
  */
-export function resolveVariantStartPage(search: string): string | null {
-  const variant = new URLSearchParams(search).get("app");
-  if (!variant) {
-    return null;
-  }
-
+export function resolveVariantStartPage(variant: string | null | undefined): string | null {
+  if (!variant || variant === "main") return null;
   return variantStartPages[variant] ?? null;
 }
 
@@ -72,14 +68,13 @@ export default function App() {
     }
   }
 
-  const variantStartPage =
-    typeof window === "undefined" ? null : resolveVariantStartPage(window.location.search);
+  const variant = typeof window === "undefined" ? undefined : window.__WORKBENCH_VARIANT__;
+  const variantStartPage = resolveVariantStartPage(variant);
   const startPage = variantStartPage ?? resolveStartPage();
   // A dedicated app launches into one feature, so it drops the cross-feature chrome.
   const isVariantApp = variantStartPage !== null;
   const shell = isVariantApp ? <VariantShell /> : <Layout />;
-  // Captured now: the first navigation replaces the URL and drops `?app=`.
-  const appName = typeof window === "undefined" ? "Workbench" : variantAppName(window.location.search);
+  const appName = variantAppName(variant);
 
   const routes = (
     <Routes>

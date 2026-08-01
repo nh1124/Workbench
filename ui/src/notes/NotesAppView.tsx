@@ -64,7 +64,7 @@ export function readStoredViewMode(): NotesViewMode {
 
 /** URL that opens one note in its own window, the way Quick Note gets its own window. */
 export function standaloneNoteUrl(noteId: string): string {
-  return `?app=notes&note=${encodeURIComponent(noteId)}`;
+  return `?note=${encodeURIComponent(noteId)}`;
 }
 
 export function NotesAppView({

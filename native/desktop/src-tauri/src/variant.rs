@@ -54,21 +54,16 @@ pub fn current(app: &tauri::AppHandle) -> AppVariant {
   from_identifier(&app.config().identifier)
 }
 
-/// Reads the variant out of a window query such as `?app=notes&note=<id>`.
-pub fn from_query(query: &str) -> AppVariant {
-  let value = query
-    .trim_start_matches('?')
-    .split('&')
-    .find_map(|pair| pair.strip_prefix("app="));
-  match value {
-    Some("tasks") => AppVariant::Tasks,
-    Some("notes") => AppVariant::Notes,
-    Some("artifacts") => AppVariant::Artifacts,
-    _ => AppVariant::Main,
-  }
-}
-
 impl AppVariant {
+  pub fn name(&self) -> &'static str {
+    match self {
+      AppVariant::Main => "main",
+      AppVariant::Tasks => "tasks",
+      AppVariant::Notes => "notes",
+      AppVariant::Artifacts => "artifacts",
+    }
+  }
+
   pub fn is_main(&self) -> bool {
     matches!(self, AppVariant::Main)
   }
@@ -81,20 +76,15 @@ impl AppVariant {
       AppVariant::Artifacts => "Workbench Artifacts",
     }
   }
+}
 
-  pub fn start_query(&self) -> Option<&'static str> {
-    match self {
-      AppVariant::Main => None,
-      AppVariant::Tasks => Some("tasks"),
-      AppVariant::Notes => Some("notes"),
-      AppVariant::Artifacts => Some("artifacts"),
-    }
-  }
+pub fn initialization_script(variant: AppVariant) -> String {
+  format!("window.__WORKBENCH_VARIANT__ = \"{}\";", variant.name())
 }
 
 #[cfg(test)]
 mod tests {
-  use super::{from_identifier, AppVariant};
+  use super::{from_identifier, initialization_script, AppVariant};
 
   #[test]
   fn maps_exact_identifiers_to_variants() {
@@ -132,5 +122,26 @@ mod tests {
       from_identifier("com.workbench.desktoptasks"),
       AppVariant::Main
     );
+  }
+
+  #[test]
+  fn variant_names_are_stable() {
+    assert_eq!(AppVariant::Main.name(), "main");
+    assert_eq!(AppVariant::Tasks.name(), "tasks");
+    assert_eq!(AppVariant::Notes.name(), "notes");
+    assert_eq!(AppVariant::Artifacts.name(), "artifacts");
+  }
+
+  #[test]
+  fn initialization_scripts_assign_each_variant_name() {
+    for variant in [
+      AppVariant::Main,
+      AppVariant::Tasks,
+      AppVariant::Notes,
+      AppVariant::Artifacts,
+    ] {
+      let expected = format!("window.__WORKBENCH_VARIANT__ = \"{}\";", variant.name());
+      assert!(initialization_script(variant).contains(&expected));
+    }
   }
 }

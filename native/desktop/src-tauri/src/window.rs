@@ -29,22 +29,25 @@ fn is_main_window_label(label: &str) -> bool {
   label.starts_with("main-")
 }
 
-/// Points a window at the storage shared by the main app and every variant.
+/// Applies the storage and variant identity shared by every window in this process.
 ///
 /// This must be applied to **every** window this module builds. Tauri keys its
 /// `WebContext` on the data directory, so a window left on the default would get a
-/// separate localStorage from its siblings.
-fn with_shared_data_directory<'a, R, M>(
+/// separate localStorage from its siblings. A window without the initialization script
+/// has no variant identity and would fall back to the main app UI.
+fn with_window_defaults<'a, R, M>(
   builder: WebviewWindowBuilder<'a, R, M>,
+  variant: crate::variant::AppVariant,
 ) -> WebviewWindowBuilder<'a, R, M>
 where
   R: tauri::Runtime,
   M: tauri::Manager<R>,
 {
-  match crate::variant::shared_webview_data_directory() {
+  let builder = match crate::variant::shared_webview_data_directory() {
     Some(path) => builder.data_directory(path),
     None => builder,
-  }
+  };
+  builder.initialization_script(crate::variant::initialization_script(variant))
 }
 
 #[cfg(desktop)]
@@ -64,21 +67,16 @@ pub fn open_new_main_window(app: &tauri::AppHandle) -> Result<(), String> {
   #[cfg(desktop)]
   {
     let variant = crate::variant::current(app);
-    // Tauri collapses an App URL to the site root only for the exact string "index.html"
-    // (tauri/src/manager/webview.rs). "index.html?app=tasks" would therefore land on
-    // /index.html, which the router resolves to NotFound. A query-only relative reference
-    // keeps the base path, so variants get "/" with the query intact.
-    let app_url = variant
-      .start_query()
-      .map(|query| format!("?app={query}"))
-      .unwrap_or_else(|| "index.html".to_string());
     let is_main_variant = variant.is_main();
     let window_label = build_main_window_label();
-    with_shared_data_directory(WebviewWindowBuilder::new(
-      app,
-      window_label,
-      WebviewUrl::App(app_url.into()),
-    ))
+    with_window_defaults(
+      WebviewWindowBuilder::new(
+        app,
+        window_label,
+        WebviewUrl::App("index.html".into()),
+      ),
+      variant,
+    )
       .title(variant.window_title())
       .inner_size(1280.0, 860.0)
       .resizable(true)
@@ -138,7 +136,7 @@ pub fn open_new_main_window(app: &tauri::AppHandle) -> Result<(), String> {
   Err("main window duplication is not supported on this platform".to_string())
 }
 
-/// Opens another window of a dedicated app at `query`, e.g. `?app=notes&note=<id>`.
+/// Opens another window of a dedicated app at `query`, e.g. `?note=<id>`.
 ///
 /// This goes through the same path as the app's own window — undecorated, shared WebView2
 /// data directory, snap-layout hit testing — rather than the generic app-window command,
@@ -146,17 +144,17 @@ pub fn open_new_main_window(app: &tauri::AppHandle) -> Result<(), String> {
 pub fn open_variant_window(app: &tauri::AppHandle, query: &str) -> Result<(), String> {
   #[cfg(desktop)]
   {
-    if !query.starts_with("?app=") {
-      return Err("variant window query must start with ?app=".to_string());
+    if !query.is_empty() && !query.starts_with('?') {
+      return Err("variant window query must be empty or start with ?".to_string());
     }
 
-    let variant = crate::variant::from_query(query);
+    let variant = crate::variant::current(app);
+    let app_url = if query.is_empty() { "index.html" } else { query };
     let window_label = build_main_window_label();
-    with_shared_data_directory(WebviewWindowBuilder::new(
-      app,
-      window_label,
-      WebviewUrl::App(query.into()),
-    ))
+    with_window_defaults(
+      WebviewWindowBuilder::new(app, window_label, WebviewUrl::App(app_url.into())),
+      variant,
+    )
     .title(variant.window_title())
     .inner_size(760.0, 820.0)
     .resizable(true)
@@ -249,11 +247,14 @@ pub fn open_new_quick_note_window(app: &tauri::AppHandle) -> Result<(), String> 
   #[cfg(desktop)]
   {
     let window_label = build_quick_note_window_label();
-    with_shared_data_directory(WebviewWindowBuilder::new(
-      app,
-      window_label,
-      WebviewUrl::App("index.html?quick-note-window=1".into()),
-    ))
+    with_window_defaults(
+      WebviewWindowBuilder::new(
+        app,
+        window_label,
+        WebviewUrl::App("index.html?quick-note-window=1".into()),
+      ),
+      crate::variant::current(app),
+    )
     .title("Quick Note")
     .inner_size(560.0, 760.0)
     .resizable(true)
@@ -300,7 +301,10 @@ pub fn open_calendar_window(app: &tauri::AppHandle, url: &str) -> Result<(), Str
       "http" | "https" => WebviewUrl::External(target_url),
       _ => WebviewUrl::CustomProtocol(target_url),
     };
-    with_shared_data_directory(WebviewWindowBuilder::new(app, "calendar", webview_url))
+    with_window_defaults(
+      WebviewWindowBuilder::new(app, "calendar", webview_url),
+      crate::variant::current(app),
+    )
       .title("Workbench Calendar")
       .inner_size(1100.0, 800.0)
       .resizable(true)
@@ -339,11 +343,10 @@ pub fn open_new_app_window(
       _ => WebviewUrl::CustomProtocol(target_url),
     };
 
-    with_shared_data_directory(WebviewWindowBuilder::new(
-      app,
-      build_app_window_label(),
-      webview_url,
-    ))
+    with_window_defaults(
+      WebviewWindowBuilder::new(app, build_app_window_label(), webview_url),
+      crate::variant::current(app),
+    )
       .title("Workbench")
       .inner_size(1280.0, 860.0)
       .resizable(true)

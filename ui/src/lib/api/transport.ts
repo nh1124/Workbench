@@ -43,6 +43,7 @@ declare global {
     __TAURI_INTERNALS__?: {
       invoke: <T = unknown>(command: string, args?: Record<string, unknown>) => Promise<T>;
     };
+    __WORKBENCH_VARIANT__?: string;
   }
 }
 
@@ -903,4 +904,3 @@ export async function clearWorkbenchSession(): Promise<void> {
 export function readWorkbenchSession(): WorkbenchUserSession | undefined {
   return readStoredSession()?.user;
 }
-
