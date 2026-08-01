@@ -7,6 +7,31 @@
   color: #cde0fa;
 }
 
+.va-app-layout {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.va-app-layout.rail-hidden {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.va-app-rail {
+  width: 232px;
+  min-height: 0;
+  overflow: auto;
+  border-right: 1px solid rgba(47, 65, 93, 0.8);
+  background: rgba(5, 12, 25, 0.95);
+  padding: 0.6rem 0.5rem;
+}
+
+.va-app-rail .artifacts-menu {
+  padding: 0;
+}
+
 .va-shell {
   position: relative;
   height: 100%;

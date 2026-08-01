@@ -3,6 +3,7 @@ import JSZip from "jszip";
 import { Link, useSearchParams } from "react-router-dom";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { TextInputDialog } from "../components/TextInputDialog";
+import { TitleBarPortal, useHasTitleBarSlot } from "../components/VariantChrome";
 import { artifactsApi, isTauriNativeRuntime, openFileWithDefaultApp, saveFileWithDialog } from "../lib/api";
 import { formatDateTime, normalizeProjectName } from "../lib/format";
 import { isTextEditingTarget } from "../lib/keyboardShortcuts";
@@ -90,6 +91,7 @@ import {
 } from "./components/ArtifactsIcons";
 import { DirectoryBrowser } from "./components/DirectoryBrowser";
 import type { DirectoryViewMode } from "./components/DirectoryBrowser";
+import { ArtifactsQuickAccess } from "./components/ArtifactsQuickAccess";
 import { ProjectCardGrid } from "./components/ProjectCardGrid";
 import { ArtifactProjectMemberships } from "./components/ArtifactProjectMemberships";
 import { MarkdownOutlinePanel } from "./components/MarkdownOutlinePanel";
@@ -110,8 +112,21 @@ type MoveFolderProjectState = {
   targetProjectId: string;
 };
 
+const ARTIFACTS_RAIL_VISIBLE_STORAGE_KEY = "workbench-artifacts-rail-visible";
+
+export function readArtifactsRailVisible(): boolean {
+  if (typeof window === "undefined") return true;
+  return window.localStorage.getItem(ARTIFACTS_RAIL_VISIBLE_STORAGE_KEY) !== "0";
+}
+
+export function writeArtifactsRailVisible(visible: boolean): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(ARTIFACTS_RAIL_VISIBLE_STORAGE_KEY, visible ? "1" : "0");
+}
+
 export function ArtifactsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const isDedicatedApp = useHasTitleBarSlot();
   const searchParamsKey = searchParams.toString();
   const requestedProjectId = searchParams.get("project")?.trim() ?? "";
   const requestedFolderPath = searchParams.get("folder")
@@ -167,6 +182,7 @@ export function ArtifactsPage() {
   const [mobileTreeVisible, setMobileTreeVisible] = useState(false);
   const [outlineCollapsed, setOutlineCollapsed] = useState(false);
   const [outlineBodyHeight, setOutlineBodyHeight] = useState(170);
+  const [railVisible, setRailVisible] = useState(() => readArtifactsRailVisible());
 
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -2212,7 +2228,7 @@ export function ArtifactsPage() {
     }
   };
 
-  return (
+  const artifactsSection = (
     <section
       className="va-artifacts-page"
       onClick={() => {
@@ -3104,5 +3120,42 @@ export function ArtifactsPage() {
       />
     </section>
   );
-}
 
+  if (!isDedicatedApp) {
+    return artifactsSection;
+  }
+
+  const railToggleLabel = railVisible ? "Hide the quick access rail" : "Show the quick access rail";
+
+  return (
+    <>
+      <TitleBarPortal>
+        <button
+          type="button"
+          className={railVisible ? "chrome-icon-button active" : "chrome-icon-button"}
+          aria-pressed={railVisible}
+          aria-label={railToggleLabel}
+          title={railToggleLabel}
+          onClick={() => {
+            const nextVisible = !railVisible;
+            setRailVisible(nextVisible);
+            writeArtifactsRailVisible(nextVisible);
+          }}
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <rect x="2" y="3" width="12" height="10" fill="none" stroke="currentColor" strokeWidth="1.4" />
+            <path d="M6 3v10" stroke="currentColor" strokeWidth="1.4" />
+          </svg>
+        </button>
+      </TitleBarPortal>
+      <div className={railVisible ? "va-app-layout" : "va-app-layout rail-hidden"}>
+        {railVisible ? (
+          <aside className="va-app-rail">
+            <ArtifactsQuickAccess />
+          </aside>
+        ) : null}
+        {artifactsSection}
+      </div>
+    </>
+  );
+}
