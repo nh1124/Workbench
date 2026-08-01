@@ -112,29 +112,6 @@
   background: rgba(43, 85, 149, 0.3);
 }
 
-.va-mobile-pane-toggle {
-  display: none;
-  width: 1.95rem;
-  min-width: 1.95rem;
-  height: 1.95rem;
-  border-radius: 8px;
-  border: 1px solid rgba(72, 99, 136, 0.9);
-  background: rgba(13, 23, 40, 0.92);
-  color: #bcd6f8;
-  place-items: center;
-  padding: 0;
-}
-
-.va-mobile-pane-toggle svg {
-  width: 0.88rem;
-  height: 0.88rem;
-}
-
-.va-mobile-pane-toggle:hover {
-  border-color: rgba(111, 168, 224, 0.95);
-  background: rgba(30, 52, 82, 0.92);
-}
-
 .va-home-icon {
   width: 0.86rem;
   height: 0.86rem;
@@ -350,14 +327,6 @@
   color: #f8b4c2;
   border-bottom: 1px solid rgba(129, 58, 86, 0.6);
   background: rgba(95, 25, 49, 0.35);
-}
-
-.va-main-grid {
-  min-height: 0;
-  height: 100%;
-  overflow: hidden;
-  display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
 }
 
 .va-directory-pane {
@@ -713,24 +682,6 @@
 .va-edit-sidebar .va-outline-body {
   height: auto !important;
   min-height: 0;
-}
-
-.va-tree-pane {
-  min-height: 0;
-  border-right: 1px solid rgba(47, 65, 93, 0.8);
-  background: linear-gradient(180deg, rgba(5, 12, 27, 0.95), rgba(3, 9, 22, 1));
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto auto;
-  overflow: hidden;
-}
-
-.va-tree-pane.drop-target-root {
-  box-shadow: inset 0 0 0 2px rgba(109, 180, 231, 0.6);
-}
-
-.va-tree-pane>.va-tree-list {
-  min-height: 0;
-  overflow: auto;
 }
 
 .va-tree-list {
@@ -1241,10 +1192,6 @@
   cursor: not-allowed;
 }
 
-.va-close-viewer-btn {
-  display: none;
-}
-
 .va-form-grid {
   min-height: 0;
   height: 100%;
@@ -1271,7 +1218,6 @@
   min-height: 0;
 }
 
-.va-tree-pane>.va-tree-list,
 .va-detail-pane,
 .va-content-section textarea,
 .va-markdown-preview,
@@ -1281,7 +1227,6 @@
   scrollbar-color: rgba(124, 145, 174, 0.7) rgba(8, 16, 35, 0.78);
 }
 
-.va-tree-pane>.va-tree-list::-webkit-scrollbar,
 .va-detail-pane::-webkit-scrollbar,
 .va-content-section textarea::-webkit-scrollbar,
 .va-markdown-preview::-webkit-scrollbar,
@@ -1291,7 +1236,6 @@
   height: 10px;
 }
 
-.va-tree-pane>.va-tree-list::-webkit-scrollbar-track,
 .va-detail-pane::-webkit-scrollbar-track,
 .va-content-section textarea::-webkit-scrollbar-track,
 .va-markdown-preview::-webkit-scrollbar-track,
@@ -1301,7 +1245,6 @@
   border-radius: 999px;
 }
 
-.va-tree-pane>.va-tree-list::-webkit-scrollbar-thumb,
 .va-detail-pane::-webkit-scrollbar-thumb,
 .va-content-section textarea::-webkit-scrollbar-thumb,
 .va-markdown-preview::-webkit-scrollbar-thumb,
@@ -1312,7 +1255,6 @@
   background: linear-gradient(180deg, rgba(146, 167, 196, 0.9), rgba(108, 129, 158, 0.85));
 }
 
-.va-tree-pane>.va-tree-list::-webkit-scrollbar-button,
 .va-detail-pane::-webkit-scrollbar-button,
 .va-content-section textarea::-webkit-scrollbar-button,
 .va-markdown-preview::-webkit-scrollbar-button,
@@ -2054,14 +1996,6 @@
 }
 
 @media (max-width: 1220px) {
-  .va-main-grid {
-    min-height: 0;
-    height: auto;
-    overflow: hidden;
-    display: grid;
-    grid-template-columns: 320px minmax(0, 1fr);
-  }
-
   .va-pdf-frame {
     min-height: 440px;
   }
@@ -2080,34 +2014,6 @@
 
 @media (max-width: 980px),
 (max-aspect-ratio: 1/1) {
-  .va-main-grid {
-    min-height: 0;
-    height: auto;
-    overflow: hidden;
-    display: grid;
-    grid-template-columns: 1fr;
-  }
-
-  .va-main-grid.viewer-active>.va-tree-pane {
-    display: none;
-  }
-
-  .va-main-grid.browser-active>.va-detail-pane {
-    display: none;
-  }
-
-  .va-close-viewer-btn {
-    display: inline-grid;
-  }
-
-  .va-mobile-pane-toggle {
-    display: inline-grid;
-  }
-
-  .va-tree-pane {
-    border-right: 0;
-  }
-
   .va-toolbar {
     flex-direction: column;
     align-items: flex-start;

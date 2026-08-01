@@ -200,7 +200,6 @@ export function ArtifactsPage() {
   const [editorExpanded, setEditorExpanded] = useState(false);
   const [artifactSettingsOpen, setArtifactSettingsOpen] = useState(false);
   const [editSidebarCollapsed, setEditSidebarCollapsed] = useState(false);
-  const [mobileTreeVisible, setMobileTreeVisible] = useState(false);
   const [outlineCollapsed, setOutlineCollapsed] = useState(false);
   const [outlineBodyHeight, setOutlineBodyHeight] = useState(170);
   const [railVisible, setRailVisible] = useState(() => readArtifactsRailVisible());
@@ -845,7 +844,6 @@ export function ArtifactsPage() {
       setSelectedItemIds([item.id]);
       setSelectionAnchorId(item.id);
     }
-    setMobileTreeVisible(false);
     setSelectedItemId(item.id);
     setSelectedFolderPath(parentPath(item.path));
     setError(null);
@@ -1311,7 +1309,6 @@ export function ArtifactsPage() {
   };
 
   const returnToDirectoryView = () => {
-    setMobileTreeVisible(true);
     setSelectedItemId(null);
     setSelectedItemIds([]);
     setSelectionAnchorId(null);
@@ -1352,7 +1349,6 @@ export function ArtifactsPage() {
 
   const startCreateNote = (targetProject: ProjectOption, targetFolderPath: string) => {
     const newPath = joinPath(targetFolderPath, "new-note.md") || "new-note.md";
-    setMobileTreeVisible(false);
     setMode("create-note");
     setSelectedItemId(null);
     setSelectedItemIds([]);
@@ -2183,7 +2179,6 @@ export function ArtifactsPage() {
   );
 
   const handleOutlineSelect = (entry: MarkdownOutlineItem) => {
-    setMobileTreeVisible(false);
     if (notePreviewMode === "live" && notionEditorRef.current) {
       const headings = notionEditorRef.current.querySelectorAll<HTMLElement>(".va-notion-heading");
       const target = headings.item(entry.headingIndex);
