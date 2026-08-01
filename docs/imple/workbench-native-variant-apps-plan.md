@@ -608,8 +608,8 @@ fork 完了後に着手。Phase 2 の残作業（Tasks のフォルダベース�
 | Wave | 内容 | 状態 |
 |---|---|---|
 | N1 | variant を Rust から注入し `?app=` 廃止 | [done] 2026-08-02 `782af0c` |
-| N2 | `ui/` を `native/desktop/ui/` へ fork | [pending] |
-| N3 | web 側から variant 専用コードを除去 | [pending] |
+| N2 | `ui/` を `native/desktop/ui/` へ fork | [done] 2026-08-02 `33dbe92` |
+| N3 | web 側から variant 専用コードを除去 | [done] 2026-08-02 `378e295` |
 | N4 | native 側の環境最適化 | [pending] 別計画 |
 
 ### N1 の実装メモ
@@ -633,3 +633,32 @@ fork 完了後に着手。Phase 2 の残作業（Tasks のフォルダベース�
 Rust 側の `open_variant_window` コマンドも同様に到達不能。
 P2-3b で「新ウィンドウが空白になり Quick Note 再利用に切り替えた」際の残骸。
 N1 では削除せず追従のみ行った。撤去するなら N3 / N4 の掃除に含める。
+
+### N2 / N3 の実装メモ
+
+- fork 直後の `native/desktop/ui/src` は `ui/src` と**バイト一致**（`diff -r` で確認）。分岐は N4 以降。
+- dev サーバは web 5174 / native 5175。`workbench-env.mjs` が両方の `.env` を生成する。
+  **native のポートは 5175 をハードコード**しているため、`UI_DEV_PORT=5175` に変えると衝突する。
+- `npm install` が `node_modules/insights` の stale link を落とした。`services/insights` は
+  analyser 移行で消えており、lock だけが実在しないディレクトリを指していた。
+- N3 で `ArtifactsQuickAccess` は**残す**。dedicated app 作業中に `Layout` から切り出したが、
+  web のサイドバーが `/artifacts` で描画しているため web のコードである。
+- N3 後: web = 452 テスト（variant 系 34 件削除）、native = 486 テスト。
+
+### N3 で踏んだ Codex タイムアウトの実例
+
+30 分の MCP タイムアウト後、**孤児プロセスが 5 分近く書き続けた**。
+最初の監視（無変更 60 秒で安定と判定）では `styles.css` を取りこぼし、
+安定判定の直後に書き込まれた。**60 秒の静止は安定の証拠にならない**。
+今回は 180 秒静止で確定した。孤児が作業中に自分で同じファイルを編集すると
+上書きされて消えるため、**待つ方が安全**。
+
+## Phase 3 の残課題
+
+- **native と web が両方 486/452 テストを持つ二重保守**が始まった。Core の API 変更は両方に反映が要る。
+- Phase 2 の残作業（Tasks のフォルダベース化、Notes 複数選択、タイトルバーの折り返し）は
+  **native 側の課題として引き継ぐ**（`native/desktop/ui/` で実施）。
+- web 側にはまだ Tauri 依存の分岐（`isTauriNativeRuntime` によるローカル daemon 設定など）が残る。
+  「variant 専用コードの除去」の範囲外としたため、必要なら別途判断する。
+- 実機確認は未実施: 4 本ビルドし、専用アプリが `?app=` なしで正しい機能に着地すること、
+  Artifacts のレール・フォルダツリーの見た目。
