@@ -80,17 +80,28 @@ button, input, select, textarea { font: inherit; }
   overflow: hidden;
 }
 
-/* The account row replaces each feature's own tool name, so hide those in a dedicated app. */
+/* The title bar replaces each feature's own tool name, so hide those in a dedicated app. */
 .variant-shell .notes-header-title,
 .variant-shell .tasks-secondary-head {
   display: none;
+}
+
+/* The window frame is the app's chrome; the page should meet it without a gutter. */
+.variant-shell .page-frame { padding: 0; }
+
+/* Folder-style navigation: the groups read as places, not as a list of filters. */
+.variant-shell .tasks-secondary-group > p { display: none; }
+.variant-shell .tasks-secondary-group + .tasks-secondary-group {
+  margin-top: 0.35rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--line);
 }
 
 /* Office-style frame: the app owns the whole title bar, so it must never scroll and the
    drag area has to stay a bare element (a press on a child is a click, not a drag). */
 .variant-title-bar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   height: 40px;
   border-bottom: 1px solid var(--line);
@@ -114,6 +125,53 @@ button, input, select, textarea { font: inherit; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Feature controls injected by the active page. Keeps its own drag-free area. */
+.variant-title-bar-slot {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  height: 100%;
+  min-width: 0;
+  padding: 0 0.5rem;
+  justify-content: flex-end;
+}
+
+/* Controls a page puts in the title bar. Sized to sit inside a 40px frame. */
+.chrome-search,
+.chrome-select,
+.chrome-primary,
+.chrome-button {
+  height: 26px;
+  border-radius: 6px;
+  font-size: 0.76rem;
+  font-family: inherit;
+}
+.chrome-search,
+.chrome-select {
+  border: 1px solid var(--line);
+  background: rgba(2, 6, 23, 0.6);
+  color: var(--text);
+  padding: 0 0.5rem;
+}
+.chrome-search { width: clamp(140px, 24vw, 300px); }
+.chrome-search::placeholder { color: rgba(148, 163, 184, 0.7); }
+.chrome-search:focus,
+.chrome-select:focus { outline: 1px solid var(--accent); outline-offset: 0; }
+.chrome-select { max-width: 180px; }
+
+.chrome-primary,
+.chrome-button {
+  border: 1px solid transparent;
+  padding: 0 0.7rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.chrome-primary { background: #2563eb; color: #fff; font-weight: 600; }
+.chrome-primary:hover { background: #1d4ed8; }
+.chrome-button { background: transparent; border-color: var(--line); color: var(--text); }
+.chrome-button:hover { background: rgba(148, 163, 184, 0.14); }
+.chrome-button.active { background: rgba(34, 211, 238, 0.16); border-color: rgba(34, 211, 238, 0.5); }
+
 .variant-title-bar-actions { display: flex; align-items: center; height: 100%; }
 
 .variant-window-button {
@@ -153,13 +211,13 @@ button, input, select, textarea { font: inherit; }
 .variant-account-avatar {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   background: #2563eb;
   color: #fff;
   font-weight: 600;
-  font-size: 0.95rem;
+  font-size: 0.72rem;
   flex-shrink: 0;
 }
 
@@ -1347,3 +1405,25 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
   .form-grid { grid-template-columns: 1fr; }
 }
 
+
+/* Icon-sized control for the title bar (view switchers and the like). */
+.chrome-icon-button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.chrome-icon-button svg { width: 14px; height: 14px; display: block; }
+.chrome-icon-button:hover { background: rgba(148, 163, 184, 0.14); color: var(--text); }
+.chrome-icon-button.active {
+  background: rgba(34, 211, 238, 0.16);
+  border-color: rgba(34, 211, 238, 0.5);
+  color: var(--text);
+}
+.chrome-segmented { display: flex; gap: 0.25rem; }

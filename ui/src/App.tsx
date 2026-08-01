@@ -18,6 +18,7 @@ import { ShortcutsPage } from "./pages/ShortcutsPage";
 import { TasksPage } from "./pages/TasksPage";
 import { TasksCalendarWindowPage } from "./pages/TasksCalendarWindowPage";
 import { VariantShell } from "./components/VariantShell";
+import { VariantChromeProvider } from "./components/VariantChrome";
 import { VariantTitleBar, variantAppName } from "./components/VariantTitleBar";
 import { WbsPage } from "./pages/WbsPage";
 
@@ -112,10 +113,12 @@ export default function App() {
         // The window is undecorated in a dedicated app, so the title bar has to exist on
         // every route — including the sign-in page, which lives outside the shell. Without
         // it that window could not be moved or closed.
-        <div className="variant-window">
-          <VariantTitleBar appName={appName} />
-          {routes}
-        </div>
+        <VariantChromeProvider>
+          <div className="variant-window">
+            <VariantTitleBar appName={appName} />
+            {routes}
+          </div>
+        </VariantChromeProvider>
       ) : (
         routes
       )}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { nativeWindowControls } from "../lib/api";
 import { VariantAccountBar } from "./VariantAccountBar";
+import { useVariantChrome } from "./VariantChrome";
 
 /**
  * Title bar for the dedicated apps, which run undecorated so the account control can sit
@@ -23,6 +24,7 @@ export function variantAppName(search: string): string {
 
 export function VariantTitleBar({ appName }: { appName: string }) {
   const maximizeButtonRef = useRef<HTMLButtonElement>(null);
+  const { registerSlot } = useVariantChrome();
 
   // Windows decides whether to offer Snap Layouts from the hit-test result, so the native
   // side needs to know where this button ended up. Re-report whenever the layout can move.
@@ -85,6 +87,9 @@ export function VariantTitleBar({ appName }: { appName: string }) {
       <div className="variant-title-bar-drag" onMouseDown={handleBackgroundMouseDown}>
         <span className="variant-title-bar-name">{appName}</span>
       </div>
+
+      {/* Feature pages portal their own controls in here. */}
+      <div className="variant-title-bar-slot" ref={registerSlot} />
 
       <div className="variant-title-bar-actions">
         <VariantAccountBar />
