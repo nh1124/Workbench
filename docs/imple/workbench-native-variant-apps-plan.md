@@ -370,7 +370,34 @@ Rust コマンドを呼ぶ方式（[`transport.ts:64-73`](../../ui/src/lib/api/t
 - 外周 N px では `HTLEFT` / `HTTOP` / `HTTOPLEFT` 等を返してリサイズ境界を復元する。
 - `windows-sys` に `Win32_UI_Shell`（`SetWindowSubclass`）と `Win32_UI_WindowsAndMessaging` を追加。
 
-### P2-6 の仕様
+## P2-3b: 各機能の作り込み（進行中）
+
+方針: **枠にアプリ全体の操作、本体は情報表示に専念**。タイトルバーのスロット
+（[`VariantChrome.tsx`](../../ui/src/components/VariantChrome.tsx)）へ各ページが portal で差し込む。
+
+### Notes（完了 2026-08-01）
+
+リスト + 編集ペイン、Panels（一覧専用）、タイトルバーに検索 / プロジェクト / 表示切替 / New note。
+編集ペインがそのままエディタで、入力停止 0.7 秒後に自動保存。別ウィンドウは Quick Note を再利用。
+
+踏んだ罠:
+
+- `.notes-page` は `width: min(1040px, calc(100% - 7rem)); margin: 0 auto` で中央寄せされる。
+  **専用アプリでは明示的に打ち消す必要がある**。Artifacts / Tasks も着手前に各ページの幅制限を確認すること。
+- `-webkit-line-clamp` + `display: -webkit-box` はカードの中身が消える形で壊れた。`max-height` + `overflow` を使う。
+- プロジェクト名未設定のノートは UUID がそのまま出るため、折り返してタイトルを押し出す。メタ行は 1 行省略に固定。
+- ウィンドウ生成は `open_variant_window` を新設したが 2 度とも空白ウィンドウになり、
+  **既存の Quick Note ウィンドウ再利用に切り替えた**。新経路を作る前に既存の動く仕組みを検討すること。
+
+### 残作業
+
+| 項目 | 内容 |
+|---|---|
+| Notes 複数選択 | shift / ctrl の範囲選択 + 右クリックの一括操作（削除など）。**未着手** |
+| Artifacts | サイドメニュー復活（プロジェクト選択が不能な機能欠落）、プロジェクト選択と検索を枠へ、余白除去 |
+| Tasks | フィルタベース → フォルダベースへ意味論変更、Task List / Due Calendar / Schedule の切替を枠へ |
+
+## P2-6 の仕様
 
 Workbench のセッションは `id` / `username` / `createdAt` のみでメールアドレスを持たないため、
 MS To Do の「名前 + メール」に相当する 2 行目は**接続先サーバーのホスト名**とした。
