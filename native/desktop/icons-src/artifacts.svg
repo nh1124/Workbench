@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="tile" x1="0.15" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#1c2028"/>
+      <stop offset="0.55" stop-color="#0d1014"/>
+      <stop offset="1" stop-color="#050608"/>
+    </linearGradient>
+    <linearGradient id="mark" gradientUnits="userSpaceOnUse" x1="280" y1="250" x2="760" y2="760">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.5" stop-color="#dfe5ec"/>
+      <stop offset="1" stop-color="#9aa5b4"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.16"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="64" y="64" width="896" height="896" rx="208" fill="url(#tile)"/>
+  <rect x="64" y="64" width="896" height="896" rx="208" fill="url(#rim)"/>
+  <rect x="76" y="76" width="872" height="872" rx="198" fill="none" stroke="#ffffff" stroke-opacity="0.10" stroke-width="4"/>
+
+  <!-- Artifacts mark: a folder holding stacked material. -->
+  <g fill="none" stroke="url(#mark)" stroke-width="54" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M282 336h192l76 88h192v264H282z"/>
+    <path d="M366 336V262h150"/>
+  </g>
+</svg>
