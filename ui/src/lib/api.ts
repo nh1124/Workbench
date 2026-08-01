@@ -62,6 +62,21 @@ export async function openCalendarWindow(url: string): Promise<boolean> {
   return calendarWindow !== null;
 }
 
+/**
+ * Opens another window of a dedicated app, e.g. one note on its own.
+ *
+ * `query` must start with `?app=`; the native side builds the window the same way the app's
+ * own window is built, so it gets the custom title bar and the shared storage.
+ */
+export async function openVariantWindow(query: string): Promise<boolean> {
+  if (!isTauriNativeRuntime()) {
+    if (typeof window === "undefined") return false;
+    return window.open(query, "_blank") !== null;
+  }
+  await invokeNative<void>("open_variant_window", { query });
+  return true;
+}
+
 export async function openMainWindow(): Promise<boolean> {
   if (!isTauriNativeRuntime()) {
     return false;
