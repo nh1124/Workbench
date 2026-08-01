@@ -91,6 +91,7 @@ import {
 } from "./components/ArtifactsIcons";
 import { DirectoryBrowser } from "./components/DirectoryBrowser";
 import type { DirectoryViewMode } from "./components/DirectoryBrowser";
+import { ArtifactsFolderTree } from "./components/ArtifactsFolderTree";
 import { ArtifactsQuickAccess } from "./components/ArtifactsQuickAccess";
 import { ProjectCardGrid } from "./components/ProjectCardGrid";
 import { ArtifactProjectMemberships } from "./components/ArtifactProjectMemberships";
@@ -1315,6 +1316,13 @@ export function ArtifactsPage() {
     setMode("view");
     setEditorExpanded(false);
     setPdfExpanded(false);
+  };
+
+  const handleRailFolderSelect = (path: string) => {
+    if (hasDetailSelection) {
+      returnToDirectoryView();
+    }
+    setSelectedFolderPath(path);
   };
 
   const closeSearch = () => {
@@ -3217,6 +3225,11 @@ export function ArtifactsPage() {
         {railVisible ? (
           <aside className="va-app-rail">
             <ArtifactsQuickAccess />
+            <ArtifactsFolderTree
+              root={treeRoot}
+              currentFolderPath={currentFolderPath}
+              onSelectFolder={handleRailFolderSelect}
+            />
           </aside>
         ) : null}
         {artifactsSection}
