@@ -607,7 +607,29 @@ fork 完了後に着手。Phase 2 の残作業（Tasks のフォルダベース�
 
 | Wave | 内容 | 状態 |
 |---|---|---|
-| N1 | variant を Rust から注入し `?app=` 廃止 | [pending] |
+| N1 | variant を Rust から注入し `?app=` 廃止 | [done] 2026-08-02 `782af0c` |
 | N2 | `ui/` を `native/desktop/ui/` へ fork | [pending] |
 | N3 | web 側から variant 専用コードを除去 | [pending] |
 | N4 | native 側の環境最適化 | [pending] 別計画 |
+
+### N1 の実装メモ
+
+- 注入は `with_window_defaults`（旧 `with_shared_data_directory`）で行う。**全ウィンドウビルダーが
+  通る唯一の choke point** であり、data_directory と同じく「1 つでも漏れると壊れる」不変条件のため
+  同じ場所に置いた。漏れたウィンドウは variant を持たず main アプリとして描画される。
+- App URL は全 variant で `index.html` に戻った。これにより Phase 1 の**訂正1（`index.html?app=` が
+  NotFound になる問題）は前提ごと消滅**した。
+- web には注入が無い → `window.__WORKBENCH_VARIANT__` が `undefined` → `resolveVariantStartPage` が
+  null → 通常の `Layout`。**N3 を待たずに「web から専用シェルへ到達できる」問題は塞がった**。
+- `open_calendar_window` / `open_new_app_window` は外部 URL を開くことがあり、そこにも
+  initialization script が入る。variant 名は機微情報ではないため許容。
+  （これらのウィンドウが WebView2 データディレクトリを外部オリジンと共有するのは P2-6 由来の既存挙動。）
+
+### 判明した死にコード（未処理）
+
+`openVariantWindow`（[`ui/src/lib/api.ts`](../../ui/src/lib/api.ts)）と
+`standaloneNoteUrl`（[`NotesAppView.tsx`](../../ui/src/notes/NotesAppView.tsx)）は
+**エクスポートされテストもあるが、production コードからは一度も呼ばれていない**。
+Rust 側の `open_variant_window` コマンドも同様に到達不能。
+P2-3b で「新ウィンドウが空白になり Quick Note 再利用に切り替えた」際の残骸。
+N1 では削除せず追従のみ行った。撤去するなら N3 / N4 の掃除に含める。
