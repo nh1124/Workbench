@@ -1,0 +1,404 @@
+# Workbench Native: 機能単位アプリ（variant）化計画
+
+Tasks / Notes / Artifacts を、機能そのままに **独立した Windows アプリ**として配布し、タスクバーに機能単位で
+ピン留めできるようにする。併せて sync-daemon の**プロセス横断の多重起動防止**を入れる。
+
+実装体制は Codex worker delegation（Claude=調査/計画/レビュー/commit、Codex=wave 実装）。
+
+## 背景と決定事項
+
+### なぜ「別 exe」なのか（方式Bの採用理由）
+
+Windows のタスクバーボタンは **AppUserModelID (AUMID)** 単位でグループ化される。既定では AUMID は exe パスから
+導出されるため、「1 つの exe が Tasks 用ウィンドウと Notes 用ウィンドウを開く」構成では**同一ボタンに束ねられ、
+アイコンも 1 つ**になる。分離するには次のいずれかが要る。
+
+- **方式A（不採用）**: 1 バイナリ + ウィンドウごとの AUMID 明示設定（`SHGetPropertyStoreForWindow` +
+  `System.AppUserModel.ID` / `RelaunchCommand` / `RelaunchIconResource`）+ NSIS テンプレート自作。
+  ウィンドウ表示前に設定する必要があり壊れやすく、NSIS テンプレートの自前保守が発生する。
+- **方式B（採用）**: 同一クレートを identifier / productName / icon 違いで複数回ビルドし、別インストーラとして配布。
+  exe が別なので**タスクバー分離・アイコン・ピン留めは Windows が自動で行う**。AUMID も NSIS テンプレートも不要。
+
+### 方式Bが既存実装と噛み合う点（調査で確認済み）
+
+- [`prepare-tauri-config.mjs`](../../native/desktop/scripts/prepare-tauri-config.mjs) は既に env 駆動
+  （`NATIVE_APP_NAME` / `NATIVE_APP_IDENTIFIER` / `NATIVE_WINDOW_TITLE`）。variant はこの延長線上に置ける。
+- `tauri-plugin-single-instance` は `app.config().identifier` からミューテックス名を作る
+  （`tauri-plugin-single-instance-2.4.0/src/platform_impl/windows.rs:58-70`）。identifier を分けるだけで
+  **アプリごとに独立した単一インスタンス**になる。
+- ログインセッションは Credential Manager の `Workbench.Session` という**ハードコード target 名**
+  （[`secure_storage.rs:6`](../../native/desktop/src-tauri/src/secure_storage.rs)）。variant 間で共有され、
+  ログインし直しは不要。
+- 初期表示の出し分けは `index.html?quick-note-window=1` と同じクエリ方式が既にある
+  （[`App.tsx:45-50`](../../ui/src/App.tsx)）。`/tasks` `/notes` `/artifacts` のルートも既存。
+
+### 許容する制約
+
+- インストーラは 4 本（各 25MB 前後）。更新時は 4 本入れ直す。
+- 同時起動中は WebView2 プロセスが variant ごとに立つ（メモリ増）。
+- **localStorage は identifier ごとの WebView2 データフォルダに分かれる**ため、サーバ URL の指定は
+  アプリごとに初回 1 回ずつ必要。これはオープンソースとして「毎回ログイン画面でサーバを指定する」設計意図
+  （複数インスタンスの乱立を許す）と矛盾しないため、共有化はしない。
+- `daemon-preferences.json` は `app_config_dir()` 由来のため variant ごとに分かれる。sync フォルダなどの
+  設定は variant ごとに持つ。daemon 本体は共有（下記）。
+
+## variant レジストリ（確定仕様）
+
+| variant | productName | identifier | 初期ルート | icon dir | window title |
+|---|---|---|---|---|---|
+| （なし＝main） | `Workbench Native` | `com.workbench.desktop` | `/`（`startPage` 設定に従う） | `icons` | `Workbench` |
+| `tasks` | `Workbench Tasks` | `com.workbench.desktop.tasks` | `/tasks` | `icons/tasks` | `Workbench Tasks` |
+| `notes` | `Workbench Notes` | `com.workbench.desktop.notes` | `/notes` | `icons/notes` | `Workbench Notes` |
+| `artifacts` | `Workbench Artifacts` | `com.workbench.desktop.artifacts` | `/artifacts` | `icons/artifacts` | `Workbench Artifacts` |
+
+アイコンは新規作成済み。元 SVG は [`native/desktop/icons-src/`](../../native/desktop/icons-src/) に版管理し、
+`npx tauri icon icons-src/<name>.svg -o src-tauri/icons[/<variant>]` で再生成できる。
+
+Rust 側は **`app.config().identifier` の suffix から variant を導出**する（ビルド時の env 追加は不要）。
+`com.workbench.desktop` → main、`com.workbench.desktop.tasks` → `tasks`。
+
+### main と variant の挙動差（確定）
+
+| 機能 | main | variant |
+|---|---|---|
+| トレイアイコン | あり | **なし**（4 個のトレイ常駐は煩雑なため） |
+| 閉じたときの常駐（close→hide） | あり（`residentMode`） | **なし**（通常どおり閉じる） |
+| sync-daemon の起動 | する | **する**（下記の多重起動防止つき） |
+| Quick Note / Calendar ウィンドウ | あり | あり（既存コマンドをそのまま使う） |
+
+variant が hide 常駐しない理由: トレイが無いと復帰導線が無くなるため。閉じたら終了し、ピン留めアイコンから
+再起動する（single-instance が identifier 単位で効くので二重起動にはならない）。
+
+## sync-daemon の多重起動防止（確定設計）
+
+### 現状の問題
+
+- 排他は `managed_daemon()` の `static Mutex` のみで、**プロセス内に閉じている**。variant が増えると
+  プロセス横断で無防備になる。
+- sync-daemon 側は `server.listen()` に `error` ハンドラが無い（[`statusServer.ts:1431`](../../services/sync-daemon/src/statusServer.ts)）ため、
+  ポート衝突時は uncaught exception で落ちる。ただし `startStatusServer` は
+  **capture 開始・identity 登録の後**に呼ばれる（[`index.ts:585-591`](../../services/sync-daemon/src/index.ts)）。
+  つまり重複起動した daemon は**落ちる前に同じ sync root へ実作業をしてしまう**。ポート衝突による自然死は
+  ガードとして不十分であり、明示的なガードが必要。
+
+### 方針
+
+daemon は Workbench の共通基盤とみなし、**variant であっても「立っていなければ起動する」**。ただし
+既に立っていれば起動せず、それを利用する（adopt）。
+
+1. **起動判定**: spawn 前に `127.0.0.1:<port>/status` を叩く（既存の `read_loopback_status` を再利用）。
+   応答があれば生存中とみなし spawn しない。
+2. **競合防止**: 「判定 → spawn」を**プロセス横断の名前付きミューテックス**で直列化する。
+   Windows は `CreateMutexW`（`Local\workbench-sync-daemon-launch`）。variant を同時に起動した場合
+   （スタートアップ、複数ピンの同時クリック）に両方が「居ない」と判定して二重 spawn するのを防ぐ。
+   `windows-sys` に `Win32_System_Threading` feature を追加する。
+   Windows 以外は排他ファイル（`create_new`）でのフォールバックとし、取得できなければ probe のみで続行する。
+3. **所有権**: spawn した側だけが `managed_daemon()` に `Child` を持つ。adopt した側は持たない。
+   `stop_daemon` は**自分が spawn した daemon のみ**を停止する（他プロセスの daemon は殺さない）。
+   状態を UI から判別できるよう、daemon 状態のレスポンスに `owned: boolean` を含める。
+
+戻り値の意味論（`start_daemon` は現在 `bool` を返す）:
+
+- `true` = このプロセスが新規に spawn した
+- `false` = 既に起動していた（プロセス内 / 他プロセスのどちらでも）
+
+既存の呼び出し側（`set_daemon_core_url` の再起動経路）は「自分が所有していない daemon は停止も再起動もしない」
+＝ `stop_daemon()` が `false` を返すので `start_daemon_with_app` を呼ばない、という現行コードの分岐で
+正しく動く。ここは変更しない。
+
+## レビューで判明した訂正（実装中に確定）
+
+### 訂正1: variant の初期 URL は `?app=<variant>` であって `index.html?app=<variant>` ではない
+
+Tauri は App URL を**完全一致文字列 `"index.html"` のときだけ**サイトルートへ簡約する
+（`tauri-2.10.3/src/manager/webview.rs:421-429`）。したがって `index.html?app=tasks` は
+`pathname == "/index.html"` になり、React Router では `path="*"` の NotFoundPage に落ちる。
+クエリのみの相対参照 `?app=tasks` はベースパスを保つため `pathname == "/"` になる。
+既存の quick-note ウィンドウが `index.html?quick-note-window=1` で動いているのは、
+`App()` がルーターより前に `<QuickNoteWindowPage/>` を返しているからであり、ルーティングの前例にはならない。
+
+### 訂正2: 起動ガードは spawn 直後に解放してはいけない
+
+当初設計は「判定 → spawn」をミューテックスで囲むだけだったが、生存判定がポート応答ベースであるため、
+spawn 直後に解放すると **daemon がまだポートを bind していない窓**が残り、次の variant が
+「居ない」と判定して二重 spawn する。ガードは spawn 後も保持し、`daemon_is_running_externally()` が
+真になるまで 250ms 間隔・最大 20 秒ポーリングしてから解放する。
+
+これに伴う 2 つの制約:
+
+- ポーリング中に `managed_daemon()` の in-process ロックを握ったままにしない。`read_daemon_status` が
+  同じロックを取るため、UI の状態取得が最大 20 秒ハングする。子プロセス格納後に明示的に `drop` する。
+- `start_daemon_if_auto_start_enabled` は `setup()`（メインスレッド）から呼ばれるため、
+  そのまま待つと起動が最大 20 秒フリーズする。`std::thread::spawn` に逃がす。
+  Windows の名前付きミューテックスは**待機したスレッドが所有者**であり `ReleaseMutex` も同一スレッドから
+  行う必要があるため、ガードをスレッド間で移動させてはならない。
+
+## Wave 分割
+
+### Wave 1: variant 設定基盤（ビルド構成）
+
+- `prepare-tauri-config.mjs`: `NATIVE_APP_VARIANT` を受け、variant レジストリから productName / identifier /
+  icon / window title を解決。未指定時は**現行の挙動を完全に維持**する（既存 env が正）。
+- `native/desktop/package.json`: `tauri:build:variant`、ルート `package.json`: `build:native:all`
+  （main → tasks → notes → artifacts を順にビルド）。
+- 検証: `NATIVE_APP_VARIANT=tasks node scripts/prepare-tauri-config.mjs` で生成 JSON が期待どおりであること。
+  variant 未指定で生成した JSON が現行と同一であること。
+
+### Wave 2: Rust 側の variant 挙動
+
+- `variant.rs`（新規）: `app.config().identifier` から variant を導出。`Variant::{Main, Tasks, Notes, Artifacts}`。
+- `window.rs`: variant のとき初期 URL を `index.html?app=<variant>` にする。close→hide の常駐は main のみ。
+- `lib.rs`: トレイ初期化は main のみ。daemon 自動起動は variant でも実行（Wave 3 のガード前提）。
+- 検証: `cargo check`、variant 導出の単体テスト。
+
+### Wave 3: sync-daemon のプロセス横断ガード
+
+- `commands.rs`: 上記「方針」1〜3 の実装。`Cargo.toml` に `Win32_System_Threading` 追加。
+- 検証: `cargo test`。ロック取得/解放、probe 成功時に spawn しないこと、`owned` フラグ。
+
+### Wave 4: UI 側の variant 受け口
+
+- `App.tsx`: `?app=<variant>` を読み、対応ルートを初期表示（`quick-note-window=1` と同じ位置で分岐）。
+  未知の値は無視して通常起動（フォールバック）。
+- 検証: `npx tsc --noEmit`、`npm test --workspace ui`。
+
+### Wave 5: ビルド・実機確認（Claude 実施）
+
+- `npm run build:native:all` で 4 本のインストーラ生成。
+- 実機で: タスクバーに 3 つを個別ピン留め／daemon が 1 つしか立たないこと（`tasklist` で確認）／
+  main を落としても variant から daemon が立つこと。
+
+## テスト戦略
+
+- Rust: variant 導出、daemon ガード（probe 成功 → spawn しない、ロック競合）。
+- UI: `?app=` パース（未知値のフォールバック含む）。
+- 生成物: variant 別 `tauri.conf.json` のスナップショット的検証（Wave 1 の検証コマンド）。
+- 実機: Wave 5。多重起動防止は **daemon プロセス数の実測**で確認する（単体テストでは不十分なため）。
+
+## ロールバック
+
+variant は追加のみで、main の構成・挙動は不変。問題があれば variant のインストーラを配布しない／
+アンインストールするだけで戻せる。Wave 3 の daemon ガードのみ main にも影響するため、
+ここは独立 commit にして単独で revert できるようにする。
+
+## 進捗ボード
+
+| Wave | 内容 | 状態 |
+|---|---|---|
+| 0 | 調査・アイコン新規作成・計画書 | [done] 2026-07-31 |
+| 1 | variant 設定基盤（prepare-tauri-config / build スクリプト） | [done] 2026-07-31 |
+| 2 | Rust 側の variant 挙動（variant.rs / window.rs / lib.rs） | [done] 2026-07-31 |
+| 3 | sync-daemon プロセス横断ガード | [done] 2026-07-31 |
+| 4 | UI 側 `?app=` 受け口 | [done] 2026-07-31 |
+| 5 | 4 本ビルド | [done] 2026-07-31 |
+| 6 | 実機確認（インストール・ピン留め・daemon 単一性） | [pending] ユーザー実施 |
+
+検証結果（2026-07-31）: `cargo test` 15 件パス、`npx tsc --noEmit` 通過、ui vitest 448 件パス、
+`npm run build:native:all` で 4 本の NSIS / MSI 生成。
+
+実装体制の実績: Wave 1〜3 は Codex 実装 + Claude レビュー。Wave 4 は Codex が 2 回連続で 30 分タイムアウトし
+出力が無かったため Claude が直接実装した（`window.rs` の URL 修正、`App.tsx` の `resolveVariantStartPage`、単体テスト）。
+
+---
+
+# Phase 2: 実使用フィードバックによる改良（2026-08-01）
+
+Phase 1 を実機で使った結果、4 点の課題が出た。方式B（別 exe）は維持し、共有と専用化で解決する。
+
+| フィードバック | 対応 |
+|---|---|
+| 再ログインしないとタスクが表示されない | P2-1 ストレージ共有 |
+| アイコンを黒基調のシンプルなものに | P2-2 アイコン再作成 |
+| 各アプリが別々で勝手が悪い | P2-1 + P2-4（1 インストーラ化） |
+| 専用アプリなのに UI が同じ | P2-3 専用シェル + 各機能の最適化 |
+
+## P2-0: 「再ログインしないとデータが出ない」の真因（2026-08-01 訂正）
+
+**P2-1 の当初診断は誤りだった。** ストレージ分離は症状の原因ではない。
+
+真因は [`getWorkbenchCoreUrl()`](../../ui/src/config/services.ts) の分岐にある。
+
+```js
+workbenchCoreUrlCache = isServedByWorkbenchCore()
+  ? currentOriginWorkbenchCoreUrl() || readStoredWorkbenchCoreUrl() || envWorkbenchCoreUrl
+  : readStoredWorkbenchCoreUrl() ?? envWorkbenchCoreUrl;
+```
+
+`isServedByWorkbenchCore()` は「protocol が http/https」かつ「本番ビルド（`!import.meta.env.DEV`）」で true を返す。
+パッケージ版ネイティブは **`http://tauri.localhost`** で UI を配信するため、この条件を偶然すべて満たす。
+結果、保存済み Core URL を捨てて自分自身のオリジンを Core とみなし、`/api/*` に index.html が返って
+JSON パースに失敗していた。共有 localStorage に
+`Service returned an HTML error page instead of JSON for http://tauri.localhost/api/tasks?limit=200`
+という通知が大量に残っていたのが決定的な証拠。
+
+ログイン直後だけ動くのは `setWorkbenchCoreUrl()` がキャッシュを直接書き換えるため。再起動すると再計算されて
+`tauri.localhost` に戻る。**この不具合は variant 固有ではなくメインアプリも抱えていた**（毎回ログインで回避されていた）。
+
+対応: `isServedByWorkbenchCore()` で `tauri.localhost` を除外する。Web 配置（Core が UI を配信）と
+ネイティブ dev（`127.0.0.1:5174`）の判定は変えない。テストは
+[`servedByCore.test.ts`](../../ui/src/config/__tests__/servedByCore.test.ts)。
+
+P2-1 のストレージ共有自体は設定・通知・UI 状態の共有として有効なので維持する。
+
+## P2-5: daemon をコンソールレスにする
+
+sidecar はコンソールアプリのため、GUI から spawn するとコンソール窓が出ていた。
+
+- `CREATE_NO_WINDOW` を付与して窓を抑止
+- 出力は破棄せず `app_config_dir/sync-daemon.log` へリダイレクト
+- トレイメニューに「Open sync daemon log」を追加し、必要なときだけ確認できるようにする
+
+## P2-1: ストレージ共有
+
+### 当初の診断（誤り。P2-0 参照）
+
+セッションは Credential Manager の固定名 `Workbench.Session` なので variant でも読める。壊れているのは
+**サーバー URL** で、`workbench-core-url` は localStorage にあり（[`services.ts`](../../ui/src/config/services.ts)）、
+localStorage は WebView2 のユーザーデータフォルダに紐づく。
+
+Tauri は `data_directory` 未指定だと wry が空文字を `CreateCoreWebView2EnvironmentWithOptions` に渡す
+（`wry-0.54.4/src/webview2/mod.rs:345`）。この場合 WebView2 の既定は **exe と同じ場所の
+`<exe名>.exe.WebView2`** であり、Electron のような identifier ベースのパスではない。
+variant はインストール先が別ディレクトリなので、localStorage も別になっていた。
+
+結果、variant はビルド時に焼き込まれた `http://127.0.0.1:4100` にフォールバックしてデータを取得できず、
+ログイン画面を通して初めて URL が入る、という症状になっていた。
+
+### 対応
+
+`WebviewWindowBuilder::data_directory()`（`tauri-2.10.3/src/webview/webview_window.rs:1022`）で、
+**main を含む全ビルド**が同一の絶対パスを指すようにする。相対パスのみ許すという制約は
+`WebviewBuilder::from_config` 経由の場合だけで（`webview/mod.rs:410-419`）、プログラム生成には掛からない。
+
+共有パスは identifier ベースの安定した場所とする: `%LOCALAPPDATA%\com.workbench.desktop\webview`。
+main の identifier を定数として使い、`app_local_data_dir()`（variant ごとに変わる）は使わない。
+
+**一度きりの移行コスト**: main の既存 localStorage は exe の隣にあるため引き継がれない。
+初回のみ main でもサーバー URL の再指定が必要になる。ログインは Credential Manager にあるため維持される。
+
+WebView2 は複数プロセスによる同一ユーザーデータフォルダの共有をサポートし、ブラウザプロセスを共有する。
+副作用として 4 アプリ同時起動時のメモリが減る一方、ブラウザプロセスのクラッシュは全アプリに波及する。
+
+## P2-2: アイコン再作成
+
+Phase 1 の彩度の高いタイルは不採用。**黒基調・シンプル**へ。色相での差別化をやめ、
+黒地＋シルバー/白のグリフとし、機能差はグリフ形状と控えめなアクセントで表す。
+元 SVG は [`icons-src/`](../../native/desktop/icons-src/) を更新し、`npx tauri icon` で再生成する。
+
+## P2-3: 専用シェルと各機能の最適化
+
+- 既存 [`Layout`](../../ui/src/components/Layout.tsx) は**変更しない**。`?app=` 起動時に使う
+  専用シェルを別コンポーネントとして新設する。
+- 落とすもの: サイドナビ全体（他機能への導線）、ヘッダーの WORKBENCH 表記・Local 状態・通知など。
+- 各機能画面を単機能アプリとして作り込む（余白・情報密度・操作導線）。
+- 仕上がりが良ければメイン側へ輸入する前提のため、専用シェル配下の共通部品は
+  メインからも使える粒度で切る。
+
+## P2-4: 1 インストーラ化（コンポーネント選択）
+
+- 4 つの exe を **1 つのインストールフォルダ**に入れる。sidecar (`workbench-sync-daemon.exe`) も 1 本で済み、
+  variant は `current_exe_parent()` 経由で共有 sidecar を見つけられる。
+- exe のパスが異なるため AUMID は自動的に分かれ、タスクバー分離は維持される。
+- NSIS のコンポーネントページで、メイン + 導入したい専用アプリだけを選ばせる。
+  Tauri の `bundle.windows.nsis.template` でカスタムテンプレートを指定する。
+  雛形は生成済みの `target/release/nsis/x64/installer.nsi` を出発点にする。
+- ビルド手順: 各 variant をビルドして exe をステージングへ退避 → main のバンドルに `resources` として同梱。
+
+## Phase 2 進捗ボード
+
+| Wave | 内容 | 状態 |
+|---|---|---|
+| P2-1 | WebView2 データディレクトリ共有 | [done] 2026-08-01 |
+| P2-2 | アイコン再作成（黒基調） | [done] 2026-08-01 |
+| P2-3a | 専用シェル（サイドバー・ヘッダー除去） | [done] 2026-08-01 |
+| P2-3b | 各機能の作り込み（余白・情報密度・操作導線） | [pending] 実機の見た目を確認してから |
+| P2-4 | 1 インストーラ化（コンポーネント選択） | [done] 2026-08-01 |
+| P2-5 | daemon をコンソールレス化 + トレイからログ参照 | [done] 2026-08-01 |
+| P2-6 | 専用アプリのアカウント行（ログイン/サーバー切替/サインアウト） | [done] 2026-08-01 |
+| P2-7A | 装飾オフ + 自前タイトルバー | [done] 2026-08-01 |
+| P2-7B | Snap Layouts（WM_NCHITTEST → HTMAXBUTTON） | [done] 2026-08-01 実機で HTMAXBUTTON を確認 |
+
+### P2-7 で踏んだ罠
+
+- **ウィンドウプロシージャから Tauri API を同期呼び出ししてはいけない**。`WM_NCMOUSEMOVE` は頻繁に飛び、
+  `webview_windows()` はウィンドウ生成中に握られているロックを取りにいくため、メインスレッドで再入して
+  デッドロックし**ウィンドウが一切表示されなくなる**。`run_on_main_thread` でメインループへ委譲すること。
+- **タイトルバーを認証ゲートの内側に置いてはいけない**。装飾オフのウィンドウでログイン画面に入ると
+  タイトルバーが存在せず、移動も終了もできなくなる。`App.tsx` でルーティングの外側に置く。
+- **`startDragging` を mousedown で呼ぶと `dblclick` が発火しない**（OS のドラッグループにポインタが渡るため）。
+  ダブルクリック最大化は `event.detail >= 2` で判定する。
+- wry の装飾オフは `WS_CAPTION` / `WS_THICKFRAME` を残したまま `WM_NCCALCSIZE` で非クライアント領域を削る方式。
+  キャプション高は実測 1px。ただし縁の `WM_NCHITTEST` は `HTCLIENT` を返すため、
+  リサイズ境界がネイティブのまま効くとは限らない（未検証）。
+
+### P2-4 の割り切り
+
+コンポーネント選択は NSIS 固有の機能のため、**MSI の生成をやめた**（`--bundles nsis`）。
+MSI が要る場合はコンポーネント選択なしの別バンドルとして戻すことになる。
+
+NSIS テンプレートは tauri-cli 2.10.1 のものを
+[`src-tauri/nsis/installer.nsi`](../../native/desktop/src-tauri/nsis/installer.nsi) に取り込んで改造している。
+**Tauri を上げる際はテンプレートの追従が必要**。取得元は
+`https://raw.githubusercontent.com/tauri-apps/tauri/refs/tags/tauri-cli-v<version>/crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi`。
+handlebars プレースホルダを残したまま改造すること（絶対パスを焼き込まない）。
+
+## P2-7: 専用アプリの自前タイトルバー（MS Office 風）
+
+アカウント操作をウィンドウ枠に置く。**専用アプリのみ**先行導入し、メインは据え置き。
+
+Windows にはネイティブ枠を残したままオーバーレイする仕組みが無いため、`decorations: false` で装飾を切り、
+タイトルバーを HTML で描く。UI は `@tauri-apps/api` を使わず `window.__TAURI_INTERNALS__.invoke` で
+Rust コマンドを呼ぶ方式（[`transport.ts:64-73`](../../ui/src/lib/api/transport.ts)）なので、
+ウィンドウ操作も同じ作法の Rust コマンドとして足す。新規依存は不要。
+
+### Wave A: 装飾オフ + 自前タイトルバー
+
+- `window.rs`: variant のときのみ `.decorations(false)`。main / Quick Note / Calendar は変更しない。
+- Rust コマンド: `window_minimize` / `window_toggle_maximize` / `window_close` / `window_start_drag`。
+  いずれも呼び出し元ウィンドウに対して作用させる（`tauri::Window` を引数に取る）。
+- UI: 専用シェルの最上段にタイトルバー。左にアプリ名、右にアカウント（P2-6 の内容を移設）+ 最小化 / 最大化 / 閉じる。
+- ドラッグ領域は明示的に `window_start_drag` を叩く（`data-tauri-drag-region` に依存しない）。
+
+### Wave B: Win32 ヒットテスト（Snap Layouts とリサイズ）
+
+装飾オフのままでは Win11 の Snap Layouts（最大化ボタンのホバーで出る分割レイアウト）とリサイズ境界が失われる。
+`SetWindowSubclass` でウィンドウをサブクラス化し、`WM_NCHITTEST` を自前処理する。
+
+- 最大化ボタンの矩形上では **`HTMAXBUTTON`** を返す → Windows が Snap Layouts を出す。
+- ボタン矩形は UI 側が実測して Rust に渡す（DPI スケール込み）。`WM_NCLBUTTONDOWN` / `WM_NCLBUTTONUP` も
+  処理しないとボタンが押せなくなる点に注意。
+- 外周 N px では `HTLEFT` / `HTTOP` / `HTTOPLEFT` 等を返してリサイズ境界を復元する。
+- `windows-sys` に `Win32_UI_Shell`（`SetWindowSubclass`）と `Win32_UI_WindowsAndMessaging` を追加。
+
+### P2-6 の仕様
+
+Workbench のセッションは `id` / `username` / `createdAt` のみでメールアドレスを持たないため、
+MS To Do の「名前 + メール」に相当する 2 行目は**接続先サーバーのホスト名**とした。
+複数サーバーを渡り歩く設計上、この文脈で最も意味のある情報のため。
+
+### 実装中に判明した罠
+
+- **`data_directory` は全ウィンドウに適用しないと破綻する**。Tauri は WebContext をデータディレクトリで
+  キーイングする（`tauri-runtime-wry-2.10.1/src/lib.rs:4601`）ため、一部のウィンドウだけに設定すると
+  Quick Note などが別ストレージへ分離する。[`window.rs`](../../native/desktop/src-tauri/src/window.rs) の
+  `with_shared_data_directory` を全ビルダーに通すこと。
+- **SVG の gradient は `userSpaceOnUse` にする**。既定の `objectBoundingBox` 単位だと、水平・垂直の
+  直線パスはバウンディングボックスが潰れて **stroke が描画されない**。アイコンの主マークが
+  消える形で踏んだ。
+
+### P2-3b で解く必要がある課題
+
+専用アプリからヘッダーを削除したため、**設定・ログアウト・サーバー URL 変更への UI 導線が無い**。
+P2-1 でメインと設定を共有するため通常運用では問題にならないが、専用アプリのみを単独インストールした
+場合に詰む。各機能ページのツールバー内に控えめなアプリメニューを置く方針とする。
+
+## 既知の注意点
+
+- `native/desktop/src-tauri/tauri.conf.json` は **`.gitignore` されている生成物**。したがって
+  「生成後に `git diff` が空であること」は検証として無意味（常に空になる）。内容の検証は
+  生成された JSON を直接読むこと。
+- `build:native:all` は最後の variant の config を残すため、完了時に main の config を再生成して
+  作業ツリーを既定状態へ戻す（[`build-variants.mjs`](../../native/desktop/scripts/build-variants.mjs)）。
+- 稼働中の `workbench-sync-daemon.exe` が `target/debug` のサイドカーをロックするため、
+  アプリ起動中の `cargo test` / `cargo check` は tauri-build が `PermissionDenied` で panic する。
+  隔離した `CARGO_TARGET_DIR` を使う。
