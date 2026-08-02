@@ -447,6 +447,46 @@ Rust コマンドを呼ぶ方式（[`transport.ts:64-73`](../../ui/src/lib/api/t
 | Tasks | 切替を枠へ = **完了** 2026-08-02 `c1435ba`。フィルタ → フォルダの意味論変更が**残** |
 | タイトルバーの折り返し | **完了** 2026-08-02。中央トラックを clip し、テキスト入力から順に譲る |
 
+### Tasks の設計（2026-08-02 調査で確定）
+
+#### 決定: 単一選択の「場所リスト」に統合する
+
+専用アプリのサイドバーを、スマートリストとプロジェクトを 1 本に並べた**単一選択の場所リスト**にする
+（MS To Do 型）。常にどれか 1 つに「居る」状態になり、プロジェクトを選ぶとスマートリストの選択は外れる。
+
+**失うもの**: 「プロジェクト X の中の Today」という積み重ね。専用アプリは単機能に振る方針のため許容する。
+メインワークスペースは従来のフィルタ積み重ねモデルのまま。
+
+#### 実装上の障壁: 「全件」を表す値が無い
+
+現状の絞り込みは 2 系統が**積み重なる**構造。
+
+- `contextFilter`（プロジェクト）は**データ取得の段階**で効く（`useTaskDataLoader(contextFilter, ...)`）
+- `quickFilter` はクライアント側（`filterTasksByMode`、occurrence 行の選択）で効く
+
+`QuickFilter` は `today | myday | planned | overdue | inbox` で、**「全件」に相当する値が無い**。
+場所リストでプロジェクトを選んだとき「そのプロジェクトの全タスク」を表す値が要る。
+`inbox` は「未整理」であって全件ではないので流用できない。
+
+したがって **`QuickFilter` に `"all"` を足す**のが正道。影響は 27 箇所 / 11 ファイル:
+
+`types.ts` / `lib/taskFilterUtils.ts` / `lib/taskOccurrenceDisplayUtils.ts` /
+`TasksPageContainer.tsx` / `components/TaskListContent.tsx` / `components/TasksSecondarySidebar.tsx` /
+`hooks/useTaskMutations.ts` と、対応する `__tests__` 4 件。
+
+`"all"` の意味は各所で「絞り込まない」= 素通し。occurrence のページングは planned / overdue 専用なので
+`"all"` は対象外。
+
+#### Wave 分割
+
+| Wave | 内容 | 状態 |
+|---|---|---|
+| T1 | `QuickFilter` に `"all"` を追加し、既存の分岐すべてを素通しで対応（挙動変更なし） | [pending] |
+| T2 | 専用アプリ用の場所リスト component（単一選択）と、`TasksSecondarySidebar` の出し分け | [pending] |
+| T3 | 実機確認 | [pending] |
+
+T1 を挙動不変で先に入れると、T2 の差分が「場所リストの追加」だけになりレビューしやすい。
+
 ### Artifacts の設計（2026-08-01 調査で確定）
 
 #### 機能欠落の実体
