@@ -624,6 +624,13 @@ Section "!${PRODUCTNAME}" SecMain
   !endif
 
   !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
+  ; The dedicated apps and the sync daemon are separate processes the stock template
+  ; knows nothing about. A daemon left running kept its exe locked and survived the
+  ; install, which is why it had to be killed by hand afterwards.
+  !insertmacro CheckIfAppIsRunning "Workbench Tasks.exe" "Workbench Tasks"
+  !insertmacro CheckIfAppIsRunning "Workbench Notes.exe" "Workbench Notes"
+  !insertmacro CheckIfAppIsRunning "Workbench Artifacts.exe" "Workbench Artifacts"
+  !insertmacro CheckIfAppIsRunning "workbench-sync-daemon.exe" "Workbench Sync Daemon"
 
   ; Copy main executable
   File "${MAINBINARYSRCPATH}"
@@ -786,6 +793,13 @@ Section Uninstall
   !endif
 
   !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
+  ; The dedicated apps and the sync daemon are separate processes the stock template
+  ; knows nothing about. A daemon left running kept its exe locked and survived the
+  ; install, which is why it had to be killed by hand afterwards.
+  !insertmacro CheckIfAppIsRunning "Workbench Tasks.exe" "Workbench Tasks"
+  !insertmacro CheckIfAppIsRunning "Workbench Notes.exe" "Workbench Notes"
+  !insertmacro CheckIfAppIsRunning "Workbench Artifacts.exe" "Workbench Artifacts"
+  !insertmacro CheckIfAppIsRunning "workbench-sync-daemon.exe" "Workbench Sync Daemon"
 
   ; Delete the app directory and its content from disk
   ; Copy main executable

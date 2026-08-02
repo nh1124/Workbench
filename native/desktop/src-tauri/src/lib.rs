@@ -161,6 +161,19 @@ pub fn run() {
       commands::save_file_with_dialog,
       commands::open_file_in_os_app,
     ])
-    .run(tauri::generate_context!())
-    .expect("error while running workbench native application");
+    .build(tauri::generate_context!())
+    .expect("error while running workbench native application")
+    .run(|_app, event| {
+      // Nothing used to stop the daemon: the tray's Quit only calls `app.exit`, and there
+      // was no exit hook, so the daemon this app spawned outlived every window and had to
+      // be killed by hand from a terminal.
+      //
+      // `stop_daemon` checks ownership, so an app that merely adopted a daemon another
+      // process started leaves it running for whoever owns it.
+      if matches!(event, tauri::RunEvent::Exit) {
+        if let Err(error) = commands::stop_daemon() {
+          eprintln!("[workbench-native] failed to stop the sync daemon on exit: {error}");
+        }
+      }
+    });
 }
