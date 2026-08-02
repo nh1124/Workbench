@@ -156,7 +156,7 @@ export function NotesPage() {
   const [authRequired, setAuthRequired] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [deleteConfirmNote, setDeleteConfirmNote] = useState<{ id: string; title: string } | null>(null);
+  const [deleteConfirmNote, setDeleteConfirmNote] = useState<{ ids: string[]; title: string } | null>(null);
   // Dedicated-app presentation: a list beside a reading pane, instead of a card wall.
   const inAppShell = useHasTitleBarSlot();
   // A window opened for a single note carries it in the URL, like the quick-note window.
@@ -429,9 +429,30 @@ export function NotesPage() {
 
   const requestDelete = (noteId: string, title?: string) => {
     setDeleteConfirmNote({
-      id: noteId,
+      ids: [noteId],
       title: title?.trim() || "note"
     });
+  };
+
+  /** Bulk delete from the dedicated app's list. One confirmation covers the whole selection. */
+  const requestDeleteMany = (noteIds: string[]) => {
+    if (noteIds.length === 0) return;
+    if (noteIds.length === 1) {
+      const only = notes.find((note) => note.id === noteIds[0]);
+      requestDelete(noteIds[0], only?.title);
+      return;
+    }
+    setDeleteConfirmNote({ ids: noteIds, title: `${noteIds.length} notes` });
+  };
+
+  /**
+   * Deletes sequentially rather than in parallel: each removal is followed by a reload in
+   * `performDelete`, and firing those together would race the list against itself.
+   */
+  const performDeleteMany = async (noteIds: string[]) => {
+    for (const noteId of noteIds) {
+      await performDelete(noteId);
+    }
   };
 
   const showNoData = !isLoading && !authRequired && filteredNotes.length === 0;
@@ -463,6 +484,7 @@ export function NotesPage() {
           onCreate={() => void createNoteInline()}
           onSave={saveNoteInline}
           onDelete={requestDelete}
+          onDeleteMany={requestDeleteMany}
           error={error}
           standaloneNoteId={standaloneNoteId}
         />
@@ -704,7 +726,11 @@ export function NotesPage() {
       <ConfirmDialog
         open={Boolean(deleteConfirmNote)}
         title="Delete Note"
-        message={`Delete "${deleteConfirmNote?.title || "note"}"?`}
+        message={
+          (deleteConfirmNote?.ids.length ?? 0) > 1
+            ? `Delete ${deleteConfirmNote?.title}? This cannot be undone.`
+            : `Delete "${deleteConfirmNote?.title || "note"}"?`
+        }
         confirmLabel="Delete"
         confirmTone="danger"
         busy={isSaving}
@@ -713,7 +739,7 @@ export function NotesPage() {
           if (!deleteConfirmNote) return;
           const target = deleteConfirmNote;
           setDeleteConfirmNote(null);
-          void performDelete(target.id);
+          void performDeleteMany(target.ids);
         }}
       />
     </section>

@@ -43,6 +43,8 @@ interface NotesAppViewProps {
   onCreate: () => void;
   onSave: (noteId: string, patch: { title?: string; content?: string }) => Promise<void>;
   onDelete: (noteId: string, title?: string) => void;
+  /** Bulk delete for a multi-selection; falls back to {@link onDelete} for a single note. */
+  onDeleteMany: (noteIds: string[]) => void;
   error: string | null;
   /** Set when this window was opened to show a single note. */
   standaloneNoteId?: string | null;
@@ -67,6 +69,46 @@ export function standaloneNoteUrl(noteId: string): string {
   return `?note=${encodeURIComponent(noteId)}`;
 }
 
+/**
+ * Which notes a click selects, given the modifier keys and what was already selected.
+ *
+ * Extracted because the interesting part is not the clicking, it is the bookkeeping: a shift
+ * range is measured from the anchor rather than from the last click, so extending a range
+ * twice grows it from the same origin instead of walking away from it.
+ */
+export function nextNoteSelection(options: {
+  orderedIds: string[];
+  clickedId: string;
+  selected: Set<string>;
+  anchorId: string | null;
+  shiftKey: boolean;
+  toggleKey: boolean;
+}): { selected: Set<string>; anchorId: string } {
+  const { orderedIds, clickedId, selected, anchorId, shiftKey, toggleKey } = options;
+
+  if (shiftKey && anchorId && anchorId !== clickedId) {
+    const from = orderedIds.indexOf(anchorId);
+    const to = orderedIds.indexOf(clickedId);
+    if (from !== -1 && to !== -1) {
+      const [start, end] = from < to ? [from, to] : [to, from];
+      // The anchor stays put so a second shift-click re-measures from the same note.
+      return { selected: new Set(orderedIds.slice(start, end + 1)), anchorId };
+    }
+  }
+
+  if (toggleKey) {
+    const next = new Set(selected);
+    if (next.has(clickedId)) {
+      next.delete(clickedId);
+    } else {
+      next.add(clickedId);
+    }
+    return { selected: next, anchorId: clickedId };
+  }
+
+  return { selected: new Set([clickedId]), anchorId: clickedId };
+}
+
 export function NotesAppView({
   notes,
   selectedNote,
@@ -82,12 +124,73 @@ export function NotesAppView({
   onCreate,
   onSave,
   onDelete,
+  onDeleteMany,
   error,
   standaloneNoteId
 }: NotesAppViewProps) {
   const [viewMode, setViewMode] = useState<NotesViewMode>(readStoredViewMode);
   const [isListCollapsed, setIsListCollapsed] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [anchorId, setAnchorId] = useState<string | null>(null);
+  const [rowMenu, setRowMenu] = useState<{ x: number; y: number; noteId: string } | null>(null);
   const isStandalone = Boolean(standaloneNoteId);
+
+  // Filtering or deleting can take notes out from under the selection; ids that are no
+  // longer on screen must not keep counting towards "3 selected" or a bulk delete.
+  useEffect(() => {
+    const visible = new Set(notes.map((note) => note.id));
+    setSelectedIds((current) => {
+      const pruned = new Set([...current].filter((id) => visible.has(id)));
+      return pruned.size === current.size ? current : pruned;
+    });
+  }, [notes]);
+
+  useEffect(() => {
+    if (!rowMenu) return;
+    const close = () => setRowMenu(null);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [rowMenu]);
+
+  const handleRowClick = (noteId: string, event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) => {
+    const next = nextNoteSelection({
+      orderedIds: notes.map((note) => note.id),
+      clickedId: noteId,
+      selected: selectedIds,
+      anchorId,
+      shiftKey: event.shiftKey,
+      toggleKey: event.ctrlKey || event.metaKey
+    });
+    setSelectedIds(next.selected);
+    setAnchorId(next.anchorId);
+    // The reading pane follows the note you just touched, whatever else is selected.
+    onSelect(noteId);
+  };
+
+  const openRowMenu = (event: { preventDefault: () => void; clientX: number; clientY: number }, noteId: string) => {
+    event.preventDefault();
+    // Right-clicking outside the selection acts on that note alone, which is what every
+    // file manager does and stops a stray click deleting a selection you forgot about.
+    if (!selectedIds.has(noteId)) {
+      setSelectedIds(new Set([noteId]));
+      setAnchorId(noteId);
+      onSelect(noteId);
+    }
+    setRowMenu({ x: event.clientX, y: event.clientY, noteId });
+  };
+
+  const menuTargetIds = rowMenu
+    ? selectedIds.has(rowMenu.noteId) && selectedIds.size > 1
+      ? [...selectedIds]
+      : [rowMenu.noteId]
+    : [];
 
   const changeViewMode = (mode: NotesViewMode) => {
     setViewMode(mode);
@@ -218,13 +321,17 @@ export function NotesAppView({
                   </button>
                   <button
                     type="button"
-                    className={note.id === selectedNote?.id ? "notes-app-row active" : "notes-app-row"}
-                    onClick={() => onSelect(note.id)}
-                    onContextMenu={(event) => {
-                      event.preventDefault();
-                      openInNewWindow();
-                    }}
-                    title="Right-click to open in a new window"
+                    className={[
+                      "notes-app-row",
+                      note.id === selectedNote?.id ? "active" : "",
+                      selectedIds.has(note.id) ? "multi-selected" : ""
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    aria-selected={selectedIds.has(note.id)}
+                    onClick={(event) => handleRowClick(note.id, event)}
+                    onContextMenu={(event) => openRowMenu(event, note.id)}
+                    title="Shift or Ctrl click to select several; right-click for actions"
                   >
                     <span className="notes-app-row-title">{note.title}</span>
                     <span className="notes-app-row-snippet">{noteSnippet(note.content)}</span>
@@ -266,6 +373,46 @@ export function NotesAppView({
                   </span>
                 </button>
               ))}
+            </div>
+          ) : null}
+
+          {rowMenu ? (
+            <div
+              className="notes-app-row-menu"
+              style={{ left: rowMenu.x, top: rowMenu.y }}
+              role="menu"
+              // The document listener that closes this fires on mousedown, so a press that
+              // starts on the menu must not travel up to it.
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              {menuTargetIds.length === 1 ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setRowMenu(null);
+                    openInNewWindow();
+                  }}
+                >
+                  Open in a new window
+                </button>
+              ) : null}
+              <button
+                type="button"
+                role="menuitem"
+                className="danger"
+                onClick={() => {
+                  setRowMenu(null);
+                  if (menuTargetIds.length === 1) {
+                    const target = notes.find((note) => note.id === menuTargetIds[0]);
+                    onDelete(menuTargetIds[0], target?.title);
+                  } else {
+                    onDeleteMany(menuTargetIds);
+                  }
+                }}
+              >
+                {menuTargetIds.length > 1 ? `Delete ${menuTargetIds.length} notes` : "Delete note"}
+              </button>
             </div>
           ) : null}
 
