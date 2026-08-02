@@ -10,6 +10,32 @@
 //! here: hover state is pushed into the page, and the non-client click messages are turned
 //! back into a maximize toggle.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// Nonzero while a window is being created.
+///
+/// Creating a webview holds Tauri's window map locked, and the subclass below runs on the
+/// same thread the creation is waiting on. If it reaches for a window in that gap the two
+/// deadlock: the builder never returns and the new window never appears. Deferring the
+/// lookup with `run_on_main_thread` is not enough, because on the main thread there is
+/// nothing to defer to — the loop is inside the build.
+///
+/// Nothing the subclass does is worth a deadlock. Hover polish and a maximize toggle can
+/// both wait for the window to exist.
+static WINDOW_BUILDS_IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+
+pub fn begin_window_build() {
+  WINDOW_BUILDS_IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
+}
+
+pub fn end_window_build() {
+  WINDOW_BUILDS_IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+}
+
+fn window_build_in_flight() -> bool {
+  WINDOW_BUILDS_IN_FLIGHT.load(Ordering::SeqCst) > 0
+}
+
 #[cfg(target_os = "windows")]
 mod platform {
   use std::collections::HashMap;
@@ -175,6 +201,10 @@ mod platform {
   /// may still hold the locks guarding its window map — during window creation that
   /// deadlocks and the window never appears.
   fn with_window(hwnd: HWND, action: impl FnOnce(&tauri::WebviewWindow) + Send + 'static) {
+    // See WINDOW_BUILDS_IN_FLIGHT: looking a window up mid-build deadlocks the build.
+    if super::window_build_in_flight() {
+      return;
+    }
     let Some(app) = crate::titlebar::app_handle() else {
       return;
     };
