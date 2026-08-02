@@ -191,7 +191,7 @@ variant は追加のみで、main の構成・挙動は不変。問題があれ�
 | 3 | sync-daemon プロセス横断ガード | [done] 2026-07-31 |
 | 4 | UI 側 `?app=` 受け口 | [done] 2026-07-31 |
 | 5 | 4 本ビルド | [done] 2026-07-31 |
-| 6 | 実機確認（インストール・ピン留め・daemon 単一性） | [pending] ユーザー実施 |
+| 6 | 実機確認（インストール・ピン留め・daemon 単一性） | [partial] 2026-08-02 起動・ピン留め・着地は OK。同時 spawn ガードは未検証 |
 
 検証結果（2026-07-31）: `cargo test` 15 件パス、`npx tsc --noEmit` 通過、ui vitest 448 件パス、
 `npm run build:native:all` で 4 本の NSIS / MSI 生成。
@@ -442,7 +442,7 @@ Rust コマンドを呼ぶ方式（[`transport.ts:64-73`](../../ui/src/lib/api/t
 | A3 | 最終レビュー指摘の修正（下記） | [done] 2026-08-01 `1714e50` |
 | A4 | 旧 2 ペインレイアウトの死にコード除去 | [done] 2026-08-02 `357bca7` |
 | A5 | レールにフォルダツリーを追加 | [done] 2026-08-02 `ee97e7c` |
-| A6 | 実機の見た目確認（ユーザー実施） | [pending] |
+| A6 | 実機の見た目確認（ユーザー実施） | [done] 2026-08-02 レール・ツリー・余白とも OK |
 
 検証: `npx tsc --noEmit` 通過、ui vitest 486 件パス（着手前 476 件）。
 
@@ -674,6 +674,47 @@ variant ビルドは Rust をビルドし終えた直後に `native-ui` に対�
 main のバンドル時に NSIS テンプレートが `Section /o` で取り込む
 （[`installer.nsi:724-739`](../../native/desktop/src-tauri/nsis/installer.nsi)）。
 最終成果物は `Workbench Native_0.1.0_x64-setup.exe` 1 本（30MB、コンポーネント選択つき）。
+
+### 実機確認の結果（2026-08-02）
+
+インストーラ 1 本を実機導入して確認。
+
+| 項目 | 結果 |
+|---|---|
+| コンポーネント選択・タスクバー個別ピン留め | OK |
+| **専用アプリが `?app=` なしで正しい機能に着地** | OK（N1 の中核を実機で確認） |
+| Artifacts のレール・フォルダツリー・余白 | OK |
+| daemon が単一 | 起動して 1 つ。ただし下記の限定つき |
+
+#### daemon 単一性の検証範囲（重要）
+
+`autoStart` は **main のみ true**、tasks / notes は false、artifacts は未設定だった。
+したがって観測された「1 つ」は **main だけが spawn した結果**であり、
+**Wave 3 のプロセス横断ガード（同時 spawn の防止）は実機では踏んでいない**。
+ガードを実際に検証するには複数アプリで `autoStart` を有効にし、同時起動する必要がある。
+単体テスト（`daemon_guard::tests`）はロック競合と再取得を押さえている。
+
+daemon の実ポートは 35780（`DEFAULT_DAEMON_HTTP_PORT`）。数えるコマンド:
+`Get-Process workbench-sync-daemon | Measure-Object | Select-Object Count`
+
+#### 見つかった不具合: トレイの「Open sync daemon log」が何も開かない（修正済み `24bff6c`）
+
+`.log` は Windows 標準では**関連付けが無い**（`assoc .log` が「見つかりません」）。
+`open_with_default_app` の `cmd /C start "" <path>` は起動対象を見つけられず即終了し、
+ユーザーには**コンソールが一瞬光って消える**だけに見えていた。
+アプリが書いたテキストは Notepad で開くようにし（`open_text_file`）、
+ユーザーが選んだファイルは従来どおり既定アプリへ。
+
+併せて `open_with_default_app` に `CREATE_NO_WINDOW` を追加。P2-5 で daemon 本体には
+付けたがこちらは漏れており、**ファイルを開くたびにコンソールが明滅**していた。
+
+#### 仕様であって不具合ではないもの
+
+設定画面の「Local daemon status is not loaded.」は、マウント時に読むのが
+`readPreferences` だけで status は `refreshLocalDaemon` 経由でしか読まないため
+（[`useLocalDaemonSettings.ts:46-73`](../../native/desktop/ui/src/settings/hooks/useLocalDaemonSettings.ts)）。
+Refresh を押すまでは空。開いた瞬間は壊れて見えるので、
+マウント時に 1 回読むかどうかは UX の判断事項として残す。
 
 ## Phase 3 の残課題
 
