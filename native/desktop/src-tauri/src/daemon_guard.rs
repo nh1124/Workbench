@@ -10,7 +10,10 @@ mod platform {
   };
 
   const DAEMON_LAUNCH_MUTEX_NAME: &str = r"Local\workbench-sync-daemon-launch";
-  const DAEMON_LAUNCH_TIMEOUT_MS: u32 = 10_000;
+  /// Must exceed the readiness wait the holder performs while still under this mutex
+  /// (`DAEMON_READINESS_TIMEOUT`, 20s). At 10s a contender gave up *before* the holder was
+  /// finished, then spawned anyway — reopening the double-start this mutex exists to close.
+  const DAEMON_LAUNCH_TIMEOUT_MS: u32 = 30_000;
 
   pub struct DaemonLaunchGuard {
     handle: HANDLE,

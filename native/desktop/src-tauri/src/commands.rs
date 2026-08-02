@@ -1201,9 +1201,18 @@ fn start_daemon_with_app(app: Option<&tauri::AppHandle>) -> Result<bool, String>
     }
   }
 
-  let _guard = daemon_guard::acquire();
+  let guard = daemon_guard::acquire();
   if daemon_is_running_externally() {
     return Ok(false);
+  }
+  if guard.is_none() {
+    // Spawning without the guard is how two daemons end up racing for the port. Whoever
+    // holds it is already starting one, so stand down and let the probe find it next time
+    // rather than starting a second that will die on EADDRINUSE.
+    return Err(
+      "another Workbench app is already starting the sync daemon; try again in a moment"
+        .to_string(),
+    );
   }
 
   let child = spawn_daemon(app)?;
@@ -1631,7 +1640,9 @@ pub fn stop_daemon() -> Result<bool, String> {
     .lock()
     .map_err(|_| "sync daemon process lock was poisoned".to_string())?;
 
-  let Some(mut daemon) = managed.take() else {
+  // Held, not taken: dropping a `Child` does not end the process, so releasing ownership
+  // before the kill is confirmed would strand a live daemon that nothing can stop again.
+  let Some(daemon) = managed.as_mut() else {
     return Ok(false);
   };
 
@@ -1641,6 +1652,7 @@ pub fn stop_daemon() -> Result<bool, String> {
     .map_err(|error| format!("failed to inspect sync daemon process: {error}"))?
     .is_some()
   {
+    *managed = None;
     return Ok(true);
   }
 
@@ -1649,6 +1661,7 @@ pub fn stop_daemon() -> Result<bool, String> {
     .child
     .wait()
     .map_err(|error| format!("failed to wait for sync daemon shutdown: {error}"))?;
+  *managed = None;
   Ok(true)
 }
 
