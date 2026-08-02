@@ -80,6 +80,8 @@ import { TaskSearchModal } from "./components/TaskSearchModal";
 import { TodaySuggestionCard } from "./components/TodaySuggestionCard";
 import { TasksCenterHeader } from "./components/TasksCenterHeader";
 import { TasksSecondarySidebar } from "./components/TasksSecondarySidebar";
+import { TasksViewSwitcher } from "./components/TasksViewSwitcher";
+import { TitleBarPortal, useHasTitleBarSlot } from "../components/VariantChrome";
 import { IcoClock } from "./components/icons";
 
 // ── CSS ─────────────────────────────────────────────────────────────────────
@@ -116,6 +118,7 @@ export function TasksPageContainer({
   const t = useUiStrings();
 
   // ── UI-only local state ──────────────────────────────────────────────────
+  const isDedicatedApp = useHasTitleBarSlot();
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>(initialSidebarMode);
   const [calendarMode, setCalendarMode] = useState<CalendarMode>(initialCalendarMode);
   const [dayCursorKey, setDayCursorKey] = useState(() => (
@@ -1223,7 +1226,22 @@ export function TasksPageContainer({
 
   // ── JSX ───────────────────────────────────────────────────────────────────
 
+  const openStandaloneCalendar = (calendar: "due" | "schedule", view: CalendarMode) => {
+    void openCalendarWindow(buildStandaloneCalendarUrl(calendar, view));
+  };
+
   return (
+    <>
+      {isDedicatedApp && !standalone ? (
+        <TitleBarPortal>
+          <TasksViewSwitcher
+            sidebarMode={sidebarMode}
+            setSidebarMode={setSidebarMode}
+            calendarMode={calendarMode}
+            onOpenCalendarWindow={openStandaloneCalendar}
+          />
+        </TitleBarPortal>
+      ) : null}
     <section className={[
       "tasks-shell",
       selectedTask ? "has-detail" : "",
@@ -1243,9 +1261,8 @@ export function TasksPageContainer({
         calendarStatusFilter={calendarStatusFilter}
         setCalendarStatusFilter={setCalendarStatusFilter}
         calendarMode={calendarMode}
-        onOpenCalendarWindow={(calendar, view) => {
-          void openCalendarWindow(buildStandaloneCalendarUrl(calendar, view));
-        }}
+        onOpenCalendarWindow={openStandaloneCalendar}
+        showViewSwitcher={!isDedicatedApp}
       />}
 
       {/* ── Center column ─────────────────────────────── */}
@@ -1698,6 +1715,7 @@ export function TasksPageContainer({
         resolveContextDisplayName={resolveContextDisplayName}
       />
     </section>
+    </>
   );
 }
 

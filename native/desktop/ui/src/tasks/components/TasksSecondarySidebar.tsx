@@ -29,6 +29,8 @@ interface TasksSecondarySidebarProps {
   setCalendarStatusFilter: (value: CalendarStatusFilter) => void;
   calendarMode: CalendarMode;
   onOpenCalendarWindow: (calendar: "due" | "schedule", view: CalendarMode) => void;
+  /** False in the dedicated app, where the switch lives in the title bar instead. */
+  showViewSwitcher?: boolean;
 }
 
 export function TasksSecondarySidebar({
@@ -44,6 +46,7 @@ export function TasksSecondarySidebar({
   setCalendarStatusFilter,
   calendarMode,
   onOpenCalendarWindow,
+  showViewSwitcher = true,
 }: TasksSecondarySidebarProps) {
   const t = useUiStrings();
   const [calendarMenu, setCalendarMenu] = useState<{
@@ -80,11 +83,13 @@ export function TasksSecondarySidebar({
       <header className="tasks-secondary-head">
         <h2><IcoClipboard /> Tasks</h2>
       </header>
-      <div className="tasks-secondary-group" style={{ borderTop: 0, paddingTop: 0 }}>
-        <button type="button" className={sidebarMode === "list" ? "sidebar-tab active" : "sidebar-tab"} onClick={() => setSidebarMode("list")}><IcoList /> Task List</button>
-        <button type="button" className={sidebarMode === "calendar" ? "sidebar-tab active" : "sidebar-tab"} onClick={() => setSidebarMode("calendar")} onContextMenu={(event) => openContextMenu(event, "due")}><IcoCal /> Due Calendar</button>
-        <button type="button" className={sidebarMode === "schedule" ? "sidebar-tab active" : "sidebar-tab"} onClick={() => setSidebarMode("schedule")} onContextMenu={(event) => openContextMenu(event, "schedule")}><IcoCal /> Schedule</button>
-      </div>
+      {showViewSwitcher && (
+        <div className="tasks-secondary-group" style={{ borderTop: 0, paddingTop: 0 }}>
+          <button type="button" className={sidebarMode === "list" ? "sidebar-tab active" : "sidebar-tab"} onClick={() => setSidebarMode("list")}><IcoList /> Task List</button>
+          <button type="button" className={sidebarMode === "calendar" ? "sidebar-tab active" : "sidebar-tab"} onClick={() => setSidebarMode("calendar")} onContextMenu={(event) => openContextMenu(event, "due")}><IcoCal /> Due Calendar</button>
+          <button type="button" className={sidebarMode === "schedule" ? "sidebar-tab active" : "sidebar-tab"} onClick={() => setSidebarMode("schedule")} onContextMenu={(event) => openContextMenu(event, "schedule")}><IcoCal /> Schedule</button>
+        </div>
+      )}
 
       {sidebarMode === "list" && (
         <>
