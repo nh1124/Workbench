@@ -820,7 +820,7 @@ Phase 1〜3 の所有権モデルは「spawn したプロセスが `Child` を�
 | Wave | 内容 | 状態 |
 |---|---|---|
 | D1 | 起動ガードの修正（ミューテックス待機 ≥ レディネス待ち、取得失敗時は spawn しない）+ `stop_daemon` の所有権保持 | [done] 2026-08-02 `f51ed71` |
-| D2 | daemon 側のリース登録簿 + graceful shutdown + `exitWhenIdle` | [pending] |
+| D2 | daemon 側のリース登録簿 + graceful shutdown + `exitWhenIdle` | [done] 2026-08-02 `893947e` |
 | D3 | アプリ側のリース取得・ハートビート・解放、`stop_daemon` の置き換え | [pending] |
 | D4 | Settings に `exitWhenIdle` トグル | [pending] |
 
@@ -837,3 +837,33 @@ Phase 1〜3 の所有権モデルは「spawn したプロセスが `Child` を�
 | トークン再生成時に webview が古い値を持つ | D3 で扱う |
 | 設定ファイルの lost update（複数プロセスの read-modify-write） | **未対応**。共有化で顕在化した構造問題。別途 |
 | loopback probe の全体締切が無い（read ごとのタイムアウトのみ） | **未対応**。実害は限定的だが残課題 |
+
+## D2 実装メモ
+
+- リース登録簿は **daemon プロセス内メモリ**（[`services/sync-daemon/src/leases.ts`](../../services/sync-daemon/src/leases.ts)）。
+  サーバへは一切送らない。API も daemon 自身のループバック HTTP に生やした。
+- テストは時計を引数で受ける設計にし、失効・猶予のルールを sleep せず検証する。
+  daemon のテストは `tsx --test src/__tests__/**/*.test.ts` で、**glob が `src/__tests__/**` のみ**という
+  既知の罠があるためそこに置いた。147 → 160 件。
+- `DaemonState.leases` を必須にしたため既存フィクスチャ 5 件に 1 行ずつ追加。
+  `exitWhenIdle` は既存の `allowAnonymousApi` に倣い任意とし、フィクスチャ側の変更を不要にした。
+- **D3 未了のため、このルートを呼ぶものはまだ無い。** `exitWhenIdle` も既定 off なので、
+  現時点の実効挙動は D2 以前と同じ（アプリは終了時に依然 daemon を kill する）。
+
+## 予約作業: `services/sync-daemon` の配置見直し
+
+`services/` に**サーバ配備のドメインサービス**と**クライアント同梱の sidecar** が同居しており、
+名前から区別がつかない。実際にこれが誤解を生んだ（「なぜサービス側がリースを持つのか」）。
+
+2026-08-02 は **(A) ドキュメントで明記**のみ実施（README の「Services and default ports」節、
+CLAUDE.md の構成節）。**(B) `native/sync-daemon/` などへの移動は予約**。
+
+移動時に追従が要るもの:
+
+- ルート `package.json` の workspace glob `services/*`
+- `services/sync-daemon/scripts/build-tauri-sidecar.mjs` の出力パス
+- Tauri の `externalBin`（現在 `../../../services/sync-daemon/dist/tauri-sidecar/workbench-sync-daemon`）
+- `prepare-tauri-config.mjs` が読む sidecar マニフェストのパス
+
+daemon のライフサイクル改修中にビルド経路を動かすと失敗の切り分けが難しくなるため、
+**Phase 4 完了・実機確認後に着手すること**。
