@@ -1564,9 +1564,19 @@ export function SettingsPage() {
                     <InfoHint label="Controls the local resident daemon, routing mode, sync folder, downloads folder and local conflict handling." />
                   </div>
                 </div>
-                <button type="button" onClick={() => void refreshLocalDaemon()} disabled={localDaemonLoading}>
-                  {localDaemonLoading ? "Refreshing..." : "Refresh"}
-                </button>
+                <div className="account-local-daemon-header-actions">
+                  {/* Starting and stopping the daemon is everyday use, not diagnosis; it sat
+                      under a collapsed "Diagnostics" summary where nobody could find it. */}
+                  <button type="button" onClick={() => void startNativeDaemon()} disabled={!nativeRuntimeAvailable}>
+                    Start
+                  </button>
+                  <button type="button" onClick={() => void stopNativeDaemon()} disabled={!nativeRuntimeAvailable}>
+                    Stop
+                  </button>
+                  <button type="button" onClick={() => void refreshLocalDaemon()} disabled={localDaemonLoading}>
+                    {localDaemonLoading ? "Refreshing..." : "Refresh"}
+                  </button>
+                </div>
               </div>
 
               {localDaemonStatus ? (
@@ -1799,12 +1809,6 @@ export function SettingsPage() {
                       disabled={localDaemonLoading}
                     >
                       Full Rescan
-                    </button>
-                    <button type="button" onClick={() => void startNativeDaemon()} disabled={!nativeRuntimeAvailable}>
-                      Start
-                    </button>
-                    <button type="button" onClick={() => void stopNativeDaemon()} disabled={!nativeRuntimeAvailable}>
-                      Stop
                     </button>
                   </div>
                 </details>
