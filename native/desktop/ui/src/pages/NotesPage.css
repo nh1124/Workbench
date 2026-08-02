@@ -938,6 +938,12 @@
 }
 .notes-app-tile:hover { border-color: rgba(148, 163, 184, 0.5); }
 .notes-app-tile.active { border-color: var(--accent); background: rgba(34, 211, 238, 0.10); }
+/* Same blue as the list rows, so a selection reads the same whichever view made it.
+   Declared after `.active` deliberately: both are two-class selectors, so order decides. */
+.notes-app-tile.multi-selected {
+  border-color: rgba(59, 130, 246, 0.7);
+  background: rgba(59, 130, 246, 0.18);
+}
 .notes-app-tile-title { font-size: 0.82rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .notes-app-tile-body {
   font-size: 0.74rem;

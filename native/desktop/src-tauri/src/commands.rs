@@ -1420,19 +1420,19 @@ pub fn secure_local_daemon_client_clear() -> Result<(), String> {
 
 #[tauri::command]
 pub fn open_main_window(app: tauri::AppHandle) -> Result<(), String> {
-  window::build_on_main_thread(&app, "main window", |app| window::open_new_main_window(app))
+  window::build_logged(&app, "main window", |app| window::open_new_main_window(app))
 }
 
 #[tauri::command]
 pub fn open_quick_note_window(app: tauri::AppHandle) -> Result<(), String> {
-  window::build_on_main_thread(&app, "quick note window", |app| {
+  window::build_logged(&app, "quick note window", |app| {
     window::open_new_quick_note_window(app)
   })
 }
 
 #[tauri::command]
 pub fn open_calendar_window(app: tauri::AppHandle, url: String) -> Result<(), String> {
-  window::build_on_main_thread(&app, "calendar window", move |app| {
+  window::build_logged(&app, "calendar window", move |app| {
     window::open_calendar_window(app, &url)
   })
 }
@@ -1443,7 +1443,7 @@ pub fn open_app_window(
   current_window: tauri::WebviewWindow,
   url: String,
 ) -> Result<(), String> {
-  window::build_on_main_thread(&app, "app window", move |app| {
+  window::build_logged(&app, "app window", move |app| {
     window::open_new_app_window(app, &current_window, &url)
   })
 }
@@ -1539,7 +1539,7 @@ pub fn window_toggle_maximize(window: tauri::Window) -> Result<(), String> {
 /// Opens another dedicated-app window, e.g. one note in its own window.
 #[tauri::command]
 pub fn open_variant_window(app: tauri::AppHandle, query: String) -> Result<(), String> {
-  window::build_on_main_thread(&app, "dedicated app window", move |app| {
+  window::build_logged(&app, "dedicated app window", move |app| {
     window::open_variant_window(app, &query)
   })
 }

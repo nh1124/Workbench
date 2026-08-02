@@ -50,38 +50,26 @@ where
   builder.initialization_script(crate::variant::initialization_script(variant))
 }
 
-/// Builds a window from the main loop rather than from wherever the caller is.
+/// Builds a window, recording how far it got.
 ///
-/// Creating a webview off the main thread deadlocks on Windows: the window appears but
-/// nothing pumps its messages, so it stays blank and even its close button does nothing —
-/// and the window that asked for it locks up too, because the same thread serves both.
-/// Opening a note in its own window hit exactly this, as did the abandoned
-/// `open_variant_window` before it.
+/// This used to hand the work to `run_on_main_thread` first. The app log showed that was
+/// wrong: "building ... on the main thread" with no "built" after it. Creating a webview
+/// needs the event loop to keep turning — WebView2 finishes initialising through it — so a
+/// callback that builds from inside the loop is blocking the very thing it waits on.
 ///
-/// The window is built after this returns, so failures are logged rather than reported to
-/// the caller. Windows opened during `setup()` do not need this: that already runs on the
-/// main thread.
-pub fn build_on_main_thread<F>(
-  app: &tauri::AppHandle,
-  what: &'static str,
-  build: F,
-) -> Result<(), String>
+/// The global-shortcut path never took that detour and has always worked, so this calls the
+/// builder the same way it does.
+pub fn build_logged<F>(app: &tauri::AppHandle, what: &str, build: F) -> Result<(), String>
 where
-  F: FnOnce(&tauri::AppHandle) -> Result<(), String> + Send + 'static,
+  F: FnOnce(&tauri::AppHandle) -> Result<(), String>,
 {
-  let handle = app.clone();
-  crate::applog::write(app, "window", &format!("scheduling {what}"));
-  app
-    .run_on_main_thread(move || {
-      crate::applog::write(&handle, "window", &format!("building {what} on the main thread"));
-      match build(&handle) {
-        Ok(()) => crate::applog::write(&handle, "window", &format!("{what} built")),
-        Err(error) => {
-          crate::applog::write(&handle, "window", &format!("failed to open {what}: {error}"))
-        }
-      }
-    })
-    .map_err(|error| format!("failed to schedule opening {what}: {error}"))
+  crate::applog::write(app, "window", &format!("building {what}"));
+  let result = build(app);
+  match &result {
+    Ok(()) => crate::applog::write(app, "window", &format!("{what} built")),
+    Err(error) => crate::applog::write(app, "window", &format!("failed to open {what}: {error}")),
+  }
+  result
 }
 
 #[cfg(desktop)]
