@@ -1,4 +1,5 @@
 import type { FSWatcher } from "node:fs";
+import type { LeaseRegistry } from "./leases.js";
 import type { CaptureManager } from "./capture/manager.js";
 import type { CaptureServerPolicyProvider } from "./capture/serverPolicy.js";
 import type { CaptureUploader } from "./capture/uploader.js";
@@ -116,6 +117,10 @@ export type SyncSnapshotResponse = {
 
 export type DaemonState = {
   config: DaemonConfig;
+  /** Which desktop apps currently depend on this daemon. See leases.ts. */
+  leases: LeaseRegistry;
+  /** Set once a clean shutdown is under way, so nothing schedules more work. */
+  shuttingDown?: boolean;
   manifestStore: ManifestStore;
   capture?: CaptureManager;
   captureUploader?: CaptureUploader;

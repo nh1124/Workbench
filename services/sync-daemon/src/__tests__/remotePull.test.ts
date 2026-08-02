@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { LeaseRegistry } from "../leases.js";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -58,6 +59,7 @@ async function createState(): Promise<{ root: string; store: ManifestStore; stat
     state: {
       config,
       manifestStore: store,
+      leases: new LeaseRegistry(),
       identity: {
         localClientId: "client-1",
         localClientToken: "token-1",

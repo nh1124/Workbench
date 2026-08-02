@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { LeaseRegistry } from "../leases.js";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -50,6 +51,7 @@ async function createState(policy: DaemonConfig["localJobConfirmationPolicy"]): 
     state: {
       config,
       manifestStore: store,
+      leases: new LeaseRegistry(),
       processedJobs: 0,
       outboxPending: 0,
       outboxFailed: 0,

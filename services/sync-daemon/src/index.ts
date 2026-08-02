@@ -169,7 +169,8 @@ import {
   pullRemoteArtifactSyncState
 } from "./remotePull.js";
 export { pullRemoteArtifactSyncState } from "./remotePull.js";
-import { startStatusServer } from "./statusServer.js";
+import { LeaseRegistry } from "./leases.js";
+import { requestDaemonShutdown, startStatusServer } from "./statusServer.js";
 export { handleLocalProjectContextWrite } from "./statusServer.js";
 
 export { readIdentity } from "./identityStorage.js";
@@ -530,6 +531,7 @@ async function main(): Promise<void> {
   const state: DaemonState = {
     config,
     manifestStore,
+    leases: new LeaseRegistry(),
     identity: await readIdentity(config),
     processedJobs: 0,
     outboxPending: 0,
@@ -589,6 +591,13 @@ async function main(): Promise<void> {
   }
   await state.capture.startFromConfig();
   startStatusServer(state);
+  // The daemon had no signal handling at all, which is why the desktop app resorted to
+  // `taskkill /F` and why an install could not get it to stand down.
+  for (const signal of ["SIGTERM", "SIGINT"] as const) {
+    process.on(signal, () => {
+      void requestDaemonShutdown(state, signal);
+    });
+  }
   startSyncWatcher(state);
   await state.ticker.run();
   setInterval(() => {

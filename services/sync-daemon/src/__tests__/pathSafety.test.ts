@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { LeaseRegistry } from "../leases.js";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -51,6 +52,7 @@ async function createState(): Promise<{ root: string; store: ManifestStore; stat
     state: {
       config,
       manifestStore: store,
+      leases: new LeaseRegistry(),
       processedJobs: 0,
       outboxPending: 0,
       outboxFailed: 0,

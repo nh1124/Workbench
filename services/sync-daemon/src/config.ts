@@ -13,6 +13,8 @@ export type DaemonConfig = {
   apiToken?: string;
   /** Absent means secure: the local API requires a token. */
   allowAnonymousApi?: boolean;
+  /** Exit once no app has held a lease for the grace period. Off by default: sync keeps running with every window closed. */
+  exitWhenIdle?: boolean;
   syncRoot: string;
   downloadsDir: string;
   deviceId: string;
@@ -93,6 +95,7 @@ export function readConfig(): DaemonConfig {
     accessToken: env("WORKBENCH_ACCESS_TOKEN"),
     apiToken: env("WORKBENCH_DAEMON_API_TOKEN") ?? env("WORKBENCH_LOCAL_DAEMON_TOKEN"),
     allowAnonymousApi: envBoolean(env("WORKBENCH_DAEMON_ALLOW_ANONYMOUS"), false),
+    exitWhenIdle: envBoolean(env("WORKBENCH_DAEMON_EXIT_WHEN_IDLE"), false),
     syncRoot,
     downloadsDir,
     deviceId: env("WORKBENCH_DEVICE_ID") ?? `${hostname()}-${randomUUID()}`,

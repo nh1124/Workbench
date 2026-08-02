@@ -3,6 +3,11 @@ import {
   type IncomingMessage
 } from "node:http";
 import {
+  LEASE_SWEEP_INTERVAL_MS,
+  LeaseValidationError,
+  normalizeClientId
+} from "./leases.js";
+import {
   resolve
 } from "node:path";
 import {
@@ -299,6 +304,41 @@ export async function handleLocalProjectContextWrite(
 }
 
 
+/** The running status server, so a clean shutdown can stop accepting connections. */
+let statusServer: ReturnType<typeof createServer> | undefined;
+let leaseSweepTimer: NodeJS.Timeout | undefined;
+
+/**
+ * Shuts the daemon down cleanly.
+ *
+ * Until this existed, the only thing that could stop the daemon was `taskkill /F` from the
+ * app that happened to spawn it — which is why no other app could stop it, and why an
+ * install had to fight a process that would not go away.
+ */
+export async function requestDaemonShutdown(state: DaemonState, reason: string): Promise<void> {
+  if (state.shuttingDown) return;
+  state.shuttingDown = true;
+  console.log(`[sync-daemon] shutting down (${reason})`);
+
+  if (leaseSweepTimer) {
+    clearInterval(leaseSweepTimer);
+    leaseSweepTimer = undefined;
+  }
+
+  await new Promise<void>((resolve) => {
+    if (!statusServer) {
+      resolve();
+      return;
+    }
+    statusServer.close(() => resolve());
+    // close() waits for keep-alive sockets, and a polling client would hold one open
+    // indefinitely, so idle connections have to be cut loose explicitly.
+    statusServer.closeIdleConnections?.();
+  });
+
+  process.exit(0);
+}
+
 export function startStatusServer(state: DaemonState): void {
   if (state.config.httpPort === 0) return;
   const server = createServer((req, res) => runWithClientOpId(requestClientOpId(req), async () => {
@@ -328,6 +368,52 @@ export function startStatusServer(state: DaemonState): void {
     }
     if (url.pathname === "/health") {
       writeJson(res, { status: "ok" });
+      return;
+    }
+
+    if (url.pathname === "/leases" && req.method === "POST") {
+      try {
+        const body = await readRequestJson(req);
+        writeJson(res, state.leases.register({
+          clientId: normalizeClientId(body.clientId),
+          variant: typeof body.variant === "string" ? body.variant : undefined,
+          pid: typeof body.pid === "number" ? body.pid : undefined
+        }));
+      } catch (error) {
+        if (error instanceof LeaseValidationError) {
+          writeJson(res, { code: "WORKBENCH_DAEMON_BAD_LEASE", message: error.message }, 400);
+          return;
+        }
+        throw error;
+      }
+      return;
+    }
+
+    if (url.pathname.startsWith("/leases/") && req.method === "DELETE") {
+      const clientId = decodeURIComponent(url.pathname.slice("/leases/".length));
+      try {
+        writeJson(res, state.leases.release(clientId));
+      } catch (error) {
+        if (error instanceof LeaseValidationError) {
+          writeJson(res, { code: "WORKBENCH_DAEMON_BAD_LEASE", message: error.message }, 400);
+          return;
+        }
+        throw error;
+      }
+      return;
+    }
+
+    if (url.pathname === "/leases" && req.method === "GET") {
+      writeJson(res, state.leases.list());
+      return;
+    }
+
+    if (url.pathname === "/shutdown" && req.method === "POST") {
+      // Answer before going away, so the caller sees a result rather than a dropped socket.
+      writeJson(res, { stopping: true });
+      res.on("finish", () => {
+        void requestDaemonShutdown(state, "shutdown endpoint");
+      });
       return;
     }
 
@@ -1428,7 +1514,17 @@ export function startStatusServer(state: DaemonState): void {
     res.statusCode = 404;
     res.end("not found");
   }));
+  statusServer = server;
   server.listen(state.config.httpPort, "127.0.0.1", () => {
     console.log(`[sync-daemon] status listening on http://127.0.0.1:${state.config.httpPort}/status`);
   });
+
+  leaseSweepTimer = setInterval(() => {
+    state.leases.sweep();
+    if (state.leases.shouldExitWhenIdle(state.config.exitWhenIdle ?? false)) {
+      void requestDaemonShutdown(state, "no app has held a lease for the grace period");
+    }
+  }, LEASE_SWEEP_INTERVAL_MS);
+  // Housekeeping must never be the reason the process stays alive.
+  leaseSweepTimer.unref();
 }
