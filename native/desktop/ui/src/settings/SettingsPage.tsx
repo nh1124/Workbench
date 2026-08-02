@@ -1647,7 +1647,7 @@ export function SettingsPage() {
                   <div>
                     <div className="settings-title-with-info">
                       <strong>Stop Daemon When Idle</strong>
-                      <InfoHint label="Stops the sync daemon once no Workbench app is using it. Off by default, so syncing continues with every window closed. Takes effect the next time the daemon starts. Desktop runtime only." />
+                      <InfoHint label="Stops the sync daemon once no Workbench app is using it. Off by default, so syncing continues with every window closed. Applies to the running daemon straight away. Desktop runtime only." />
                     </div>
                   </div>
                   <label className="integration-switch">

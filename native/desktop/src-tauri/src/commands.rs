@@ -1685,8 +1685,8 @@ pub fn set_daemon_resident_mode(
 
 /// Whether the daemon stops once no app is holding a lease.
 ///
-/// The daemon reads this at startup, so a change lands on its next start rather than
-/// immediately — the UI says as much rather than pretending otherwise.
+/// Pushed to the running daemon as well as persisted for its next start. Storing it alone
+/// would make this a toggle that appears to do nothing until the daemon happens to restart.
 #[tauri::command]
 pub fn set_daemon_exit_when_idle(
   app: tauri::AppHandle,
@@ -1702,6 +1702,18 @@ pub fn set_daemon_exit_when_idle(
   );
   let preferences = normalize_daemon_preferences(preferences);
   write_daemon_preferences_to_disk(&app, &preferences)?;
+
+  if let Ok(port) = configured_daemon_port(None) {
+    if daemon_loopback_is_occupied(port) {
+      let payload = serde_json::json!({ "exitWhenIdle": exit_when_idle }).to_string();
+      if let Err(error) = daemon_lease_request(&app, "PUT", "/leases/policy", Some(&payload)) {
+        // The stored value still applies at the daemon's next start, so this is worth
+        // reporting but not worth failing the setting change over.
+        eprintln!("[workbench-native] could not apply the idle policy to the running sync daemon: {error}");
+      }
+    }
+  }
+
   daemon_preferences_response(&app, preferences)
 }
 

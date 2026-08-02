@@ -408,6 +408,22 @@ export function startStatusServer(state: DaemonState): void {
       return;
     }
 
+    if (url.pathname === "/leases/policy" && req.method === "PUT") {
+      // Applied to the running daemon, not just stored for its next start: a setting that
+      // takes effect only after a restart reads as a toggle that does nothing.
+      const body = await readRequestJson(req);
+      if (typeof body.exitWhenIdle !== "boolean") {
+        writeJson(res, {
+          code: "WORKBENCH_DAEMON_BAD_POLICY",
+          message: "exitWhenIdle must be a boolean"
+        }, 400);
+        return;
+      }
+      state.config.exitWhenIdle = body.exitWhenIdle;
+      writeJson(res, { exitWhenIdle: state.config.exitWhenIdle });
+      return;
+    }
+
     if (url.pathname === "/shutdown" && req.method === "POST") {
       // Answer before going away, so the caller sees a result rather than a dropped socket.
       writeJson(res, { stopping: true });

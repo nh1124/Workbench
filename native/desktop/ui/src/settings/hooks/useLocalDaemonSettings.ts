@@ -207,8 +207,8 @@ export function useLocalDaemonSettings({
       setLocalDaemonPreferences(preferences);
       setLocalDaemonMessage(
         preferences.exitWhenIdle
-          ? "The daemon will stop once no app is using it, from its next start."
-          : "The daemon will keep running with every app closed, from its next start."
+          ? "The daemon will stop once no Workbench app is using it."
+          : "The daemon will keep running with every app closed."
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to update idle shutdown";
