@@ -134,6 +134,27 @@ button, input, select, textarea { font: inherit; }
   min-width: 0;
   padding: 0 0.5rem;
   justify-content: flex-end;
+  /* The window buttons sit in their own grid track and never shrink, but a child that
+     refuses to give up width still paints outside this one and lands on top of them.
+     Clipping here keeps close and minimise clickable no matter what a page portals in. */
+  overflow: hidden;
+}
+
+/* Flex children default to min-width:auto, so text fields hold their full size and push
+   everything else out. Let them yield, and in a deliberate order: the boxes you can still
+   use at half width go first, the buttons that would become unhittable stay whole. */
+.variant-title-bar-slot > * {
+  min-width: 0;
+}
+.variant-title-bar-slot > .chrome-search,
+.variant-title-bar-slot > .chrome-select {
+  flex-shrink: 1;
+}
+.variant-title-bar-slot > .chrome-icon-button,
+.variant-title-bar-slot > .chrome-segmented,
+.variant-title-bar-slot > .chrome-primary,
+.variant-title-bar-slot > .chrome-button {
+  flex-shrink: 0;
 }
 
 /* Controls a page puts in the title bar. Sized to sit inside a 40px frame. */
