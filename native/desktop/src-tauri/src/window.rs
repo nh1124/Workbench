@@ -291,10 +291,16 @@ pub fn open_new_quick_note_window(app: &tauri::AppHandle) -> Result<(), String> 
     .disable_drag_drop_handler()
     .build()
     .and_then(|window| {
+      // Step by step: "building" with no "built" says only that this whole block did not
+      // finish, which is true whether the builder blocked or one of these calls did.
+      crate::applog::write(app, "window", "quick note: builder returned");
       window.set_always_on_top(true)?;
+      crate::applog::write(app, "window", "quick note: always-on-top set");
       let _ = window.unminimize();
       let _ = window.show();
+      crate::applog::write(app, "window", "quick note: shown");
       let _ = window.set_focus();
+      crate::applog::write(app, "window", "quick note: focused");
       Ok(())
     })
     .map_err(|error| format!("failed to open quick note window: {error}"))

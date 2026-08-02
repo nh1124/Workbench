@@ -46,9 +46,17 @@ fn default_global_shortcuts() -> Vec<GlobalShortcutRegistration> {
 
 #[cfg(desktop)]
 fn handle_shortcut_action(app: &tauri::AppHandle, action_id: &str) -> Result<(), String> {
+  // Logged so the path that works and the path that hangs land in the same file. Quick Note
+  // opens fine from a shortcut and hangs from a command, and that comparison was being made
+  // from memory rather than from evidence.
+  crate::applog::write(app, "shortcut", action_id);
   match action_id {
     "new_window" => window::open_new_main_window(app),
-    "quick_note" | "quick_note_alt" => window::open_new_quick_note_window(app),
+    "quick_note" | "quick_note_alt" => {
+      window::build_logged(app, "quick note window (shortcut)", |app| {
+        window::open_new_quick_note_window(app)
+      })
+    }
     "open_calendar_window" => window::open_calendar_window(
       app,
       "/tasks/calendar",
