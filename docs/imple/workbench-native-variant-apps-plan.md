@@ -40,7 +40,7 @@ Tasks / Notes / Artifacts を、機能そのままに **独立した Windows ア
 | loopback probe に全体締切が無い（read ごとのタイムアウトのみ） | 実害限定的 |
 | `services/sync-daemon` を `services/` 外へ移す | 予約作業。Phase 4 完了・実機確認後 |
 | `File item not found` / Sync issue | サーバ側 Artifacts の 404。今日の変更以前から存在。別件 |
-| **daemon と main の役割が反転している** | トレイ常駐・ショートカットは本来 daemon 側。末尾の節を参照。**未着手** |
+| **daemon と main の役割が反転している** | 別計画へ切り出し済み → [daemon-residency-plan](workbench-native-daemon-residency-plan.md)。variant 分割の完了後に着手 |
 
 ### 実機で未検証のもの（重要）
 
@@ -919,52 +919,13 @@ daemon のライフサイクル改修中にビルド経路を動かすと失敗�
 
 ---
 
-# 想定アーキテクチャとの食い違い（2026-08-02 ユーザー指摘・未着手）
+# 想定アーキテクチャとの食い違い → 別計画へ
 
-## ユーザーの想定
+トレイ常駐・グローバルショートカットの主体は、本来 main ではなく **daemon** であるべき、という
+食い違いが 2026-08-02 に判明した。variant 分割とは独立した改修のため、別計画に切り出した。
 
-**トレイに常駐すべきは daemon であって main ではない。**
+**→ [workbench-native-daemon-residency-plan.md](workbench-native-daemon-residency-plan.md)**
 
-- daemon が常駐し、グローバルショートカットを受け付ける
-- daemon が必要に応じて main を起動する、task を読む
-- アプリが起動している間は daemon も必ず起動（アプリ連携のため）
-- アプリが落ちている間も、ユーザーが望まない限り常駐（`exitWhenIdle` = off）
-
-つまり **daemon = 常駐サービス、アプリ = 出入りするクライアント**。
-
-## 現状の実装（逆になっている）
-
-| | 想定 | 現状 |
-|---|---|---|
-| トレイ常駐 | daemon | main |
-| グローバルショートカット | daemon | main（`shortcuts::register`） |
-| main の起動 | daemon が必要に応じて | ユーザーが直接 |
-| daemon の寿命 | 自律 | main が握っていた（Phase 4 で緩和） |
-
-Phase 4 の参照カウンタで「main が daemon を殺す」までは解消したが、**役割の反転そのものは残っている**。
-
-## 「使用中」の定義: (b) を採用（暫定）
-
-`exitWhenIdle` が発火する条件として 2 案あった。
-
-- **(a) ウィンドウを持たない常駐アプリはリースを手放す** — 「使用中 = ウィンドウが開いている」
-- **(b) プロセスが生きていれば使用中** — 「使用中 = アプリが起動している」
-
-**想定アーキテクチャ上は (a) が正しい**が、役割が反転していない現状で (a) を入れると、
-main がトレイへ退いた瞬間にリースを手放し、**「main は生きているのに daemon が落ちる」**という
-避けたい挙動をわざわざ作り込むことになる。
-
-したがって **当面は (b)**（現在の実装がそのまま該当）。`exitWhenIdle` は
-「トレイからも含めて Workbench を完全終了したときに daemon も止める」設定として意味を持つ。
-UI の文言もそう書き直した。
-
-**役割の反転が済んだ時点で (a) を再検討すること。**
-
-## 反転する場合に動かす必要があるもの
-
-- `shortcuts::register`（現在 main の `setup()`）→ daemon 側へ
-- トレイアイコンとメニュー（`initialize_tray_icon`、現在 main 限定）→ daemon 側へ
-- main の起動経路 → daemon から exe を spawn する口が要る
-- `residentMode`（close→hide）の意味 → main は普通に終了してよくなる
-- daemon は現在 Node の sidecar。トレイ UI とショートカットを Node で持つか、
-  daemon 常駐部だけ Rust の別バイナリにするかは要検討
+本計画への影響は 1 点。`exitWhenIdle` の「使用中」の定義を、役割が反転していない現状に合わせて
+**(b)「プロセスが生きていれば使用中」で暫定確定**した（現在の実装がそのまま該当）。
+反転が済んだら (a)「ウィンドウを持たない常駐アプリはリースを手放す」へ戻す。理由は別計画に記載。

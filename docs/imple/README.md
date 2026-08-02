@@ -35,6 +35,13 @@
 | [project-context-offline-writes-plan.md](project-context-offline-writes-plan.md) | オフライン書き込み |
 | [project-context-sync-export-plan.md](project-context-sync-export-plan.md) | context の同期エクスポート |
 
+### ネイティブデスクトップ
+
+| 計画書 | 内容 |
+|---|---|
+| [workbench-native-variant-apps-plan.md](workbench-native-variant-apps-plan.md) | Tasks / Notes / Artifacts の専用アプリ化、native UI の web からの独立、daemon の参照カウンタ。**冒頭に現状インデックスあり** |
+| [workbench-native-daemon-residency-plan.md](workbench-native-daemon-residency-plan.md) | 常駐の主体を main から daemon へ反転。**variant 分割の完了後に着手** |
+
 ### ドメイン
 
 | 計画書 | 内容 |
