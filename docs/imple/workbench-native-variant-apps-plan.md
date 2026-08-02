@@ -653,6 +653,28 @@ N1 では削除せず追従のみ行った。撤去するなら N3 / N4 の掃�
 今回は 180 秒静止で確定した。孤児が作業中に自分で同じファイルを編集すると
 上書きされて消えるため、**待つ方が安全**。
 
+### N2 の罠: workspace をパスで指すと配下も巻き込む
+
+`native/desktop/ui` を `native/desktop/` の**内側**に置いたため、npm の
+`--workspace native/desktop` が**配下の全 workspace にマッチ**するようになった。
+variant ビルドは Rust をビルドし終えた直後に `native-ui` に対しても `tauri:build` を流し、
+`Missing script` で停止する。**パスではなくパッケージ名で指すこと**
+（`workbench-native-desktop` / `native-ui`）。修正は `1e302a6`。
+
+確認方法: `npm run --workspace native/desktop` を引数なしで実行すると、
+マッチした全 workspace のスクリプト一覧が出る。2 つ出たら曖昧。
+
+型チェック・両方のテスト・`prepare-tauri-config` の出力はすべて通っていたため、
+**`tauri build` を実際に走らせるまで検出できなかった**。workspace 構成を変える変更では、
+遅くてもバンドルまで通すこと。
+
+### 4 本ビルドの実績（2026-08-02）
+
+`npm run build:native:all` 成功。variant 3 本を `target/release/variants/` へ退避（各 9.5MB）し、
+main のバンドル時に NSIS テンプレートが `Section /o` で取り込む
+（[`installer.nsi:724-739`](../../native/desktop/src-tauri/nsis/installer.nsi)）。
+最終成果物は `Workbench Native_0.1.0_x64-setup.exe` 1 本（30MB、コンポーネント選択つき）。
+
 ## Phase 3 の残課題
 
 - **native と web が両方 486/452 テストを持つ二重保守**が始まった。Core の API 変更は両方に反映が要る。
