@@ -763,11 +763,8 @@ fn configure_daemon_client_identity_env(
 /// Path the daemon's console output is captured to, so it can be reviewed without a
 /// console window ever appearing.
 pub fn daemon_log_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-  app
-    .path()
-    .app_config_dir()
-    .map(|path| path.join(DAEMON_LOG_FILE))
-    .map_err(|error| format!("failed to resolve app config directory: {error}"))
+  // Shared, so the tray can show the log of a daemon a variant started.
+  crate::variant::shared_config_directory(app).map(|path| path.join(DAEMON_LOG_FILE))
 }
 
 /// Redirects the daemon's stdout/stderr into the log file, truncating what was there.
@@ -834,11 +831,8 @@ fn spawn_daemon(app: Option<&tauri::AppHandle>) -> Result<Child, String> {
 }
 
 fn daemon_preferences_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-  app
-    .path()
-    .app_config_dir()
-    .map(|path| path.join(DAEMON_PREFERENCES_FILE))
-    .map_err(|error| format!("failed to resolve app config directory: {error}"))
+  // These settings describe one shared daemon, so every app must read and write the same file.
+  crate::variant::shared_config_directory(app).map(|path| path.join(DAEMON_PREFERENCES_FILE))
 }
 
 fn normalized_optional_path_string(value: &serde_json::Value, key: &str) -> Option<String> {

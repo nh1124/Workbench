@@ -1,8 +1,35 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Identifier of the main app. Variants derive their shared storage location from
 /// this rather than from their own identifier, so every build lands on one folder.
 const MAIN_IDENTIFIER: &str = "com.workbench.desktop";
+
+/// Rewrites an identifier-scoped config directory to the main app's.
+///
+/// Tauri derives `app_config_dir()` from the bundle identifier, so every variant would
+/// otherwise keep its own copy of settings that describe **one shared sync daemon** — which
+/// is how auto-start came to be on for the main app and off for Tasks and Notes at the same
+/// time. Swapping only the last component keeps this correct on every platform, rather than
+/// hardcoding `%APPDATA%`.
+pub fn shared_config_dir_from(own: &Path) -> PathBuf {
+  match own.parent() {
+    Some(parent) => parent.join(MAIN_IDENTIFIER),
+    None => own.to_path_buf(),
+  }
+}
+
+/// Config directory shared by the main app and every variant.
+///
+/// The main app keeps the settings it already has and the variants join them, the same way
+/// [`shared_webview_data_directory`] treats browser storage.
+pub fn shared_config_directory(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+  use tauri::Manager;
+  app
+    .path()
+    .app_config_dir()
+    .map(|own| shared_config_dir_from(&own))
+    .map_err(|error| format!("failed to resolve app config directory: {error}"))
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AppVariant {
@@ -84,7 +111,39 @@ pub fn initialization_script(variant: AppVariant) -> String {
 
 #[cfg(test)]
 mod tests {
-  use super::{from_identifier, initialization_script, AppVariant};
+  use super::{from_identifier, initialization_script, shared_config_dir_from, AppVariant};
+  use std::path::{Path, PathBuf};
+
+  #[test]
+  fn every_variant_resolves_to_the_same_config_directory() {
+    let roaming = Path::new("C:\\Users\\x\\AppData\\Roaming");
+    let expected = roaming.join("com.workbench.desktop");
+    for identifier in [
+      "com.workbench.desktop",
+      "com.workbench.desktop.tasks",
+      "com.workbench.desktop.notes",
+      "com.workbench.desktop.artifacts",
+    ] {
+      assert_eq!(shared_config_dir_from(&roaming.join(identifier)), expected);
+    }
+  }
+
+  #[test]
+  fn a_bare_identifier_still_maps_to_main() {
+    // A single-component relative path has an empty parent, not none, so the join still
+    // produces the main identifier.
+    assert_eq!(
+      shared_config_dir_from(Path::new("com.workbench.desktop.tasks")),
+      PathBuf::from("com.workbench.desktop")
+    );
+  }
+
+  #[test]
+  fn a_root_directory_is_left_alone() {
+    // Nothing to swap the identifier into; returning it unchanged beats panicking.
+    let root = PathBuf::from("C:\\");
+    assert_eq!(shared_config_dir_from(&root), root);
+  }
 
   #[test]
   fn maps_exact_identifiers_to_variants() {

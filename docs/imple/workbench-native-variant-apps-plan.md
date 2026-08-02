@@ -39,8 +39,8 @@ Windows のタスクバーボタンは **AppUserModelID (AUMID)** 単位でグ�
 - **localStorage は identifier ごとの WebView2 データフォルダに分かれる**ため、サーバ URL の指定は
   アプリごとに初回 1 回ずつ必要。これはオープンソースとして「毎回ログイン画面でサーバを指定する」設計意図
   （複数インスタンスの乱立を許す）と矛盾しないため、共有化はしない。
-- `daemon-preferences.json` は `app_config_dir()` 由来のため variant ごとに分かれる。sync フォルダなどの
-  設定は variant ごとに持つ。daemon 本体は共有（下記）。
+- ~~`daemon-preferences.json` は `app_config_dir()` 由来のため variant ごとに分かれる。sync フォルダなどの
+  設定は variant ごとに持つ。~~ **2026-08-02 撤回。設定は共有する（下記「設定の共有」）。** daemon 本体は共有。
 
 ## variant レジストリ（確定仕様）
 
@@ -715,6 +715,38 @@ daemon の実ポートは 35780（`DEFAULT_DAEMON_HTTP_PORT`）。数えるコ�
 （[`useLocalDaemonSettings.ts:46-73`](../../native/desktop/ui/src/settings/hooks/useLocalDaemonSettings.ts)）。
 Refresh を押すまでは空。開いた瞬間は壊れて見えるので、
 マウント時に 1 回読むかどうかは UX の判断事項として残す。
+
+## 設定の共有（2026-08-02 決定・Phase 1 の制約を撤回）
+
+Phase 1 は `daemon-preferences.json` が variant ごとに分かれることを許容していたが、
+**設定は 1 つの共有 daemon を記述するもの**なので分割は一貫していない。実際、
+main だけ `autoStart: true`、tasks / notes は `false` という状態が生まれ、
+「daemon が 1 つ」の観測が**ガードが効いた結果なのか main しか起動していないだけなのか
+区別できなくなった**（実機確認の限界の原因）。
+
+Tauri は `app_config_dir()` を bundle identifier から導出するため、
+[`variant.rs`](../../native/desktop/src-tauri/src/variant.rs) に `shared_config_dir_from` を置き、
+**末尾のコンポーネントだけを main の identifier に差し替える**。`%APPDATA%` を焼き込まないので
+プラットフォームに依らない。P2-1 の `shared_webview_data_directory` と同じ考え方。
+
+対象は `app_config_dir()` を使っていた 2 箇所のみ:
+
+| ファイル | 効果 |
+|---|---|
+| `daemon-preferences.json` | 全アプリが同じ設定を読み書きする |
+| `sync-daemon.log` | variant が起動した daemon のログも main のトレイから開ける |
+
+**移行**: main の既存設定がそのまま正本になる（パスが変わらないため）。
+`com.workbench.desktop.{tasks,notes,artifacts}` 配下の古い
+`daemon-preferences.json` は参照されなくなる。削除は任意。
+
+**副作用**: main が `autoStart: true` なので、次回以降は**全 variant が daemon を起動しようとする**。
+Wave 3 のプロセス横断ガードが通常運用で常時踏まれることになる。
+
+共有されていないもの（意図的）: single-instance のミューテックスは identifier ごと
+（アプリごとに独立したインスタンスにするため）。
+localStorage 由来の設定（サーバ URL / ショートカット / 起動ページ）は P2-1 で既に共有済み。
+ログインセッションは Credential Manager の固定名で元から共有。
 
 ## Phase 3 の残課題
 
