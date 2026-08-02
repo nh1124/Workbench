@@ -81,11 +81,14 @@ fn sanitize_temp_filename(default_name: &str) -> String {
 fn open_with_default_app(path: &std::path::Path) -> Result<(), String> {
   #[cfg(target_os = "windows")]
   {
+    use std::os::windows::process::CommandExt;
     std::process::Command::new("cmd")
       .arg("/C")
       .arg("start")
       .arg("")
       .arg(path.as_os_str())
+      // Without this the helper `cmd` blinks up a console every time a file is opened.
+      .creation_flags(CREATE_NO_WINDOW)
       .spawn()
       .map_err(|error| format!("failed to open file with default app: {error}"))?;
     return Ok(());
@@ -111,6 +114,29 @@ fn open_with_default_app(path: &std::path::Path) -> Result<(), String> {
 
   #[allow(unreachable_code)]
   Err("opening files is not supported on this platform".to_string())
+}
+
+/// Opens a plain-text file the app produced, rather than one the user chose.
+///
+/// The daemon log must not go through [`open_with_default_app`]: `.log` often has no
+/// registered handler on Windows — `assoc .log` reports none on a stock install — and
+/// `start` then exits without opening anything. The only thing the user sees is the helper
+/// console blinking, which reads as a crash. Notepad is always present and is the right
+/// viewer for a log.
+fn open_text_file(path: &std::path::Path) -> Result<(), String> {
+  #[cfg(target_os = "windows")]
+  {
+    std::process::Command::new("notepad.exe")
+      .arg(path.as_os_str())
+      .spawn()
+      .map_err(|error| format!("failed to open log file: {error}"))?;
+    return Ok(());
+  }
+
+  #[cfg(not(target_os = "windows"))]
+  {
+    open_with_default_app(path)
+  }
 }
 
 fn path_to_string(path: PathBuf) -> String {
@@ -1416,7 +1442,7 @@ pub fn open_daemon_log(app: tauri::AppHandle) -> Result<bool, String> {
       path.display()
     ));
   }
-  open_with_default_app(&path)?;
+  open_text_file(&path)?;
   Ok(true)
 }
 
