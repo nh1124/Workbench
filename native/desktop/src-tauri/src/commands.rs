@@ -322,7 +322,12 @@ fn configured_daemon_port(port: Option<u16>) -> Result<u16, String> {
   }
 }
 
-fn read_loopback_status(port: u16) -> Result<serde_json::Value, String> {
+/// Issues one request against the daemon's loopback API and returns `(status code, body)`.
+///
+/// Reaching the daemon at all is a different question from being allowed to read it, so the
+/// HTTP status is handed back rather than turned into an error here. See
+/// [`daemon_loopback_is_occupied`] for why that distinction matters.
+fn loopback_request(port: u16, path: &str, token: Option<&str>) -> Result<(String, String), String> {
   let address = SocketAddr::from(([127, 0, 0, 1], port));
   let mut stream = TcpStream::connect_timeout(&address, DAEMON_STATUS_TIMEOUT)
     .map_err(|error| format!("failed to connect to sync daemon at {address}: {error}"))?;
@@ -334,8 +339,12 @@ fn read_loopback_status(port: u16) -> Result<serde_json::Value, String> {
     .set_write_timeout(Some(DAEMON_STATUS_TIMEOUT))
     .map_err(|error| format!("failed to set daemon status write timeout: {error}"))?;
 
+  let auth_header = match token {
+    Some(token) => format!("x-workbench-daemon-token: {token}\r\n"),
+    None => String::new(),
+  };
   let request = format!(
-    "GET /status HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
+    "GET {path} HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\nAccept: application/json\r\n{auth_header}Connection: close\r\n\r\n"
   );
   stream
     .write_all(request.as_bytes())
@@ -371,6 +380,12 @@ fn read_loopback_status(port: u16) -> Result<serde_json::Value, String> {
     .nth(1)
     .ok_or_else(|| format!("sync daemon status line was malformed: {status_line}"))?;
 
+  Ok((status_code.to_string(), body.to_string()))
+}
+
+fn read_loopback_status(port: u16, token: Option<&str>) -> Result<serde_json::Value, String> {
+  let (status_code, body) = loopback_request(port, "/status", token)?;
+
   if status_code != "200" {
     let detail = body.trim();
     if detail.is_empty() {
@@ -387,11 +402,26 @@ fn read_loopback_status(port: u16) -> Result<serde_json::Value, String> {
     .map_err(|error| format!("failed to parse sync daemon status JSON: {error}"))
 }
 
+/// True when something is already serving the daemon's loopback port.
+///
+/// This drives the launch guard, so the question it must answer is "would spawning collide?"
+/// — not "can I read the status?". Those came apart badly: `/status` needs a token the
+/// daemon writes under the sync root, and probing it without one gets 401, which read as
+/// "nothing is listening". Every app then spawned its own daemon and the losers died on
+/// EADDRINUSE, which is precisely the silent double-start the guard exists to prevent.
+///
+/// `/health` is the one route the daemon exempts from auth (`loopbackAuthBypassed` in
+/// `services/sync-daemon/src/httpApi.ts`). Any well-formed HTTP reply counts as occupied,
+/// including a non-200: whatever is holding the port, binding it again would fail.
+fn daemon_loopback_is_occupied(port: u16) -> bool {
+  loopback_request(port, "/health", None).is_ok()
+}
+
 fn daemon_is_running_externally() -> bool {
   let Ok(port) = configured_daemon_port(None) else {
     return false;
   };
-  read_loopback_status(port).is_ok()
+  daemon_loopback_is_occupied(port)
 }
 
 fn wait_for_daemon_readiness_with<P, S, N>(
@@ -1478,8 +1508,14 @@ pub fn read_local_daemon_api_token(app: tauri::AppHandle) -> Result<Option<Strin
 }
 
 #[tauri::command]
-pub fn read_daemon_status(port: Option<u16>) -> Result<serde_json::Value, String> {
-  let mut status = read_loopback_status(configured_daemon_port(port)?)?;
+pub fn read_daemon_status(
+  app: tauri::AppHandle,
+  port: Option<u16>,
+) -> Result<serde_json::Value, String> {
+  // `/status` is behind the daemon's loopback auth, so this needs the same token the webview
+  // sends. Without it every call came back 401.
+  let token = read_local_daemon_api_token(app)?;
+  let mut status = read_loopback_status(configured_daemon_port(port)?, token.as_deref())?;
   if let Some(object) = status.as_object_mut() {
     let native_owned = {
       let mut managed = managed_daemon()
@@ -1750,7 +1786,7 @@ mod tests {
     });
 
     assert_eq!(
-      read_loopback_status(port).expect("running status listener should be detected"),
+      read_loopback_status(port, None).expect("running status listener should be detected"),
       serde_json::json!({ "status": "ok" })
     );
     server.join().expect("status server should not panic");
@@ -1762,7 +1798,74 @@ mod tests {
       .expect("unused port listener should have an address")
       .port();
     drop(unused_listener);
-    assert!(read_loopback_status(unused_port).is_err());
+    assert!(read_loopback_status(unused_port, None).is_err());
+  }
+
+  /// The bug this pins: a live daemon answers `/status` with 401 when the caller has no
+  /// token, and treating that as "nothing is listening" made every app spawn its own daemon.
+  /// Occupancy must be decided by getting an answer at all, not by getting a 200.
+  #[test]
+  fn an_unauthorized_daemon_still_counts_as_occupying_the_port() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("test listener should bind");
+    let port = listener
+      .local_addr()
+      .expect("test listener should have an address")
+      .port();
+    let server = std::thread::spawn(move || {
+      let (mut stream, _) = listener.accept().expect("probe should connect");
+      let mut request = [0_u8; 1024];
+      stream.read(&mut request).expect("probe should be readable");
+      let body = r#"{"message":"Local daemon API token is required."}"#;
+      write!(
+        stream,
+        "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+      )
+      .expect("401 response should be written");
+    });
+
+    assert!(daemon_loopback_is_occupied(port));
+    server.join().expect("probe server should not panic");
+  }
+
+  #[test]
+  fn a_closed_port_is_not_occupied() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("test listener should bind");
+    let port = listener
+      .local_addr()
+      .expect("test listener should have an address")
+      .port();
+    drop(listener);
+    assert!(!daemon_loopback_is_occupied(port));
+  }
+
+  #[test]
+  fn the_status_request_carries_the_daemon_token() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("test listener should bind");
+    let port = listener
+      .local_addr()
+      .expect("test listener should have an address")
+      .port();
+    let server = std::thread::spawn(move || {
+      let (mut stream, _) = listener.accept().expect("status request should connect");
+      let mut request = [0_u8; 1024];
+      let read = stream
+        .read(&mut request)
+        .expect("status request should be readable");
+      let text = String::from_utf8_lossy(&request[..read]).to_string();
+      let body = r#"{"status":"ok"}"#;
+      write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+      )
+      .expect("status response should be written");
+      text
+    });
+
+    read_loopback_status(port, Some("secret-token")).expect("status should be read");
+    let request = server.join().expect("status server should not panic");
+    assert!(request.contains("x-workbench-daemon-token: secret-token"));
   }
 
   #[test]
