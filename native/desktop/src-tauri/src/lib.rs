@@ -1,3 +1,4 @@
+mod applog;
 mod commands;
 mod daemon_guard;
 mod daemon_lease;
@@ -11,6 +12,8 @@ mod window;
 const TRAY_MENU_OPEN_MAIN_ID: &str = "tray-open-main";
 #[cfg(desktop)]
 const TRAY_MENU_DAEMON_LOG_ID: &str = "tray-daemon-log";
+#[cfg(desktop)]
+const TRAY_MENU_APP_LOG_ID: &str = "tray-app-log";
 #[cfg(desktop)]
 const TRAY_MENU_QUIT_ID: &str = "tray-quit";
 
@@ -41,9 +44,18 @@ fn initialize_tray_icon(app: &tauri::App) -> Result<(), String> {
     None::<&str>,
   )
   .map_err(|error| format!("failed to create tray menu item: {error}"))?;
+  // The app itself has no console in a release build, so this is the only way to read it.
+  let app_log_item = MenuItem::with_id(
+    app,
+    TRAY_MENU_APP_LOG_ID,
+    "Open app log",
+    true,
+    None::<&str>,
+  )
+  .map_err(|error| format!("failed to create tray menu item: {error}"))?;
   let quit_item = MenuItem::with_id(app, TRAY_MENU_QUIT_ID, "Quit", true, None::<&str>)
     .map_err(|error| format!("failed to create tray menu item: {error}"))?;
-  let tray_menu = Menu::with_items(app, &[&open_main_item, &daemon_log_item, &quit_item])
+  let tray_menu = Menu::with_items(app, &[&open_main_item, &daemon_log_item, &app_log_item, &quit_item])
     .map_err(|error| format!("failed to build tray menu: {error}"))?;
 
   TrayIconBuilder::with_id("workbench-tray")
@@ -71,6 +83,10 @@ fn initialize_tray_icon(app: &tauri::App) -> Result<(), String> {
       } else if event.id() == TRAY_MENU_DAEMON_LOG_ID {
         if let Err(error) = commands::open_daemon_log(app.clone()) {
           eprintln!("[workbench-native] tray menu failed to open the daemon log: {error}");
+        }
+      } else if event.id() == TRAY_MENU_APP_LOG_ID {
+        if let Err(error) = applog::open_app_log(app.clone()) {
+          eprintln!("[workbench-native] tray menu failed to open the app log: {error}");
         }
       } else if event.id() == TRAY_MENU_QUIT_ID {
         app.exit(0);
@@ -145,6 +161,8 @@ pub fn run() {
       commands::open_downloads_folder,
       commands::read_daemon_status,
       commands::open_daemon_log,
+      applog::open_app_log,
+      applog::log_ui_error,
       commands::read_local_daemon_api_token,
       commands::window_minimize,
       commands::window_toggle_maximize,

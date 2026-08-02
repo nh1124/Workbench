@@ -4,8 +4,35 @@ import App from "./App";
 import { initializeSessionStorage, syncNativeLocalDaemonToken } from "./lib/api";
 import "./styles.css";
 
+/**
+ * Sends webview failures to the app's log file.
+ *
+ * Installed before anything else runs: a page that throws on its way to the first render
+ * leaves a blank window and no trace, which looks identical to a window that never loaded
+ * at all. That ambiguity is what made a blank Quick Note window take several rounds to
+ * pin down.
+ */
+function reportToAppLog(message: string) {
+  try {
+    window.__TAURI_INTERNALS__?.invoke("log_ui_error", { message });
+  } catch {
+    // Reporting a failure must never become one.
+  }
+}
+
+window.addEventListener("error", (event) => {
+  reportToAppLog(`window.onerror: ${event.message} @ ${event.filename}:${event.lineno}`);
+});
+window.addEventListener("unhandledrejection", (event) => {
+  reportToAppLog(`unhandledrejection: ${String(event.reason)}`);
+});
+reportToAppLog(
+  `boot url=${window.location.href} quickNote=${Boolean(window.__WORKBENCH_QUICK_NOTE__)} variant=${window.__WORKBENCH_VARIANT__ ?? "none"}`
+);
+
 const container = document.getElementById("root");
 if (!container) {
+  reportToAppLog("root element missing");
   throw new Error("Root element not found");
 }
 // Narrowed here so the deferred paint below sees a non-null container.

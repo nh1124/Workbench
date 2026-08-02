@@ -70,10 +70,15 @@ where
   F: FnOnce(&tauri::AppHandle) -> Result<(), String> + Send + 'static,
 {
   let handle = app.clone();
+  crate::applog::write(app, "window", &format!("scheduling {what}"));
   app
     .run_on_main_thread(move || {
-      if let Err(error) = build(&handle) {
-        eprintln!("[workbench-native] failed to open {what}: {error}");
+      crate::applog::write(&handle, "window", &format!("building {what} on the main thread"));
+      match build(&handle) {
+        Ok(()) => crate::applog::write(&handle, "window", &format!("{what} built")),
+        Err(error) => {
+          crate::applog::write(&handle, "window", &format!("failed to open {what}: {error}"))
+        }
       }
     })
     .map_err(|error| format!("failed to schedule opening {what}: {error}"))

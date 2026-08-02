@@ -128,7 +128,7 @@ fn open_with_default_app(path: &std::path::Path) -> Result<(), String> {
 /// `start` then exits without opening anything. The only thing the user sees is the helper
 /// console blinking, which reads as a crash. Notepad is always present and is the right
 /// viewer for a log.
-fn open_text_file(path: &std::path::Path) -> Result<(), String> {
+pub(crate) fn open_text_file(path: &std::path::Path) -> Result<(), String> {
   #[cfg(target_os = "windows")]
   {
     std::process::Command::new("notepad.exe")
