@@ -28,7 +28,7 @@ Tasks / Notes / Artifacts を、機能そのままに **独立した Windows ア
 |---|---|---|---|
 | 1 | **D3** アプリ側リースクライアント（取得・ハートビート・解放、`stop_daemon` 置換） | Phase 4 | **完了** 2026-08-02。実機未検証 |
 | 2 | **D4** Settings に `exitWhenIdle` トグル | Phase 4 | **完了** 2026-08-02。実機未検証 |
-| 3 | Tasks: フィルタ → フォルダの意味論変更 | Phase 2 (P2-3b) | 未着手（ビュー切替の枠移設のみ完了） |
+| 3 | ~~Tasks: フィルタ → フォルダの意味論変更~~ | Phase 2 (P2-3b) | **中止** 2026-08-02。フィルタ形式のまま維持 |
 | 4 | Notes: 複数選択（shift/ctrl + 右クリック一括） | Phase 2 (P2-3b) | 未着手 |
 | 5 | 実機再確認（下記） | 全体 | **必須。現インストール版は 4 コミット遅れ** |
 
@@ -360,7 +360,7 @@ Phase 1 の彩度の高いタイルは不採用。**黒基調・シンプル**�
 | P2-1 | WebView2 データディレクトリ共有 | [done] 2026-08-01 |
 | P2-2 | アイコン再作成（黒基調） | [done] 2026-08-01 |
 | P2-3a | 専用シェル（サイドバー・ヘッダー除去） | [done] 2026-08-01 |
-| P2-3b | 各機能の作り込み（余白・情報密度・操作導線） | [進行中] Notes / Artifacts / タイトルバー完了。Tasks と Notes 複数選択が残 |
+| P2-3b | 各機能の作り込み（余白・情報密度・操作導線） | [進行中] Notes / Artifacts / Tasks / タイトルバー完了。**残は Notes 複数選択のみ** |
 | P2-4 | 1 インストーラ化（コンポーネント選択） | [done] 2026-08-01 |
 | P2-5 | daemon をコンソールレス化 + トレイからログ参照 | [done] 2026-08-01 |
 | P2-6 | 専用アプリのアカウント行（ログイン/サーバー切替/サインアウト） | [done] 2026-08-01 |
@@ -444,70 +444,25 @@ Rust コマンドを呼ぶ方式（[`transport.ts:64-73`](../../ui/src/lib/api/t
 |---|---|
 | Notes 複数選択 | shift / ctrl の範囲選択 + 右クリックの一括操作（削除など）。**未着手** |
 | Artifacts | 下記「Artifacts の設計」参照。**完了**（実機確認 2026-08-02 OK） |
-| Tasks | 切替を枠へ = **完了** 2026-08-02 `c1435ba`。フィルタ → フォルダの意味論変更が**残** |
+| Tasks | 切替を枠へ = **完了** 2026-08-02 `c1435ba`。フォルダ化は**中止**（フィルタ形式のまま） |
 | タイトルバーの折り返し | **完了** 2026-08-02。中央トラックを clip し、テキスト入力から順に譲る |
 
-### Tasks の設計（2026-08-02 調査で確定）
+### Tasks のフォルダ化は見送り（2026-08-02 中止）
 
-#### 決定: 単一選択の「場所リスト」に統合する
+サイドバーを「フィルタの積み重ね」から「単一選択の場所リスト」（MS To Do 型）へ変える案を検討したが、
+**ユーザー判断で中止。フィルタ形式のまま維持する。** 実装には入っていない。
 
-専用アプリのサイドバーを、スマートリストとプロジェクトを 1 本に並べた**単一選択の場所リスト**にする
-（MS To Do 型）。常にどれか 1 つに「居る」状態になり、プロジェクトを選ぶとスマートリストの選択は外れる。
+調査でわかったことだけ残す（再検討する人が同じ道を辿らないように）:
 
-**失うもの**: 「プロジェクト X の中の Today」という積み重ね。専用アプリは単機能に振る方針のため許容する。
-メインワークスペースは従来のフィルタ積み重ねモデルのまま。
-
-#### 実装上の障壁: 「全件」を表す値が無い
-
-現状の絞り込みは 2 系統が**積み重なる**構造。
-
-- `contextFilter`（プロジェクト）は**データ取得の段階**で効く（`useTaskDataLoader(contextFilter, ...)`）
-- `quickFilter` はクライアント側（`filterTasksByMode`、occurrence 行の選択）で効く
-
-`QuickFilter` は `today | myday | planned | overdue | inbox` で、**「全件」に相当する値が無い**。
-場所リストでプロジェクトを選んだとき「そのプロジェクトの全タスク」を表す値が要る。
-`inbox` は「未整理」であって全件ではないので流用できない。
-
-したがって **`QuickFilter` に `"all"` を足す**のが正道。影響は 27 箇所 / 11 ファイル:
-
-`types.ts` / `lib/taskFilterUtils.ts` / `lib/taskOccurrenceDisplayUtils.ts` /
-`TasksPageContainer.tsx` / `components/TaskListContent.tsx` / `components/TasksSecondarySidebar.tsx` /
-`hooks/useTaskMutations.ts` と、対応する `__tests__` 4 件。
-
-#### 追加調査で判明: `"all"` は素通しでは済まない（2026-08-02）
-
-「型に足して既存分岐は素通し」で終わると踏んでいたが、**2 点で足りない**。
-
-1. **描画されない。** [`TaskListContent.tsx`](../../native/desktop/ui/src/tasks/components/TaskListContent.tsx) の
-   分岐は `inbox` / `today|myday` / `planned|overdue` / **else は `null`**。`"all"` は何も出ない。
-2. **データ源が無い。** 既存の 3 分岐はすべて **occurrence 行**（日付を持つ発生インスタンス）を描く。
-   `occurrenceRowsOrdered` は `useOccurrencePaging` が供給し、**ページングは planned / overdue のときしか
-   走らない**。しかも occurrence は本質的に日付範囲つき（planned = 未来 / overdue = 過去）。
-
-「日付に関係なくプロジェクトの全タスク」は occurrence では表現できず、
-**`useTaskDataLoader` が既に読んでいる `tasks` 配列から描く新しい経路**が要る。
-これは既存のどの分岐とも異なる描画になる。
-
-#### 修正した Wave 分割
-
-| Wave | 内容 | 状態 |
-|---|---|---|
-| T1 | `QuickFilter` に `"all"` を追加。既存分岐は素通し（挙動変更なし、`"all"` はまだ未使用） | [pending] |
-| T2 | `"all"` の描画経路を `tasks` 配列から作る（完了/未完了の並び、プロジェクト内の全件） | [pending] |
-| T3 | 専用アプリ用の場所リスト component（単一選択）と出し分け | [pending] |
-| T4 | 実機確認 | [pending] |
-
-T2 が実質の新規実装で、ここが本作業の重心。T1 だけ入れても `"all"` を選ぶ導線が無いので無害。
-
-#### Wave 分割
-
-| Wave | 内容 | 状態 |
-|---|---|---|
-| T1 | `QuickFilter` に `"all"` を追加し、既存の分岐すべてを素通しで対応（挙動変更なし） | [pending] |
-| T2 | 専用アプリ用の場所リスト component（単一選択）と、`TasksSecondarySidebar` の出し分け | [pending] |
-| T3 | 実機確認 | [pending] |
-
-T1 を挙動不変で先に入れると、T2 の差分が「場所リストの追加」だけになりレビューしやすい。
+- 絞り込みは 2 層で積み重なる。`contextFilter`（プロジェクト）は**データ取得の段階**、
+  `quickFilter` はクライアント側。
+- `QuickFilter` は `today | myday | planned | overdue | inbox` で、**「全件」に相当する値が無い**。
+  場所リスト化するなら、プロジェクトを選んだとき用に `"all"` の追加が要る（27 箇所 / 11 ファイル）。
+- **それだけでは足りない。** [`TaskListContent.tsx`](../../native/desktop/ui/src/tasks/components/TaskListContent.tsx)
+  の分岐は else が `null` で何も描画されず、さらに既存分岐はすべて **occurrence 行**（日付つきの発生
+  インスタンス）を描く。そのページングは planned / overdue でしか走らない。
+  **「日付に関係なくプロジェクトの全タスク」は occurrence では表現できず**、`tasks` 配列から描く
+  新経路が要る——これが実質の新規実装になる。
 
 ### Artifacts の設計（2026-08-01 調査で確定）
 
