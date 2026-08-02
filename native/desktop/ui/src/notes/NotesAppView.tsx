@@ -342,13 +342,24 @@ export function NotesAppView({
                 <button
                   key={note.id}
                   type="button"
-                  className="notes-app-tile"
-                  onClick={() => openInNewWindow()}
-                  onContextMenu={(event) => {
-                    event.preventDefault();
-                    openInNewWindow();
+                  className={[
+                    "notes-app-tile",
+                    selectedIds.has(note.id) ? "multi-selected" : ""
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  aria-selected={selectedIds.has(note.id)}
+                  onClick={(event) => {
+                    handleRowClick(note.id, event);
+                    // A plain click on a panel means "read this one", so it hands over to the
+                    // list where the reading pane lives. Modified clicks are building a
+                    // selection and must stay on the wall.
+                    if (!event.shiftKey && !event.ctrlKey && !event.metaKey) {
+                      changeViewMode("list");
+                    }
                   }}
-                  title="Right-click to open in a new window"
+                  onContextMenu={(event) => openRowMenu(event, note.id)}
+                  title="Click to open in the list; shift or ctrl click to select several"
                 >
                   <span className="notes-app-tile-title">{note.title}</span>
                   <span className="notes-app-tile-body">{noteSnippet(note.content)}</span>
@@ -482,23 +493,6 @@ function NoteEditorPane({
   return (
     <article className="notes-app-reader">
       <header className="notes-app-reader-head">
-        {/* Lives here rather than in the window frame: it acts on the list, not the app. It
-            has to sit outside the list itself, or hiding the list would hide the way back. */}
-        {listCollapsed !== undefined ? (
-          <button
-            type="button"
-            className="notes-icon-action notes-app-list-toggle"
-            aria-pressed={listCollapsed}
-            aria-label={listCollapsed ? "Show the note list" : "Hide the note list"}
-            title={listCollapsed ? "Show the note list" : "Hide the note list (full-width editor)"}
-            onClick={onToggleList}
-          >
-            <svg viewBox="0 0 16 16" aria-hidden="true">
-              <rect x="2" y="3" width="12" height="10" fill="none" stroke="currentColor" strokeWidth="1.4" />
-              <path d="M6 3v10" stroke="currentColor" strokeWidth="1.4" />
-            </svg>
-          </button>
-        ) : null}
         <input
           className="notes-app-title-input"
           value={title}
@@ -523,6 +517,21 @@ function NoteEditorPane({
               <svg viewBox="0 0 16 16" aria-hidden="true">
                 <path d="M6 3H3v10h10v-3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
                 <path d="M9.5 3H13v3.5M13 3L7.5 8.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          ) : null}
+          {listCollapsed !== undefined ? (
+            <button
+              type="button"
+              className="notes-icon-action"
+              aria-pressed={listCollapsed}
+              aria-label={listCollapsed ? "Show the note list" : "Hide the note list"}
+              title={listCollapsed ? "Show the note list" : "Hide the note list (full-width editor)"}
+              onClick={onToggleList}
+            >
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <rect x="2" y="3" width="12" height="10" fill="none" stroke="currentColor" strokeWidth="1.4" />
+                <path d="M6 3v10" stroke="currentColor" strokeWidth="1.4" />
               </svg>
             </button>
           ) : null}

@@ -50,6 +50,35 @@ where
   builder.initialization_script(crate::variant::initialization_script(variant))
 }
 
+/// Builds a window from the main loop rather than from wherever the caller is.
+///
+/// Creating a webview off the main thread deadlocks on Windows: the window appears but
+/// nothing pumps its messages, so it stays blank and even its close button does nothing —
+/// and the window that asked for it locks up too, because the same thread serves both.
+/// Opening a note in its own window hit exactly this, as did the abandoned
+/// `open_variant_window` before it.
+///
+/// The window is built after this returns, so failures are logged rather than reported to
+/// the caller. Windows opened during `setup()` do not need this: that already runs on the
+/// main thread.
+pub fn build_on_main_thread<F>(
+  app: &tauri::AppHandle,
+  what: &'static str,
+  build: F,
+) -> Result<(), String>
+where
+  F: FnOnce(&tauri::AppHandle) -> Result<(), String> + Send + 'static,
+{
+  let handle = app.clone();
+  app
+    .run_on_main_thread(move || {
+      if let Err(error) = build(&handle) {
+        eprintln!("[workbench-native] failed to open {what}: {error}");
+      }
+    })
+    .map_err(|error| format!("failed to schedule opening {what}: {error}"))
+}
+
 #[cfg(desktop)]
 fn build_main_window_label() -> String {
   let ts = SystemTime::now()
