@@ -62,9 +62,11 @@ const command = useNpmExecPath
   : process.platform === "win32"
     ? "npm.cmd"
     : "npm";
+// Selected by package name, not path: `--workspace native/desktop` also matches the UI
+// workspace nested inside it, and npm would then run this script there too.
 const baseCommandArgs = useNpmExecPath
-  ? [npmExecPath, "run", "tauri:build", "--workspace", "native/desktop"]
-  : ["run", "tauri:build", "--workspace", "native/desktop"];
+  ? [npmExecPath, "run", "tauri:build", "--workspace", "workbench-native-desktop"]
+  : ["run", "tauri:build", "--workspace", "workbench-native-desktop"];
 const useShell = !useNpmExecPath && process.platform === "win32";
 
 function displayCommandPart(value) {
