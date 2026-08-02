@@ -61,11 +61,10 @@ function resolveStartPage(): string {
 }
 
 export default function App() {
-  if (typeof window !== "undefined") {
-    const searchParams = new URLSearchParams(window.location.search);
-    if (searchParams.get("quick-note-window") === "1") {
-      return <QuickNoteWindowPage />;
-    }
+  // Injected by the native side before the page loads, like the variant. It used to travel
+  // as a URL query, which left this the one window not served from the site root.
+  if (typeof window !== "undefined" && window.__WORKBENCH_QUICK_NOTE__) {
+    return <QuickNoteWindowPage />;
   }
 
   const variant = typeof window === "undefined" ? undefined : window.__WORKBENCH_VARIANT__;

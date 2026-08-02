@@ -280,10 +280,13 @@ pub fn open_new_quick_note_window(app: &tauri::AppHandle) -> Result<(), String> 
       WebviewWindowBuilder::new(
         app,
         window_label,
-        WebviewUrl::App("index.html?quick-note-window=1".into()),
+        WebviewUrl::App("index.html".into()),
       ),
       crate::variant::current(app),
     )
+    // Which window this is arrives the same way the variant does. It used to ride in the
+    // URL, which left this the one window loading /index.html rather than the site root.
+    .initialization_script("window.__WORKBENCH_QUICK_NOTE__ = true;")
     .title("Quick Note")
     .inner_size(560.0, 760.0)
     .resizable(true)

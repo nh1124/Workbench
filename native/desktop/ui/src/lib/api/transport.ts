@@ -45,6 +45,7 @@ declare global {
       invoke: <T = unknown>(command: string, args?: Record<string, unknown>) => Promise<T>;
     };
     __WORKBENCH_VARIANT__?: string;
+    __WORKBENCH_QUICK_NOTE__?: boolean;
   }
 }
 
