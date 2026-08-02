@@ -9,10 +9,14 @@ if (!rootElement) {
   throw new Error("Root element not found");
 }
 
-// Both are best-effort and must not hold up the first paint any longer than they already
-// do: without the daemon token every local request 401s, but a machine that has never run
-// the daemon simply has no token to fetch.
-void Promise.allSettled([initializeSessionStorage(), syncNativeLocalDaemonToken()])
+// Deliberately not awaited: nothing on screen needs the daemon token, and the first paint
+// must not be hostage to an IPC call. Gating render on this produced a window that never
+// drew at all when the call did not settle.
+void syncNativeLocalDaemonToken();
+
+// The session is different — the app has to know whether it is signed in before it decides
+// what to render, so this one is worth waiting for.
+void initializeSessionStorage()
   .catch(() => {
     // If secure session loading fails, the app still renders and user can re-authenticate.
   })

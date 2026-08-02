@@ -258,21 +258,6 @@ export function NotesAppView({
                 </svg>
               </button>
             </div>
-            {viewMode === "list" ? (
-              <button
-                type="button"
-                className={isListCollapsed ? "chrome-icon-button active" : "chrome-icon-button"}
-                aria-pressed={isListCollapsed}
-                aria-label={isListCollapsed ? "Show the note list" : "Hide the note list"}
-                title={isListCollapsed ? "Show the note list" : "Hide the note list (full-width editor)"}
-                onClick={() => setIsListCollapsed((collapsed) => !collapsed)}
-              >
-                <svg viewBox="0 0 16 16" aria-hidden="true">
-                  <rect x="2" y="3" width="12" height="10" fill="none" stroke="currentColor" strokeWidth="1.4" />
-                  <path d="M6 3v10" stroke="currentColor" strokeWidth="1.4" />
-                </svg>
-              </button>
-            ) : null}
             <button type="button" className="chrome-primary" onClick={onCreate}>
               New note
             </button>
@@ -425,6 +410,8 @@ export function NotesAppView({
               onDelete={onDelete}
               onOpenInNewWindow={isStandalone ? undefined : openInNewWindow}
               error={error}
+              listCollapsed={!isStandalone && viewMode === "list" ? isListCollapsed : undefined}
+              onToggleList={() => setIsListCollapsed((collapsed) => !collapsed)}
             />
           ) : null}
         </div>
@@ -439,10 +426,21 @@ interface NoteEditorPaneProps {
   onDelete: (noteId: string, title?: string) => void;
   onOpenInNewWindow?: () => void;
   error: string | null;
+  /** Undefined where there is no list to collapse, e.g. a window showing one note. */
+  listCollapsed?: boolean;
+  onToggleList: () => void;
 }
 
 /** The reading pane and the editor are the same surface; edits autosave. */
-function NoteEditorPane({ note, onSave, onDelete, onOpenInNewWindow, error }: NoteEditorPaneProps) {
+function NoteEditorPane({
+  note,
+  onSave,
+  onDelete,
+  onOpenInNewWindow,
+  error,
+  listCollapsed,
+  onToggleList
+}: NoteEditorPaneProps) {
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [status, setStatus] = useState<"idle" | "dirty" | "saving" | "saved">("idle");
@@ -484,6 +482,23 @@ function NoteEditorPane({ note, onSave, onDelete, onOpenInNewWindow, error }: No
   return (
     <article className="notes-app-reader">
       <header className="notes-app-reader-head">
+        {/* Lives here rather than in the window frame: it acts on the list, not the app. It
+            has to sit outside the list itself, or hiding the list would hide the way back. */}
+        {listCollapsed !== undefined ? (
+          <button
+            type="button"
+            className="notes-icon-action notes-app-list-toggle"
+            aria-pressed={listCollapsed}
+            aria-label={listCollapsed ? "Show the note list" : "Hide the note list"}
+            title={listCollapsed ? "Show the note list" : "Hide the note list (full-width editor)"}
+            onClick={onToggleList}
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="2" y="3" width="12" height="10" fill="none" stroke="currentColor" strokeWidth="1.4" />
+              <path d="M6 3v10" stroke="currentColor" strokeWidth="1.4" />
+            </svg>
+          </button>
+        ) : null}
         <input
           className="notes-app-title-input"
           value={title}

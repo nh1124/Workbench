@@ -874,8 +874,10 @@
 }
 .notes-app-reader-head h2 { margin: 0; font-size: 1.15rem; }
 .notes-app-reader-meta { margin: 0.2rem 0 0; font-size: 0.74rem; color: var(--muted); }
-.notes-app-reader-actions { display: flex; gap: 0.35rem; flex-shrink: 0; }
-.notes-app-reader-actions button {
+.notes-app-reader-actions { display: flex; align-items: center; gap: 0.35rem; flex-shrink: 0; }
+/* Excludes the icon buttons: this rule is more specific than .notes-icon-action, so it was
+   overriding their square 26px box and leaving them wider than tall and out of line. */
+.notes-app-reader-actions button:not(.notes-icon-action) {
   padding: 0.3rem 0.7rem;
   border: 1px solid var(--line);
   border-radius: 7px;
