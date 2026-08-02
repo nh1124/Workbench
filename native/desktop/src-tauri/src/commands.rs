@@ -22,6 +22,9 @@ const DAEMON_READINESS_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_DAEMON_STATUS_RESPONSE_BYTES: usize = 1024 * 1024;
 const DAEMON_PREFERENCES_FILE: &str = "daemon-preferences.json";
 const DAEMON_LOG_FILE: &str = "sync-daemon.log";
+/// Must match `DAEMON_TOKEN_FILE` in `services/sync-daemon/src/config.ts`; the daemon owns
+/// this file and we only read it.
+const DAEMON_TOKEN_FILE: &str = "daemon-token";
 /// `CREATE_NO_WINDOW` — keeps the console sidecar from flashing up a console window.
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -1438,6 +1441,40 @@ pub fn open_daemon_log(app: tauri::AppHandle) -> Result<bool, String> {
   }
   open_text_file(&path)?;
   Ok(true)
+}
+
+/// Reads the token the sync daemon expects on every local API request.
+///
+/// The daemon generates this itself and writes it under the sync root, then logs "Paste it
+/// into Settings > Local daemon" — a manual step the desktop app has no reason to ask for,
+/// since it already knows where the sync root is. Without the token every call from the
+/// webview comes back 401, which is why daemon status never loaded and local routing could
+/// not be used at all.
+///
+/// Returns `None` rather than an error when the daemon has not generated one yet; that is
+/// the ordinary state before its first run, not a failure.
+#[tauri::command]
+pub fn read_local_daemon_api_token(app: tauri::AppHandle) -> Result<Option<String>, String> {
+  let preferences = read_daemon_preferences_from_disk(&app)?;
+  let token_path = configured_sync_folder(&app, &preferences)?
+    .join(".workbench")
+    .join(DAEMON_TOKEN_FILE);
+
+  match fs::read_to_string(&token_path) {
+    Ok(raw) => {
+      let token = raw.trim();
+      Ok(if token.is_empty() {
+        None
+      } else {
+        Some(token.to_string())
+      })
+    }
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+    Err(error) => Err(format!(
+      "failed to read the local daemon token at {}: {error}",
+      token_path.display()
+    )),
+  }
 }
 
 #[tauri::command]

@@ -19,7 +19,8 @@ export {
   readWorkbenchSession,
   saveWorkbenchSession,
   sessionAuthHeaders,
-  syncNativeDaemonCoreUrl
+  syncNativeDaemonCoreUrl,
+  syncNativeLocalDaemonToken
 } from "./api/transport";
 export type { ApiBackend } from "./api/transport";
 export { notesApi } from "./api/notes";

@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import {
   localDaemonApi,
   nativeDaemonApi,
-  syncNativeDaemonCoreUrl
+  syncNativeDaemonCoreUrl,
+  syncNativeLocalDaemonToken
 } from "../../lib/api";
 import {
   getWorkbenchLocalDaemonUrlInitialValue,
@@ -52,6 +53,9 @@ export function useLocalDaemonSettings({
     let cancelled = false;
     (async () => {
       await syncNativeDaemonCoreUrl().catch(() => undefined);
+      // Re-read here as well as at startup: the daemon generates its token on first run, so
+      // an app that started before it would otherwise stay unauthenticated until restarted.
+      await syncNativeLocalDaemonToken();
       return nativeDaemonApi.readPreferences();
     })()
       .then((preferences) => {

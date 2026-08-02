@@ -144,6 +144,7 @@ pub fn run() {
       commands::open_downloads_folder,
       commands::read_daemon_status,
       commands::open_daemon_log,
+      commands::read_local_daemon_api_token,
       commands::window_minimize,
       commands::window_toggle_maximize,
       commands::window_is_maximized,

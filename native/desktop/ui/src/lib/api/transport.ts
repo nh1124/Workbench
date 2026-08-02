@@ -4,7 +4,8 @@ import {
   getWorkbenchLocalDaemonUrl,
   getWorkbenchAutoLocalFallbackActive,
   getWorkbenchLocalRoutingMode,
-  setWorkbenchAutoLocalFallbackActive
+  setWorkbenchAutoLocalFallbackActive,
+  setWorkbenchLocalDaemonToken
 } from "../../config/services";
 import { pushErrorNotification, pushNotification } from "../notificationService";
 import type {
@@ -94,8 +95,33 @@ export const nativeDaemonApi = {
   setCoreUrl: (coreUrl: string): Promise<LocalDaemonPreferences> =>
     invokeNative<LocalDaemonPreferences>("set_daemon_core_url", { coreUrl }),
   start: (): Promise<boolean> => invokeNative<boolean>("start_daemon"),
-  stop: (): Promise<boolean> => invokeNative<boolean>("stop_daemon")
+  stop: (): Promise<boolean> => invokeNative<boolean>("stop_daemon"),
+  readApiToken: (): Promise<string | null> => invokeNative<string | null>("read_local_daemon_api_token")
 };
+
+/**
+ * Teaches this webview the token the daemon expects, so local requests stop coming back 401.
+ *
+ * The daemon writes the token under the sync root and asks the user to paste it into
+ * Settings. The desktop app knows where that is, so it reads it instead. Failure is silent
+ * on purpose: no daemon has run yet on a fresh install, and that must not surface as an
+ * error every time the app starts.
+ */
+export async function syncNativeLocalDaemonToken(): Promise<string | undefined> {
+  if (!isTauriNativeRuntime()) {
+    return undefined;
+  }
+  try {
+    const token = await nativeDaemonApi.readApiToken();
+    if (!token) {
+      return undefined;
+    }
+    setWorkbenchLocalDaemonToken(token);
+    return token;
+  } catch {
+    return undefined;
+  }
+}
 
 export async function syncNativeDaemonCoreUrl(): Promise<LocalDaemonPreferences | undefined> {
   if (!isTauriNativeRuntime()) return undefined;
