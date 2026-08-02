@@ -474,8 +474,30 @@ Rust コマンドを呼ぶ方式（[`transport.ts:64-73`](../../ui/src/lib/api/t
 `TasksPageContainer.tsx` / `components/TaskListContent.tsx` / `components/TasksSecondarySidebar.tsx` /
 `hooks/useTaskMutations.ts` と、対応する `__tests__` 4 件。
 
-`"all"` の意味は各所で「絞り込まない」= 素通し。occurrence のページングは planned / overdue 専用なので
-`"all"` は対象外。
+#### 追加調査で判明: `"all"` は素通しでは済まない（2026-08-02）
+
+「型に足して既存分岐は素通し」で終わると踏んでいたが、**2 点で足りない**。
+
+1. **描画されない。** [`TaskListContent.tsx`](../../native/desktop/ui/src/tasks/components/TaskListContent.tsx) の
+   分岐は `inbox` / `today|myday` / `planned|overdue` / **else は `null`**。`"all"` は何も出ない。
+2. **データ源が無い。** 既存の 3 分岐はすべて **occurrence 行**（日付を持つ発生インスタンス）を描く。
+   `occurrenceRowsOrdered` は `useOccurrencePaging` が供給し、**ページングは planned / overdue のときしか
+   走らない**。しかも occurrence は本質的に日付範囲つき（planned = 未来 / overdue = 過去）。
+
+「日付に関係なくプロジェクトの全タスク」は occurrence では表現できず、
+**`useTaskDataLoader` が既に読んでいる `tasks` 配列から描く新しい経路**が要る。
+これは既存のどの分岐とも異なる描画になる。
+
+#### 修正した Wave 分割
+
+| Wave | 内容 | 状態 |
+|---|---|---|
+| T1 | `QuickFilter` に `"all"` を追加。既存分岐は素通し（挙動変更なし、`"all"` はまだ未使用） | [pending] |
+| T2 | `"all"` の描画経路を `tasks` 配列から作る（完了/未完了の並び、プロジェクト内の全件） | [pending] |
+| T3 | 専用アプリ用の場所リスト component（単一選択）と出し分け | [pending] |
+| T4 | 実機確認 | [pending] |
+
+T2 が実質の新規実装で、ここが本作業の重心。T1 だけ入れても `"all"` を選ぶ導線が無いので無害。
 
 #### Wave 分割
 
