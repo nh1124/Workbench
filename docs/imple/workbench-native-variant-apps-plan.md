@@ -26,7 +26,7 @@ Tasks / Notes / Artifacts を、機能そのままに **独立した Windows ア
 
 | # | 作業 | 所属 | 状態 |
 |---|---|---|---|
-| 1 | **D3** アプリ側リースクライアント（取得・ハートビート・解放、`stop_daemon` 置換） | Phase 4 | **未着手。これが入るまで Phase 4 の効果はゼロ** |
+| 1 | **D3** アプリ側リースクライアント（取得・ハートビート・解放、`stop_daemon` 置換） | Phase 4 | **完了** 2026-08-02。実機未検証 |
 | 2 | **D4** Settings に `exitWhenIdle` トグル | Phase 4 | 未着手（D3 の後） |
 | 3 | Tasks: フィルタ → フォルダの意味論変更 | Phase 2 (P2-3b) | 未着手（ビュー切替の枠移設のみ完了） |
 | 4 | Notes: 複数選択（shift/ctrl + 右クリック一括） | Phase 2 (P2-3b) | 未着手 |
@@ -869,7 +869,7 @@ Phase 1〜3 の所有権モデルは「spawn したプロセスが `Child` を�
 |---|---|---|
 | D1 | 起動ガードの修正（ミューテックス待機 ≥ レディネス待ち、取得失敗時は spawn しない）+ `stop_daemon` の所有権保持 | [done] 2026-08-02 `f51ed71` |
 | D2 | daemon 側のリース登録簿 + graceful shutdown + `exitWhenIdle` | [done] 2026-08-02 `893947e` |
-| D3 | アプリ側のリース取得・ハートビート・解放、`stop_daemon` の置き換え | [pending] |
+| D3 | アプリ側のリース取得・ハートビート・解放、`stop_daemon` の置き換え | [done] 2026-08-02 |
 | D4 | Settings に `exitWhenIdle` トグル | [pending] |
 
 ## レビュー指摘のうち Phase 4 で解消するもの

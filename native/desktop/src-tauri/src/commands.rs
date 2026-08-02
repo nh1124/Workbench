@@ -328,6 +328,16 @@ fn configured_daemon_port(port: Option<u16>) -> Result<u16, String> {
 /// HTTP status is handed back rather than turned into an error here. See
 /// [`daemon_loopback_is_occupied`] for why that distinction matters.
 fn loopback_request(port: u16, path: &str, token: Option<&str>) -> Result<(String, String), String> {
+  loopback_request_with(port, "GET", path, token, None)
+}
+
+fn loopback_request_with(
+  port: u16,
+  method: &str,
+  path: &str,
+  token: Option<&str>,
+  body: Option<&str>,
+) -> Result<(String, String), String> {
   let address = SocketAddr::from(([127, 0, 0, 1], port));
   let mut stream = TcpStream::connect_timeout(&address, DAEMON_STATUS_TIMEOUT)
     .map_err(|error| format!("failed to connect to sync daemon at {address}: {error}"))?;
@@ -343,12 +353,20 @@ fn loopback_request(port: u16, path: &str, token: Option<&str>) -> Result<(Strin
     Some(token) => format!("x-workbench-daemon-token: {token}\r\n"),
     None => String::new(),
   };
+  let body_headers = match body {
+    Some(body) => format!(
+      "Content-Type: application/json\r\nContent-Length: {}\r\n",
+      body.len()
+    ),
+    None => String::new(),
+  };
   let request = format!(
-    "GET {path} HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\nAccept: application/json\r\n{auth_header}Connection: close\r\n\r\n"
+    "{method} {path} HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\nAccept: application/json\r\n{auth_header}{body_headers}Connection: close\r\n\r\n{}",
+    body.unwrap_or("")
   );
   stream
     .write_all(request.as_bytes())
-    .map_err(|error| format!("failed to request sync daemon status: {error}"))?;
+    .map_err(|error| format!("failed to send sync daemon request: {error}"))?;
 
   let mut response = Vec::new();
   let mut chunk = [0_u8; 8192];
@@ -415,6 +433,54 @@ fn read_loopback_status(port: u16, token: Option<&str>) -> Result<serde_json::Va
 /// including a non-200: whatever is holding the port, binding it again would fail.
 fn daemon_loopback_is_occupied(port: u16) -> bool {
   loopback_request(port, "/health", None).is_ok()
+}
+
+/// Registers this app as depending on the daemon and keeps the lease refreshed.
+///
+/// Called whether this process started the daemon or found one already running: what the
+/// daemon needs to know is who is using it, not who launched it.
+fn hold_daemon_lease(app: Option<&tauri::AppHandle>) {
+  let Some(app) = app else { return };
+  if let Err(error) = crate::daemon_lease::acquire(app) {
+    // Not fatal: the daemon runs regardless, and without a lease it simply stays resident.
+    eprintln!("[workbench-native] could not take a sync daemon lease: {error}");
+    return;
+  }
+  crate::daemon_lease::start_heartbeat(app.clone());
+}
+
+/// Calls the daemon's lease API with this machine's token, failing on any non-2xx.
+pub(crate) fn daemon_lease_request(
+  app: &tauri::AppHandle,
+  method: &str,
+  path: &str,
+  body: Option<&str>,
+) -> Result<String, String> {
+  let port = configured_daemon_port(None)?;
+  let token = read_local_daemon_api_token(app.clone())?;
+  let (status_code, response) = loopback_request_with(port, method, path, token.as_deref(), body)?;
+  if !status_code.starts_with('2') {
+    return Err(format!(
+      "sync daemon rejected {method} {path} with HTTP {status_code}: {}",
+      response.trim()
+    ));
+  }
+  Ok(response)
+}
+
+/// Waits for the daemon's port to come free after asking it to stop.
+///
+/// A restart that spawns before the old process has released the port produces the
+/// EADDRINUSE crash the launch guard exists to avoid, so the caller has to see it gone.
+fn wait_for_daemon_to_stop(port: u16) -> bool {
+  let deadline = Instant::now() + DAEMON_READINESS_TIMEOUT;
+  while Instant::now() < deadline {
+    if !daemon_loopback_is_occupied(port) {
+      return true;
+    }
+    std::thread::sleep(DAEMON_READINESS_POLL_INTERVAL);
+  }
+  false
 }
 
 fn daemon_is_running_externally() -> bool {
@@ -1203,6 +1269,8 @@ fn start_daemon_with_app(app: Option<&tauri::AppHandle>) -> Result<bool, String>
 
   let guard = daemon_guard::acquire();
   if daemon_is_running_externally() {
+    drop(managed);
+    hold_daemon_lease(app);
     return Ok(false);
   }
   if guard.is_none() {
@@ -1225,6 +1293,7 @@ fn start_daemon_with_app(app: Option<&tauri::AppHandle>) -> Result<bool, String>
       DAEMON_READINESS_TIMEOUT.as_secs()
     );
   }
+  hold_daemon_lease(app);
   Ok(true)
 }
 
@@ -1611,7 +1680,7 @@ pub fn set_daemon_core_url(
   let preferences = normalize_daemon_preferences(preferences);
   write_daemon_preferences_to_disk(&app, &preferences)?;
 
-  if changed && stop_daemon()? {
+  if changed && stop_daemon(app.clone())? {
     start_daemon_with_app(Some(&app))?;
   }
 
@@ -1634,8 +1703,36 @@ pub fn start_daemon(app: tauri::AppHandle) -> Result<bool, String> {
   start_daemon_with_app(Some(&app))
 }
 
+/// Stops the daemon, whether or not this app is the one that started it.
+///
+/// Asking it to stop over its own API is what makes this work from any app: killing a child
+/// only ever worked for the process holding the handle, so "Stop" did nothing in every other
+/// window. Killing stays as the fallback for a daemon that will not answer.
 #[tauri::command]
-pub fn stop_daemon() -> Result<bool, String> {
+pub fn stop_daemon(app: tauri::AppHandle) -> Result<bool, String> {
+  let port = configured_daemon_port(None)?;
+  if daemon_loopback_is_occupied(port) {
+    match daemon_lease_request(&app, "POST", "/shutdown", None) {
+      Ok(_) => {
+        if wait_for_daemon_to_stop(port) {
+          if let Ok(mut managed) = managed_daemon().lock() {
+            *managed = None;
+          }
+          return Ok(true);
+        }
+        eprintln!("[workbench-native] sync daemon did not stop in time; falling back to a kill");
+      }
+      Err(error) => {
+        eprintln!("[workbench-native] sync daemon refused the shutdown request: {error}");
+      }
+    }
+  }
+
+  stop_owned_daemon_process()
+}
+
+/// Kills the daemon this process spawned. Does nothing when it merely adopted one.
+fn stop_owned_daemon_process() -> Result<bool, String> {
   let mut managed = managed_daemon()
     .lock()
     .map_err(|_| "sync daemon process lock was poisoned".to_string())?;

@@ -1,5 +1,6 @@
 mod commands;
 mod daemon_guard;
+mod daemon_lease;
 mod secure_storage;
 mod shortcuts;
 mod titlebar;
@@ -163,17 +164,14 @@ pub fn run() {
     ])
     .build(tauri::generate_context!())
     .expect("error while running workbench native application")
-    .run(|_app, event| {
-      // Nothing used to stop the daemon: the tray's Quit only calls `app.exit`, and there
-      // was no exit hook, so the daemon this app spawned outlived every window and had to
-      // be killed by hand from a terminal.
+    .run(|app_handle, event| {
+      // Quitting drops this app's claim on the daemon; it does not stop it. Killing here
+      // took the daemon away from every other app that was still open, and the daemon is
+      // shared infrastructure — it decides for itself once nobody holds a lease.
       //
-      // `stop_daemon` checks ownership, so an app that merely adopted a daemon another
-      // process started leaves it running for whoever owns it.
+      // Stopping it outright is a deliberate act: the Settings button, or the installer.
       if matches!(event, tauri::RunEvent::Exit) {
-        if let Err(error) = commands::stop_daemon() {
-          eprintln!("[workbench-native] failed to stop the sync daemon on exit: {error}");
-        }
+        daemon_lease::release(app_handle);
       }
     });
 }
