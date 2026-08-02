@@ -92,6 +92,8 @@ export const nativeDaemonApi = {
     invokeNative<LocalDaemonPreferences>("set_daemon_auto_start", { autoStart }),
   setResidentMode: (residentMode: boolean): Promise<LocalDaemonPreferences> =>
     invokeNative<LocalDaemonPreferences>("set_daemon_resident_mode", { residentMode }),
+  setExitWhenIdle: (exitWhenIdle: boolean): Promise<LocalDaemonPreferences> =>
+    invokeNative<LocalDaemonPreferences>("set_daemon_exit_when_idle", { exitWhenIdle }),
   setCoreUrl: (coreUrl: string): Promise<LocalDaemonPreferences> =>
     invokeNative<LocalDaemonPreferences>("set_daemon_core_url", { coreUrl }),
   start: (): Promise<boolean> => invokeNative<boolean>("start_daemon"),

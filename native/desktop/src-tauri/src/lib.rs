@@ -156,6 +156,7 @@ pub fn run() {
       commands::read_daemon_preferences,
       commands::set_daemon_auto_start,
       commands::set_daemon_resident_mode,
+      commands::set_daemon_exit_when_idle,
       commands::set_daemon_core_url,
       commands::start_daemon,
       commands::stop_daemon,

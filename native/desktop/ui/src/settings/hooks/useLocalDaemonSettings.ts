@@ -42,6 +42,7 @@ export function useLocalDaemonSettings({
   const [localDaemonConfirmingJob, setLocalDaemonConfirmingJob] = useState<Record<string, boolean>>({});
   const [localDaemonResidentMode, setLocalDaemonResidentMode] = useState(true);
   const [localDaemonAutoStart, setLocalDaemonAutoStart] = useState(false);
+  const [localDaemonExitWhenIdle, setLocalDaemonExitWhenIdle] = useState(false);
   const [localDaemonPreferences, setLocalDaemonPreferences] = useState<LocalDaemonPreferences | undefined>(undefined);
 
   useEffect(() => {
@@ -62,6 +63,7 @@ export function useLocalDaemonSettings({
         if (!cancelled) {
           setLocalDaemonResidentMode(preferences.residentMode ?? true);
           setLocalDaemonAutoStart(preferences.autoStart);
+          setLocalDaemonExitWhenIdle(preferences.exitWhenIdle ?? false);
           setLocalDaemonPreferences(preferences);
         }
       })
@@ -189,6 +191,27 @@ export function useLocalDaemonSettings({
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to update resident mode";
+      setLocalDaemonMessage(message);
+    }
+  };
+
+  /**
+   * The daemon reads this at startup, so the confirmation says when it takes effect rather
+   * than implying the running daemon just changed behaviour.
+   */
+  const toggleNativeDaemonExitWhenIdle = async (enabled: boolean) => {
+    setLocalDaemonMessage("");
+    try {
+      const preferences = await nativeDaemonApi.setExitWhenIdle(enabled);
+      setLocalDaemonExitWhenIdle(preferences.exitWhenIdle ?? false);
+      setLocalDaemonPreferences(preferences);
+      setLocalDaemonMessage(
+        preferences.exitWhenIdle
+          ? "The daemon will stop once no app is using it, from its next start."
+          : "The daemon will keep running with every app closed, from its next start."
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to update idle shutdown";
       setLocalDaemonMessage(message);
     }
   };
@@ -424,6 +447,8 @@ export function useLocalDaemonSettings({
     requestLocalDaemonRescan,
     saveLocalDaemonUrl,
     changeLocalRoutingMode,
+    localDaemonExitWhenIdle,
+    toggleNativeDaemonExitWhenIdle,
     toggleNativeDaemonResidentMode,
     toggleNativeDaemonAutoStart,
     refreshNativeDaemonPreferences,

@@ -627,6 +627,8 @@ export function SettingsPage() {
     requestLocalDaemonRescan,
     saveLocalDaemonUrl,
     changeLocalRoutingMode,
+    localDaemonExitWhenIdle,
+    toggleNativeDaemonExitWhenIdle,
     toggleNativeDaemonResidentMode,
     toggleNativeDaemonAutoStart,
     chooseNativeSyncFolder,
@@ -1637,6 +1639,27 @@ export function SettingsPage() {
                     <span className="integration-switch-slider" aria-hidden="true" />
                     <span className="sr-only">
                       {localDaemonResidentMode ? "Disable background resident mode" : "Enable background resident mode"}
+                    </span>
+                  </label>
+                </div>
+
+                <div className="account-local-mode-control">
+                  <div>
+                    <div className="settings-title-with-info">
+                      <strong>Stop Daemon When Idle</strong>
+                      <InfoHint label="Stops the sync daemon once no Workbench app is using it. Off by default, so syncing continues with every window closed. Takes effect the next time the daemon starts. Desktop runtime only." />
+                    </div>
+                  </div>
+                  <label className="integration-switch">
+                    <input
+                      type="checkbox"
+                      checked={localDaemonExitWhenIdle}
+                      disabled={!nativeRuntimeAvailable}
+                      onChange={(event) => void toggleNativeDaemonExitWhenIdle(event.target.checked)}
+                    />
+                    <span className="integration-switch-slider" aria-hidden="true" />
+                    <span className="sr-only">
+                      {localDaemonExitWhenIdle ? "Keep the daemon running when idle" : "Stop the daemon when idle"}
                     </span>
                   </label>
                 </div>

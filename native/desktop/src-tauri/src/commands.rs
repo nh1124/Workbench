@@ -34,6 +34,8 @@ const LOCAL_CLIENT_TOKEN_ENV: &str = "WORKBENCH_LOCAL_CLIENT_TOKEN";
 const PERSIST_CLIENT_IDENTITY_ENV: &str = "WORKBENCH_PERSIST_CLIENT_IDENTITY";
 const SECURE_CLIENT_IDENTITY_ENV: &str = "WORKBENCH_SECURE_CLIENT_IDENTITY";
 const CORE_URL_ENV: &str = "WORKBENCH_CORE_URL";
+/// Must match the env var read in `services/sync-daemon/src/config.ts`.
+const EXIT_WHEN_IDLE_ENV: &str = "WORKBENCH_DAEMON_EXIT_WHEN_IDLE";
 
 #[derive(Debug, Clone)]
 struct ActiveWorkbenchAccount {
@@ -737,6 +739,7 @@ fn configure_daemon_env(
 ) -> Result<(), String> {
   let mut sync_root_for_identity: Option<PathBuf> = None;
   let mut configured_core_url: Option<String> = None;
+  let mut configured_exit_when_idle = false;
   let active_account = active_workbench_account();
   if std::env::var_os("WORKBENCH_DAEMON_HTTP_PORT").is_none() {
     command.env(
@@ -748,6 +751,10 @@ fn configure_daemon_env(
   if let Some(app) = app {
     let preferences = read_daemon_preferences_from_disk(app)?;
     configured_core_url = configured_daemon_core_url(&preferences);
+    configured_exit_when_idle = preferences
+      .get("exitWhenIdle")
+      .and_then(serde_json::Value::as_bool)
+      .unwrap_or(false);
     let sync_root = configured_sync_folder(app, &preferences)?;
     let downloads_dir = configured_downloads_folder(app, &preferences)?;
     sync_root_for_identity = Some(sync_root.clone());
@@ -759,6 +766,15 @@ fn configure_daemon_env(
     if let Some(core_url) = configured_core_url {
       command.env(CORE_URL_ENV, core_url);
     }
+  }
+
+  // Whether the daemon outlives the apps is a per-machine setting, and it is read at
+  // startup, so changing it only takes effect the next time the daemon starts.
+  if std::env::var_os(EXIT_WHEN_IDLE_ENV).is_none() {
+    command.env(
+      EXIT_WHEN_IDLE_ENV,
+      if configured_exit_when_idle { "1" } else { "0" },
+    );
   }
 
   if std::env::var_os("WORKBENCH_ACCESS_TOKEN").is_none() {
@@ -1014,9 +1030,15 @@ fn normalize_daemon_preferences(value: serde_json::Value) -> serde_json::Value {
     .get("residentMode")
     .and_then(serde_json::Value::as_bool)
     .unwrap_or(true);
+  // Off by default: sync has no reason to stop just because the last window closed.
+  let exit_when_idle = value
+    .get("exitWhenIdle")
+    .and_then(serde_json::Value::as_bool)
+    .unwrap_or(false);
   serde_json::json!({
     "autoStart": auto_start,
     "residentMode": resident_mode,
+    "exitWhenIdle": exit_when_idle,
     "syncRoot": normalized_optional_path_string(&value, "syncRoot"),
     "downloadsDir": normalized_optional_path_string(&value, "downloadsDir"),
     "syncRootBase": normalized_optional_path_string(&value, "syncRootBase"),
@@ -1655,6 +1677,28 @@ pub fn set_daemon_resident_mode(
   object.insert(
     "residentMode".to_string(),
     serde_json::Value::Bool(resident_mode),
+  );
+  let preferences = normalize_daemon_preferences(preferences);
+  write_daemon_preferences_to_disk(&app, &preferences)?;
+  daemon_preferences_response(&app, preferences)
+}
+
+/// Whether the daemon stops once no app is holding a lease.
+///
+/// The daemon reads this at startup, so a change lands on its next start rather than
+/// immediately — the UI says as much rather than pretending otherwise.
+#[tauri::command]
+pub fn set_daemon_exit_when_idle(
+  app: tauri::AppHandle,
+  exit_when_idle: bool,
+) -> Result<serde_json::Value, String> {
+  let mut preferences = read_daemon_preferences_from_disk(&app)?;
+  let object = preferences
+    .as_object_mut()
+    .ok_or_else(|| "daemon preferences were not an object".to_string())?;
+  object.insert(
+    "exitWhenIdle".to_string(),
+    serde_json::Value::Bool(exit_when_idle),
   );
   let preferences = normalize_daemon_preferences(preferences);
   write_daemon_preferences_to_disk(&app, &preferences)?;
