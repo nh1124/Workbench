@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { TitleBarPortal } from "../components/VariantChrome";
 import { formatDateTime, normalizeProjectName } from "../lib/format";
-import { openQuickNoteWindow } from "../lib/api";
+import { openVariantWindow } from "../lib/api";
 import type { Note } from "../types/models";
 
 /**
@@ -197,10 +197,16 @@ export function NotesAppView({
     window.localStorage.setItem(VIEW_MODE_STORAGE_KEY, mode);
   };
 
-  // The quick-note window is the proven path for a note in its own window; reuse it rather
-  // than maintaining a second kind of note window.
-  const openInNewWindow = () => {
-    void openQuickNoteWindow();
+  /**
+   * Opens one note in a window of its own.
+   *
+   * This used to hand off to the quick-note window, which is a blank composer — so "Open in
+   * a new window" gave you an empty form rather than the note you picked. That detour was
+   * taken because the dedicated-app window never appeared; it turned out to be opening
+   * windows from a synchronous command, and with that fixed this can do what it says.
+   */
+  const openInNewWindow = (noteId: string) => {
+    void openVariantWindow(standaloneNoteUrl(noteId));
   };
 
   return (
@@ -387,7 +393,7 @@ export function NotesAppView({
                   role="menuitem"
                   onClick={() => {
                     setRowMenu(null);
-                    openInNewWindow();
+                    openInNewWindow(menuTargetIds[0]);
                   }}
                 >
                   Open in a new window
@@ -419,7 +425,9 @@ export function NotesAppView({
               note={selectedNote}
               onSave={onSave}
               onDelete={onDelete}
-              onOpenInNewWindow={isStandalone ? undefined : openInNewWindow}
+              onOpenInNewWindow={
+                isStandalone || !selectedNote ? undefined : () => openInNewWindow(selectedNote.id)
+              }
               error={error}
               listCollapsed={!isStandalone && viewMode === "list" ? isListCollapsed : undefined}
               onToggleList={() => setIsListCollapsed((collapsed) => !collapsed)}

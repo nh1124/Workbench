@@ -474,7 +474,11 @@ Rust コマンドを呼ぶ方式（[`transport.ts:64-73`](../../ui/src/lib/api/t
 - `-webkit-line-clamp` + `display: -webkit-box` はカードの中身が消える形で壊れた。`max-height` + `overflow` を使う。
 - プロジェクト名未設定のノートは UUID がそのまま出るため、折り返してタイトルを押し出す。メタ行は 1 行省略に固定。
 - ウィンドウ生成は `open_variant_window` を新設したが 2 度とも空白ウィンドウになり、
-  **既存の Quick Note ウィンドウ再利用に切り替えた**。新経路を作る前に既存の動く仕組みを検討すること。
+  一旦 Quick Note ウィンドウ再利用に切り替えた。
+  **2026-08-03 解決**: 原因は同期コマンドからのウィンドウ生成（上記「ウィンドウを開くコマンドは async に」）。
+  `open_variant_window` は正常に動くため、選択したノートを自分のウィンドウで開く本来の実装に戻した。
+  Quick Note は空の作成フォームなので、再利用した間は「Open in a new window」が
+  **選んだノートではなく白紙を開く**という食い違いを抱えていた。
 
 ### 残作業
 
@@ -731,9 +735,8 @@ fork 完了後に着手。Phase 2 の残作業（Tasks のフォルダベース�
 
 ### 判明した死にコード（未処理）
 
-`openVariantWindow`（[`ui/src/lib/api.ts`](../../ui/src/lib/api.ts)）と
-`standaloneNoteUrl`（[`NotesAppView.tsx`](../../ui/src/notes/NotesAppView.tsx)）は
-**エクスポートされテストもあるが、production コードからは一度も呼ばれていない**。
+~~`openVariantWindow` と `standaloneNoteUrl` は production から呼ばれていない。~~
+**2026-08-03 解消**: 同期コマンドの問題が直り、Notes の「Open in a new window」が両方を使うようになった。
 Rust 側の `open_variant_window` コマンドも同様に到達不能。
 P2-3b で「新ウィンドウが空白になり Quick Note 再利用に切り替えた」際の残骸。
 N1 では削除せず追従のみ行った。撤去するなら N3 / N4 の掃除に含める。
