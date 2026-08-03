@@ -64,11 +64,7 @@ where
   F: FnOnce(&tauri::AppHandle) -> Result<(), String>,
 {
   crate::applog::write(app, "window", &format!("building {what}"));
-  // The custom title bar's window procedure must keep its hands off Tauri until this
-  // returns, or it deadlocks the very build it is running alongside.
-  crate::titlebar::begin_window_build();
   let result = build(app);
-  crate::titlebar::end_window_build();
   match &result {
     Ok(()) => crate::applog::write(app, "window", &format!("{what} built")),
     Err(error) => crate::applog::write(app, "window", &format!("failed to open {what}: {error}")),
