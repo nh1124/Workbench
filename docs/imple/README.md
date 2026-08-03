@@ -40,7 +40,8 @@
 | 計画書 | 内容 |
 |---|---|
 | [workbench-native-variant-apps-plan.md](workbench-native-variant-apps-plan.md) | Tasks / Notes / Artifacts の専用アプリ化、native UI の web からの独立、daemon の参照カウンタ。**冒頭に現状インデックスあり** |
-| [workbench-native-daemon-residency-plan.md](workbench-native-daemon-residency-plan.md) | 常駐の主体を main から daemon へ反転。**variant 分割の完了後に着手** |
+| [workbench-native-daemon-residency-plan.md](workbench-native-daemon-residency-plan.md) | 常駐の主体を main から daemon へ反転。**次の作業（R0 から）** |
+| [workbench-native-handover-2026-08-03.md](workbench-native-handover-2026-08-03.md) | セッション引き継ぎ。**再開時はここから読む** |
 
 ### ドメイン
 

@@ -8,51 +8,47 @@ Tasks / Notes / Artifacts を、機能そのままに **独立した Windows ア
 
 ---
 
-## 現状インデックス（2026-08-02 時点・ここだけ読めば全体が分かる）
+## 現状インデックス（2026-08-03 時点・ここだけ読めば全体が分かる）
 
 この計画書は 4 フェーズを追記で重ねたため節の順序が時系列でなく、単独で読むと迷子になる。
 **個別の節より、この表が正**。
 
-### フェーズ一覧
+### 結論: variant 分割は完了
 
 | Phase | 目的 | 状態 |
 |---|---|---|
-| 1 | variant 化の基盤（別 exe / ビルド / ルーティング） | コード完了。実機は一部未検証 |
-| 2 | 実使用フィードバックによる改良（見た目・導線・インストーラ） | **P2-3b のみ継続中**。他は完了 |
-| 3 | native UI を web から完全独立（fork） | 完了（N4 = 以後の native 最適化は継続タスク） |
-| 4 | daemon を独立アプリ化（参照カウンタ） | **進行中。D3 が未了で効果が出ていない** |
+| 1 | variant 化の基盤（別 exe / ビルド / ルーティング） | **完了・実機確認済み** |
+| 2 | 実使用フィードバックによる改良（見た目・導線・インストーラ） | **完了・実機確認済み** |
+| 3 | native UI を web から完全独立（fork） | **完了** |
+| 4 | daemon を独立アプリ化（参照カウンタ） | **完了・実機確認済み** |
 
-### いま動いている作業（残タスク）
+実機で確認済み: 4 本インストールとピン留め、`?app=` なしでの機能着地、daemon 同時起動ガード
+（`Count : 1` かつログに `EADDRINUSE` なし）、リース機構（所有者終了でも daemon が残る）、
+Stop がどのウィンドウからでも効く、Artifacts のレール／ツリー、Notes の複数選択（list / Panels）、
+Quick Note と専用ウィンドウ、Tasks のビュー切替とカレンダー別ウィンドウ。
 
-| # | 作業 | 所属 | 状態 |
-|---|---|---|---|
-| 1 | **D3** アプリ側リースクライアント（取得・ハートビート・解放、`stop_daemon` 置換） | Phase 4 | **完了** 2026-08-02。実機未検証 |
-| 2 | **D4** Settings に `exitWhenIdle` トグル | Phase 4 | **完了** 2026-08-02。実機未検証 |
-| 3 | ~~Tasks: フィルタ → フォルダの意味論変更~~ | Phase 2 (P2-3b) | **中止** 2026-08-02。フィルタ形式のまま維持 |
-| 4 | Notes: 複数選択（shift/ctrl + 右クリック一括） | Phase 2 (P2-3b) | **完了** 2026-08-02。実機未検証 |
-| 5 | 実機再確認（下記） | 全体 | **必須。現インストール版は 4 コミット遅れ** |
+### 次の作業
+
+**→ [workbench-native-daemon-residency-plan.md](workbench-native-daemon-residency-plan.md)（R0 から）**
+
+トレイ常駐とグローバルショートカットの主体を main から daemon へ反転する。着手条件（variant 分割の完了）は満たした。
 
 ### 未対応と割り切った既知課題
 
-| 課題 | 理由 |
+| 課題 | 扱い |
 |---|---|
-| `daemon-preferences.json` の lost update（複数プロセスの read-modify-write 競合） | 設定共有で顕在化した構造問題。別途 |
-| loopback probe に全体締切が無い（read ごとのタイムアウトのみ） | 実害限定的 |
-| `services/sync-daemon` を `services/` 外へ移す | 予約作業。Phase 4 完了・実機確認後 |
-| `File item not found` / Sync issue | サーバ側 Artifacts の 404。今日の変更以前から存在。別件 |
-| **daemon と main の役割が反転している** | 別計画へ切り出し済み → [daemon-residency-plan](workbench-native-daemon-residency-plan.md)。variant 分割の完了後に着手 |
+| `daemon-preferences.json` の lost update（複数プロセスの read-modify-write 競合） | 設定共有で顕在化した構造問題。未対応 |
+| loopback probe に全体締切が無い（read ごとのタイムアウトのみ） | 実害限定的。未対応 |
+| `services/sync-daemon` を `services/` 外へ移す | 予約作業。**residency 計画と同時にやるのが合理的** |
+| `File item not found` / Sync issue | サーバ側 Artifacts の 404。variant 作業以前から存在。別件 |
+| Panels 表示の右クリックからの「新規ウィンドウ」 | list のみ実装。Panels はクリックで list へ渡す設計 |
 
-### 実機で未検証のもの（重要）
+### 開発時に効く道具（2026-08-03 追加）
 
-**現在インストールされているビルドは `d392bbd` 時点**で、以下を含まない。
-
-- `f51ed71` 起動ガードの修正（ミューテックス待機 ≥ レディネス待ち）
-- `893947e` daemon リース登録簿（D3 未了のため現状は無効）
-- `46eced0` タイトルバーのはみ出し修正
-- `c1435ba` Tasks のビュー切替を枠へ
-
-したがって **daemon 同時起動ガードは今も未検証**。Phase 1 Wave 6 が `[partial]` のままなのはこのため。
-D3 まで進めてから再ビルドし、まとめて確認するのが手戻りが少ない。
+**アプリログ**: トレイ →「Open app log」、実体は `%APPDATA%com.workbench.desktopworkbench-native.log`。
+リリースビルドは windows-subsystem でコンソールが無く `eprintln!` がどこにも出ないため、
+これが無い間は不具合の原因を推測するしかなかった。webview の例外・未処理 Promise 拒否も同じファイルに入る。
+**症状から 2 回推測して直らなければ、まずここを見ること。**
 
 ## 背景と決定事項
 
