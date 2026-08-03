@@ -6,7 +6,8 @@
     "services/*",
     "ui",
     "native/desktop/ui",
-    "native/desktop"
+    "native/desktop",
+    "native/sync-daemon"
   ],
   "scripts": {
     "dev": "concurrently -k -n CORE,NOTES,ARTIFACTS,TASKS,PROJECTS,IMAGES,MINDMAPS,WBS,ANALYSER,UI -c blue,yellow,cyan,green,white,gray,magenta,cyan,green,magenta \"npm:dev:http --workspace services/workbench-core\" \"npm:dev:http --workspace services/notes\" \"npm:dev:http --workspace services/artifacts\" \"npm:dev:http --workspace services/tasks\" \"npm:dev:http --workspace services/projects\" \"npm:dev:http --workspace services/images\" \"npm:dev:http --workspace services/mindmaps\" \"npm:dev:http --workspace services/wbs\" \"npm:dev:http --workspace services/analyser\" \"npm:dev --workspace ui\"",

@@ -54,13 +54,16 @@ UI / Agent Runtime -> Workbench Core -> Internal Services
 
 Core facade route prefixes include `/api/notes`, `/api/artifacts`, `/api/tasks`, `/api/projects`, `/api/images`, `/api/mindmaps`, `/api/wbs`, and `/api/analyser`. Analyser's direct `/health` and business routes are internal; clients use the Core `/api/analyser/*` facade or the `analyser.*` MCP tools.
 
-### `services/sync-daemon` is not one of these
+### `native/sync-daemon` is not one of these
 
-It sits under `services/` but is not a server at all. It is built into an executable
-(`npm run sidecar:build`), shipped inside the desktop app as a Tauri sidecar, and runs on the
-user's own machine bound to `127.0.0.1` — one per device. It is absent from
-`docker-compose.yml` and from `npm run dev` for that reason, and it has no port in the table
-above because nothing outside the machine may reach it.
+It is not a server at all. It is built into an executable (`npm run sidecar:build`), shipped
+inside the desktop app as a Tauri sidecar, and runs on the user's own machine bound to
+`127.0.0.1` — one per device. It is absent from `docker-compose.yml` and from `npm run dev`
+for that reason, and it has no port in the table above because nothing outside the machine
+may reach it.
+
+It lived under `services/` until 2026-08-03 and was moved to `native/` precisely because that
+placement kept suggesting it was a deployable service.
 
 Anything about its lifetime — how many apps depend on it, whether it exits when they all
 close — is therefore per-device state that lives in the daemon process itself, not on a

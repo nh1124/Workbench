@@ -141,6 +141,15 @@ NSIS テンプレートには**アンインストール時に Run キーを消�
 | `src/__tests__/routeCoverage.test.ts:32-34` | repoRoot 相対の daemon ソースパス |
 | `scripts/smoke-secure-identity.mjs:14` | エラーメッセージ中の workspace 名 |
 
+**実施時に見つかった、事前調査から漏れていた 2 箇所**:
+
+- `.gitignore` の `services/*/dist/` — 移設で**この glob が効かなくなり**、ビルド成果物
+  （Node SEA の exe を含む）が一括で追跡対象に浮上する。`native/sync-daemon/dist/` を追加した。
+- `commands.rs` の `has_sync_daemon_workspace` — `join("services").join("sync-daemon")` と
+  **パスが分割されていて grep に掛からなかった**。これは dev モードで repo root を特定する
+  判定なので、外していれば `npm run dev --workspace` の cwd が静かに狂う。
+  `git grep "services/sync-daemon"` だけでは足りない、という教訓。
+
 **移設後も変更不要なもの**（確認済み）:
 
 - `scripts/build-tauri-sidecar.mjs` — `repoRoot` を `resolve(daemonRoot, "../..")` で出しており、
@@ -155,7 +164,7 @@ NSIS テンプレートには**アンインストール時に Run キーを消�
 | Wave | 内容 | 状態 |
 |---|---|---|
 | R0 | 実装言語・構成の決定 | [done] 二層構成（新規 Rust クレート）。2026-08-03 合意 |
-| R0.5 | `services/sync-daemon` → `native/sync-daemon` 移設（単独 commit） | [pending] |
+| R0.5 | `services/sync-daemon` → `native/sync-daemon` 移設（単独 commit） | [done] 2026-08-03 |
 | R1 | 常駐部の受け皿を作る（トレイ・ショートカット・ログイン起動） | [pending] |
 | R2 | main の起動経路を daemon 側に作る | [pending] |
 | R3 | main から常駐責務を外す（`residentMode` 撤去） | [pending] |

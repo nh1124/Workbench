@@ -11,7 +11,7 @@ const daemonRoot = path.resolve(scriptDir, "..");
 const identityStoragePath = path.resolve(daemonRoot, "dist/identityStorage.js");
 
 if (!existsSync(identityStoragePath)) {
-  throw new Error("dist/identityStorage.js was not found. Run `npm run build --workspace services/sync-daemon` first.");
+  throw new Error("dist/identityStorage.js was not found. Run `npm run build --workspace native/sync-daemon` first.");
 }
 
 const {

@@ -39,7 +39,7 @@ Quick Note と専用ウィンドウ、Tasks のビュー切替とカレンダー
 |---|---|
 | `daemon-preferences.json` の lost update（複数プロセスの read-modify-write 競合） | 設定共有で顕在化した構造問題。未対応 |
 | loopback probe に全体締切が無い（read ごとのタイムアウトのみ） | 実害限定的。未対応 |
-| `services/sync-daemon` を `services/` 外へ移す | 予約作業。**residency 計画と同時にやるのが合理的** |
+| ~~sync-daemon を `services/` 外へ移す~~ | **2026-08-03 実施済み**（`native/sync-daemon`）。residency 計画 R0.5 |
 | `File item not found` / Sync issue | サーバ側 Artifacts の 404。variant 作業以前から存在。別件 |
 | Panels 表示の右クリックからの「新規ウィンドウ」 | list のみ実装。Panels はクリックで list へ渡す設計 |
 
@@ -120,9 +120,9 @@ variant が hide 常駐しない理由: トレイが無いと復帰導線が無�
 
 - 排他は `managed_daemon()` の `static Mutex` のみで、**プロセス内に閉じている**。variant が増えると
   プロセス横断で無防備になる。
-- sync-daemon 側は `server.listen()` に `error` ハンドラが無い（[`statusServer.ts:1431`](../../services/sync-daemon/src/statusServer.ts)）ため、
+- sync-daemon 側は `server.listen()` に `error` ハンドラが無い（[`statusServer.ts:1431`](../../native/sync-daemon/src/statusServer.ts)）ため、
   ポート衝突時は uncaught exception で落ちる。ただし `startStatusServer` は
-  **capture 開始・identity 登録の後**に呼ばれる（[`index.ts:585-591`](../../services/sync-daemon/src/index.ts)）。
+  **capture 開始・identity 登録の後**に呼ばれる（[`index.ts:585-591`](../../native/sync-daemon/src/index.ts)）。
   つまり重複起動した daemon は**落ちる前に同じ sync root へ実作業をしてしまう**。ポート衝突による自然死は
   ガードとして不十分であり、明示的なガードが必要。
 
@@ -942,7 +942,7 @@ Phase 1〜3 の所有権モデルは「spawn したプロセスが `Child` を�
 
 ## D2 実装メモ
 
-- リース登録簿は **daemon プロセス内メモリ**（[`services/sync-daemon/src/leases.ts`](../../services/sync-daemon/src/leases.ts)）。
+- リース登録簿は **daemon プロセス内メモリ**（[`native/sync-daemon/src/leases.ts`](../../native/sync-daemon/src/leases.ts)）。
   サーバへは一切送らない。API も daemon 自身のループバック HTTP に生やした。
 - テストは時計を引数で受ける設計にし、失効・猶予のルールを sleep せず検証する。
   daemon のテストは `tsx --test src/__tests__/**/*.test.ts` で、**glob が `src/__tests__/**` のみ**という
@@ -952,23 +952,14 @@ Phase 1〜3 の所有権モデルは「spawn したプロセスが `Child` を�
 - **D3 未了のため、このルートを呼ぶものはまだ無い。** `exitWhenIdle` も既定 off なので、
   現時点の実効挙動は D2 以前と同じ（アプリは終了時に依然 daemon を kill する）。
 
-## 予約作業: `services/sync-daemon` の配置見直し
+## 完了: sync-daemon の配置見直し（2026-08-03）
 
 `services/` に**サーバ配備のドメインサービス**と**クライアント同梱の sidecar** が同居しており、
 名前から区別がつかない。実際にこれが誤解を生んだ（「なぜサービス側がリースを持つのか」）。
 
 2026-08-02 は **(A) ドキュメントで明記**のみ実施（README の「Services and default ports」節、
-CLAUDE.md の構成節）。**(B) `native/sync-daemon/` などへの移動は予約**。
-
-移動時に追従が要るもの:
-
-- ルート `package.json` の workspace glob `services/*`
-- `services/sync-daemon/scripts/build-tauri-sidecar.mjs` の出力パス
-- Tauri の `externalBin`（現在 `../../../services/sync-daemon/dist/tauri-sidecar/workbench-sync-daemon`）
-- `prepare-tauri-config.mjs` が読む sidecar マニフェストのパス
-
-daemon のライフサイクル改修中にビルド経路を動かすと失敗の切り分けが難しくなるため、
-**Phase 4 完了・実機確認後に着手すること**。
+CLAUDE.md の構成節）。**(B) 移動は 2026-08-03 に実施**し、`services/sync-daemon` →
+`native/sync-daemon` となった。residency 計画の R0.5 に追従箇所の一覧がある。
 
 ---
 

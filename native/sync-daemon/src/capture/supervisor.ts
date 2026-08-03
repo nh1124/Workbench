@@ -48,7 +48,7 @@ function resolveBundledSamplerPath(explicitPath?: string): string {
     ownDir ? join(ownDir, "windowsSampler.ps1") : undefined,
     ownDir ? resolve(ownDir, "../../src/capture/windowsSampler.ps1") : undefined,
     resolve(process.cwd(), "src/capture/windowsSampler.ps1"),
-    resolve(process.cwd(), "services/sync-daemon/src/capture/windowsSampler.ps1")
+    resolve(process.cwd(), "native/sync-daemon/src/capture/windowsSampler.ps1")
   ].filter((candidate): candidate is string => Boolean(candidate));
 
   for (const candidate of candidates) {

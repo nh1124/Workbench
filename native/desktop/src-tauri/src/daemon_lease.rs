@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use tauri::AppHandle;
 
-/// Matches `LEASE_HEARTBEAT_MS` in `services/sync-daemon/src/leases.ts`, comfortably inside
+/// Matches `LEASE_HEARTBEAT_MS` in `native/sync-daemon/src/leases.ts`, comfortably inside
 /// the daemon's TTL so one missed beat does not drop the lease.
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 

@@ -85,7 +85,7 @@ function resolveManifestPath(manifestPath, value) {
 function sidecarManifestExternalBins() {
   const manifestPath = path.resolve(
     desktopRoot,
-    "../../services/sync-daemon/dist/tauri-sidecar/sidecar-manifest.json"
+    "../sync-daemon/dist/tauri-sidecar/sidecar-manifest.json"
   );
   if (!fs.existsSync(manifestPath)) {
     return [];

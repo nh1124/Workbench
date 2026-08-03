@@ -29,9 +29,9 @@ function readDaemonSources(dir: string): string[] {
     return entry.name.endsWith(".ts") ? [readFileSync(full, "utf8")] : [];
   });
 }
-const daemonSource = readDaemonSources(path.join(repoRoot, "services/sync-daemon/src")).join("\n");
-const daemonMcpSource = readFileSync(path.join(repoRoot, "services/sync-daemon/src/mcpServer.ts"), "utf8");
-const daemonProjectContextExportSource = readFileSync(path.join(repoRoot, "services/sync-daemon/src/projectContextExport.ts"), "utf8");
+const daemonSource = readDaemonSources(path.join(repoRoot, "native/sync-daemon/src")).join("\n");
+const daemonMcpSource = readFileSync(path.join(repoRoot, "native/sync-daemon/src/mcpServer.ts"), "utf8");
+const daemonProjectContextExportSource = readFileSync(path.join(repoRoot, "native/sync-daemon/src/projectContextExport.ts"), "utf8");
 // Core's routes were split out of httpServer.ts into routes/*.ts. The contract
 // this test guards is "Core exposes these routes", not which file holds them,
 // so read the whole HTTP surface rather than a single file.

@@ -25,7 +25,7 @@ function moduleDirname(): string | undefined {
 
 function scriptPath(explicit?: string): string {
   const ownDir = moduleDirname();
-  const candidates = [explicit, ownDir ? join(ownDir, "windowsScreenshot.ps1") : undefined, ownDir ? resolve(ownDir, "../../src/capture/windowsScreenshot.ps1") : undefined, resolve(process.cwd(), "src/capture/windowsScreenshot.ps1"), resolve(process.cwd(), "services/sync-daemon/src/capture/windowsScreenshot.ps1")];
+  const candidates = [explicit, ownDir ? join(ownDir, "windowsScreenshot.ps1") : undefined, ownDir ? resolve(ownDir, "../../src/capture/windowsScreenshot.ps1") : undefined, resolve(process.cwd(), "src/capture/windowsScreenshot.ps1"), resolve(process.cwd(), "native/sync-daemon/src/capture/windowsScreenshot.ps1")];
   for (const candidate of candidates) if (candidate && existsSync(candidate)) return candidate;
   const fallback = join(tmpdir(), "workbench-capture-windowsScreenshot.ps1");
   writeFileSync(fallback, WINDOWS_SCREENSHOT_SCRIPT, "utf8");

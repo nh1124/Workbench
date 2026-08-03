@@ -32,8 +32,8 @@ R0 は**実装言語・構成の決定**で、ここが最大の論点。daemon 
 Windows のトレイ UI とグローバルショートカットをどう持たせるかを決める必要がある。
 計画書に選択肢 (1)〜(3) と現時点の見立て（二層構成）を書いてある。**着手前にユーザーと合意すること。**
 
-`services/sync-daemon` を `services/` 外へ移す予約作業は、**この改修と同時にやるのが合理的**
-（daemon の構成自体を変えるため）。追従が必要なビルド経路 4 つも計画書に列挙済み。
+daemon を `services/` 外へ移す予約作業は **2026-08-03 に実施済み**（`native/sync-daemon`）。
+residency 計画の R0.5 を参照。
 
 ## 作業を始める前に知っておくべきこと
 
@@ -79,7 +79,7 @@ npm run build:native:all
 ```
 cd native/desktop/src-tauri && CARGO_TARGET_DIR=<隔離パス> cargo test   # 24 件
 cd native/desktop/ui && npx tsc --noEmit && node ../../../node_modules/vitest/vitest.mjs run   # 493 件
-cd services/sync-daemon && npm test   # 160 件
+cd native/sync-daemon && npm test   # 160 件
 cd ui && npx tsc --noEmit && node ../node_modules/vitest/vitest.mjs run   # 452 件（web）
 ```
 

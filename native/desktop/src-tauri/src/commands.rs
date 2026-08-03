@@ -22,7 +22,7 @@ const DAEMON_READINESS_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_DAEMON_STATUS_RESPONSE_BYTES: usize = 1024 * 1024;
 const DAEMON_PREFERENCES_FILE: &str = "daemon-preferences.json";
 const DAEMON_LOG_FILE: &str = "sync-daemon.log";
-/// Must match `DAEMON_TOKEN_FILE` in `services/sync-daemon/src/config.ts`; the daemon owns
+/// Must match `DAEMON_TOKEN_FILE` in `native/sync-daemon/src/config.ts`; the daemon owns
 /// this file and we only read it.
 const DAEMON_TOKEN_FILE: &str = "daemon-token";
 /// `CREATE_NO_WINDOW` — keeps the console sidecar from flashing up a console window.
@@ -34,7 +34,7 @@ const LOCAL_CLIENT_TOKEN_ENV: &str = "WORKBENCH_LOCAL_CLIENT_TOKEN";
 const PERSIST_CLIENT_IDENTITY_ENV: &str = "WORKBENCH_PERSIST_CLIENT_IDENTITY";
 const SECURE_CLIENT_IDENTITY_ENV: &str = "WORKBENCH_SECURE_CLIENT_IDENTITY";
 const CORE_URL_ENV: &str = "WORKBENCH_CORE_URL";
-/// Must match the env var read in `services/sync-daemon/src/config.ts`.
+/// Must match the env var read in `native/sync-daemon/src/config.ts`.
 const EXIT_WHEN_IDLE_ENV: &str = "WORKBENCH_DAEMON_EXIT_WHEN_IDLE";
 
 #[derive(Debug, Clone)]
@@ -431,7 +431,7 @@ fn read_loopback_status(port: u16, token: Option<&str>) -> Result<serde_json::Va
 /// EADDRINUSE, which is precisely the silent double-start the guard exists to prevent.
 ///
 /// `/health` is the one route the daemon exempts from auth (`loopbackAuthBypassed` in
-/// `services/sync-daemon/src/httpApi.ts`). Any well-formed HTTP reply counts as occupied,
+/// `native/sync-daemon/src/httpApi.ts`). Any well-formed HTTP reply counts as occupied,
 /// including a non-200: whatever is holding the port, binding it again would fail.
 fn daemon_loopback_is_occupied(port: u16) -> bool {
   loopback_request(port, "/health", None).is_ok()
@@ -548,7 +548,7 @@ fn has_package_json(path: &Path) -> bool {
 
 fn has_sync_daemon_workspace(path: &Path) -> bool {
   path
-    .join("services")
+    .join("native")
     .join("sync-daemon")
     .join("package.json")
     .is_file()
@@ -727,7 +727,8 @@ fn resolve_daemon_command(app: Option<&tauri::AppHandle>) -> Result<DaemonComman
       "run".to_string(),
       "dev".to_string(),
       "--workspace".to_string(),
-      "services/sync-daemon".to_string(),
+      // The package name, not the path: it survives the daemon moving around the repo.
+      "sync-daemon".to_string(),
     ],
     cwd,
   })
