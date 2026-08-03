@@ -1,64 +1,26 @@
 //! Tauri command handlers exposed to the frontend via `invoke`.
+//!
+//! Anything about the sync daemon — where its files are, which account it syncs as, whether
+//! it is already running — lives in `workbench_shared` and is only wrapped here. The
+//! resident calls the same code, and one of the two being right about the sync root is not a
+//! failure mode worth having.
 
 use std::{
   fs,
-  io::{Read, Write},
-  net::{SocketAddr, TcpStream},
-  path::{Path, PathBuf},
-  process::{Child, Command, Stdio},
-  sync::{Mutex, OnceLock},
-  time::{Duration, Instant},
+  path::PathBuf,
+  process::Command,
 };
 
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 
-use crate::{daemon_guard, secure_storage, window};
+use workbench_shared::{daemon, loopback, paths::path_to_string, preferences, secure_storage};
 
-const DEFAULT_DAEMON_HTTP_PORT: u16 = 35780;
-const DAEMON_STATUS_TIMEOUT: Duration = Duration::from_secs(2);
-const DAEMON_READINESS_POLL_INTERVAL: Duration = Duration::from_millis(250);
-const DAEMON_READINESS_TIMEOUT: Duration = Duration::from_secs(20);
-const MAX_DAEMON_STATUS_RESPONSE_BYTES: usize = 1024 * 1024;
-const DAEMON_PREFERENCES_FILE: &str = "daemon-preferences.json";
-const DAEMON_LOG_FILE: &str = "sync-daemon.log";
-/// Must match `DAEMON_TOKEN_FILE` in `native/sync-daemon/src/config.ts`; the daemon owns
-/// this file and we only read it.
-const DAEMON_TOKEN_FILE: &str = "daemon-token";
-/// `CREATE_NO_WINDOW` — keeps the console sidecar from flashing up a console window.
+use crate::window;
+
+/// `CREATE_NO_WINDOW` — keeps helper console processes from flashing up a window.
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-const DEFAULT_DAEMON_SIDECAR_NAME: &str = "workbench-sync-daemon";
-const LOCAL_CLIENT_ID_ENV: &str = "WORKBENCH_LOCAL_CLIENT_ID";
-const LOCAL_CLIENT_TOKEN_ENV: &str = "WORKBENCH_LOCAL_CLIENT_TOKEN";
-const PERSIST_CLIENT_IDENTITY_ENV: &str = "WORKBENCH_PERSIST_CLIENT_IDENTITY";
-const SECURE_CLIENT_IDENTITY_ENV: &str = "WORKBENCH_SECURE_CLIENT_IDENTITY";
-const CORE_URL_ENV: &str = "WORKBENCH_CORE_URL";
-/// Must match the env var read in `native/sync-daemon/src/config.ts`.
-const EXIT_WHEN_IDLE_ENV: &str = "WORKBENCH_DAEMON_EXIT_WHEN_IDLE";
-
-#[derive(Debug, Clone)]
-struct ActiveWorkbenchAccount {
-  user_id: String,
-  username: String,
-  access_token: Option<String>,
-}
-
-struct ManagedDaemon {
-  child: Child,
-}
-
-struct DaemonCommand {
-  program: String,
-  args: Vec<String>,
-  cwd: PathBuf,
-}
-
-static MANAGED_DAEMON: OnceLock<Mutex<Option<ManagedDaemon>>> = OnceLock::new();
-
-fn managed_daemon() -> &'static Mutex<Option<ManagedDaemon>> {
-  MANAGED_DAEMON.get_or_init(|| Mutex::new(None))
-}
 
 fn sanitize_temp_filename(default_name: &str) -> String {
   let trimmed = default_name.trim();
@@ -87,7 +49,7 @@ fn open_with_default_app(path: &std::path::Path) -> Result<(), String> {
   #[cfg(target_os = "windows")]
   {
     use std::os::windows::process::CommandExt;
-    std::process::Command::new("cmd")
+    Command::new("cmd")
       .arg("/C")
       .arg("start")
       .arg("")
@@ -101,7 +63,7 @@ fn open_with_default_app(path: &std::path::Path) -> Result<(), String> {
 
   #[cfg(target_os = "macos")]
   {
-    std::process::Command::new("open")
+    Command::new("open")
       .arg(path.as_os_str())
       .spawn()
       .map_err(|error| format!("failed to open file with default app: {error}"))?;
@@ -110,7 +72,7 @@ fn open_with_default_app(path: &std::path::Path) -> Result<(), String> {
 
   #[cfg(all(unix, not(target_os = "macos")))]
   {
-    std::process::Command::new("xdg-open")
+    Command::new("xdg-open")
       .arg(path.as_os_str())
       .spawn()
       .map_err(|error| format!("failed to open file with default app: {error}"))?;
@@ -131,7 +93,7 @@ fn open_with_default_app(path: &std::path::Path) -> Result<(), String> {
 pub(crate) fn open_text_file(path: &std::path::Path) -> Result<(), String> {
   #[cfg(target_os = "windows")]
   {
-    std::process::Command::new("notepad.exe")
+    Command::new("notepad.exe")
       .arg(path.as_os_str())
       .spawn()
       .map_err(|error| format!("failed to open log file: {error}"))?;
@@ -144,1020 +106,102 @@ pub(crate) fn open_text_file(path: &std::path::Path) -> Result<(), String> {
   }
 }
 
-fn path_to_string(path: PathBuf) -> String {
-  path.to_string_lossy().into_owned()
-}
-
-fn env_path(name: &str) -> Option<PathBuf> {
-  std::env::var(name)
-    .ok()
-    .map(|value| value.trim().to_string())
-    .filter(|value| !value.is_empty())
-    .map(PathBuf::from)
-}
-
-fn parse_active_workbench_account(raw: &str) -> Option<ActiveWorkbenchAccount> {
-  let parsed = serde_json::from_str::<serde_json::Value>(raw).ok()?;
-  let user = parsed.get("user")?;
-  let user_id = user
-    .get("id")
-    .and_then(serde_json::Value::as_str)
-    .map(str::trim)
-    .filter(|value| !value.is_empty())?
-    .to_string();
-  let username = user
-    .get("username")
-    .and_then(serde_json::Value::as_str)
-    .map(str::trim)
-    .filter(|value| !value.is_empty())
-    .unwrap_or("user")
-    .to_string();
-  let access_token = parsed
-    .get("accessToken")
-    .and_then(serde_json::Value::as_str)
-    .map(str::trim)
-    .filter(|value| !value.is_empty())
-    .map(ToString::to_string);
-
-  Some(ActiveWorkbenchAccount {
-    user_id,
-    username,
-    access_token,
-  })
-}
-
-fn active_workbench_account() -> Option<ActiveWorkbenchAccount> {
-  secure_storage::read()
-    .ok()
-    .flatten()
-    .and_then(|raw| parse_active_workbench_account(&raw))
-}
-
-fn sanitize_folder_segment(raw: &str) -> String {
-  let mut sanitized = String::new();
-  let mut previous_separator = false;
-  for ch in raw.trim().chars() {
-    let replacement = match ch {
-      '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => Some('_'),
-      c if c.is_control() => Some('_'),
-      c if c.is_whitespace() => Some('-'),
-      c => Some(c),
-    };
-    let Some(next) = replacement else {
-      continue;
-    };
-    let is_separator = next == '_' || next == '-' || next == '.';
-    if is_separator && previous_separator {
-      continue;
-    }
-    sanitized.push(next);
-    previous_separator = is_separator;
-    if sanitized.chars().count() >= 64 {
-      break;
-    }
-  }
-
-  let trimmed = sanitized
-    .trim_matches(|ch| ch == '_' || ch == '-' || ch == '.')
-    .to_string();
-  if trimmed.is_empty() {
-    "user".to_string()
-  } else {
-    trimmed
-  }
-}
-
-fn take_segment_prefix(raw: &str, max_chars: usize) -> String {
-  raw.chars().take(max_chars).collect()
-}
-
-fn account_folder_segment(account: Option<&ActiveWorkbenchAccount>) -> String {
-  let Some(account) = account else {
-    return "guest".to_string();
-  };
-  let username = sanitize_folder_segment(&account.username);
-  let user_id = sanitize_folder_segment(&account.user_id);
-  format!("{}-{}", username, take_segment_prefix(&user_id, 12))
-}
-
-fn account_sync_root_id(account: Option<&ActiveWorkbenchAccount>) -> String {
-  let Some(account) = account else {
-    return "guest".to_string();
-  };
-  format!(
-    "account-{}",
-    take_segment_prefix(&sanitize_folder_segment(&account.user_id), 32)
-  )
-}
-
-fn account_label(account: Option<&ActiveWorkbenchAccount>) -> String {
-  account
-    .map(|account| account.username.trim())
-    .filter(|value| !value.is_empty())
-    .unwrap_or("Guest")
-    .to_string()
-}
-
-fn default_sync_folder(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-  if let Some(path) = env_path("WORKBENCH_SYNC_ROOT") {
-    return Ok(path);
-  }
-
-  let account = active_workbench_account();
-  let account_segment = account_folder_segment(account.as_ref());
-  app
-    .path()
-    .home_dir()
-    .map(|path| path.join("WorkbenchSync").join(account_segment))
-    .map_err(|error| format!("failed to resolve home directory: {error}"))
-}
-
-fn default_downloads_folder(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-  if let Some(path) = env_path("WORKBENCH_DOWNLOADS_DIR") {
-    return Ok(path);
-  }
-
-  let account = active_workbench_account();
-  let account_segment = account_folder_segment(account.as_ref());
-  app
-    .path()
-    .download_dir()
-    .or_else(|_| app.path().home_dir().map(|path| path.join("Downloads")))
-    .map(|path| path.join("Workbench").join(account_segment))
-    .map_err(|error| format!("failed to resolve downloads directory: {error}"))
-}
-
 fn ensure_folder_and_open(path: PathBuf) -> Result<bool, String> {
-  std::fs::create_dir_all(&path)
+  fs::create_dir_all(&path)
     .map_err(|error| format!("failed to create folder {}: {error}", path.display()))?;
   open_with_default_app(&path)?;
   Ok(true)
 }
 
-fn configured_daemon_port(port: Option<u16>) -> Result<u16, String> {
-  if let Some(port) = port {
-    if port == 0 {
-      return Err("sync daemon status port cannot be 0".to_string());
-    }
-    return Ok(port);
-  }
-
-  match std::env::var("WORKBENCH_DAEMON_HTTP_PORT") {
-    Ok(value) => {
-      let trimmed = value.trim();
-      if trimmed.is_empty() {
-        return Ok(DEFAULT_DAEMON_HTTP_PORT);
-      }
-
-      let parsed = trimmed.parse::<u16>().map_err(|_| {
-        format!("WORKBENCH_DAEMON_HTTP_PORT must be between 1 and 65535, got {trimmed}")
-      })?;
-      if parsed == 0 {
-        Err(
-          "sync daemon status server is disabled because WORKBENCH_DAEMON_HTTP_PORT=0".to_string(),
-        )
-      } else {
-        Ok(parsed)
-      }
-    }
-    Err(_) => Ok(DEFAULT_DAEMON_HTTP_PORT),
-  }
+/// Directories this app can offer the shared daemon launcher on top of the ones it finds
+/// itself. A packaged Tauri app carries the sidecar in its resource directory.
+fn sidecar_search_roots(app: &tauri::AppHandle) -> Vec<PathBuf> {
+  app
+    .path()
+    .resource_dir()
+    .ok()
+    .into_iter()
+    .collect::<Vec<_>>()
 }
 
-/// Issues one request against the daemon's loopback API and returns `(status code, body)`.
-///
-/// Reaching the daemon at all is a different question from being allowed to read it, so the
-/// HTTP status is handed back rather than turned into an error here. See
-/// [`daemon_loopback_is_occupied`] for why that distinction matters.
-fn loopback_request(port: u16, path: &str, token: Option<&str>) -> Result<(String, String), String> {
-  loopback_request_with(port, "GET", path, token, None)
-}
-
-fn loopback_request_with(
-  port: u16,
+/// Calls the daemon's lease API. Kept here because `daemon_lease` is the app's own concern.
+pub(crate) fn daemon_lease_request(
+  _app: &tauri::AppHandle,
   method: &str,
   path: &str,
-  token: Option<&str>,
   body: Option<&str>,
-) -> Result<(String, String), String> {
-  let address = SocketAddr::from(([127, 0, 0, 1], port));
-  let mut stream = TcpStream::connect_timeout(&address, DAEMON_STATUS_TIMEOUT)
-    .map_err(|error| format!("failed to connect to sync daemon at {address}: {error}"))?;
-
-  stream
-    .set_read_timeout(Some(DAEMON_STATUS_TIMEOUT))
-    .map_err(|error| format!("failed to set daemon status read timeout: {error}"))?;
-  stream
-    .set_write_timeout(Some(DAEMON_STATUS_TIMEOUT))
-    .map_err(|error| format!("failed to set daemon status write timeout: {error}"))?;
-
-  let auth_header = match token {
-    Some(token) => format!("x-workbench-daemon-token: {token}\r\n"),
-    None => String::new(),
-  };
-  let body_headers = match body {
-    Some(body) => format!(
-      "Content-Type: application/json\r\nContent-Length: {}\r\n",
-      body.len()
-    ),
-    None => String::new(),
-  };
-  let request = format!(
-    "{method} {path} HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\nAccept: application/json\r\n{auth_header}{body_headers}Connection: close\r\n\r\n{}",
-    body.unwrap_or("")
-  );
-  stream
-    .write_all(request.as_bytes())
-    .map_err(|error| format!("failed to send sync daemon request: {error}"))?;
-
-  let mut response = Vec::new();
-  let mut chunk = [0_u8; 8192];
-  loop {
-    let bytes_read = stream
-      .read(&mut chunk)
-      .map_err(|error| format!("failed to read sync daemon status: {error}"))?;
-    if bytes_read == 0 {
-      break;
-    }
-    response.extend_from_slice(&chunk[..bytes_read]);
-    if response.len() > MAX_DAEMON_STATUS_RESPONSE_BYTES {
-      return Err("sync daemon status response is too large".to_string());
-    }
-  }
-
-  let response_text = String::from_utf8(response)
-    .map_err(|error| format!("sync daemon status response was not UTF-8: {error}"))?;
-  let (headers, body) = response_text
-    .split_once("\r\n\r\n")
-    .ok_or_else(|| "sync daemon status response was malformed".to_string())?;
-
-  let status_line = headers
-    .lines()
-    .next()
-    .ok_or_else(|| "sync daemon status response did not include a status line".to_string())?;
-  let status_code = status_line
-    .split_whitespace()
-    .nth(1)
-    .ok_or_else(|| format!("sync daemon status line was malformed: {status_line}"))?;
-
-  Ok((status_code.to_string(), body.to_string()))
-}
-
-fn read_loopback_status(port: u16, token: Option<&str>) -> Result<serde_json::Value, String> {
-  let (status_code, body) = loopback_request(port, "/status", token)?;
-
-  if status_code != "200" {
-    let detail = body.trim();
-    if detail.is_empty() {
-      return Err(format!(
-        "sync daemon status request failed with HTTP {status_code}"
-      ));
-    }
-    return Err(format!(
-      "sync daemon status request failed with HTTP {status_code}: {detail}"
-    ));
-  }
-
-  serde_json::from_str(body.trim())
-    .map_err(|error| format!("failed to parse sync daemon status JSON: {error}"))
-}
-
-/// True when something is already serving the daemon's loopback port.
-///
-/// This drives the launch guard, so the question it must answer is "would spawning collide?"
-/// — not "can I read the status?". Those came apart badly: `/status` needs a token the
-/// daemon writes under the sync root, and probing it without one gets 401, which read as
-/// "nothing is listening". Every app then spawned its own daemon and the losers died on
-/// EADDRINUSE, which is precisely the silent double-start the guard exists to prevent.
-///
-/// `/health` is the one route the daemon exempts from auth (`loopbackAuthBypassed` in
-/// `native/sync-daemon/src/httpApi.ts`). Any well-formed HTTP reply counts as occupied,
-/// including a non-200: whatever is holding the port, binding it again would fail.
-fn daemon_loopback_is_occupied(port: u16) -> bool {
-  loopback_request(port, "/health", None).is_ok()
+) -> Result<String, String> {
+  daemon::api_request(method, path, body)
 }
 
 /// Registers this app as depending on the daemon and keeps the lease refreshed.
 ///
 /// Called whether this process started the daemon or found one already running: what the
 /// daemon needs to know is who is using it, not who launched it.
-fn hold_daemon_lease(app: Option<&tauri::AppHandle>) {
-  let Some(app) = app else { return };
+///
+/// The heartbeat starts even when the first attempt fails, and that is the point — an app
+/// that opened before the daemon did would otherwise never hold a lease for the rest of its
+/// life, and with `exitWhenIdle` on the daemon would eventually stop under a window that was
+/// still in use. Each beat re-registers, so it corrects itself within one interval.
+fn hold_daemon_lease(app: &tauri::AppHandle) {
   if let Err(error) = crate::daemon_lease::acquire(app) {
-    // Not fatal: the daemon runs regardless, and without a lease it simply stays resident.
-    eprintln!("[workbench-native] could not take a sync daemon lease: {error}");
-    return;
+    crate::applog::write(app, "daemon", &format!("could not take a lease yet: {error}"));
   }
   crate::daemon_lease::start_heartbeat(app.clone());
 }
 
-/// Calls the daemon's lease API with this machine's token, failing on any non-2xx.
-pub(crate) fn daemon_lease_request(
-  app: &tauri::AppHandle,
-  method: &str,
-  path: &str,
-  body: Option<&str>,
-) -> Result<String, String> {
-  let port = configured_daemon_port(None)?;
-  let token = read_local_daemon_api_token(app.clone())?;
-  let (status_code, response) = loopback_request_with(port, method, path, token.as_deref(), body)?;
-  if !status_code.starts_with('2') {
-    return Err(format!(
-      "sync daemon rejected {method} {path} with HTTP {status_code}: {}",
-      response.trim()
-    ));
-  }
-  Ok(response)
+/// Starts the daemon if nothing else has, then takes a lease on it either way.
+pub fn start_daemon_and_lease(app: &tauri::AppHandle) -> Result<bool, String> {
+  let started = daemon::start(&sidecar_search_roots(app))?;
+  hold_daemon_lease(app);
+  Ok(started)
 }
 
-/// Waits for the daemon's port to come free after asking it to stop.
+/// Takes a lease on the daemon, starting it first if that is this app's job.
 ///
-/// A restart that spawns before the old process has released the port produces the
-/// EADDRINUSE crash the launch guard exists to avoid, so the caller has to see it gone.
-fn wait_for_daemon_to_stop(port: u16) -> bool {
-  let deadline = Instant::now() + DAEMON_READINESS_TIMEOUT;
-  while Instant::now() < deadline {
-    if !daemon_loopback_is_occupied(port) {
-      return true;
-    }
-    std::thread::sleep(DAEMON_READINESS_POLL_INTERVAL);
-  }
-  false
-}
-
-fn daemon_is_running_externally() -> bool {
-  let Ok(port) = configured_daemon_port(None) else {
-    return false;
-  };
-  daemon_loopback_is_occupied(port)
-}
-
-fn wait_for_daemon_readiness_with<P, S, N>(
-  poll_interval: Duration,
-  timeout: Duration,
-  mut probe: P,
-  mut sleep: S,
-  mut now: N,
-) -> bool
-where
-  P: FnMut() -> bool,
-  S: FnMut(Duration),
-  N: FnMut() -> Instant,
-{
-  let started = now();
-  loop {
-    if now().saturating_duration_since(started) >= timeout {
-      return false;
-    }
-    if probe() {
-      return true;
-    }
-
-    let elapsed = now().saturating_duration_since(started);
-    if elapsed >= timeout {
-      return false;
-    }
-    sleep(poll_interval.min(timeout.saturating_sub(elapsed)));
-  }
-}
-
-fn wait_for_daemon_readiness() -> bool {
-  wait_for_daemon_readiness_with(
-    DAEMON_READINESS_POLL_INTERVAL,
-    DAEMON_READINESS_TIMEOUT,
-    daemon_is_running_externally,
-    std::thread::sleep,
-    Instant::now,
-  )
-}
-
-fn split_daemon_args(args: &str) -> Vec<String> {
-  args.split_whitespace().map(ToString::to_string).collect()
-}
-
-fn daemon_args_from_env(name: &str) -> Vec<String> {
-  std::env::var(name)
-    .ok()
-    .map(|value| split_daemon_args(&value))
-    .unwrap_or_default()
-}
-
-fn has_package_json(path: &Path) -> bool {
-  path.join("package.json").is_file()
-}
-
-fn has_sync_daemon_workspace(path: &Path) -> bool {
-  path
-    .join("native")
-    .join("sync-daemon")
-    .join("package.json")
-    .is_file()
-}
-
-fn current_exe_parent() -> Option<PathBuf> {
-  std::env::current_exe()
-    .ok()
-    .and_then(|path| path.parent().map(Path::to_path_buf))
-}
-
-fn repo_root_candidates() -> Vec<PathBuf> {
-  let mut candidates = Vec::new();
-  if let Ok(current_dir) = std::env::current_dir() {
-    candidates.push(current_dir);
-  }
-  if let Some(exe_parent) = current_exe_parent() {
-    candidates.push(exe_parent);
-  }
-  candidates
-}
-
-fn infer_repo_root() -> PathBuf {
-  let candidates = repo_root_candidates();
-
-  for candidate in &candidates {
-    for ancestor in candidate.ancestors() {
-      if has_package_json(ancestor) && has_sync_daemon_workspace(ancestor) {
-        return ancestor.to_path_buf();
+/// **The lease is the part that always has to happen.** `exitWhenIdle` means "stop once no
+/// window is open", and the daemon works that out from who holds a lease — so an app that
+/// skipped this because it was not the one configured to start the daemon would be invisible
+/// to it, and the daemon would exit from under a window the user was still using.
+///
+/// Starting is the conditional half. The resident normally has the daemon up long before any
+/// window opens; `autoStart` is the fallback for a machine where the resident is not running
+/// at all. The launch guard makes the overlap safe.
+pub fn ensure_daemon_for_app(app: &tauri::AppHandle) {
+  let app = app.clone();
+  let _ = std::thread::spawn(move || {
+    let should_start = match preferences::read_from_disk() {
+      Ok(preferences) => preferences::auto_start(&preferences),
+      Err(error) => {
+        crate::applog::write(
+          &app,
+          "daemon",
+          &format!("failed to read daemon preferences: {error}"),
+        );
+        false
       }
-    }
-  }
+    };
 
-  for candidate in &candidates {
-    for ancestor in candidate.ancestors() {
-      if has_package_json(ancestor) {
-        return ancestor.to_path_buf();
-      }
-    }
-  }
-
-  std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-}
-
-fn command_cwd_from_program(program: &Path) -> PathBuf {
-  program
-    .parent()
-    .map(Path::to_path_buf)
-    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
-}
-
-fn daemon_executable_names(base_name: &str) -> Vec<String> {
-  let trimmed = base_name.trim();
-  if trimmed.is_empty() {
-    return daemon_executable_names(DEFAULT_DAEMON_SIDECAR_NAME);
-  }
-
-  let mut names = vec![trimmed.to_string()];
-  #[cfg(target_os = "windows")]
-  {
-    if !trimmed.to_ascii_lowercase().ends_with(".exe") {
-      names.push(format!("{trimmed}.exe"));
-    }
-  }
-  names
-}
-
-fn sidecar_search_roots(app: Option<&tauri::AppHandle>) -> Vec<PathBuf> {
-  let mut roots = Vec::new();
-  if let Some(app) = app {
-    if let Ok(resource_dir) = app.path().resource_dir() {
-      roots.push(resource_dir);
-    }
-  }
-  if let Some(exe_parent) = current_exe_parent() {
-    roots.push(exe_parent);
-  }
-  if let Ok(current_dir) = std::env::current_dir() {
-    roots.push(current_dir);
-  }
-  roots
-}
-
-fn find_packaged_sidecar(app: Option<&tauri::AppHandle>) -> Option<PathBuf> {
-  let base_name = std::env::var("WORKBENCH_DAEMON_SIDECAR_NAME")
-    .ok()
-    .filter(|value| !value.trim().is_empty())
-    .unwrap_or_else(|| DEFAULT_DAEMON_SIDECAR_NAME.to_string());
-  let names = daemon_executable_names(&base_name);
-
-  for root in sidecar_search_roots(app) {
-    for name in &names {
-      for candidate in [
-        root.join(name),
-        root.join("sidecars").join(name),
-        root.join("binaries").join(name),
-      ] {
-        if candidate.is_file() {
-          return Some(candidate);
-        }
-      }
-    }
-  }
-
-  None
-}
-
-fn resolve_explicit_sidecar() -> Result<Option<DaemonCommand>, String> {
-  let Ok(raw_path) = std::env::var("WORKBENCH_DAEMON_SIDECAR_PATH") else {
-    return Ok(None);
-  };
-  let trimmed = raw_path.trim();
-  if trimmed.is_empty() {
-    return Err("WORKBENCH_DAEMON_SIDECAR_PATH was set but empty".to_string());
-  }
-
-  let path = PathBuf::from(trimmed);
-  if !path.is_file() {
-    return Err(format!(
-      "WORKBENCH_DAEMON_SIDECAR_PATH does not point to a file: {}",
-      path.display()
-    ));
-  }
-
-  Ok(Some(DaemonCommand {
-    program: path_to_string(path.clone()),
-    args: daemon_args_from_env("WORKBENCH_DAEMON_SIDECAR_ARGS"),
-    cwd: command_cwd_from_program(&path),
-  }))
-}
-
-fn resolve_packaged_sidecar(app: Option<&tauri::AppHandle>) -> Option<DaemonCommand> {
-  let path = find_packaged_sidecar(app)?;
-  Some(DaemonCommand {
-    program: path_to_string(path.clone()),
-    args: daemon_args_from_env("WORKBENCH_DAEMON_SIDECAR_ARGS"),
-    cwd: command_cwd_from_program(&path),
-  })
-}
-
-fn resolve_daemon_command(app: Option<&tauri::AppHandle>) -> Result<DaemonCommand, String> {
-  if let Ok(command) = std::env::var("WORKBENCH_DAEMON_COMMAND") {
-    let program = command.trim();
-    if program.is_empty() {
-      return Err("WORKBENCH_DAEMON_COMMAND was set but empty".to_string());
-    }
-
-    let args = daemon_args_from_env("WORKBENCH_DAEMON_ARGS");
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-
-    return Ok(DaemonCommand {
-      program: program.to_string(),
-      args,
-      cwd,
-    });
-  }
-
-  if let Some(command) = resolve_explicit_sidecar()? {
-    return Ok(command);
-  }
-
-  if let Some(command) = resolve_packaged_sidecar(app) {
-    return Ok(command);
-  }
-
-  let cwd = infer_repo_root();
-  let program = if cfg!(target_os = "windows") {
-    "npm.cmd"
-  } else {
-    "npm"
-  };
-
-  Ok(DaemonCommand {
-    program: program.to_string(),
-    args: vec![
-      "run".to_string(),
-      "dev".to_string(),
-      "--workspace".to_string(),
-      // The package name, not the path: it survives the daemon moving around the repo.
-      "sync-daemon".to_string(),
-    ],
-    cwd,
-  })
-}
-
-fn configure_daemon_env(
-  command: &mut Command,
-  app: Option<&tauri::AppHandle>,
-) -> Result<(), String> {
-  let mut sync_root_for_identity: Option<PathBuf> = None;
-  let mut configured_core_url: Option<String> = None;
-  let mut configured_exit_when_idle = false;
-  let active_account = active_workbench_account();
-  if std::env::var_os("WORKBENCH_DAEMON_HTTP_PORT").is_none() {
-    command.env(
-      "WORKBENCH_DAEMON_HTTP_PORT",
-      DEFAULT_DAEMON_HTTP_PORT.to_string(),
-    );
-  }
-
-  if let Some(app) = app {
-    let preferences = read_daemon_preferences_from_disk(app)?;
-    configured_core_url = configured_daemon_core_url(&preferences);
-    configured_exit_when_idle = preferences
-      .get("exitWhenIdle")
-      .and_then(serde_json::Value::as_bool)
-      .unwrap_or(false);
-    let sync_root = configured_sync_folder(app, &preferences)?;
-    let downloads_dir = configured_downloads_folder(app, &preferences)?;
-    sync_root_for_identity = Some(sync_root.clone());
-    command.env("WORKBENCH_SYNC_ROOT", path_to_string(sync_root));
-    command.env("WORKBENCH_DOWNLOADS_DIR", path_to_string(downloads_dir));
-  }
-
-  if std::env::var_os(CORE_URL_ENV).is_none() {
-    if let Some(core_url) = configured_core_url {
-      command.env(CORE_URL_ENV, core_url);
-    }
-  }
-
-  // Whether the daemon outlives the apps is a per-machine setting, and it is read at
-  // startup, so changing it only takes effect the next time the daemon starts.
-  if std::env::var_os(EXIT_WHEN_IDLE_ENV).is_none() {
-    command.env(
-      EXIT_WHEN_IDLE_ENV,
-      if configured_exit_when_idle { "1" } else { "0" },
-    );
-  }
-
-  if std::env::var_os("WORKBENCH_ACCESS_TOKEN").is_none() {
-    if let Some(access_token) = active_account
-      .as_ref()
-      .and_then(|account| account.access_token.as_ref())
-    {
-      command.env("WORKBENCH_ACCESS_TOKEN", access_token);
-    }
-  }
-  if std::env::var_os("WORKBENCH_SYNC_ROOT_ID").is_none() {
-    command.env(
-      "WORKBENCH_SYNC_ROOT_ID",
-      account_sync_root_id(active_account.as_ref()),
-    );
-  }
-  if std::env::var_os("WORKBENCH_SYNC_ROOT_LABEL").is_none() {
-    command.env(
-      "WORKBENCH_SYNC_ROOT_LABEL",
-      format!(
-        "Workbench Sync ({})",
-        account_label(active_account.as_ref())
-      ),
-    );
-  }
-  if std::env::var_os(SECURE_CLIENT_IDENTITY_ENV).is_none() {
-    command.env(SECURE_CLIENT_IDENTITY_ENV, "auto");
-  }
-
-  configure_daemon_client_identity_env(
-    command,
-    sync_root_for_identity.as_deref(),
-    active_account.as_ref(),
-  );
-  Ok(())
-}
-
-fn configure_daemon_client_identity_env(
-  command: &mut Command,
-  sync_root: Option<&Path>,
-  active_account: Option<&ActiveWorkbenchAccount>,
-) {
-  let has_parent_client_id = std::env::var_os(LOCAL_CLIENT_ID_ENV).is_some();
-  let has_parent_client_token = std::env::var_os(LOCAL_CLIENT_TOKEN_ENV).is_some();
-
-  if has_parent_client_id && has_parent_client_token {
-    if std::env::var_os(PERSIST_CLIENT_IDENTITY_ENV).is_none() {
-      command.env(PERSIST_CLIENT_IDENTITY_ENV, "0");
-    }
-    return;
-  }
-
-  if has_parent_client_id || has_parent_client_token {
-    eprintln!(
-      "[workbench-native] not injecting secure local daemon client credentials because parent env is incomplete"
-    );
-    return;
-  }
-
-  if active_account.is_some() {
-    let _ = sync_root;
-    return;
-  }
-
-  match secure_storage::read_local_daemon_client_identity() {
-    Ok(Some(identity)) => {
-      command.env(LOCAL_CLIENT_ID_ENV, identity.local_client_id);
-      command.env(LOCAL_CLIENT_TOKEN_ENV, identity.local_client_token);
-      if std::env::var_os(PERSIST_CLIENT_IDENTITY_ENV).is_none() {
-        command.env(PERSIST_CLIENT_IDENTITY_ENV, "0");
-      }
-    }
-    Ok(None) => {
-      let Some(sync_root) = sync_root else {
+    if should_start {
+      if let Err(error) = start_daemon_and_lease(&app) {
+        crate::applog::write(&app, "daemon", &format!("failed to auto-start: {error}"));
+        // Still take the lease below: the start may have failed because the resident
+        // already had one running, which is exactly the case that needs a lease.
+      } else {
         return;
-      };
-      match migrate_local_daemon_identity_file_to_secure_storage(sync_root) {
-        Ok(Some(identity)) => {
-          command.env(LOCAL_CLIENT_ID_ENV, identity.local_client_id);
-          command.env(LOCAL_CLIENT_TOKEN_ENV, identity.local_client_token);
-          if std::env::var_os(PERSIST_CLIENT_IDENTITY_ENV).is_none() {
-            command.env(PERSIST_CLIENT_IDENTITY_ENV, "0");
-          }
-        }
-        Ok(None) => {}
-        Err(error) => {
-          eprintln!(
-            "[workbench-native] failed to migrate local daemon client credentials; daemon will use file fallback: {error}"
-          );
-        }
       }
     }
-    Err(error) => {
-      eprintln!(
-        "[workbench-native] failed to read secure local daemon client credentials; daemon will use file fallback: {error}"
-      );
-    }
-  }
+
+    hold_daemon_lease(&app);
+  });
 }
 
-/// Path the daemon's console output is captured to, so it can be reviewed without a
-/// console window ever appearing.
-pub fn daemon_log_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-  // Shared, so the tray can show the log of a daemon a variant started.
-  crate::variant::shared_config_directory(app).map(|path| path.join(DAEMON_LOG_FILE))
-}
+/// Adds the derived values the settings page shows next to the stored ones.
+fn daemon_preferences_response(preferences: serde_json::Value) -> Result<serde_json::Value, String> {
+  use workbench_shared::account::{account_folder_segment, account_label, active_workbench_account};
 
-/// Redirects the daemon's stdout/stderr into the log file, truncating what was there.
-///
-/// Returns `None` when the log cannot be opened; the caller then falls back to discarding
-/// output rather than letting it reach a console.
-fn daemon_log_sinks(app: Option<&tauri::AppHandle>) -> Option<(Stdio, Stdio)> {
-  let path = app.and_then(|app| daemon_log_path(app).ok())?;
-  if let Some(parent) = path.parent() {
-    fs::create_dir_all(parent).ok()?;
-  }
-
-  let file = fs::File::create(&path)
-    .map_err(|error| {
-      eprintln!(
-        "[workbench-native] failed to open sync daemon log {}: {error}",
-        path.display()
-      );
-    })
-    .ok()?;
-  let stderr = file
-    .try_clone()
-    .map_err(|error| {
-      eprintln!("[workbench-native] failed to duplicate sync daemon log handle: {error}");
-    })
-    .ok()?;
-  Some((Stdio::from(file), Stdio::from(stderr)))
-}
-
-fn spawn_daemon(app: Option<&tauri::AppHandle>) -> Result<Child, String> {
-  let daemon_command = resolve_daemon_command(app)?;
-  let mut command = Command::new(&daemon_command.program);
-  command
-    .args(&daemon_command.args)
-    .current_dir(&daemon_command.cwd)
-    .stdin(Stdio::null());
-
-  // The sidecar is a console executable. Spawned from a GUI app it would pop up a console
-  // window, so suppress it and send the output to a log file instead.
-  #[cfg(target_os = "windows")]
-  {
-    use std::os::windows::process::CommandExt;
-    command.creation_flags(CREATE_NO_WINDOW);
-  }
-
-  match daemon_log_sinks(app) {
-    Some((stdout, stderr)) => {
-      command.stdout(stdout).stderr(stderr);
-    }
-    None => {
-      command.stdout(Stdio::null()).stderr(Stdio::null());
-    }
-  }
-
-  configure_daemon_env(&mut command, app)?;
-
-  command.spawn().map_err(|error| {
-    format!(
-      "failed to start sync daemon with `{}` from {}: {error}",
-      daemon_command.program,
-      daemon_command.cwd.display()
-    )
-  })
-}
-
-fn daemon_preferences_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-  // These settings describe one shared daemon, so every app must read and write the same file.
-  crate::variant::shared_config_directory(app).map(|path| path.join(DAEMON_PREFERENCES_FILE))
-}
-
-fn normalized_optional_path_string(value: &serde_json::Value, key: &str) -> Option<String> {
-  value
-    .get(key)
-    .and_then(serde_json::Value::as_str)
-    .map(str::trim)
-    .filter(|value| !value.is_empty())
-    .map(|value| path_to_string(PathBuf::from(value)))
-}
-
-fn normalize_daemon_core_url(raw: &str) -> Result<String, String> {
-  let trimmed = raw.trim();
-  if trimmed.is_empty() {
-    return Err("Core URL is required.".to_string());
-  }
-  if trimmed.chars().any(char::is_whitespace) {
-    return Err("Core URL must not contain whitespace.".to_string());
-  }
-  if trimmed.starts_with("https://") {
-    return Ok(trimmed.trim_end_matches('/').to_string());
-  }
-  if trimmed.starts_with("http://") {
-    if is_loopback_core_url(trimmed) {
-      return Ok(trimmed.trim_end_matches('/').to_string());
-    }
-    return Err("Core URL must use https:// unless it points to localhost.".to_string());
-  }
-  Err("Core URL must start with http:// or https://.".to_string())
-}
-
-fn is_loopback_core_url(raw: &str) -> bool {
-  let Some(hostname) = http_url_hostname(raw) else {
-    return false;
-  };
-  let hostname = hostname
-    .trim_matches(|ch| ch == '[' || ch == ']')
-    .to_ascii_lowercase();
-  hostname == "localhost"
-    || hostname == "127.0.0.1"
-    || hostname == "::1"
-    || hostname == "tauri.localhost"
-    || hostname.ends_with(".localhost")
-}
-
-fn http_url_hostname(raw: &str) -> Option<String> {
-  let rest = raw.strip_prefix("http://")?;
-  let authority = rest
-    .split(|ch| ch == '/' || ch == '?' || ch == '#')
-    .next()
-    .unwrap_or("");
-  if authority.is_empty() || authority.contains('@') {
-    return None;
-  }
-  if let Some(stripped) = authority.strip_prefix('[') {
-    let end = stripped.find(']')?;
-    return Some(stripped[..end].to_string());
-  }
-  authority
-    .split(':')
-    .next()
-    .map(str::trim)
-    .filter(|value| !value.is_empty())
-    .map(ToString::to_string)
-}
-
-fn normalized_optional_url_string(value: &serde_json::Value, key: &str) -> Option<String> {
-  value
-    .get(key)
-    .and_then(serde_json::Value::as_str)
-    .and_then(|value| normalize_daemon_core_url(value).ok())
-}
-
-fn normalize_daemon_preferences(value: serde_json::Value) -> serde_json::Value {
-  let auto_start = value
-    .get("autoStart")
-    .and_then(serde_json::Value::as_bool)
-    .unwrap_or(false);
-  let resident_mode = value
-    .get("residentMode")
-    .and_then(serde_json::Value::as_bool)
-    .unwrap_or(true);
-  // Off by default: sync has no reason to stop just because the last window closed.
-  let exit_when_idle = value
-    .get("exitWhenIdle")
-    .and_then(serde_json::Value::as_bool)
-    .unwrap_or(false);
-  serde_json::json!({
-    "autoStart": auto_start,
-    "residentMode": resident_mode,
-    "exitWhenIdle": exit_when_idle,
-    "syncRoot": normalized_optional_path_string(&value, "syncRoot"),
-    "downloadsDir": normalized_optional_path_string(&value, "downloadsDir"),
-    "syncRootBase": normalized_optional_path_string(&value, "syncRootBase"),
-    "downloadsDirBase": normalized_optional_path_string(&value, "downloadsDirBase"),
-    "coreUrl": normalized_optional_url_string(&value, "coreUrl")
-  })
-}
-
-fn configured_preference_path(preferences: &serde_json::Value, key: &str) -> Option<PathBuf> {
-  preferences
-    .get(key)
-    .and_then(serde_json::Value::as_str)
-    .map(str::trim)
-    .filter(|value| !value.is_empty())
-    .map(PathBuf::from)
-}
-
-fn configured_sync_folder(
-  app: &tauri::AppHandle,
-  preferences: &serde_json::Value,
-) -> Result<PathBuf, String> {
-  if let Some(base) = configured_preference_path(preferences, "syncRootBase") {
-    let account = active_workbench_account();
-    return Ok(base.join(account_folder_segment(account.as_ref())));
-  }
-
-  configured_preference_path(preferences, "syncRoot")
-    .map(Ok)
-    .unwrap_or_else(|| default_sync_folder(app))
-}
-
-fn configured_downloads_folder(
-  app: &tauri::AppHandle,
-  preferences: &serde_json::Value,
-) -> Result<PathBuf, String> {
-  if let Some(base) = configured_preference_path(preferences, "downloadsDirBase") {
-    let account = active_workbench_account();
-    return Ok(base.join(account_folder_segment(account.as_ref())));
-  }
-
-  configured_preference_path(preferences, "downloadsDir")
-    .map(Ok)
-    .unwrap_or_else(|| default_downloads_folder(app))
-}
-
-fn configured_daemon_core_url(preferences: &serde_json::Value) -> Option<String> {
-  preferences
-    .get("coreUrl")
-    .and_then(serde_json::Value::as_str)
-    .map(str::trim)
-    .filter(|value| !value.is_empty())
-    .map(ToString::to_string)
-}
-
-fn effective_daemon_core_url(preferences: &serde_json::Value) -> Option<String> {
-  configured_daemon_core_url(preferences).or_else(|| {
-    std::env::var(CORE_URL_ENV)
-      .ok()
-      .and_then(|value| normalize_daemon_core_url(&value).ok())
-  })
-}
-
-fn local_daemon_identity_file(sync_root: &Path) -> PathBuf {
-  sync_root.join(".workbench").join("client-identity.json")
-}
-
-fn read_local_daemon_identity_file(
-  sync_root: &Path,
-) -> Result<Option<secure_storage::LocalDaemonClientIdentity>, String> {
-  let path = local_daemon_identity_file(sync_root);
-  if !path.is_file() {
-    return Ok(None);
-  }
-  let raw = fs::read_to_string(&path).map_err(|error| {
-    format!(
-      "failed to read local daemon identity file {}: {error}",
-      path.display()
-    )
-  })?;
-  secure_storage::parse_local_daemon_client_identity(&raw).map(Some)
-}
-
-fn migrate_local_daemon_identity_file_to_secure_storage(
-  sync_root: &Path,
-) -> Result<Option<secure_storage::LocalDaemonClientIdentity>, String> {
-  if !secure_storage::is_supported() {
-    return Ok(None);
-  }
-  let Some(identity) = read_local_daemon_identity_file(sync_root)? else {
-    return Ok(None);
-  };
-
-  secure_storage::save_local_daemon_client_identity(
-    &identity.local_client_id,
-    &identity.local_client_token,
-  )?;
-
-  let path = local_daemon_identity_file(sync_root);
-  match fs::remove_file(&path) {
-    Ok(()) => {}
-    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-    Err(error) => {
-      eprintln!(
-        "[workbench-native] migrated local daemon client credentials to secure storage, but failed to remove {}: {error}",
-        path.display()
-      );
-    }
-  }
-
-  Ok(Some(identity))
-}
-
-fn daemon_preferences_response(
-  app: &tauri::AppHandle,
-  preferences: serde_json::Value,
-) -> Result<serde_json::Value, String> {
-  let effective_sync_root = configured_sync_folder(app, &preferences)?;
-  let effective_downloads_dir = configured_downloads_folder(app, &preferences)?;
+  let effective_sync_root = preferences::configured_sync_folder(&preferences)?;
+  let effective_downloads_dir = preferences::configured_downloads_folder(&preferences)?;
   let active_account = active_workbench_account();
   let mut response = preferences.as_object().cloned().unwrap_or_default();
   response.insert(
@@ -1178,65 +222,16 @@ fn daemon_preferences_response(
   );
   response.insert(
     "effectiveCoreUrl".to_string(),
-    effective_daemon_core_url(&preferences)
+    preferences::effective_core_url(&preferences)
       .map(serde_json::Value::String)
       .unwrap_or(serde_json::Value::Null),
   );
   Ok(serde_json::Value::Object(response))
 }
 
-fn read_daemon_preferences_from_disk(app: &tauri::AppHandle) -> Result<serde_json::Value, String> {
-  let path = daemon_preferences_path(app)?;
-  if !path.is_file() {
-    return Ok(normalize_daemon_preferences(serde_json::json!({})));
-  }
-
-  let raw = fs::read_to_string(&path).map_err(|error| {
-    format!(
-      "failed to read daemon preferences {}: {error}",
-      path.display()
-    )
-  })?;
-  let parsed = serde_json::from_str::<serde_json::Value>(&raw).map_err(|error| {
-    format!(
-      "failed to parse daemon preferences {}: {error}",
-      path.display()
-    )
-  })?;
-  Ok(normalize_daemon_preferences(parsed))
-}
-
-fn write_daemon_preferences_to_disk(
-  app: &tauri::AppHandle,
-  preferences: &serde_json::Value,
-) -> Result<(), String> {
-  let path = daemon_preferences_path(app)?;
-  let parent = path
-    .parent()
-    .ok_or_else(|| format!("daemon preferences path has no parent: {}", path.display()))?;
-  fs::create_dir_all(parent).map_err(|error| {
-    format!(
-      "failed to create daemon preferences directory {}: {error}",
-      parent.display()
-    )
-  })?;
-  let serialized = serde_json::to_string_pretty(preferences)
-    .map_err(|error| format!("failed to serialize daemon preferences: {error}"))?;
-  fs::write(&path, format!("{serialized}\n")).map_err(|error| {
-    format!(
-      "failed to write daemon preferences {}: {error}",
-      path.display()
-    )
-  })
-}
-
-fn set_daemon_preference_path(
-  app: &tauri::AppHandle,
-  key: &str,
-  path: Option<PathBuf>,
-) -> Result<serde_json::Value, String> {
-  let mut preferences = read_daemon_preferences_from_disk(app)?;
-  let object = preferences
+fn set_daemon_preference_path(key: &str, path: Option<PathBuf>) -> Result<serde_json::Value, String> {
+  let mut stored = preferences::read_from_disk()?;
+  let object = stored
     .as_object_mut()
     .ok_or_else(|| "daemon preferences were not an object".to_string())?;
   match path {
@@ -1250,126 +245,22 @@ fn set_daemon_preference_path(
       object.insert(key.to_string(), serde_json::Value::Null);
     }
   }
-  let preferences = normalize_daemon_preferences(preferences);
-  write_daemon_preferences_to_disk(app, &preferences)?;
-  daemon_preferences_response(app, preferences)
+  let stored = preferences::normalize(stored);
+  preferences::write_to_disk(&stored)?;
+  daemon_preferences_response(stored)
 }
 
-fn reset_daemon_preference_paths(
-  app: &tauri::AppHandle,
-  keys: &[&str],
-) -> Result<serde_json::Value, String> {
-  let mut preferences = read_daemon_preferences_from_disk(app)?;
-  let object = preferences
+fn reset_daemon_preference_paths(keys: &[&str]) -> Result<serde_json::Value, String> {
+  let mut stored = preferences::read_from_disk()?;
+  let object = stored
     .as_object_mut()
     .ok_or_else(|| "daemon preferences were not an object".to_string())?;
   for key in keys {
     object.insert((*key).to_string(), serde_json::Value::Null);
   }
-  let preferences = normalize_daemon_preferences(preferences);
-  write_daemon_preferences_to_disk(app, &preferences)?;
-  daemon_preferences_response(app, preferences)
-}
-
-/// Starts the sync daemon when needed.
-///
-/// Returns `true` when this process spawned it, or `false` when it was already
-/// running in this process or another one.
-fn start_daemon_with_app(app: Option<&tauri::AppHandle>) -> Result<bool, String> {
-  let mut managed = managed_daemon()
-    .lock()
-    .map_err(|_| "sync daemon process lock was poisoned".to_string())?;
-
-  if let Some(daemon) = managed.as_mut() {
-    match daemon.child.try_wait() {
-      Ok(None) => return Ok(false),
-      Ok(Some(_status)) => {
-        *managed = None;
-      }
-      Err(error) => return Err(format!("failed to inspect sync daemon process: {error}")),
-    }
-  }
-
-  let guard = daemon_guard::acquire();
-  if daemon_is_running_externally() {
-    drop(managed);
-    hold_daemon_lease(app);
-    return Ok(false);
-  }
-  if guard.is_none() {
-    // Spawning without the guard is how two daemons end up racing for the port. Whoever
-    // holds it is already starting one, so stand down and let the probe find it next time
-    // rather than starting a second that will die on EADDRINUSE.
-    return Err(
-      "another Workbench app is already starting the sync daemon; try again in a moment"
-        .to_string(),
-    );
-  }
-
-  let child = spawn_daemon(app)?;
-  *managed = Some(ManagedDaemon { child });
-  drop(managed);
-
-  if !wait_for_daemon_readiness() {
-    eprintln!(
-      "[workbench-native] sync daemon did not become observable within {} seconds",
-      DAEMON_READINESS_TIMEOUT.as_secs()
-    );
-  }
-  hold_daemon_lease(app);
-  Ok(true)
-}
-
-pub fn start_daemon_if_auto_start_enabled(app: &tauri::AppHandle) {
-  let preferences = match read_daemon_preferences_from_disk(app) {
-    Ok(preferences) => preferences,
-    Err(error) => {
-      eprintln!("[workbench-native] failed to read daemon preferences: {error}");
-      return;
-    }
-  };
-
-  if !preferences
-    .get("autoStart")
-    .and_then(serde_json::Value::as_bool)
-    .unwrap_or(false)
-  {
-    return;
-  }
-
-  let app = app.clone();
-  let _ = std::thread::spawn(move || {
-    if let Err(error) = start_daemon_with_app(Some(&app)) {
-      eprintln!("[workbench-native] failed to auto-start sync daemon: {error}");
-    }
-  });
-}
-
-#[cfg(target_os = "windows")]
-fn kill_child_process_tree(child: &mut Child) -> Result<(), String> {
-  let pid = child.id().to_string();
-  let status = Command::new("taskkill")
-    .args(["/PID", &pid, "/T", "/F"])
-    .stdin(Stdio::null())
-    .stdout(Stdio::null())
-    .stderr(Stdio::null())
-    .status()
-    .map_err(|error| format!("failed to invoke taskkill for sync daemon process {pid}: {error}"))?;
-
-  if status.success() {
-    return Ok(());
-  }
-
-  child
-    .kill()
-    .map_err(|error| format!("failed to kill sync daemon process {pid}: {error}"))
-}
-
-#[cfg(not(target_os = "windows"))]
-fn kill_child_process_tree(child: &mut Child) -> Result<(), String> {
-  child
-    .kill()
-    .map_err(|error| format!("failed to kill sync daemon process {}: {error}", child.id()))
+  let stored = preferences::normalize(stored);
+  preferences::write_to_disk(&stored)?;
+  daemon_preferences_response(stored)
 }
 
 #[tauri::command]
@@ -1466,7 +357,7 @@ pub async fn choose_sync_folder(app: tauri::AppHandle) -> Result<Option<String>,
         .into_path()
         .map_err(|error| format!("invalid folder path: {error}"))?;
       let selected = path_to_string(path.clone());
-      set_daemon_preference_path(&app, "syncRootBase", Some(path))?;
+      set_daemon_preference_path("syncRootBase", Some(path))?;
       Ok(Some(selected))
     }
     None => Ok(None),
@@ -1483,7 +374,7 @@ pub async fn choose_downloads_folder(app: tauri::AppHandle) -> Result<Option<Str
         .into_path()
         .map_err(|error| format!("invalid folder path: {error}"))?;
       let selected = path_to_string(path.clone());
-      set_daemon_preference_path(&app, "downloadsDirBase", Some(path))?;
+      set_daemon_preference_path("downloadsDirBase", Some(path))?;
       Ok(Some(selected))
     }
     None => Ok(None),
@@ -1491,25 +382,25 @@ pub async fn choose_downloads_folder(app: tauri::AppHandle) -> Result<Option<Str
 }
 
 #[tauri::command]
-pub fn reset_sync_folder(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-  reset_daemon_preference_paths(&app, &["syncRoot", "syncRootBase"])
+pub fn reset_sync_folder() -> Result<serde_json::Value, String> {
+  reset_daemon_preference_paths(&["syncRoot", "syncRootBase"])
 }
 
 #[tauri::command]
-pub fn reset_downloads_folder(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-  reset_daemon_preference_paths(&app, &["downloadsDir", "downloadsDirBase"])
+pub fn reset_downloads_folder() -> Result<serde_json::Value, String> {
+  reset_daemon_preference_paths(&["downloadsDir", "downloadsDirBase"])
 }
 
 #[tauri::command]
-pub fn open_sync_folder(app: tauri::AppHandle) -> Result<bool, String> {
-  let preferences = read_daemon_preferences_from_disk(&app)?;
-  ensure_folder_and_open(configured_sync_folder(&app, &preferences)?)
+pub fn open_sync_folder() -> Result<bool, String> {
+  let stored = preferences::read_from_disk()?;
+  ensure_folder_and_open(preferences::configured_sync_folder(&stored)?)
 }
 
 #[tauri::command]
-pub fn open_downloads_folder(app: tauri::AppHandle) -> Result<bool, String> {
-  let preferences = read_daemon_preferences_from_disk(&app)?;
-  ensure_folder_and_open(configured_downloads_folder(&app, &preferences)?)
+pub fn open_downloads_folder() -> Result<bool, String> {
+  let stored = preferences::read_from_disk()?;
+  ensure_folder_and_open(preferences::configured_downloads_folder(&stored)?)
 }
 
 /// Window controls for the dedicated apps, which run undecorated and draw their own
@@ -1570,8 +461,8 @@ pub fn window_start_drag(window: tauri::Window) -> Result<(), String> {
 ///
 /// The daemon runs without a console window, so this is how its console state is reviewed.
 #[tauri::command]
-pub fn open_daemon_log(app: tauri::AppHandle) -> Result<bool, String> {
-  let path = daemon_log_path(&app)?;
+pub fn open_daemon_log() -> Result<bool, String> {
+  let path = daemon::log_path()?;
   if !path.is_file() {
     return Err(format!(
       "no sync daemon log yet at {} — start the daemon first",
@@ -1593,103 +484,44 @@ pub fn open_daemon_log(app: tauri::AppHandle) -> Result<bool, String> {
 /// Returns `None` rather than an error when the daemon has not generated one yet; that is
 /// the ordinary state before its first run, not a failure.
 #[tauri::command]
-pub fn read_local_daemon_api_token(app: tauri::AppHandle) -> Result<Option<String>, String> {
-  let preferences = read_daemon_preferences_from_disk(&app)?;
-  let token_path = configured_sync_folder(&app, &preferences)?
-    .join(".workbench")
-    .join(DAEMON_TOKEN_FILE);
-
-  match fs::read_to_string(&token_path) {
-    Ok(raw) => {
-      let token = raw.trim();
-      Ok(if token.is_empty() {
-        None
-      } else {
-        Some(token.to_string())
-      })
-    }
-    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-    Err(error) => Err(format!(
-      "failed to read the local daemon token at {}: {error}",
-      token_path.display()
-    )),
-  }
+pub fn read_local_daemon_api_token() -> Result<Option<String>, String> {
+  let stored = preferences::read_from_disk()?;
+  daemon::read_api_token(&stored)
 }
 
 #[tauri::command]
-pub fn read_daemon_status(
-  app: tauri::AppHandle,
-  port: Option<u16>,
-) -> Result<serde_json::Value, String> {
+pub fn read_daemon_status(port: Option<u16>) -> Result<serde_json::Value, String> {
   // `/status` is behind the daemon's loopback auth, so this needs the same token the webview
   // sends. Without it every call came back 401.
-  let token = read_local_daemon_api_token(app)?;
-  let mut status = read_loopback_status(configured_daemon_port(port)?, token.as_deref())?;
+  let token = read_local_daemon_api_token()?;
+  let mut status = loopback::read_status(
+    loopback::configured_daemon_port(port)?,
+    token.as_deref(),
+  )?;
   if let Some(object) = status.as_object_mut() {
-    let native_owned = {
-      let mut managed = managed_daemon()
-        .lock()
-        .map_err(|_| "sync daemon process lock was poisoned".to_string())?;
-      match managed.as_mut() {
-        Some(daemon) => match daemon.child.try_wait() {
-          Ok(None) => true,
-          Ok(Some(_status)) => {
-            *managed = None;
-            false
-          }
-          Err(error) => {
-            eprintln!("[workbench-native] failed to inspect sync daemon process: {error}");
-            false
-          }
-        },
-        None => false,
-      }
-    };
     object.insert(
       "nativeOwned".to_string(),
-      serde_json::Value::Bool(native_owned),
+      serde_json::Value::Bool(daemon::is_owned_here()),
     );
   }
   Ok(status)
 }
 
 #[tauri::command]
-pub fn read_daemon_preferences(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-  let preferences = read_daemon_preferences_from_disk(&app)?;
-  daemon_preferences_response(&app, preferences)
+pub fn read_daemon_preferences() -> Result<serde_json::Value, String> {
+  daemon_preferences_response(preferences::read_from_disk()?)
 }
 
 #[tauri::command]
-pub fn set_daemon_auto_start(
-  app: tauri::AppHandle,
-  auto_start: bool,
-) -> Result<serde_json::Value, String> {
-  let mut preferences = read_daemon_preferences_from_disk(&app)?;
-  let object = preferences
+pub fn set_daemon_auto_start(auto_start: bool) -> Result<serde_json::Value, String> {
+  let mut stored = preferences::read_from_disk()?;
+  let object = stored
     .as_object_mut()
     .ok_or_else(|| "daemon preferences were not an object".to_string())?;
   object.insert("autoStart".to_string(), serde_json::Value::Bool(auto_start));
-  let preferences = normalize_daemon_preferences(preferences);
-  write_daemon_preferences_to_disk(&app, &preferences)?;
-  daemon_preferences_response(&app, preferences)
-}
-
-#[tauri::command]
-pub fn set_daemon_resident_mode(
-  app: tauri::AppHandle,
-  resident_mode: bool,
-) -> Result<serde_json::Value, String> {
-  let mut preferences = read_daemon_preferences_from_disk(&app)?;
-  let object = preferences
-    .as_object_mut()
-    .ok_or_else(|| "daemon preferences were not an object".to_string())?;
-  object.insert(
-    "residentMode".to_string(),
-    serde_json::Value::Bool(resident_mode),
-  );
-  let preferences = normalize_daemon_preferences(preferences);
-  write_daemon_preferences_to_disk(&app, &preferences)?;
-  daemon_preferences_response(&app, preferences)
+  let stored = preferences::normalize(stored);
+  preferences::write_to_disk(&stored)?;
+  daemon_preferences_response(stored)
 }
 
 /// Whether the daemon stops once no app is holding a lease.
@@ -1701,29 +533,33 @@ pub fn set_daemon_exit_when_idle(
   app: tauri::AppHandle,
   exit_when_idle: bool,
 ) -> Result<serde_json::Value, String> {
-  let mut preferences = read_daemon_preferences_from_disk(&app)?;
-  let object = preferences
+  let mut stored = preferences::read_from_disk()?;
+  let object = stored
     .as_object_mut()
     .ok_or_else(|| "daemon preferences were not an object".to_string())?;
   object.insert(
     "exitWhenIdle".to_string(),
     serde_json::Value::Bool(exit_when_idle),
   );
-  let preferences = normalize_daemon_preferences(preferences);
-  write_daemon_preferences_to_disk(&app, &preferences)?;
+  let stored = preferences::normalize(stored);
+  preferences::write_to_disk(&stored)?;
 
-  if let Ok(port) = configured_daemon_port(None) {
-    if daemon_loopback_is_occupied(port) {
+  if let Ok(port) = loopback::configured_daemon_port(None) {
+    if loopback::is_occupied(port) {
       let payload = serde_json::json!({ "exitWhenIdle": exit_when_idle }).to_string();
-      if let Err(error) = daemon_lease_request(&app, "PUT", "/leases/policy", Some(&payload)) {
+      if let Err(error) = daemon::api_request("PUT", "/leases/policy", Some(&payload)) {
         // The stored value still applies at the daemon's next start, so this is worth
         // reporting but not worth failing the setting change over.
-        eprintln!("[workbench-native] could not apply the idle policy to the running sync daemon: {error}");
+        crate::applog::write(
+          &app,
+          "daemon",
+          &format!("could not apply the idle policy to the running daemon: {error}"),
+        );
       }
     }
   }
 
-  daemon_preferences_response(&app, preferences)
+  daemon_preferences_response(stored)
 }
 
 #[tauri::command]
@@ -1731,367 +567,32 @@ pub fn set_daemon_core_url(
   app: tauri::AppHandle,
   core_url: String,
 ) -> Result<serde_json::Value, String> {
-  let normalized = normalize_daemon_core_url(&core_url)?;
-  let mut preferences = read_daemon_preferences_from_disk(&app)?;
-  let previous = configured_daemon_core_url(&preferences);
+  let normalized = preferences::normalize_core_url(&core_url)?;
+  let mut stored = preferences::read_from_disk()?;
+  let previous = preferences::configured_core_url(&stored);
   let changed = previous.as_deref() != Some(normalized.as_str());
-  let object = preferences
+  let object = stored
     .as_object_mut()
     .ok_or_else(|| "daemon preferences were not an object".to_string())?;
-  object.insert(
-    "coreUrl".to_string(),
-    serde_json::Value::String(normalized),
-  );
-  let preferences = normalize_daemon_preferences(preferences);
-  write_daemon_preferences_to_disk(&app, &preferences)?;
+  object.insert("coreUrl".to_string(), serde_json::Value::String(normalized));
+  let stored = preferences::normalize(stored);
+  preferences::write_to_disk(&stored)?;
 
-  if changed && stop_daemon(app.clone())? {
-    start_daemon_with_app(Some(&app))?;
+  if changed && daemon::stop()? {
+    start_daemon_and_lease(&app)?;
   }
 
-  daemon_preferences_response(&app, preferences)
-}
-
-pub fn daemon_resident_mode_enabled(app: &tauri::AppHandle) -> bool {
-  read_daemon_preferences_from_disk(app)
-    .ok()
-    .and_then(|preferences| {
-      preferences
-        .get("residentMode")
-        .and_then(serde_json::Value::as_bool)
-    })
-    .unwrap_or(true)
+  daemon_preferences_response(stored)
 }
 
 #[tauri::command]
 pub fn start_daemon(app: tauri::AppHandle) -> Result<bool, String> {
-  start_daemon_with_app(Some(&app))
+  start_daemon_and_lease(&app)
 }
 
-/// Stops the daemon, whether or not this app is the one that started it.
-///
-/// Asking it to stop over its own API is what makes this work from any app: killing a child
-/// only ever worked for the process holding the handle, so "Stop" did nothing in every other
-/// window. Killing stays as the fallback for a daemon that will not answer.
 #[tauri::command]
-pub fn stop_daemon(app: tauri::AppHandle) -> Result<bool, String> {
-  let port = configured_daemon_port(None)?;
-  if daemon_loopback_is_occupied(port) {
-    match daemon_lease_request(&app, "POST", "/shutdown", None) {
-      Ok(_) => {
-        if wait_for_daemon_to_stop(port) {
-          if let Ok(mut managed) = managed_daemon().lock() {
-            *managed = None;
-          }
-          return Ok(true);
-        }
-        eprintln!("[workbench-native] sync daemon did not stop in time; falling back to a kill");
-      }
-      Err(error) => {
-        eprintln!("[workbench-native] sync daemon refused the shutdown request: {error}");
-      }
-    }
-  }
-
-  stop_owned_daemon_process()
-}
-
-/// Kills the daemon this process spawned. Does nothing when it merely adopted one.
-fn stop_owned_daemon_process() -> Result<bool, String> {
-  let mut managed = managed_daemon()
-    .lock()
-    .map_err(|_| "sync daemon process lock was poisoned".to_string())?;
-
-  // Held, not taken: dropping a `Child` does not end the process, so releasing ownership
-  // before the kill is confirmed would strand a live daemon that nothing can stop again.
-  let Some(daemon) = managed.as_mut() else {
-    return Ok(false);
-  };
-
-  if daemon
-    .child
-    .try_wait()
-    .map_err(|error| format!("failed to inspect sync daemon process: {error}"))?
-    .is_some()
-  {
-    *managed = None;
-    return Ok(true);
-  }
-
-  kill_child_process_tree(&mut daemon.child)?;
-  daemon
-    .child
-    .wait()
-    .map_err(|error| format!("failed to wait for sync daemon shutdown: {error}"))?;
-  *managed = None;
-  Ok(true)
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-  use std::{cell::Cell, net::TcpListener};
-
-  fn unique_test_root(name: &str) -> PathBuf {
-    let nanos = std::time::SystemTime::now()
-      .duration_since(std::time::UNIX_EPOCH)
-      .expect("system time should be after unix epoch")
-      .as_nanos();
-    std::env::temp_dir().join(format!(
-      "workbench-native-{name}-{}-{nanos}",
-      std::process::id()
-    ))
-  }
-
-  #[test]
-  fn reads_legacy_local_daemon_identity_file() {
-    let root = unique_test_root("identity");
-    let metadata_dir = root.join(".workbench");
-    fs::create_dir_all(&metadata_dir).expect("metadata dir should be created");
-    fs::write(
-      local_daemon_identity_file(&root),
-      r#"{"localClientId":"client-1","localClientToken":"token-1"}"#,
-    )
-    .expect("identity file should be written");
-
-    let identity = read_local_daemon_identity_file(&root)
-      .expect("identity file should be readable")
-      .expect("identity should exist");
-
-    assert_eq!(identity.local_client_id, "client-1");
-    assert_eq!(identity.local_client_token, "token-1");
-    fs::remove_dir_all(root).ok();
-  }
-
-  #[test]
-  fn returns_none_when_legacy_local_daemon_identity_file_is_missing() {
-    let root = unique_test_root("identity-missing");
-    fs::create_dir_all(root.join(".workbench")).expect("metadata dir should be created");
-
-    let identity =
-      read_local_daemon_identity_file(&root).expect("missing identity file should not be an error");
-
-    assert!(identity.is_none());
-    fs::remove_dir_all(root).ok();
-  }
-
-  #[test]
-  fn builds_account_scoped_folder_segments() {
-    let account = ActiveWorkbenchAccount {
-      user_id: "user-1234567890abcdef".to_string(),
-      username: "Hayato Nakanishi".to_string(),
-      access_token: None,
-    };
-
-    assert_eq!(
-      account_folder_segment(Some(&account)),
-      "Hayato-Nakanishi-user-1234567"
-    );
-    assert_eq!(
-      account_sync_root_id(Some(&account)),
-      "account-user-1234567890abcdef"
-    );
-    assert_eq!(account_folder_segment(None), "guest");
-  }
-
-  #[test]
-  fn normalizes_daemon_core_url() {
-    assert_eq!(
-      normalize_daemon_core_url(" https://example.com/core/// ").unwrap(),
-      "https://example.com/core"
-    );
-    assert_eq!(
-      normalize_daemon_core_url(" http://localhost:3000/// ").unwrap(),
-      "http://localhost:3000"
-    );
-    assert!(normalize_daemon_core_url("ftp://example.com").is_err());
-    assert!(normalize_daemon_core_url("http://example.com").is_err());
-    assert!(normalize_daemon_core_url("https://exa mple.com").is_err());
-  }
-
-  #[test]
-  fn stores_core_url_in_normalized_daemon_preferences() {
-    let preferences = normalize_daemon_preferences(serde_json::json!({
-      "coreUrl": "http://localhost:3000/",
-      "autoStart": true
-    }));
-
-    assert_eq!(
-      preferences.get("coreUrl").and_then(serde_json::Value::as_str),
-      Some("http://localhost:3000")
-    );
-    assert_eq!(
-      configured_daemon_core_url(&preferences).as_deref(),
-      Some("http://localhost:3000")
-    );
-  }
-
-  #[test]
-  fn parses_active_workbench_account_from_session_json() {
-    let account = parse_active_workbench_account(
-      r#"{"user":{"id":"core-user-1","username":"alice"},"accessToken":"access-1"}"#,
-    )
-    .expect("account should parse");
-
-    assert_eq!(account.user_id, "core-user-1");
-    assert_eq!(account.username, "alice");
-    assert_eq!(account.access_token.as_deref(), Some("access-1"));
-  }
-
-  #[test]
-  fn detects_loopback_daemon_status() {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("test status listener should bind");
-    let port = listener
-      .local_addr()
-      .expect("test status listener should have an address")
-      .port();
-    let server = std::thread::spawn(move || {
-      let (mut stream, _) = listener.accept().expect("status request should connect");
-      let mut request = [0_u8; 1024];
-      stream
-        .read(&mut request)
-        .expect("status request should be readable");
-      let body = r#"{"status":"ok"}"#;
-      write!(
-        stream,
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-      )
-      .expect("status response should be written");
-    });
-
-    assert_eq!(
-      read_loopback_status(port, None).expect("running status listener should be detected"),
-      serde_json::json!({ "status": "ok" })
-    );
-    server.join().expect("status server should not panic");
-
-    let unused_listener =
-      TcpListener::bind(("127.0.0.1", 0)).expect("unused port listener should bind");
-    let unused_port = unused_listener
-      .local_addr()
-      .expect("unused port listener should have an address")
-      .port();
-    drop(unused_listener);
-    assert!(read_loopback_status(unused_port, None).is_err());
-  }
-
-  /// The bug this pins: a live daemon answers `/status` with 401 when the caller has no
-  /// token, and treating that as "nothing is listening" made every app spawn its own daemon.
-  /// Occupancy must be decided by getting an answer at all, not by getting a 200.
-  #[test]
-  fn an_unauthorized_daemon_still_counts_as_occupying_the_port() {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("test listener should bind");
-    let port = listener
-      .local_addr()
-      .expect("test listener should have an address")
-      .port();
-    let server = std::thread::spawn(move || {
-      let (mut stream, _) = listener.accept().expect("probe should connect");
-      let mut request = [0_u8; 1024];
-      stream.read(&mut request).expect("probe should be readable");
-      let body = r#"{"message":"Local daemon API token is required."}"#;
-      write!(
-        stream,
-        "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-      )
-      .expect("401 response should be written");
-    });
-
-    assert!(daemon_loopback_is_occupied(port));
-    server.join().expect("probe server should not panic");
-  }
-
-  #[test]
-  fn a_closed_port_is_not_occupied() {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("test listener should bind");
-    let port = listener
-      .local_addr()
-      .expect("test listener should have an address")
-      .port();
-    drop(listener);
-    assert!(!daemon_loopback_is_occupied(port));
-  }
-
-  #[test]
-  fn the_status_request_carries_the_daemon_token() {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("test listener should bind");
-    let port = listener
-      .local_addr()
-      .expect("test listener should have an address")
-      .port();
-    let server = std::thread::spawn(move || {
-      let (mut stream, _) = listener.accept().expect("status request should connect");
-      let mut request = [0_u8; 1024];
-      let read = stream
-        .read(&mut request)
-        .expect("status request should be readable");
-      let text = String::from_utf8_lossy(&request[..read]).to_string();
-      let body = r#"{"status":"ok"}"#;
-      write!(
-        stream,
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-      )
-      .expect("status response should be written");
-      text
-    });
-
-    read_loopback_status(port, Some("secret-token")).expect("status should be read");
-    let request = server.join().expect("status server should not panic");
-    assert!(request.contains("x-workbench-daemon-token: secret-token"));
-  }
-
-  #[test]
-  fn readiness_wait_retries_until_daemon_is_observable() {
-    let started = Instant::now();
-    let elapsed = Cell::new(Duration::ZERO);
-    let attempts = Cell::new(0);
-    let sleeps = Cell::new(0);
-
-    let ready = wait_for_daemon_readiness_with(
-      Duration::from_millis(4),
-      Duration::from_millis(20),
-      || {
-        let next = attempts.get() + 1;
-        attempts.set(next);
-        next == 3
-      },
-      |duration| {
-        sleeps.set(sleeps.get() + 1);
-        elapsed.set(elapsed.get() + duration);
-      },
-      || started + elapsed.get(),
-    );
-
-    assert!(ready);
-    assert_eq!(attempts.get(), 3);
-    assert_eq!(sleeps.get(), 2);
-    assert_eq!(elapsed.get(), Duration::from_millis(8));
-  }
-
-  #[test]
-  fn readiness_wait_stops_at_timeout() {
-    let started = Instant::now();
-    let elapsed = Cell::new(Duration::ZERO);
-    let attempts = Cell::new(0);
-
-    let ready = wait_for_daemon_readiness_with(
-      Duration::from_millis(4),
-      Duration::from_millis(10),
-      || {
-        attempts.set(attempts.get() + 1);
-        false
-      },
-      |duration| elapsed.set(elapsed.get() + duration),
-      || started + elapsed.get(),
-    );
-
-    assert!(!ready);
-    assert_eq!(attempts.get(), 3);
-    assert_eq!(elapsed.get(), Duration::from_millis(10));
-  }
+pub fn stop_daemon() -> Result<bool, String> {
+  daemon::stop()
 }
 
 /// Open a native Save-As dialog and write `bytes` to the chosen path.
@@ -2113,7 +614,7 @@ pub async fn save_file_with_dialog(
       let path_buf = file_path
         .into_path()
         .map_err(|e| format!("invalid path: {e}"))?;
-      std::fs::write(&path_buf, &bytes).map_err(|e| format!("failed to write file: {e}"))?;
+      fs::write(&path_buf, &bytes).map_err(|e| format!("failed to write file: {e}"))?;
       Ok(true)
     }
     None => Ok(false), // user cancelled
@@ -2124,7 +625,7 @@ pub async fn save_file_with_dialog(
 #[tauri::command]
 pub fn open_file_in_os_app(bytes: Vec<u8>, default_name: String) -> Result<bool, String> {
   let temp_dir = std::env::temp_dir().join("workbench-open");
-  std::fs::create_dir_all(&temp_dir)
+  fs::create_dir_all(&temp_dir)
     .map_err(|error| format!("failed to create temp directory: {error}"))?;
 
   let ts = std::time::SystemTime::now()
@@ -2134,9 +635,49 @@ pub fn open_file_in_os_app(bytes: Vec<u8>, default_name: String) -> Result<bool,
 
   let file_name = format!("{ts}-{}", sanitize_temp_filename(&default_name));
   let file_path = temp_dir.join(file_name);
-  std::fs::write(&file_path, &bytes)
-    .map_err(|error| format!("failed to write temp file: {error}"))?;
+  fs::write(&file_path, &bytes).map_err(|error| format!("failed to write temp file: {error}"))?;
 
   open_with_default_app(&file_path)?;
   Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn temp_filenames_lose_the_characters_a_path_cannot_carry() {
+    assert_eq!(sanitize_temp_filename("a/b:c*.docx"), "a_b_c_.docx");
+  }
+
+  #[test]
+  fn a_blank_temp_filename_falls_back_to_a_usable_one() {
+    assert_eq!(sanitize_temp_filename("   "), "document.docx");
+    // `///` is not blank once replaced, so it stays: the fallback is for names that would
+    // otherwise be empty, not for ones that end up ugly.
+    assert_eq!(sanitize_temp_filename("///"), "___");
+  }
+
+  #[test]
+  fn the_preferences_response_carries_the_derived_values_the_settings_page_reads() {
+    let response = daemon_preferences_response(preferences::normalize(serde_json::json!({
+      "syncRoot": "D:\\Sync",
+      "downloadsDir": "D:\\Down"
+    })))
+    .expect("a fully specified preference set should resolve");
+
+    assert_eq!(
+      response.get("effectiveSyncRoot").and_then(serde_json::Value::as_str),
+      Some("D:\\Sync")
+    );
+    assert_eq!(
+      response
+        .get("effectiveDownloadsDir")
+        .and_then(serde_json::Value::as_str),
+      Some("D:\\Down")
+    );
+    for key in ["accountFolderSegment", "accountLabel", "effectiveCoreUrl"] {
+      assert!(response.get(key).is_some(), "{key} should be present");
+    }
+  }
 }

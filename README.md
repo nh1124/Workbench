@@ -66,8 +66,27 @@ It lived under `services/` until 2026-08-03 and was moved to `native/` precisely
 placement kept suggesting it was a deployable service.
 
 Anything about its lifetime — how many apps depend on it, whether it exits when they all
-close — is therefore per-device state that lives in the daemon process itself, not on a
-server. See `docs/imple/workbench-native-variant-apps-plan.md`, "Phase 4".
+close — is therefore per-device state, not server state. See
+`docs/imple/workbench-native-variant-apps-plan.md`, "Phase 4".
+
+## The desktop side
+
+Four crates, and which one owns what matters:
+
+| | What it is | Lifetime |
+|---|---|---|
+| `native/resident` | Tray icon, global shortcuts, and the sync daemon's parent | Starts at login, stays |
+| `native/desktop` | The Tauri apps (main, Tasks, Notes, Artifacts) | Opened and closed by the user |
+| `native/sync-daemon` | The sync engine, a child of the resident | The resident's, not any app's |
+| `native/shared` | What the resident and the apps must agree on exactly | — |
+
+**The resident is the service; the apps are clients that come and go.** It used to be the
+other way round: the main app held the tray and the shortcuts, so closing it took both away.
+See `docs/imple/workbench-native-daemon-residency-plan.md`.
+
+`native/shared` exists because both sides start the daemon, and they have to derive the same
+sync root, the same account and the same loopback port to do it. It depends on nothing from
+Tauri; the apps wrap it in commands, and the resident calls it directly.
 
 ## Analyser routine contract
 

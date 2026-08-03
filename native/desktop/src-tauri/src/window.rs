@@ -24,11 +24,6 @@ static QUICK_NOTE_WINDOW_COUNTER: AtomicU64 = AtomicU64::new(1);
 #[cfg(desktop)]
 static APP_WINDOW_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-#[cfg(desktop)]
-fn is_main_window_label(label: &str) -> bool {
-  label.starts_with("main-")
-}
-
 /// Applies the storage and variant identity shared by every window in this process.
 ///
 /// This must be applied to **every** window this module builds. Tauri keys its
@@ -116,37 +111,21 @@ pub fn open_new_main_window(app: &tauri::AppHandle) -> Result<(), String> {
             eprintln!("[workbench-native] snap layout support unavailable: {error}");
           }
         }
+        // Closing the last window now ends the process. It used to hide instead, so that
+        // something stayed alive to hold the tray icon and the global shortcuts — the
+        // resident holds both now, and a hidden window with nothing to show is just a
+        // process the user cannot get rid of.
         #[cfg(target_os = "windows")]
-        let tracked_hwnd = window.hwnd().ok().map(|handle| handle.0 as isize);
-        let event_window = window.clone();
-        window.on_window_event(move |event| {
-          #[cfg(target_os = "windows")]
-          if matches!(event, WindowEvent::Destroyed) {
-            if let Some(hwnd) = tracked_hwnd {
-              crate::titlebar::forget_window(hwnd);
+        {
+          let tracked_hwnd = window.hwnd().ok().map(|handle| handle.0 as isize);
+          window.on_window_event(move |event| {
+            if matches!(event, WindowEvent::Destroyed) {
+              if let Some(hwnd) = tracked_hwnd {
+                crate::titlebar::forget_window(hwnd);
+              }
             }
-          }
-          if let WindowEvent::CloseRequested { api, .. } = event {
-            // Keep exactly one resident main window alive.
-            // If this is the last main window, hide it instead of closing.
-            if !is_main_variant {
-              return;
-            }
-            if !crate::commands::daemon_resident_mode_enabled(event_window.app_handle()) {
-              return;
-            }
-            let main_window_count = event_window
-              .app_handle()
-              .webview_windows()
-              .values()
-              .filter(|candidate| is_main_window_label(candidate.label()))
-              .count();
-            if main_window_count <= 1 {
-              api.prevent_close();
-              let _ = event_window.hide();
-            }
-          }
-        });
+          });
+        }
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
@@ -200,29 +179,6 @@ pub fn open_variant_window(app: &tauri::AppHandle, query: &str) -> Result<(), St
     let _ = (app, query);
     Err("variant windows are not supported on this platform".to_string())
   }
-}
-
-/// Shows an existing main window if present; otherwise creates a new one.
-///
-/// This is used by tray interactions to restore the app from resident state.
-pub fn show_or_create_main_window(app: &tauri::AppHandle) -> Result<(), String> {
-  #[cfg(desktop)]
-  {
-    if let Some(main_window) = app
-      .webview_windows()
-      .values()
-      .find(|window| is_main_window_label(window.label()))
-      .cloned()
-    {
-      let _ = main_window.unminimize();
-      let _ = main_window.show();
-      let _ = main_window.set_focus();
-      return Ok(());
-    }
-    open_new_main_window(app)
-  }
-  #[cfg(not(desktop))]
-  Err("main window restore is not supported on this platform".to_string())
 }
 
 #[cfg(desktop)]
@@ -396,15 +352,3 @@ pub fn open_new_app_window(
   Err("app window opening is not supported on this platform".to_string())
 }
 
-/// Returns `true` when the CLI arguments indicate that a new **main** window
-/// should be opened (i.e. the launch is not for a quick-note window).
-///
-/// Used by the `single-instance` plugin handler to decide what to do when a
-/// second process is started (e.g. via taskbar shift+click).
-#[cfg(desktop)]
-pub fn should_open_new_main_window(argv: &[String]) -> bool {
-  !argv
-    .iter()
-    .map(|arg| arg.to_ascii_lowercase())
-    .any(|arg| arg.contains("quick-note-window=1"))
-}

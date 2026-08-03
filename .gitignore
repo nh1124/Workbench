@@ -10,6 +10,9 @@ services/*/dist/
 services/*/docs/
 native/sync-daemon/dist/
 native/desktop/src-tauri/target/
+native/resident/target/
+native/resident/dist/
+native/shared/target/
 native/desktop/node_modules/
 native/desktop/src-tauri/tauri.conf.json
 .env

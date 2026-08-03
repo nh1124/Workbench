@@ -618,7 +618,6 @@ export function SettingsPage() {
     localDaemonUrlInput,
     setLocalDaemonUrlInput,
     localRoutingMode,
-    localDaemonResidentMode,
     localDaemonAutoStart,
     localDaemonPreferences,
     localDaemonResolving,
@@ -627,7 +626,6 @@ export function SettingsPage() {
     requestLocalDaemonRescan,
     saveLocalDaemonUrl,
     changeLocalRoutingMode,
-    toggleNativeDaemonResidentMode,
     toggleNativeDaemonAutoStart,
     chooseNativeSyncFolder,
     chooseNativeDownloadsFolder,
@@ -1618,27 +1616,6 @@ export function SettingsPage() {
                       </button>
                     ))}
                   </div>
-                </div>
-
-                <div className="account-local-mode-control">
-                  <div>
-                    <div className="settings-title-with-info">
-                      <strong>Background Resident</strong>
-                      <InfoHint label="Keeps Workbench available from the tray when the last main window is closed. Desktop runtime only." />
-                    </div>
-                  </div>
-                  <label className="integration-switch">
-                    <input
-                      type="checkbox"
-                      checked={localDaemonResidentMode}
-                      disabled={!nativeRuntimeAvailable}
-                      onChange={(event) => void toggleNativeDaemonResidentMode(event.target.checked)}
-                    />
-                    <span className="integration-switch-slider" aria-hidden="true" />
-                    <span className="sr-only">
-                      {localDaemonResidentMode ? "Disable background resident mode" : "Enable background resident mode"}
-                    </span>
-                  </label>
                 </div>
 
                 <div className="account-local-mode-control">

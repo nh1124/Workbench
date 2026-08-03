@@ -39,7 +39,7 @@ mod platform {
       .collect::<Vec<_>>();
     let handle = unsafe { CreateMutexW(ptr::null(), 0, name.as_ptr()) };
     if handle.is_null() {
-      eprintln!("[workbench-native] failed to create sync daemon launch mutex");
+      crate::log::write("daemon", "failed to create the sync daemon launch mutex");
       return None;
     }
 
@@ -51,8 +51,9 @@ mod platform {
     unsafe {
       CloseHandle(handle);
     }
-    eprintln!(
-      "[workbench-native] failed to acquire sync daemon launch mutex within {timeout_ms} ms"
+    crate::log::write(
+      "daemon",
+      &format!("failed to acquire the sync daemon launch mutex within {timeout_ms} ms"),
     );
     None
   }
@@ -80,9 +81,12 @@ mod platform {
     fn drop(&mut self) {
       if let Err(error) = fs::remove_file(&self.path) {
         if error.kind() != ErrorKind::NotFound {
-          eprintln!(
-            "[workbench-native] failed to remove sync daemon launch lock {}: {error}",
-            self.path.display()
+          crate::log::write(
+            "daemon",
+            &format!(
+              "failed to remove sync daemon launch lock {}: {error}",
+              self.path.display()
+            ),
           );
         }
       }
@@ -106,27 +110,33 @@ mod platform {
             Ok(()) => continue,
             Err(remove_error) if remove_error.kind() == ErrorKind::NotFound => continue,
             Err(remove_error) => {
-              eprintln!(
-                "[workbench-native] failed to remove stale sync daemon launch lock {}: {remove_error}",
-                path.display()
+              crate::log::write(
+                "daemon",
+                &format!(
+                  "failed to remove stale sync daemon launch lock {}: {remove_error}",
+                  path.display()
+                ),
               );
               return None;
             }
           }
         }
         Err(error) => {
-          eprintln!(
-            "[workbench-native] failed to acquire sync daemon launch lock {}: {error}",
-            path.display()
+          crate::log::write(
+            "daemon",
+            &format!(
+              "failed to acquire sync daemon launch lock {}: {error}",
+              path.display()
+            ),
           );
           return None;
         }
       }
     }
 
-    eprintln!(
-      "[workbench-native] failed to acquire sync daemon launch lock {}",
-      path.display()
+    crate::log::write(
+      "daemon",
+      &format!("failed to acquire sync daemon launch lock {}", path.display()),
     );
     None
   }

@@ -6,9 +6,10 @@
   "scripts": {
     "build": "npm run tauri:prepare",
     "sidecar:build": "npm --prefix ../.. run sidecar:build --workspace sync-daemon",
+    "resident:build": "node ../resident/scripts/build-resident.mjs",
     "tauri:prepare": "node ./scripts/prepare-tauri-config.mjs",
-    "tauri:dev": "npm run sidecar:build && npm run tauri:prepare && tauri dev --config src-tauri/tauri.conf.json",
-    "tauri:build": "npm run sidecar:build && npm run tauri:prepare && tauri build --config src-tauri/tauri.conf.json"
+    "tauri:dev": "npm run sidecar:build && npm run resident:build && npm run tauri:prepare && tauri dev --config src-tauri/tauri.conf.json",
+    "tauri:build": "npm run sidecar:build && npm run resident:build && npm run tauri:prepare && tauri build --config src-tauri/tauri.conf.json"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.9.0",

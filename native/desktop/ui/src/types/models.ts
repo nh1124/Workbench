@@ -754,7 +754,6 @@ export interface LocalJobRecord {
 
 export interface LocalDaemonPreferences {
   autoStart: boolean;
-  residentMode?: boolean;
   exitWhenIdle?: boolean;
   syncRoot?: string | null;
   downloadsDir?: string | null;

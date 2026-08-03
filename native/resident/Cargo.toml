@@ -1,0 +1,32 @@
+[package]
+name = "workbench-resident"
+version = "0.1.0"
+description = "Workbench resident service: tray icon, global shortcuts, and the sync daemon"
+authors = ["Workbench Team"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.77.2"
+
+[[bin]]
+name = "workbench-resident"
+path = "src/main.rs"
+
+[build-dependencies]
+# Already a build dependency of tauri-build, so the resident embeds its tray icon
+# without pulling in a dependency family the repository does not already carry.
+embed-resource = "3"
+
+[dependencies]
+workbench-shared = { path = "../shared" }
+# `default-features = false` drops the `libxdo` feature, which only exists to drive
+# X11 and would otherwise be requested on every platform.
+tray-icon = { version = "0.21", default-features = false }
+global-hotkey = "0.7"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_System_Registry",
+  "Win32_System_Threading",
+  "Win32_UI_WindowsAndMessaging",
+] }

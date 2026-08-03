@@ -624,12 +624,15 @@ Section "!${PRODUCTNAME}" SecMain
   !endif
 
   !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
-  ; The dedicated apps and the sync daemon are separate processes the stock template
-  ; knows nothing about. A daemon left running kept its exe locked and survived the
-  ; install, which is why it had to be killed by hand afterwards.
+  ; The dedicated apps, the resident and the sync daemon are separate processes the stock
+  ; template knows nothing about. A daemon left running kept its exe locked and survived the
+  ; install, which is why it had to be killed by hand afterwards. The resident is the same
+  ; problem by design: it is meant to still be running, so it is always the one holding a
+  ; lock during an update.
   !insertmacro CheckIfAppIsRunning "Workbench Tasks.exe" "Workbench Tasks"
   !insertmacro CheckIfAppIsRunning "Workbench Notes.exe" "Workbench Notes"
   !insertmacro CheckIfAppIsRunning "Workbench Artifacts.exe" "Workbench Artifacts"
+  !insertmacro CheckIfAppIsRunning "workbench-resident.exe" "Workbench"
   !insertmacro CheckIfAppIsRunning "workbench-sync-daemon.exe" "Workbench Sync Daemon"
 
   ; Copy main executable
@@ -718,6 +721,17 @@ Section "!${PRODUCTNAME}" SecMain
     Call CreateOrUpdateDesktopShortcut
   ${EndIf}
 
+  ; The resident owns the tray icon, the global shortcuts and the sync daemon, so nothing
+  ; about Workbench works in the background until it runs. Registering it here rather than
+  ; leaving it to first launch means a machine that installs and reboots comes back with
+  ; syncing already going, which is the whole point of it being resident.
+  ;
+  ; The tray has a "Start Workbench at login" toggle, so the user can undo this. Written to
+  ; the same value name the uninstaller already deletes below.
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}" '"$INSTDIR\workbench-resident.exe"'
+  ; Not ExecWait: the resident does not exit, and the installer must not wait for it.
+  Exec '"$INSTDIR\workbench-resident.exe"'
+
   !ifmacrodef NSIS_HOOK_POSTINSTALL
     !insertmacro NSIS_HOOK_POSTINSTALL
   !endif
@@ -799,6 +813,7 @@ Section Uninstall
   !insertmacro CheckIfAppIsRunning "Workbench Tasks.exe" "Workbench Tasks"
   !insertmacro CheckIfAppIsRunning "Workbench Notes.exe" "Workbench Notes"
   !insertmacro CheckIfAppIsRunning "Workbench Artifacts.exe" "Workbench Artifacts"
+  !insertmacro CheckIfAppIsRunning "workbench-resident.exe" "Workbench"
   !insertmacro CheckIfAppIsRunning "workbench-sync-daemon.exe" "Workbench Sync Daemon"
 
   ; Delete the app directory and its content from disk

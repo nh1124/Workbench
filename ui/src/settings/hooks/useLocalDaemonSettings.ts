@@ -39,7 +39,6 @@ export function useLocalDaemonSettings({
   const [localDaemonLoading, setLocalDaemonLoading] = useState(false);
   const [localDaemonResolving, setLocalDaemonResolving] = useState<Record<string, boolean>>({});
   const [localDaemonConfirmingJob, setLocalDaemonConfirmingJob] = useState<Record<string, boolean>>({});
-  const [localDaemonResidentMode, setLocalDaemonResidentMode] = useState(true);
   const [localDaemonAutoStart, setLocalDaemonAutoStart] = useState(false);
   const [localDaemonPreferences, setLocalDaemonPreferences] = useState<LocalDaemonPreferences | undefined>(undefined);
 
@@ -56,8 +55,7 @@ export function useLocalDaemonSettings({
     })()
       .then((preferences) => {
         if (!cancelled) {
-          setLocalDaemonResidentMode(preferences.residentMode ?? true);
-          setLocalDaemonAutoStart(preferences.autoStart);
+              setLocalDaemonAutoStart(preferences.autoStart);
           setLocalDaemonPreferences(preferences);
         }
       })
@@ -171,29 +169,10 @@ export function useLocalDaemonSettings({
     }
   };
 
-  const toggleNativeDaemonResidentMode = async (enabled: boolean) => {
-    setLocalDaemonMessage("");
-    try {
-      const preferences = await nativeDaemonApi.setResidentMode(enabled);
-      setLocalDaemonResidentMode(preferences.residentMode ?? true);
-      setLocalDaemonAutoStart(preferences.autoStart);
-      setLocalDaemonPreferences(preferences);
-      setLocalDaemonMessage(
-        preferences.residentMode === false
-          ? "Background resident mode disabled."
-          : "Workbench will stay available from the tray."
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to update resident mode";
-      setLocalDaemonMessage(message);
-    }
-  };
-
   const toggleNativeDaemonAutoStart = async (enabled: boolean) => {
     setLocalDaemonMessage("");
     try {
       const preferences = await nativeDaemonApi.setAutoStart(enabled);
-      setLocalDaemonResidentMode(preferences.residentMode ?? true);
       setLocalDaemonAutoStart(preferences.autoStart);
       setLocalDaemonPreferences(preferences);
       setLocalDaemonMessage(preferences.autoStart ? "Daemon auto-start enabled." : "Daemon auto-start disabled.");
@@ -209,7 +188,6 @@ export function useLocalDaemonSettings({
     }
     await syncNativeDaemonCoreUrl();
     const preferences = await nativeDaemonApi.readPreferences();
-    setLocalDaemonResidentMode(preferences.residentMode ?? true);
     setLocalDaemonAutoStart(preferences.autoStart);
     setLocalDaemonPreferences(preferences);
     return preferences;
@@ -256,7 +234,6 @@ export function useLocalDaemonSettings({
     try {
       const preferences = await nativeDaemonApi.resetSyncFolder();
       setLocalDaemonPreferences(preferences);
-      setLocalDaemonResidentMode(preferences.residentMode ?? true);
       setLocalDaemonAutoStart(preferences.autoStart);
       setLocalDaemonMessage("Sync folder reset to the per-user default. Restart the daemon if it is already running.");
     } catch (error) {
@@ -270,7 +247,6 @@ export function useLocalDaemonSettings({
     try {
       const preferences = await nativeDaemonApi.resetDownloadsFolder();
       setLocalDaemonPreferences(preferences);
-      setLocalDaemonResidentMode(preferences.residentMode ?? true);
       setLocalDaemonAutoStart(preferences.autoStart);
       setLocalDaemonMessage("Downloads folder reset to the per-user default. Restart the daemon if it is already running.");
     } catch (error) {
@@ -410,7 +386,6 @@ export function useLocalDaemonSettings({
     localDaemonUrlInput,
     setLocalDaemonUrlInput,
     localRoutingMode,
-    localDaemonResidentMode,
     localDaemonAutoStart,
     localDaemonPreferences,
     localDaemonResolving,
@@ -420,7 +395,6 @@ export function useLocalDaemonSettings({
     requestLocalDaemonRescan,
     saveLocalDaemonUrl,
     changeLocalRoutingMode,
-    toggleNativeDaemonResidentMode,
     toggleNativeDaemonAutoStart,
     refreshNativeDaemonPreferences,
     chooseNativeSyncFolder,

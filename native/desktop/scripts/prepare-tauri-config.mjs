@@ -82,11 +82,14 @@ function resolveManifestPath(manifestPath, value) {
   return path.isAbsolute(value) ? value : path.resolve(path.dirname(manifestPath), value);
 }
 
-function sidecarManifestExternalBins() {
-  const manifestPath = path.resolve(
-    desktopRoot,
-    "../sync-daemon/dist/tauri-sidecar/sidecar-manifest.json"
-  );
+/**
+ * Reads one build's manifest and returns the `externalBin` entries it declares.
+ *
+ * Two things ship beside the app now — the Node sync daemon and the Rust resident — and
+ * each writes its own manifest at build time so this file never has to know the target
+ * triple or the output layout.
+ */
+function manifestExternalBins(manifestPath, label) {
   if (!fs.existsSync(manifestPath)) {
     return [];
   }
@@ -105,21 +108,37 @@ function sidecarManifestExternalBins() {
   if (typeof manifest.artifactPath === "string" && manifest.artifactPath.trim() !== "") {
     const artifactPath = resolveManifestPath(manifestPath, manifest.artifactPath);
     if (!fs.existsSync(artifactPath)) {
-      throw new Error(`Sync daemon sidecar manifest points to a missing artifact: ${artifactPath}`);
+      throw new Error(`${label} manifest points to a missing artifact: ${artifactPath}`);
     }
   }
 
   if (externalBins.length > 0) {
-    console.log(`Using sync daemon sidecar manifest ${manifestPath}`);
+    console.log(`Using ${label} manifest ${manifestPath}`);
   }
 
   return externalBins.map((item) => item.trim());
 }
 
+function sidecarManifestExternalBins() {
+  return manifestExternalBins(
+    path.resolve(desktopRoot, "../sync-daemon/dist/tauri-sidecar/sidecar-manifest.json"),
+    "sync daemon sidecar"
+  );
+}
+
+function residentManifestExternalBins() {
+  return manifestExternalBins(
+    path.resolve(desktopRoot, "../resident/dist/resident-manifest.json"),
+    "resident"
+  );
+}
+
 const daemonExternalBins = envHas("WORKBENCH_DAEMON_EXTERNAL_BIN")
   ? optionalList("WORKBENCH_DAEMON_EXTERNAL_BIN")
   : sidecarManifestExternalBins();
-const bundleActive = optionalBoolean("NATIVE_BUNDLE_ACTIVE", daemonExternalBins.length > 0 ? true : false);
+const residentExternalBins = residentManifestExternalBins();
+const externalBins = [...daemonExternalBins, ...residentExternalBins];
+const bundleActive = optionalBoolean("NATIVE_BUNDLE_ACTIVE", externalBins.length > 0 ? true : false);
 
 const config = {
   $schema: "https://schema.tauri.app/config/2",
@@ -153,8 +172,8 @@ const config = {
   }
 };
 
-if (daemonExternalBins.length > 0) {
-  config.bundle.externalBin = daemonExternalBins;
+if (externalBins.length > 0) {
+  config.bundle.externalBin = externalBins;
 }
 
 if (appVariant === "") {

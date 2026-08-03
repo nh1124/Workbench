@@ -618,7 +618,6 @@ export function SettingsPage() {
     localDaemonUrlInput,
     setLocalDaemonUrlInput,
     localRoutingMode,
-    localDaemonResidentMode,
     localDaemonAutoStart,
     localDaemonPreferences,
     localDaemonResolving,
@@ -629,7 +628,6 @@ export function SettingsPage() {
     changeLocalRoutingMode,
     localDaemonExitWhenIdle,
     toggleNativeDaemonExitWhenIdle,
-    toggleNativeDaemonResidentMode,
     toggleNativeDaemonAutoStart,
     chooseNativeSyncFolder,
     chooseNativeDownloadsFolder,
@@ -1635,29 +1633,8 @@ export function SettingsPage() {
                 <div className="account-local-mode-control">
                   <div>
                     <div className="settings-title-with-info">
-                      <strong>Background Resident</strong>
-                      <InfoHint label="Keeps Workbench available from the tray when the last main window is closed. Desktop runtime only." />
-                    </div>
-                  </div>
-                  <label className="integration-switch">
-                    <input
-                      type="checkbox"
-                      checked={localDaemonResidentMode}
-                      disabled={!nativeRuntimeAvailable}
-                      onChange={(event) => void toggleNativeDaemonResidentMode(event.target.checked)}
-                    />
-                    <span className="integration-switch-slider" aria-hidden="true" />
-                    <span className="sr-only">
-                      {localDaemonResidentMode ? "Disable background resident mode" : "Enable background resident mode"}
-                    </span>
-                  </label>
-                </div>
-
-                <div className="account-local-mode-control">
-                  <div>
-                    <div className="settings-title-with-info">
                       <strong>Stop Daemon When Idle</strong>
-                      <InfoHint label="Stops the sync daemon once you quit Workbench entirely, including from the tray. Closing a window is not enough: an app resident in the tray is still using the daemon. Off by default, so syncing survives a full quit. Applies to the running daemon straight away. Desktop runtime only." />
+                      <InfoHint label="Stops the sync daemon once no Workbench window is open. Workbench itself stays in the tray either way. Off by default, so syncing continues while no window is open. Applies to the running daemon straight away. Desktop runtime only." />
                     </div>
                   </div>
                   <label className="integration-switch">
@@ -1678,7 +1655,7 @@ export function SettingsPage() {
                   <div>
                     <div className="settings-title-with-info">
                       <strong>Auto-start Daemon</strong>
-                      <InfoHint label="Starts the local sync daemon automatically when the desktop app launches. Desktop runtime only." />
+                      <InfoHint label="Starts the local sync daemon when a Workbench app launches. Normally unnecessary: Workbench keeps the daemon running from the tray. This is the fallback for a machine where start-at-login is off. Desktop runtime only." />
                     </div>
                   </div>
                   <label className="integration-switch">

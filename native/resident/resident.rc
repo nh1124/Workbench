@@ -1,0 +1,9 @@
+// Tray icon, embedded so the resident carries its own artwork.
+//
+// `Icon::from_path` would need a loose .ico beside the executable, and nothing installs
+// one; the installer ships executables only. Ordinal 1 is what `icon::from_resource(1, _)`
+// asks for in tray.rs.
+//
+// The path reaches into the desktop app's icon set on purpose: one icon, one place to
+// change it. A copy here would drift the first time the app's icon is updated.
+1 ICON "../desktop/src-tauri/icons/icon.ico"

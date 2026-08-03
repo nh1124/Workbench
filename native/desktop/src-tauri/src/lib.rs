@@ -1,120 +1,28 @@
 mod applog;
 mod commands;
-mod daemon_guard;
 mod daemon_lease;
-mod secure_storage;
+mod launch_intent;
 mod shortcuts;
 mod titlebar;
 mod variant;
 mod window;
 
-#[cfg(desktop)]
-const TRAY_MENU_OPEN_MAIN_ID: &str = "tray-open-main";
-#[cfg(desktop)]
-const TRAY_MENU_DAEMON_LOG_ID: &str = "tray-daemon-log";
-#[cfg(desktop)]
-const TRAY_MENU_APP_LOG_ID: &str = "tray-app-log";
-#[cfg(desktop)]
-const TRAY_MENU_QUIT_ID: &str = "tray-quit";
-
-#[cfg(desktop)]
-fn initialize_tray_icon(app: &tauri::App) -> Result<(), String> {
-  use tauri::menu::{Menu, MenuItem};
-  use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-
-  let icon = app
-    .default_window_icon()
-    .cloned()
-    .ok_or_else(|| "default window icon is not available".to_string())?;
-
-  let open_main_item = MenuItem::with_id(
-    app,
-    TRAY_MENU_OPEN_MAIN_ID,
-    "Open Workbench",
-    true,
-    None::<&str>,
-  )
-  .map_err(|error| format!("failed to create tray menu item: {error}"))?;
-  // The sync daemon runs without a console window, so its output is reachable from here.
-  let daemon_log_item = MenuItem::with_id(
-    app,
-    TRAY_MENU_DAEMON_LOG_ID,
-    "Open sync daemon log",
-    true,
-    None::<&str>,
-  )
-  .map_err(|error| format!("failed to create tray menu item: {error}"))?;
-  // The app itself has no console in a release build, so this is the only way to read it.
-  let app_log_item = MenuItem::with_id(
-    app,
-    TRAY_MENU_APP_LOG_ID,
-    "Open app log",
-    true,
-    None::<&str>,
-  )
-  .map_err(|error| format!("failed to create tray menu item: {error}"))?;
-  let quit_item = MenuItem::with_id(app, TRAY_MENU_QUIT_ID, "Quit", true, None::<&str>)
-    .map_err(|error| format!("failed to create tray menu item: {error}"))?;
-  let tray_menu = Menu::with_items(app, &[&open_main_item, &daemon_log_item, &app_log_item, &quit_item])
-    .map_err(|error| format!("failed to build tray menu: {error}"))?;
-
-  TrayIconBuilder::with_id("workbench-tray")
-    .icon(icon)
-    .tooltip("Workbench")
-    .menu(&tray_menu)
-    .show_menu_on_left_click(false)
-    .on_tray_icon_event(|tray, event| {
-      if let TrayIconEvent::Click {
-        button: MouseButton::Left,
-        button_state: MouseButtonState::Up,
-        ..
-      } = event
-      {
-        if let Err(error) = window::show_or_create_main_window(tray.app_handle()) {
-          eprintln!("[workbench-native] tray click failed to restore main window: {error}");
-        }
-      }
-    })
-    .on_menu_event(|app, event| {
-      if event.id() == TRAY_MENU_OPEN_MAIN_ID {
-        if let Err(error) = window::show_or_create_main_window(app) {
-          eprintln!("[workbench-native] tray menu failed to restore main window: {error}");
-        }
-      } else if event.id() == TRAY_MENU_DAEMON_LOG_ID {
-        if let Err(error) = commands::open_daemon_log(app.clone()) {
-          eprintln!("[workbench-native] tray menu failed to open the daemon log: {error}");
-        }
-      } else if event.id() == TRAY_MENU_APP_LOG_ID {
-        if let Err(error) = applog::open_app_log(app.clone()) {
-          eprintln!("[workbench-native] tray menu failed to open the app log: {error}");
-        }
-      } else if event.id() == TRAY_MENU_QUIT_ID {
-        app.exit(0);
-      }
-    })
-    .build(app)
-    .map(|_| ())
-    .map_err(|error| format!("failed to initialize tray icon: {error}"))
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-      // Called when a second process is launched (e.g. taskbar shift+click).
-      // Open a new main window unless the second instance is for a quick-note window.
+      // A second launch of this executable lands here instead of starting a process. That
+      // is how the resident asks an already-running app for a window: it spawns the exe
+      // with the same flags either way, and Windows routes it to whichever case applies.
       #[cfg(desktop)]
       {
-        if window::should_open_new_main_window(&argv) {
-          if let Err(error) = window::open_new_main_window(app) {
-            eprintln!("[workbench-native] failed to open window for second instance: {error}");
-          }
-        }
+        launch_intent::open_for(app, launch_intent::from_args(&argv));
       }
     }))
     .setup(|app| {
       #[cfg(desktop)]
       {
+        applog::name_this_process(app.handle());
         // tauri.conf.json declares no windows: every window is built here so it gets the
         // shared WebView2 data directory and `disable_drag_drop_handler`. This sweep is a
         // safety net — a config-declared window would already hold the process to the
@@ -125,17 +33,13 @@ pub fn run() {
         }
         // The snap-layout subclass callback cannot capture state, so hand it the handle.
         titlebar::remember_app_handle(app.handle());
-        window::open_new_main_window(app.handle())
+
+        let args: Vec<String> = std::env::args().collect();
+        let intent = launch_intent::from_args(&args);
+        launch_intent::open_at_startup(app.handle(), intent)
           .map_err(|e| Box::<dyn std::error::Error>::from(e))?;
 
-        if variant::current(app.handle()).is_main() {
-          if let Err(error) = initialize_tray_icon(app) {
-            eprintln!("[workbench-native] tray icon setup failed: {error}");
-          }
-        }
-
-        commands::start_daemon_if_auto_start_enabled(app.handle());
-        shortcuts::register(app);
+        commands::ensure_daemon_for_app(app.handle());
       }
       Ok(())
     })
@@ -173,7 +77,6 @@ pub fn run() {
       titlebar::set_maximize_button_rect,
       commands::read_daemon_preferences,
       commands::set_daemon_auto_start,
-      commands::set_daemon_resident_mode,
       commands::set_daemon_exit_when_idle,
       commands::set_daemon_core_url,
       commands::start_daemon,
@@ -186,9 +89,11 @@ pub fn run() {
     .run(|app_handle, event| {
       // Quitting drops this app's claim on the daemon; it does not stop it. Killing here
       // took the daemon away from every other app that was still open, and the daemon is
-      // shared infrastructure — it decides for itself once nobody holds a lease.
+      // shared infrastructure — the resident keeps it, and it decides for itself once
+      // nobody holds a lease.
       //
-      // Stopping it outright is a deliberate act: the Settings button, or the installer.
+      // Stopping it outright is a deliberate act: the Settings button, the resident's tray,
+      // or the installer.
       if matches!(event, tauri::RunEvent::Exit) {
         daemon_lease::release(app_handle);
       }

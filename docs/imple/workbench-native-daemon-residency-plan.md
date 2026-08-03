@@ -159,14 +159,79 @@ NSIS テンプレートには**アンインストール時に Run キーを消�
   **パスではなくパッケージ名**で指しているため、glob が拾えばそのまま通る
 - NSIS の `CheckIfAppIsRunning "workbench-sync-daemon.exe"` — 成果物名でありソース位置と無関係
 
+## 実装の構成（R1〜R4 完了時点）
+
+```
+native/
+  shared/     workbench-shared … 両者が一致していなければならないもの（Tauri 非依存）
+  resident/   workbench-resident … トレイ・ショートカット・daemon の寿命
+  desktop/    Tauri アプリ … ウィンドウを持つクライアント
+  sync-daemon/ Node 同期エンジン … resident の子プロセス
+```
+
+### `native/shared` を切った理由
+
+R0 の想定では resident が daemon を spawn するだけのつもりだったが、実装に入って
+**daemon 起動の env 構成が account 認証情報に深く結びついている**ことが分かった。
+`WORKBENCH_ACCESS_TOKEN` / `WORKBENCH_SYNC_ROOT` / `WORKBENCH_SYNC_ROOT_ID` は
+Credential Manager のセッションとアカウント別フォルダ規則から導出され、
+sidecar 解決・二重起動防止・readiness 待ちもそこに連なる。
+
+これを resident 側に複製すると「**どの sync root か**」の実装が 2 つできる。食い違ったときの
+症状は「daemon が間違ったフォルダを静かに同期する」で、バグらしく見えない。
+そこで **Tauri 非依存の共有クレートに 1 つだけ置き**、アプリ側はそれを `#[tauri::command]` で
+包むだけにした。`commands.rs` は 2142 行 → 約 600 行。
+
+含めたもの: `secure_storage` / `account` / `paths` / `preferences` / `loopback` /
+`launch_guard` / `daemon` / `shortcuts` / `log`。
+
+### プロセス間の取り決め（ファイル 3 つ）
+
+すべて `%APPDATA%\com.workbench.desktop\` に置く。IPC を作らなかったのは、
+resident は**アプリが 1 つも起動していない状態でも最後の設定で動けなければならない**ため。
+
+| ファイル | 書き手 | 読み手 |
+|---|---|---|
+| `daemon-preferences.json` | アプリ（設定画面） | 両方 |
+| `global-shortcuts.json` | アプリ（`set_global_shortcuts`） | resident（2 秒ポーリング） |
+| `workbench-native.log` | 両方（`[resident]` / `[main]` などのタグ付き） | 人間 |
+
+ショートカット設定の UI は**一切変えていない**。アプリの `set_global_shortcuts` が
+「登録する」から「書き出す」に変わっただけ。
+
+### アプリの起動経路
+
+resident はアプリのプロセス内にウィンドウを作れないので、**exe を引数付きで起動する**。
+既にアプリが起動していれば `tauri-plugin-single-instance` が引数を既存プロセスへ転送するため、
+**1 つのコマンドで「開く」と「もう 1 枚出す」の両方が成立する**。
+
+| 要求 | コマンド |
+|---|---|
+| メインウィンドウ | `workbench-native.exe` |
+| Quick Note | `workbench-native.exe --quick-note-window=1` |
+| カレンダー | `workbench-native.exe --calendar-window=1` |
+
+改修前は single-instance ハンドラが**メインウィンドウしか開かず**、`quick-note-window=1` を
+持った 2 回目の起動は届いた上で何もしていなかった（[launch_intent.rs](../../native/desktop/src-tauri/src/launch_intent.rs)）。
+
+### R4 が追加実装なしで成立した理由
+
+`residentMode`（close→hide）を撤去した結果、**アプリは最後のウィンドウと一緒に終了する**。
+リースはアプリのプロセスが握るので、「プロセスが生きている」＝「ウィンドウがある」になり、
+**(b) だった実装がそのまま (a) の意味になった**。resident はリースを取らない（利用者ではないため）。
+
+`exitWhenIdle` = on のとき: 最後のウィンドウが閉じる → 猶予 60 秒 → daemon 終了。
+トレイは残る。次にアプリを起動するとき resident が daemon を起こし直す
+（`Resident::launch` が先に `ensure_daemon` を呼ぶ）。
+
 ## 進捗ボード
 
 | Wave | 内容 | 状態 |
 |---|---|---|
 | R0 | 実装言語・構成の決定 | [done] 二層構成（新規 Rust クレート）。2026-08-03 合意 |
 | R0.5 | `services/sync-daemon` → `native/sync-daemon` 移設（単独 commit） | [done] 2026-08-03 |
-| R1 | 常駐部の受け皿を作る（トレイ・ショートカット・ログイン起動） | [pending] |
-| R2 | main の起動経路を daemon 側に作る | [pending] |
-| R3 | main から常駐責務を外す（`residentMode` 撤去） | [pending] |
-| R4 | `exitWhenIdle` の「使用中」を (a) へ戻す | [pending] |
-| R5 | 実機確認 | [pending] |
+| R1 | 常駐部の受け皿（トレイ・ショートカット・ログイン起動・ビルド経路） | [done] 2026-08-04 |
+| R2 | main の起動経路を resident 側に作る | [done] 2026-08-04 |
+| R3 | main から常駐責務を外す（`residentMode` 撤去） | [done] 2026-08-04 |
+| R4 | `exitWhenIdle` の「使用中」を (a) へ戻す | [done] 2026-08-04（R3 の帰結。上記参照） |
+| R5 | 実機確認 | [pending] **未実施。ビルドとテストのみ** |
