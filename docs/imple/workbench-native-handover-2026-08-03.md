@@ -1,14 +1,28 @@
 # 引き継ぎ: Workbench Native（更新 2026-08-04）
 
-**次にやるのは R5（実機確認）。実装は R0〜R4 まで完了し、ビルドとテストは全緑だが、
-インストールして動かす確認はしていない。**
+**R0〜R4 実装済み。R5（実機確認）を実施中で、8 項目中 6 項目が確認済み。
+残り 2 項目（下記）と、修正した 2 件の再確認が要る。**
 
 ## 次セッション開始プロンプト
 
 ```
 docs/imple/workbench-native-handover-2026-08-03.md を読んで作業を引き継いでください。
-次の作業は docs/imple/workbench-native-daemon-residency-plan.md の R5（実機確認）です。
+次の作業は docs/imple/workbench-native-daemon-residency-plan.md の R5（実機確認）の残りです。
 ```
+
+## R5 の残り
+
+**再インストールしてから確認すること。**
+
+| # | 内容 | 状態 |
+|---|---|---|
+| 4 | アプリ起動中に同じショートカット → 既存プロセスにウィンドウが増えるか | 未確認 |
+| 8 | `exitWhenIdle` on で全ウィンドウを閉じ、60 秒後に daemon 終了 → 次の起動で復帰 | 未確認。UI のラベルは **「Stop Daemon When Idle」** |
+| 再 | `Ctrl+Alt+C` を**何も起動していない状態**から押してカレンダーが出るか | 修正済み・要再確認 |
+| 再 | トレイの Quit でアプリのウィンドウも閉じるか | 実装追加・要確認 |
+
+確認済み: 1（インストール直後の起動）/ 2（再ログイン復帰）/ 3（`Ctrl+Alt+C` 以外のショートカット）
+/ 5（トレイ各項目・daemon 停止）/ 6（ショートカット変更の 2 秒反映）/ 7（最後のウィンドウで終了）
 
 ## いま何が終わっているか
 
@@ -30,7 +44,7 @@ native/
 構成の詳細と、なぜ `native/shared` を切ったかは
 [residency 計画書](workbench-native-daemon-residency-plan.md)の「実装の構成」節にある。
 
-## R5 で確認すべきこと
+## R5 の確認項目（全 8 件、元リスト）
 
 インストーラ: `native/desktop/src-tauri/target/release/bundle/nsis/Workbench Native_0.1.0_x64-setup.exe`
 
@@ -53,6 +67,9 @@ native/
    次にアプリを起動すると**起き直る**か。
 
 **不具合を 2 回推測して直らなければ、まずアプリログを見ること**（下記）。
+R5 で出た `Ctrl+Alt+C` の不具合は、**ログの 1 行で原因が確定した**（`invalid app window URL:
+relative URL with a cannot-be-a-base base`）。症状からの推測では「Tasks を開いている時だけ動く」に
+見えていて、実際は「何かウィンドウが開いている時だけ動く」だった。
 
 ## 作業を始める前に知っておくべきこと
 
@@ -104,8 +121,8 @@ npm run build:native:all
 
 ```
 cd native/shared   && CARGO_TARGET_DIR=<隔離パス> cargo test   # 35 件
-cd native/resident && CARGO_TARGET_DIR=<隔離パス> cargo test   # 15 件
-cd native/desktop/src-tauri && CARGO_TARGET_DIR=<隔離パス> cargo test   # 19 件
+cd native/resident && CARGO_TARGET_DIR=<隔離パス> cargo test   # 19 件
+cd native/desktop/src-tauri && CARGO_TARGET_DIR=<隔離パス> cargo test   # 23 件
 cd native/desktop/ui && npx tsc --noEmit && node ../../../node_modules/vitest/vitest.mjs run   # 493 件
 cd native/sync-daemon && npm test   # 160 件
 cd ui && npx tsc --noEmit && node ../node_modules/vitest/vitest.mjs run   # 452 件（web）
@@ -122,6 +139,7 @@ resident は**常駐が仕事なので必ず動いている**。`resident:build`
 |---|---|
 | `daemon-preferences.json` の lost update（複数プロセスの read-modify-write） | 構造問題。resident は読むだけなので窓は狭まったが閉じてはいない |
 | loopback probe に全体締切が無い | 実害限定的 |
+| 設定画面の `(local GET /status): Connection failed: Failed to fetch` | `exitWhenIdle` on だとアプリ起動が daemon 起動と競走する。状態を一度しか読まないため出る。リロードで直る |
 | `File item not found` / Sync issue | サーバ側 Artifacts の 404。variant 作業以前から存在。別件 |
 | Panels の右クリックからの「新規ウィンドウ」 | list のみ実装。Panels はクリックで list へ渡す設計 |
 | resident は Windows 前提 | トレイ・Run キー・メッセージループが `#[cfg(windows)]`。他 OS では起動しても何もしない |

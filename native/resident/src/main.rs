@@ -17,6 +17,7 @@ mod apps;
 mod autostart;
 mod hotkeys;
 mod msgloop;
+mod shutdown;
 mod single_instance;
 mod tray;
 
@@ -113,15 +114,17 @@ impl Resident {
 
   /// Ends everything Workbench owns on this machine.
   ///
-  /// The daemon goes too. This is the tray's "Quit", the one place a user says they are done
-  /// rather than just closing a window, and leaving a sync process behind after it would be
-  /// indistinguishable from the quit not having worked.
+  /// The apps go first, then the daemon. Stopping the daemon and leaving windows open put
+  /// the apps in the one state they cannot work in — a dead local API, errors on screen, and
+  /// nothing left in the tray to bring the daemon back. An app running means the daemon is
+  /// running, so quitting has to end both.
   ///
   /// Deliberately synchronous, unlike the other daemon calls: the process must not exit
   /// before the daemon has actually gone, or "Quit" leaves the thing it was meant to stop
   /// still running with nothing left to stop it.
   fn quit(&self) -> bool {
-    workbench_shared::log::write("tray", "quitting; stopping the sync daemon");
+    workbench_shared::log::write("tray", "quitting");
+    shutdown::close_apps();
     if let Err(error) = workbench_shared::daemon::stop() {
       workbench_shared::log::write("daemon", &format!("could not stop on quit: {error}"));
     }

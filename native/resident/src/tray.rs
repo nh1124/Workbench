@@ -78,7 +78,12 @@ impl Tray {
       crate::autostart::is_enabled(),
       None,
     );
-    let quit = MenuItem::with_id(MENU_QUIT, "Quit Workbench (stops syncing)", true, None);
+    let quit = MenuItem::with_id(
+      MENU_QUIT,
+      "Quit Workbench (closes apps, stops syncing)",
+      true,
+      None,
+    );
 
     let menu = Menu::new();
     menu

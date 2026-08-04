@@ -59,21 +59,19 @@ pub fn open_for(app: &tauri::AppHandle, intent: LaunchIntent) {
 
 /// Opens what a launch asked for, during this process's own startup.
 ///
-/// The calendar window navigates relative to an existing window's URL, so it cannot be the
-/// first thing built. A main window is opened first and the calendar joins it — which also
-/// leaves something on screen if the calendar route itself fails.
+/// The calendar used to get a main window opened alongside it, because it resolved its route
+/// against an existing window. It no longer needs one, and it should not have one: someone
+/// pressing the calendar shortcut with nothing open asked for a calendar, not for a calendar
+/// and a main window they then have to close.
 pub fn open_at_startup(app: &tauri::AppHandle, intent: LaunchIntent) -> Result<(), String> {
   match intent {
     LaunchIntent::MainWindow => window::open_new_main_window(app),
     LaunchIntent::QuickNote => window::build_logged(app, "quick note window (startup)", |app| {
       window::open_new_quick_note_window(app)
     }),
-    LaunchIntent::Calendar => {
-      window::open_new_main_window(app)?;
-      window::build_logged(app, "calendar window (startup)", |app| {
-        window::open_calendar_window(app, CALENDAR_URL)
-      })
-    }
+    LaunchIntent::Calendar => window::build_logged(app, "calendar window (startup)", |app| {
+      window::open_calendar_window(app, CALENDAR_URL)
+    }),
   }
 }
 

@@ -261,35 +261,73 @@ pub fn open_new_quick_note_window(app: &tauri::AppHandle) -> Result<(), String> 
   Err("quick note window is not supported on this platform".to_string())
 }
 
-/// Opens or focuses the dedicated calendar window at a Workbench-local URL.
+/// Checks that a route stays inside the app, and returns it ready to hand to Tauri.
+///
+/// Only root-relative paths are accepted, which is all the UI ever sends. Tauri resolves
+/// them against the app's own URL, so a route cannot reach another origin — as long as it
+/// cannot start a new authority. `//evil.example` and `/\evil.example` both can: joined onto
+/// `http://tauri.localhost/` they become `http://evil.example/`, because a URL parser reads
+/// a leading double separator as protocol-relative and treats `\` as `/` for http.
+#[cfg(desktop)]
+fn validate_app_route(route: &str) -> Result<String, String> {
+  let trimmed = route.trim();
+  if trimmed.is_empty() {
+    return Err("app route is required".to_string());
+  }
+  if !trimmed.starts_with('/') {
+    return Err(format!("app route must start with /: {trimmed}"));
+  }
+  if trimmed[1..].starts_with('/') || trimmed[1..].starts_with('\\') {
+    return Err(format!("app route must not name another host: {trimmed}"));
+  }
+  if trimmed.contains("://") {
+    return Err(format!("app route must not be absolute: {trimmed}"));
+  }
+  Ok(trimmed.to_string())
+}
+
+/// Opens or focuses the dedicated calendar window at a Workbench-local route.
+///
+/// The route is handed to `WebviewUrl::App`, which Tauri joins onto the app's own URL. It
+/// used to be resolved against whatever window happened to exist, and that failed for the
+/// one case that matters most — a shortcut pressed with nothing open. The main window built
+/// a moment earlier is still on `about:blank`, which cannot be a base, so the join returned
+/// "relative URL with a cannot-be-a-base base" and the calendar never appeared unless
+/// another window was already loaded.
 pub fn open_calendar_window(app: &tauri::AppHandle, url: &str) -> Result<(), String> {
   #[cfg(desktop)]
   {
-    let current_url = app
-      .webview_windows()
-      .values()
-      .next()
-      .ok_or_else(|| "no Workbench window is available".to_string())?
-      .url()
-      .map_err(|error| format!("failed to read current app window URL: {error}"))?;
-    let target_url = validate_app_window_url(&current_url, url)?;
+    let route = validate_app_route(url)?;
 
     if let Some(calendar_window) = app.get_webview_window("calendar") {
-      calendar_window
-        .navigate(target_url)
-        .map_err(|error| format!("failed to navigate calendar window: {error}"))?;
+      // Navigating needs an absolute URL. The calendar window has already loaded something,
+      // so its own URL is a base that is known to be resolved.
+      match calendar_window
+        .url()
+        .ok()
+        .and_then(|base| base.join(&route).ok())
+      {
+        Some(target) => {
+          calendar_window
+            .navigate(target)
+            .map_err(|error| format!("failed to navigate calendar window: {error}"))?;
+        }
+        None => {
+          crate::applog::write(
+            app,
+            "window",
+            "calendar window could not be navigated; showing it where it is",
+          );
+        }
+      }
       let _ = calendar_window.unminimize();
       let _ = calendar_window.show();
       let _ = calendar_window.set_focus();
       return Ok(());
     }
 
-    let webview_url = match target_url.scheme() {
-      "http" | "https" => WebviewUrl::External(target_url),
-      _ => WebviewUrl::CustomProtocol(target_url),
-    };
     with_window_defaults(
-      WebviewWindowBuilder::new(app, "calendar", webview_url),
+      WebviewWindowBuilder::new(app, "calendar", WebviewUrl::App(route.into())),
       crate::variant::current(app),
     )
       .title("Workbench Calendar")
@@ -350,5 +388,45 @@ pub fn open_new_app_window(
   }
   #[cfg(not(desktop))]
   Err("app window opening is not supported on this platform".to_string())
+}
+
+#[cfg(all(test, desktop))]
+mod tests {
+  use super::validate_app_route;
+
+  #[test]
+  fn accepts_the_routes_the_ui_sends() {
+    assert_eq!(
+      validate_app_route("/tasks/calendar").as_deref(),
+      Ok("/tasks/calendar")
+    );
+    assert_eq!(
+      validate_app_route("  /tasks/calendar?calendar=day&date=2026-08-04  ").as_deref(),
+      Ok("/tasks/calendar?calendar=day&date=2026-08-04")
+    );
+  }
+
+  #[test]
+  fn rejects_anything_that_could_name_another_host() {
+    // Joined onto the app URL these become http://evil.example/ — the first because a
+    // leading `//` is protocol-relative, the second because http treats `\` as `/`.
+    assert!(validate_app_route("//evil.example/x").is_err());
+    assert!(validate_app_route("/\\evil.example/x").is_err());
+    assert!(validate_app_route("https://evil.example/x").is_err());
+  }
+
+  #[test]
+  fn rejects_routes_that_are_not_root_relative() {
+    // A bare path would resolve against whatever the current directory of the URL is, which
+    // is not something the caller can reason about.
+    assert!(validate_app_route("tasks/calendar").is_err());
+    assert!(validate_app_route("").is_err());
+    assert!(validate_app_route("   ").is_err());
+  }
+
+  #[test]
+  fn a_lone_slash_is_the_app_root() {
+    assert_eq!(validate_app_route("/").as_deref(), Ok("/"));
+  }
 }
 
