@@ -43,24 +43,41 @@ pub fn acquire(app: &AppHandle) -> Result<(), String> {
   Ok(())
 }
 
-/// Gives up this app's lease.
+/// Drops this app's lease, without touching the heartbeat.
 ///
-/// Best effort by design: this runs while the app is exiting, and a daemon that has already
-/// gone away, or one that expired the lease first, must not hold up the shutdown. The TTL
-/// covers whatever this misses.
-pub fn release(app: &AppHandle) {
-  stop_heartbeat();
+/// Best effort by design: a daemon that has already gone away, or one that expired the lease
+/// first, must not hold anything up. The TTL covers whatever this misses.
+fn release_request(app: &AppHandle) {
   let path = format!("/leases/{}", urlencode(&client_id(app)));
   if let Err(error) = crate::commands::daemon_lease_request(app, "DELETE", &path, None) {
-    eprintln!("[workbench-native] could not release the sync daemon lease: {error}");
+    crate::applog::write(app, "daemon", &format!("could not release the lease: {error}"));
   }
 }
 
-/// Starts refreshing the lease in the background.
+/// Gives up this app's lease for good. Called while the app is exiting.
+pub fn release(app: &AppHandle) {
+  stop_heartbeat();
+  release_request(app);
+}
+
+/// Whether this app still has a window open.
 ///
-/// The refresh has to keep running for as long as the app does, and it cannot block the main
-/// thread, so it lives on its own thread with a channel for the stop signal — `recv_timeout`
-/// both paces the loop and wakes immediately when the app is on its way out.
+/// This is what "using the daemon" means. It used to be taken for granted that a live
+/// process had a window — closing the last one exits the app — and that is how it behaves
+/// nearly always. Nearly is not enough: Tauri only decides to exit when a window's
+/// `Destroyed` event finds the registry empty (`tauri-runtime-wry`), and a process that
+/// loses its windows any other way stays alive. One was found doing exactly that, still
+/// beating a lease, which with `exitWhenIdle` on means the daemon can never go idle.
+fn has_windows(app: &AppHandle) -> bool {
+  use tauri::Manager;
+  !app.webview_windows().is_empty()
+}
+
+/// Keeps the lease in step with whether this app has any windows.
+///
+/// Both directions matter. A windowless app must let go, and one that opens a window again
+/// must take the lease back — which is why this keeps beating either way rather than
+/// stopping the first time it finds nothing open.
 pub fn start_heartbeat(app: AppHandle) {
   let (sender, receiver) = mpsc::channel::<()>();
   {
@@ -74,14 +91,31 @@ pub fn start_heartbeat(app: AppHandle) {
     *stopper = Some(sender);
   }
 
-  std::thread::spawn(move || loop {
-    match receiver.recv_timeout(HEARTBEAT_INTERVAL) {
-      Ok(()) | Err(RecvTimeoutError::Disconnected) => return,
-      Err(RecvTimeoutError::Timeout) => {
-        if let Err(error) = acquire(&app) {
-          // Losing a beat is not fatal: the next one re-registers, and the daemon only drops
-          // the lease after the TTL.
-          eprintln!("[workbench-native] sync daemon heartbeat failed: {error}");
+  std::thread::spawn(move || {
+    let mut holding = true;
+    loop {
+      match receiver.recv_timeout(HEARTBEAT_INTERVAL) {
+        Ok(()) | Err(RecvTimeoutError::Disconnected) => return,
+        Err(RecvTimeoutError::Timeout) => {
+          if has_windows(&app) {
+            if let Err(error) = acquire(&app) {
+              // Losing a beat is not fatal: the next one re-registers, and the daemon only
+              // drops the lease after the TTL.
+              crate::applog::write(&app, "daemon", &format!("heartbeat failed: {error}"));
+            }
+            holding = true;
+          } else if holding {
+            // Worth saying out loud: a process with no windows that is still running is not
+            // a state this app is supposed to reach, and the next time it happens this line
+            // is what says so.
+            crate::applog::write(
+              &app,
+              "daemon",
+              "no windows are open; releasing the lease and staying quiet",
+            );
+            release_request(&app);
+            holding = false;
+          }
         }
       }
     }

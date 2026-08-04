@@ -3,6 +3,7 @@ import {
   type IncomingMessage
 } from "node:http";
 import {
+  LEASE_IDLE_GRACE_MS,
   LEASE_SWEEP_INTERVAL_MS,
   LeaseValidationError,
   normalizeClientId
@@ -221,6 +222,11 @@ function daemonStatusPayload(state: DaemonState): Record<string, unknown> {
     tickQueued: state.tickQueued,
     localJobConfirmationPolicy: state.config.localJobConfirmationPolicy ?? "off",
     localJobConfirmationsPending: pendingJobConfirmations(state).size,
+    // The idle policy and who is holding the daemon open. Neither was reported anywhere,
+    // and without them "the daemon did not stop when idle" is indistinguishable from "the
+    // setting never reached it" — which cost a long diagnosis for exactly that reason.
+    exitWhenIdle: state.config.exitWhenIdle ?? false,
+    leaseCount: state.leases.count,
     capture: state.capture?.status() ?? {
       enabled: false,
       collectorAlive: false,
@@ -420,6 +426,7 @@ export function startStatusServer(state: DaemonState): void {
         return;
       }
       state.config.exitWhenIdle = body.exitWhenIdle;
+      console.log(`[sync-daemon] idle shutdown ${state.config.exitWhenIdle ? "enabled" : "disabled"}`);
       writeJson(res, { exitWhenIdle: state.config.exitWhenIdle });
       return;
     }
@@ -1533,6 +1540,12 @@ export function startStatusServer(state: DaemonState): void {
   statusServer = server;
   server.listen(state.config.httpPort, "127.0.0.1", () => {
     console.log(`[sync-daemon] status listening on http://127.0.0.1:${state.config.httpPort}/status`);
+    // Said at startup because it is the one setting whose effect is invisible until much
+    // later: "the daemon never stopped when idle" is usually this being off.
+    console.log(
+      `[sync-daemon] idle shutdown ${state.config.exitWhenIdle ? "enabled" : "disabled"}` +
+        ` (grace ${LEASE_IDLE_GRACE_MS / 1000}s after the last app lets go)`
+    );
   });
 
   leaseSweepTimer = setInterval(() => {
