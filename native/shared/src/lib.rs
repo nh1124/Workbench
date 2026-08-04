@@ -16,5 +16,6 @@ pub mod log;
 pub mod loopback;
 pub mod paths;
 pub mod preferences;
+pub mod resident;
 pub mod secure_storage;
 pub mod shortcuts;

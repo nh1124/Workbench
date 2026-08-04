@@ -1,7 +1,7 @@
 # 引き継ぎ: Workbench Native（更新 2026-08-04）
 
-**R0〜R4 実装済み。R5（実機確認）を実施中で、8 項目中 6 項目が確認済み。
-残り 2 項目（下記）と、修正した 2 件の再確認が要る。**
+**R0〜R4 実装済み。R5（実機確認）は 8 項目中 7 項目が確認済み。
+残るのは項目 8 と、そこから出た修正 1 件の確認だけ。**
 
 ## 次セッション開始プロンプト
 
@@ -16,13 +16,12 @@ docs/imple/workbench-native-handover-2026-08-03.md を読んで作業を引き�
 
 | # | 内容 | 状態 |
 |---|---|---|
-| 4 | アプリ起動中に同じショートカット → 既存プロセスにウィンドウが増えるか | 未確認 |
+| 再 | **Quit の後にアプリを起動 → トレイに resident が戻るか** | 実装追加・要確認 |
 | 8 | `exitWhenIdle` on で全ウィンドウを閉じ、60 秒後に daemon 終了 → 次の起動で復帰 | 未確認。UI のラベルは **「Stop Daemon When Idle」** |
-| 再 | `Ctrl+Alt+C` を**何も起動していない状態**から押してカレンダーが出るか | 修正済み・要再確認 |
-| 再 | トレイの Quit でアプリのウィンドウも閉じるか | 実装追加・要確認 |
 
-確認済み: 1（インストール直後の起動）/ 2（再ログイン復帰）/ 3（`Ctrl+Alt+C` 以外のショートカット）
-/ 5（トレイ各項目・daemon 停止）/ 6（ショートカット変更の 2 秒反映）/ 7（最後のウィンドウで終了）
+確認済み: 1（インストール直後の起動）/ 2（再ログイン復帰）/ 3（ショートカット全 4 つ、
+`Ctrl+Alt+C` の修正含む）/ 4（既存プロセスにウィンドウが増える）/ 5（トレイ各項目・
+Quit でアプリも daemon も停止）/ 6（ショートカット変更の 2 秒反映）/ 7（最後のウィンドウで終了）
 
 ## いま何が終わっているか
 
@@ -103,6 +102,16 @@ Tauri の同期コマンドはメインスレッドで走る。ウィンドウ�
 `node -e` でのファイル一括編集が「成功」と出力しながら**何も書いていない**事例が 3 回あった。
 今回のセッションでは Python も使えなかった。CSS / TSX / Rust の編集は Edit ツールで行うこと。
 
+### resident が「居るか」は名前付き mutex で判定する
+
+`workbench_shared::resident::is_running()` は、resident の単一インスタンス用 mutex
+（`Local\workbench-resident-instance`）が開けるかで判定する。プロセス名の列挙より確実で、
+**resident 自身が二重起動を拒むのと同一の錠前**なので、両者の判断が食い違いようがない。
+アプリ側はこれを見て、居なければ resident を起こす。
+
+テストを書くときの注意: 開発機ではたいてい本物の resident がトレイに居る。「錠前が空いている」
+前提のテストは実機で落ちるので、居る場合の分岐も書くこと。
+
 ### 実装体制
 
 計画書は「Codex worker delegation」と書いてあるが、**2026-08 時点で Codex は 30 分タイムアウトで
@@ -120,8 +129,8 @@ npm run build:native:all
 検証コマンド（2026-08-04 時点の件数）:
 
 ```
-cd native/shared   && CARGO_TARGET_DIR=<隔離パス> cargo test   # 35 件
-cd native/resident && CARGO_TARGET_DIR=<隔離パス> cargo test   # 19 件
+cd native/shared   && CARGO_TARGET_DIR=<隔離パス> cargo test   # 39 件
+cd native/resident && CARGO_TARGET_DIR=<隔離パス> cargo test   # 18 件
 cd native/desktop/src-tauri && CARGO_TARGET_DIR=<隔離パス> cargo test   # 23 件
 cd native/desktop/ui && npx tsc --noEmit && node ../../../node_modules/vitest/vitest.mjs run   # 493 件
 cd native/sync-daemon && npm test   # 160 件

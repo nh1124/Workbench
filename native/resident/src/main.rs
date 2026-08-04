@@ -18,7 +18,6 @@ mod autostart;
 mod hotkeys;
 mod msgloop;
 mod shutdown;
-mod single_instance;
 mod tray;
 
 use std::time::{Duration, SystemTime};
@@ -211,7 +210,9 @@ fn shortcuts_modified_at() -> Option<SystemTime> {
 fn main() {
   workbench_shared::log::set_process_tag("resident");
 
-  let Some(_instance) = single_instance::acquire() else {
+  // The lock lives in the shared crate because the apps check it too: they start a resident
+  // when none is running, and both sides have to mean the same lock by that.
+  let Some(_instance) = workbench_shared::resident::acquire_instance_lock() else {
     workbench_shared::log::write("startup", "another resident is already running; exiting");
     return;
   };

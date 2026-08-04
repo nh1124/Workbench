@@ -157,6 +157,23 @@ pub fn start_daemon_and_lease(app: &tauri::AppHandle) -> Result<bool, String> {
   Ok(started)
 }
 
+/// Makes sure Workbench has a tray icon, starting the resident if it does not.
+///
+/// Quitting from the tray stops the resident, and opening an app afterwards used to leave
+/// the machine with no tray icon, no global shortcuts and nothing keeping the daemon alive
+/// until the next sign-in. Opening an app means the user is using Workbench again, so the
+/// resident comes back with it.
+///
+/// Failing to find it is logged, not raised: the app itself works without a resident, and a
+/// dialog about a missing background process on every launch would be worse than the gap.
+fn ensure_resident_for_app(app: &tauri::AppHandle) {
+  match workbench_shared::resident::ensure_running(&sidecar_search_roots(app)) {
+    Ok(true) => crate::applog::write(app, "resident", "started the resident"),
+    Ok(false) => {}
+    Err(error) => crate::applog::write(app, "resident", &format!("could not start: {error}")),
+  }
+}
+
 /// Takes a lease on the daemon, starting it first if that is this app's job.
 ///
 /// **The lease is the part that always has to happen.** `exitWhenIdle` means "stop once no
@@ -170,6 +187,10 @@ pub fn start_daemon_and_lease(app: &tauri::AppHandle) -> Result<bool, String> {
 pub fn ensure_daemon_for_app(app: &tauri::AppHandle) {
   let app = app.clone();
   let _ = std::thread::spawn(move || {
+    // First, because the resident starts the daemon itself. When it does, the work below
+    // finds one already running and only has to take a lease on it.
+    ensure_resident_for_app(&app);
+
     let should_start = match preferences::read_from_disk() {
       Ok(preferences) => preferences::auto_start(&preferences),
       Err(error) => {
