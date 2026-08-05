@@ -187,8 +187,8 @@ export function useLocalDaemonSettings({
       setLocalDaemonPreferences(preferences);
       setLocalDaemonMessage(
         preferences.exitWhenIdle
-          ? "The daemon will stop when Workbench is quit entirely, including from the tray."
-          : "The daemon will keep running after Workbench is quit."
+          ? "Workbench will shut down about a minute after the last window closes. Global shortcuts stop working until you open it again."
+          : "Workbench will keep syncing in the tray after the last window closes."
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to update idle shutdown";

@@ -21,6 +21,12 @@ pub enum Action {
   RestartDaemon,
   ToggleAutostart,
   Quit,
+  /// Leave because nothing is using Workbench and the user asked for that.
+  ///
+  /// Separate from [`Action::Quit`] so the log says which one happened. They also do
+  /// different work: quitting has apps to close and a daemon to stop, and this only ever
+  /// runs once both are already gone.
+  IdleExit,
 }
 
 fn queue() -> &'static Mutex<VecDeque<Action>> {

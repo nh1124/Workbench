@@ -32,6 +32,12 @@ use msgloop::LoopHandler;
 /// Save in a settings page. Two seconds is imperceptible there and free the rest of the time.
 const SHORTCUT_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
+/// How often the resident checks whether anything still needs it.
+///
+/// Slower than the shortcut poll: this one probes a socket, and the thing it is waiting for
+/// takes a minute to happen anyway.
+const IDLE_POLL_INTERVAL: Duration = Duration::from_secs(10);
+
 struct Resident {
   tray: tray::Tray,
   /// `None` when the hotkey manager could not be created. The tray is still worth running
@@ -51,6 +57,13 @@ impl Resident {
       Action::RestartDaemon => self.restart_daemon(),
       Action::ToggleAutostart => self.toggle_autostart(),
       Action::Quit => return self.quit(),
+      Action::IdleExit => {
+        workbench_shared::log::write(
+          "shutdown",
+          "nothing is using Workbench and idle shutdown is on; leaving the tray",
+        );
+        return false;
+      }
     }
     true
   }
@@ -185,6 +198,55 @@ fn ensure_daemon_off_thread() {
   std::thread::spawn(ensure_daemon);
 }
 
+/// Leaves the tray once nothing is using Workbench, when the user has asked for that.
+///
+/// "Stop when idle" was originally only about the sync daemon, and the tray icon stayed
+/// behind — which reads as the setting not having worked, because the daemon is invisible
+/// and the tray icon is the only part of Workbench a user can see when no window is open.
+///
+/// The trade-off is real and deliberate: with the resident gone, the global shortcuts stop
+/// working until Workbench is opened again from the Start menu. Opening any app starts the
+/// resident back up (`workbench_shared::resident::ensure_running`), so it recovers.
+///
+/// The daemon being gone is what stands in for the grace period: the daemon already waits a
+/// minute after the last app lets go, so by the time it has exited, Workbench has been
+/// unused for at least that long.
+fn watch_for_idle() {
+  std::thread::spawn(|| {
+    // Only ever leave after having seen the daemon up. Otherwise a daemon that failed to
+    // start would look exactly like one that exited because nobody needed it, and the
+    // resident would quit seconds after login having done nothing.
+    let mut daemon_was_running = false;
+    loop {
+      std::thread::sleep(IDLE_POLL_INTERVAL);
+
+      let wanted = workbench_shared::preferences::read_from_disk()
+        .map(|preferences| workbench_shared::preferences::exit_when_idle(&preferences))
+        .unwrap_or(false);
+      if !wanted {
+        continue;
+      }
+
+      let daemon_running = workbench_shared::loopback::configured_daemon_port(None)
+        .map(workbench_shared::loopback::is_occupied)
+        .unwrap_or(false);
+      if daemon_running {
+        daemon_was_running = true;
+        continue;
+      }
+      if !daemon_was_running {
+        continue;
+      }
+      if shutdown::open_app_window_count() > 0 {
+        continue;
+      }
+
+      action::post(Action::IdleExit);
+      return;
+    }
+  });
+}
+
 /// Watches the stored shortcuts for changes made by a settings page in one of the apps.
 fn watch_shortcuts() {
   std::thread::spawn(|| {
@@ -247,6 +309,8 @@ fn main() {
       None
     }
   };
+
+  watch_for_idle();
 
   let mut resident = Resident { tray, hotkeys };
   msgloop::run(&mut resident);

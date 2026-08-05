@@ -1,7 +1,12 @@
 # 引き継ぎ: Workbench Native（更新 2026-08-04）
 
 **R0〜R4 実装済み。R5（実機確認）は 8 項目中 7 項目が確認済み。
-残るのは項目 8 の再確認だけ。**
+残るのは項目 8 — ただし 2026-08-06 に仕様が変わったので、その確認。**
+
+**仕様変更**: `exitWhenIdle` は sync daemon だけでなく **resident（トレイアイコン）も終了させる**。
+UI 名も「Stop Daemon When Idle」→「**Quit Workbench When Idle**」に変更。
+理由と代償（グローバルショートカットが効かなくなる）は
+[residency 計画書](workbench-native-daemon-residency-plan.md)の該当節。
 
 ## 次セッション開始プロンプト
 
@@ -16,12 +21,17 @@ docs/imple/workbench-native-handover-2026-08-03.md を読んで作業を引き�
 
 | # | 内容 | 状態 |
 |---|---|---|
-| 8 | `exitWhenIdle` on で全ウィンドウを閉じ、daemon 終了 → 次の起動で復帰 | **修正済み・要再確認**。UI のラベルは「Stop Daemon When Idle」 |
+| 8 | 「Quit Workbench When Idle」on → 全ウィンドウを閉じる → **daemon もトレイも消える** → アプリを開くと両方戻る | **要確認**（仕様変更後） |
 
-**項目 8 を確認するときは `/status` を見ること。** 実行中の daemon の `exitWhenIdle` と
-`leaseCount` が入っている。`leaseCount` が 0 にならないなら、ウィンドウを持たないアプリの
-プロセスが残っている（app ログに `no windows are open; releasing the lease` が出る）。
-リース解放は heartbeat 単位なので、最後のウィンドウを閉じてから最大 30 秒 + 猶予 60 秒。
+項目 8 の daemon 終了そのものは 2026-08-05 に確認済み（daemon ログに
+`shutting down (no app has held a lease for the grace period)`）。
+その後**ユーザー決定でトレイごと終了する仕様に変更**したため、再確認が要る。
+
+**確認のコツ**: 最後のウィンドウを閉じてから、リース解放（最大 30 秒）+ 猶予 60 秒
++ resident のポーリング（最大 10 秒）で、**最長 100 秒**かかる。
+途中経過は daemon の `/status`（`exitWhenIdle` と `leaseCount`）で見える。
+`leaseCount` が 0 にならないなら、ウィンドウを持たないアプリのプロセスが残っている
+（app ログに `no windows are open; releasing the lease` が出る）。
 
 確認済み: 1（インストール直後の起動）/ 2（再ログイン復帰）/ 3（ショートカット全 4 つ、
 `Ctrl+Alt+C` の修正含む）/ 4（既存プロセスにウィンドウが増える）/ 5（トレイ各項目・

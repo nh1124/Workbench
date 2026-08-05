@@ -46,6 +46,18 @@ fn is_workbench_app(image: &std::path::Path, known: &HashSet<String>) -> bool {
   known.contains(&normalize(image))
 }
 
+/// How many Workbench app windows are open right now.
+///
+/// This is the resident's answer to "is anyone using Workbench". It counts windows rather
+/// than processes for the same reason the lease does: a process can outlive its windows.
+pub fn open_app_window_count() -> usize {
+  let known: HashSet<String> = app_executable_paths().iter().map(|p| normalize(p)).collect();
+  if known.is_empty() {
+    return 0;
+  }
+  platform::count_open(&known)
+}
+
 /// Asks every Workbench app window to close, and waits until they are gone or time runs out.
 ///
 /// Never fails the quit: whatever happens here, the daemon still has to be stopped and this

@@ -1633,8 +1633,8 @@ export function SettingsPage() {
                 <div className="account-local-mode-control">
                   <div>
                     <div className="settings-title-with-info">
-                      <strong>Stop Daemon When Idle</strong>
-                      <InfoHint label="Stops the sync daemon once no Workbench window is open. Workbench itself stays in the tray either way. Off by default, so syncing continues while no window is open. Applies to the running daemon straight away. Desktop runtime only." />
+                      <strong>Quit Workbench When Idle</strong>
+                      <InfoHint label="Shuts Workbench down completely about a minute after the last window closes: syncing stops and the tray icon disappears. Global shortcuts stop working until you open Workbench again, which brings both back. Off by default, so syncing continues in the background while no window is open. Desktop runtime only." />
                     </div>
                   </div>
                   <label className="integration-switch">
@@ -1646,7 +1646,7 @@ export function SettingsPage() {
                     />
                     <span className="integration-switch-slider" aria-hidden="true" />
                     <span className="sr-only">
-                      {localDaemonExitWhenIdle ? "Keep the daemon running when idle" : "Stop the daemon when idle"}
+                      {localDaemonExitWhenIdle ? "Keep Workbench running when idle" : "Quit Workbench when idle"}
                     </span>
                   </label>
                 </div>
